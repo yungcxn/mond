@@ -1,4 +1,4 @@
-# mond
-MOND-Language's interpreter, examples, docs
+# Mond
+MOND-Language's inmondterpreter, examples, docs
 
 ```coming soon :')```
