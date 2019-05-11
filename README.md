@@ -1,4 +1,4 @@
-# Mond
+﻿# Mond
 
 Mond (🌒) is a language which combines simplicity and complexity.
 It sounds weird, I know, but here is why:
@@ -14,3 +14,7 @@ But anyways: This language is influenced by many great aspects of nearly every k
 Mond is a clear OOP-Language, but has completely new aspects, like the predefined methods or the datatype arrangement.
 
 ```coming soon :')```
+
+## Documentation
+
+The docs and other informations are at: [I'm an inline-style link](https://www.yungcxn.github.io/mond)
