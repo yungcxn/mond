@@ -17,4 +17,4 @@ Mond is a clear OOP-Language, but has completely new aspects, like the predefine
 
 ## Documentation
 
-The docs and other informations are at: [I'm an inline-style link](https://www.yungcxn.github.io/mond)
+The docs and other informations are at: [yungcxn.github.io/mond](https://yungcxn.github.io/mond/)
