@@ -17,6 +17,11 @@
 # sys.path.insert(0, os.path.abspath('.'))
 
 #tells that these modules must be installed
+import mock
+
+MOCK_MODULES = ['msmb_theme']
+for mod_name in MOCK_MODULES:
+    sys.modules[mod_name] = mock.Mock()
 autodoc_mock_imports = ["msmb_theme"]
 # -- Project information -----------------------------------------------------
 
