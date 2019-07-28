@@ -6,7 +6,8 @@ Guide
 
 .. toctree::
    :maxdepth: 3
+   :titlesonly:
 
-   How-to
-   Glossary
-   License
+   how-to
+   glossary
+   license
