@@ -18,4 +18,4 @@ Mond is a clear OOP-Language, but has completely new aspects, like the predefine
 
 ## Documentation
 
-The docs and other informations are at: [yungcxn.github.io/mond](https://yungcxn.github.io/mond/)
+The official docs are at: [https://mond.readthedocs.io](mond.readthedocs.io)
