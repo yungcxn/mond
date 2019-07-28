@@ -1,4 +1,5 @@
-﻿# Mond
+[![Documentation Status](https://readthedocs.org/projects/mond/badge/?version=latest)](https://mond.readthedocs.io/en/latest/?badge=latest)
+# Mond
 
 Mond (🌒) is a language which combines simplicity and complexity.
 It sounds weird, I know, but here is why:
