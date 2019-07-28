@@ -16,7 +16,8 @@
 # import sys
 # sys.path.insert(0, os.path.abspath('.'))
 
-
+#tells that these modules must be installed
+autodoc_mock_imports = ["msmb_theme"]
 # -- Project information -----------------------------------------------------
 
 project = u'mond'
