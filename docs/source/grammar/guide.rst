@@ -1,4 +1,4 @@
-How to use mond
+Programming guide
 ===============
 
 Note:
@@ -6,11 +6,9 @@ This tutorial presuposes that you have been programming in another language and 
 
 Content
 ^^^^^^^
-
 .. toctree::
-   :maxdepth: 3
+   :maxdepth: 2
    :titlesonly:
 
    mondc/mondc
-   grammar/Grammar
-   libbus/libbus
+   glossary
