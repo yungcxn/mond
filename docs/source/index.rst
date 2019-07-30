@@ -8,5 +8,5 @@ Guide
    :maxdepth: 2
    :titlesonly:
 
-   grammar/guide
+   guide/guide
    license
