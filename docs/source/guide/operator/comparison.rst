@@ -4,3 +4,4 @@ greater than        a > b
 less than           a < b
 greater or equals   a >= b
 less or equals      a <= b
+instance of         ::
