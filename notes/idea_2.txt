@@ -1,0 +1,794 @@
+Mond docs 1.2
+
+mondcsys
+
+= Mond-Compilation-System
+not very thoughtful, but thats what’s existing at the moment:
+The JIT-Compiler generates to LLVM IR
+LLVM -> executable
+The Compiler’s structure:
+	Lexer
+	Parser
+	Merger
+	Validator (unreachable code or duplicates)
+	Optimizator
+	Codegen
+
+
+
+
+
+
+file structure (overview)
+
+a file consists of one class that’s named equally to the file:
+
+test.mon - class test {}
+
+or a module named like the file:
+
+test.monm - module test {}
+
+(Standalone datatypes)
+
+grammar exclusives:
+For { you can also use begin and } end keywords
+
+
+classes and attribute access
+
+A class is a structure with methods, fields and models (custom and to implement)
+It can extend one other class and implement multiple models.
+
+class classname~?a+?b
+
+(static) (con) class classname : fatherclass ++ model1, model2 {}
+
+You don’t Need to inherit or use models. You can implement models also without inheriting.
+
+(static) (con) class classname ++ model1, model2 {}
+
+A class Can also hold anonymous classes to influence what a class is about, for example a list that holds values on which you can’t decide otherwise.
+It can be static, constant or both at the same time:
+Static causes that you cannot create an instance out of it. There is only one instance and that is the $s instance.
+Class.$s.field
+The keyword con forbids that the class can be inherited from another. This is very important to not let restricted data get accessed
+Like mentioned, you access attributes of a class with a dot (.)
+
+A nonstatic class can have instances:
+
+classname instance = new classname()
+
+This classname() method is called init method and this is one of the predefined methods in a class. There are multiple ones, like Main, but these are the two methods:
+
+$init(args) {
+
+}
+
+$deinit() {
+
+}
+
+The init method is called on instanciating. Here with new.
+The deinit method is called on deleting with
+del instance.
+A init method can have Arguments, a deinit not.
+These arguments need to be defined on instanciation:
+
+if $init of class test has (int first, int second, char third)
+
+test instance = $test(5, 6, ‚d‘)
+
+If you have no init, nothing special happens on instanciation. The same as at deinit, no method, nothing happens.
+If you have one init, you need to use it. If you have multiple inits, you can use them but as you have no init, nothing happens on
+new classname()
+On quickassign the init method is called before, then the special assignment syntax.
+
+There is also a Methode without init, it’s called
+quickinit. Under normal conditions it’s used for structs because they don’t provide methods but you can use that also for classes:
+Here the classic init method is called and after that the quickinit:
+
+class instance = new class() {
+.field = something
+.otherfield = something
+}
+
+You can also use $main() this Can be used as
+$main() {
+
+}
+and
+$main(str…) {
+
+}
+to access console args via $args
+Main cannot be called. This is only for the compiler that does so on run.
+Comments:
+Single line //
+Multiline /* */
+
+anonymous classes
+
+Anonymous classes are not real classes, they are placeholders for instances.
+You can define anonymous classes directly via ?name after the ~
+
+class classname~?first+?second {}
+You can use the ?first and second as classname like:
+
+?first instance = new ?first()
+
+or in methods
+
+?first method(?second something) {
+-> new ?first()
+}
+
+On instanciating you need to declare the classes like that:
+
+Test~class1+class2 instance = new Test~class1+class2()
+
+You Need to tell the init method after new the same anonymous classes as on the left, but you can also use that method of instanciating if you aren’t using flex
+
+Test~class1+class2 instance = new test~()
+
+This is possible because the compiler knows already which anonymous classes to hold.
+If you use flex like mentioned you need to give the information about anonymous classes in the init method because flex can’t hold those classes:
+
+flex instance = new test~class1+class2()
+
+On inheritance, the derived class needs to hold the anonymous classes of the fatherclass that are not real classes:
+
+class test~?a+?b : father~?a+?b
+
+But you can also give a solution. You can also give some classes and leave some of them anonymous::
+
+class test~?a : father~?a+normalclass
+
+Then there is only 1 anonymous and that’s ?a
+But you can resolute everything:
+
+class test : father~realclass+realclass
+
+ANONYMOUS CLASSES CANT HOLD INSTANCES OF THE CLASS „CLASS“ AND CLASS „STRUCT“,MORE IN INSTANCES INSTANCES
+
+
+instance’s instances / double-instanciable:
+
+Nearly everything is an instance.
+An instance can be an object and even a member of class, struct or module.
+
+The compiler has a structure called “class” every class is an instance of this class “class”.
+Here is a table of every dependent class:
+(for example, the anonymous classes arent shown here)
+A class defined by user, in the language itself or in libraries:
+
+
+
+
+
+
+
+
+
+class class
+class int		instance of “class”, can be in compiler or custom,called “customclass”
+int test			object, customclass-member, custommodule-member,
+customstruct-member
+
+class class
+class struct 		instance of “class”, compiler,
+struct test		custom, called “customstruct”, object, but not a member, can be found
+in customclass,customstruct and custommodule
+test instance		object, customclass-member, customstruct-member,
+custommodule-member
+
+class class
+class module		instance of “class”, compiler,
+module test		custom, called custommodule
+
+
+
+class class
+class ptr		instance of “class”, compiler,
+ptr pointer		object, customclass-member, customstruct-member,
+custommodule-member
+
+
+class class
+class lambda		instance of “class”, compiler,
+lambda test		object, customclass-member, customstruct-member,
+custommodule-member
+
+
+class class
+class flex		instance of “class”, compiler,
+flex any		object, customclass-member, customstruct-member,
+custommodule-member
+
+
+class class
+class dict/list/arr/str	instance of “class”, compiler,
+dict/list/arr/str any	object, customclass-member, customstruct-member,
+custommodule-member
+
+
+class class
+class form		instance of “class”, compiler,
+form any		object, customclass-member, customstruct-member,
+custommodule-member
+
+
+class class
+class func/subpr	instance of “class”, compiler,
+func/subpr any 	object, customclass-member,
+custommodule-member
+
+
+
+
+
+
+
+inheritance and models (abtraction):
+
+One class can derive from one other, not multiple. But only if that class isn’t con and if the fatherclass is static, the derived class must be also static.
+The inheritance operator is :
+
+class derived : father
+
+static class derived : staticfatherclass
+
+con class derived: someclass
+
+but „class derived : conclass“ is not possible !!
+
+You can also inherit with anonymous classes like mentioned above:
+
+class derived~?a+?a : father
+
+class derived~?a+?b : father~?a+?b
+
+class derived : father~realclass+realclass
+
+class derived~?b : father~realclass+?a
+
+
+models are class like structures. They only provide methods and fields that a class must implement in the model block.
+
+model modelname {
+method() {
+}
+field
+}
+
+A class Can implement models with the ++ Operator:
+
+class classname ++ model1, model2
+
+class classname : father ++ model
+
+A class Can also have one model :
+
+class classname {
+
+model {
+field
+method
+}
+
+}
+
+Then the derived class needs to do that:
+
+class derived : classname {
+model {
+//own model that derived needs to implement
+}
+
+classname model{
+//all fields and methods in models of father
+}
+
+
+}
+
+Every models field and method that a class implements (customs, father class or models from father class or from the class itself)
+Becomes a field and method of the class. Also every model needs to be implemented by the son :
+
+class father ++ model1 {
+model {
+//custom
+}
+
+model1 model{
+//fields and methods of model1
+}
+
+}
+
+class derived : father {
+Father model {
+//all models summarized of father
+}
+}
+
+Models are the only class that cannot be instanciated like module test = new module()
+Eventhough module is a class.
+
+
+
+
+instanciating, variables and datatypes
+
+Every variable is a instance of a class. It’s not necessary whether it’s a normal class or a datatype like str. You instanciate via:
+
+classname instance = new classname()
+
+You don’t Need to assign a value to instance. If you assign nothing like:
+classname instance
+the instance becomes $null
+Every class can be $null. If a class is $null, that means that the instance allocated nothing in memory. You can use con before instanciation to not let the instance being changed again, but it’s fields can be changed (undefined).
+
+And then the init method is called like mentioned above
+
+You can assign this instance only to other instances of the same class (casting in the same hierarchy is the ONLY exception)
+
+instance = otherinstance
+
+You can provide using an encapsulation keyword to control the access of fields or methods from other classes:
+
+public classname instance = new classname()
+
+beside of that, we have also predefined variables, that begin with the $ operator.
+Every predefined Variable is used for another thing. Details mentioned at predefined methods and variables.
+
+
+datatypes are certian classes that aren’t instanced normally and provide special features.
+
+Basic
+  numeric
+    bool (1-bit)
+    byte (1-byte)
+    int (4-byte)
+    float (8-byte)
+    double (16-byte)
+
+  alphabetical
+    char (1-byte)
+    unichar (undefined)
+
+  unsigned (only positive)
+    u_byte (1-byte)
+    u_int (4-byte)
+    u_float (8-byte)
+    u_double (16-byte)
+
+  sizeable
+    unsigned
+      usml_int (2-byte)
+      ubig_int (8-byte)
+      usml_float (4-byte)
+      ubig_double (32-byte)
+
+    signed (classic)
+      sml_int (2-byte)
+      big_int (8-byte)
+      sml_float (4-byte)
+      big_double (32-byte)
+
+
+Advanced
+  ptr~?
+  lambda~?
+  flex
+
+
+Derived
+
+  Double-instanciable
+    struct
+    Standalone
+      class
+
+  model
+
+  datacollections
+    form
+    dict~?+?
+    list~?
+    arr~?
+    str (type of arr)
+    unistr (str but unichars)
+
+  specials
+    func
+    subpr
+
+
+
+
+
+Details of datatypes
+bool
+A bool (boolean) stores 1 Bit of data.
+It can be „true“ or „false“
+true is an integer (1)
+false is also an integer (0)
+
+byte
+A byte stores 1 byte of Data. This means the range is -128 to 127 integer values
+u_byte
+An unsigned byte stores also 1 byte of data, but from 0 to 255
+0x for hex prefix (0123456789abcdef)
+0b for binary prefix (01)
+0c for octagonal prefix (01234567)
+
+int
+An integer stores 4 Bytes of data. Numbers without dot (non floating numbers) can be assigned: -2 147 483 648 to 2 147 483 647
+0x for hex prefix (0123456789abcdef)
+0b for binary prefix (01)
+0c for octagonal prefix (01234567)
+
+u_int
+The same as a normal int, but range from
+0 to 4 294 967 295
+0x for hex prefix (0123456789abcdef)
+0b for binary prefix (01)
+0c for octagonal prefix (01234567)
+
+ubig_int
+An unsigned integer that stores 8 bytes of data
+Range: 0 to 185 467 440 733 709 551 615
+usml_int
+An unsigned integer that stores 2 bytes of data
+Range: 0 to 65 535
+big_int
+An integer that Stores 8 Bytes of data: Range:
+-9 223 372 036 854 775 808 to
+9 223 373 036 854 775 807
+sml_int
+An integer storing 2 bytes of data:
+-32 768 to 32 767
+0x for hex prefix (0123456789abcdef)
+0b for binary prefix (01)
+0c for octagonal prefix (01234567)
+
+float
+A float stores 4 bytes of data. It holds a number that must have a floating point.
+Range: undefined
+A floating point number stores two values. At first the whole number without the dot and then the place where the dot is.
+u_float
+A unsigned float stores 4 bytes of data. Must have a floating point. Two values are stored like float. Range: undefined
+usml_float
+A unsigned float that stores 2 bytes of data. Must have a floating point. Two values stored. Range: undefined
+sml_float
+A float that stores 2 bytes of data. Must have a floating point. Two values are stored. Range: undefined
+
+
+double
+A double stores 8 bytes of data. Must have a floating point. Two values are stored.
+Range: undefined
+u_double
+An unsigned double that stores 8 byte of data. Must have a floating point. Two values are stored. Range: undefined
+ubig_double
+An unsigned double that store 16 bytes of data. Must have a floating point. Two values are stored. Range: undefined
+big_double
+An double that stores 16 bytes of data. Must have a floating point. Two values are stored. Range: undefined
+
+char
+A char stores 1 byte of data. It can be assigned to:
+ascii character in ‘‘
+ascii corresponding code via ‘\code‘
+non floating number (to represent number to ascii)
+unichar
+A char that stores undefined data. It can be assigned to:
+Unicode character in u‘‘
+Unicode corresponding code via u‘\code‘
+non floating numbers (to represent Unicode table)
+
+
+ptr~?
+A Pointer (ptr) stores the amount data the class it holds needs. A Pointer is created like this:
+The pointer can point to struct instances
+
+ptr~test instance = &sometestinstance
+Here the instance points to the memory offset of sometestinstance
+
+ptr~test *instance = testinstance
+
+Here the instance points to testinstance
+
+With * (dereference) operator before instance is the value the pointer points to.
+
+The ampersand (&) before any instance is the hexadecimal memory offset.
+A *pointer always points to a memory offset
+
+If the instance on the memory offset the pointer points to changes the * pointervalue changes also.
+You can also use memory arithmetic to work with arrays, lists and dicts:
+If a array is created, a pointer to the first value of the array is created, named like the array.
+Lists and dicts also provide that.
+You can also make a Pointer array/List:
+
+arr~(ptr~returntype) instance[5]
+Here 5 Pointer are created. You might access the pointer as:
+*instance[3] = someinstance
+Then instance is a pointer to instance[0] and *instance is *instance[0]
+
+And there is also the flex pointer:
+A flex Pointer can point to everything without type casting like void pointers in C.
+
+Access:
+You Access members of the classinstance it points to via
+Pointername.field
+But if you want to access public fields of the instance the pointerinstance points to you must dereference:
+*Pointername.field
+
+
+lambda~?
+Lambdas provide a way to control assignments:
+The class lambda is holding is the return type of lambda. If it’s flex, it can be anything.
+Syntax:
+lambda~int sum = (int arg1, int arg2) -> arg1+arg2
+
+Then sum can be:
+sum = (2,3) // 5
+sum = 2,3 // 5
+
+flex
+Flex is a special type that can be anything.
+If you declare a variable like
+name = „test“
+It’s flex. If you don’t mention the returnclass of instances, arguments or return types, it’s automatically flex. Now flex mutated to string, but flex can also mutate to any other class.
+flex name = „5“
+Name = new testclass()
+Name = 7.56
+
+for example a flex array doesn’t need to have every entry to be the same class.
+how the compiler evaluates flex:
+„string“ //string
+‘C‘ //char
+u‘‘ //unichar
+u”unistring”
+
+how its evaluated, more below
+
+
+class
+Every class that is declared is a instance of the class „class“. An instance of a class is a „class“ instances instance. The only instances that can be instanced again are structs and classes.
+
+A class can have any instances of classes / fields and functions (here: methods)
+Every class that isn’t deriving from another class derives from the class obj.
+A class can also implement modules with the ++ after class name definition.
+Details are declared above.
+
+model
+A model is like a class, but without predefined methods. It cannot be instanciated like a instance of an instance of the class „class“. Every model you define is an instance of the class „model“
+
+form
+A form is declared like an enumeration:
+form name {
+ITEM1,ITEM2,ITEM3
+}
+
+The values of a form should be in UPPER
+The ITEM entries are states
+A form has states.
+A state can be assigned to a form. On instance, the form is on state -1 aka. null
+A state has an index corresponding to when its declared in the form, so ITEM1 is 0, ITEM2 is 1 and ITEM3 is 2 (like an array). Besides that you also have an array of states.
+You Access a State via . :
+formname.STATENAME
+you cannot assign form to other form because they are different instances with different states
+
+
+
+struct
+A struct is a collection of fields that can be accessed via a dot. On instanciation it’s the same as classes. At first you declare a struct with a custom name and custom fields, then you make an instance out of your custom struct:
+
+struct coordinate {
+int x // = null
+int y // = null
+int defaultfield = 5
+}
+And then
+coordinate PlayerPosition = new coordinate
+Then access via
+PlayerPosition.x = 256
+
+
+Here it’s important to not write () because Structs don’t provide an init method.
+Because you cannot use inheritance, staticness, Constantness, (like classes not, but fields can be constant) implementation of modules and methods, quickassign is available but without ():
+
+coordinate PlayerPosition = new coordinate {
+.x = 4
+.y = 1
+}
+
+
+
+dict~?+?
+A dict holds keys and values corresponding to each other. This is the instanciation syntax:
+dict~str+int peoplesAge = [
+„James“:40
+Peter.Name:17
+]
+
+We access the ints here with peoplesAge[„James“]
+or
+peoplesAge.getKey(„James“)
+We Access Strings here with
+peoplesAge.getValues(40)
+But than an array is returned, even if there is one key with the value 40.
+
+You cannot define same keys.
+you can also have keys and values as arrays:
+peoplesAge.getKeys() //array of all keys in order they are assigned in the dict
+peoplesAge.getValues() //array of all values in order they’re assigned in dict.
+It’s mutable sized, that means that on assignment it doesn’t depend if you change the length of that dictionary.
+You can also have dicts of flex, where the keys or values don’t have to be the same classes.
+
+Memory arithmetic:
+Everytime a dict is created, you access it by dictname[], but also a pointer to &dictname[0] is created. It’s called dictname / *dictname. A dict is saved in memory together. That means:
+Memory
+&dictname        dictname[firstkey]
+&dictname+1    dictname[firstvalue]
+&dictname+2    dictname[secondkey]
+&dictname+3    dictname[secondvalue]
+and so on
+
+arr~?
+An array is a Classic Data Collection that holds data at one spot in memory. Every instance in the array is from the class it holds. It’s immutable sized so if you declare it with for example 5 values, you can’t have 6 values on reassignment.
+You can initialize an array with its size and null entries via:
+arr~int instance[numberofentries]
+Or you can directly assign:
+arr~int instance[] = [
+[5,4,intinstance,135]
+]
+You can also use flex to have every instance indivudually assigned.
+Dimensions:
+To indicate how many dimensions the array should have, do that:
+
+arr~str strings[][][]
+[] = 1 Dimension
+[][] = 2 Dimensions
+[][][] = 3 Dimensions
+
+You Must indicate the Size also:
+
+arr~str cube[3][3][3]
+Now we have a 3D array:
+3*3*3
+[x][y][z]
+Then the dimensions would look like this:
+[classinstance, classinstance1,classinstance2] //1D
+
+[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2] //2D
+
+[[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2]],
+[[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2]] //3D
+And so on. The structure on this is that you have arrays in arrays, but before you use such arrays in arrays you need to indicate how many dimensions and how big the array should be
+
+Memory arithmetic
+Everytime a arr is created, you access it by arrname[], but also a pointer to &arrname[0] is created. It’s called arrname / *arrname. An arr is saved in memory together. That means:
+Memory
+&arrname        arrname[0]
+&arrname+1    arrname[1]
+&arrname+2    arrname[2]
+&arrname+3    arrname[3]
+and so on
+
+list~?
+It’s the same as array, but you can change the size and amount of dimensions everytime You reassign. That means you can also initialize a null list.
+
+str
+A str is technically the same as arrays of chars, but the syntax is slightly different and you have more functionalities. Note: Here isn’t  a pointer to the blank name of str created, because you dont instanciate a str with [].
+
+str test = “abcdefg”
+and unistr is just a string out of unicode chars.
+unistr test = u”test”
+
+memory arithmetic:
+like array, but like mentioned without ptr of name
+
+func
+
+subpr
+
+
+
+alias instances, flex and return
+
+wrapper classes
+
+
+
+
+type casting and convert
+
+assignment and -chains
+
+deftip
+
+constants
+encapsulation
+
+indexing
+
+operators, keywordoperators and precedence in general
+
+functions
+subprocess, sync and processpools
+varargs
+closures
+
+predefined methods/fields
+
+overr, overl and doublenaming
+overloading overloadable operators
+
+compiler’s meta
+
+special code blocks, loops and conditionals
+if: args {}
+fast-for and fast-iter
+
+foreign language support
+You May use other languages
+
+Errors and it’s handling
+
+structured glossary
+
+tokens:
+
+the smallest element in a program.
+Tokens are seperated by whitespace. That could be:
+comments //by optimizer wiped out
+space
+tab
+
+from left to right, top to bottom the tokenizer searchs for the longest element:
+test = i---j
+that could be i- (--j)
+or i-- -j
+but its i-- -j.
+
+tokens are:
+
+keywords //cannot be used for
+identitfiers
+	objectname
+	class, structure, module names
+	name of class or structure member (object)
+	function, subprocessname
+
+literals
+	non-sign
+	sign
+operators
+	non associative
+	left to right associative
+	right to left associative
+punctuators
+	real punctuators
+	alias punctuators
+
+
+_ a b c d e f g h i j k l m
+n o p q r s t u v w x y z
+A B C D E F G H I J K L M
+N O P Q R S T U V W X Y Z
+all numbers after first place of name
+
+
+
+
+datatypes
+errors
+compilers meta
+predefined methods and fields

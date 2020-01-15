@@ -1,4 +1,0 @@
-not     !
-and     &&
-or      ||
-xor     ^^

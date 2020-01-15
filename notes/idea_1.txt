@@ -1,0 +1,701 @@
+Mond
+Write the Grammar
+Build the compiler
+
+mondcsys
+
+= Mond-Compilation-System
+
+On compiliance:
+1. Executor is executed first, executes Mond-Merger
+2. Calls with Meta-Data Mond-Merger, makes 1 .monm file
+    out of mainsrc.mon and other files
+3. 4. Mond-Compiler translates .monm into machine code,
+   now .monc
+5. Executor executes machine code
+
+On execution of .monc:
+1. Executor executes .monc
+
+The mondcsys has
+Executor
+Merger
+Compiler
+	-> Lexer
+	-> Parser
+	-> Machine-Gen (Machine code Generator)
+
+
+More Notes:Executor:
+Merger:
+Needs to give the compiler the exact information about which classes are in which file
+Compiler:
+Translates complex statements on letting variables holding the value, being returned by a method and in structures at first into their real value
+
+Machine-Gen generates nasm, at first in windows, then macOS and linux
+
+Grammar-plans
+
+imports : .fimp path/to/file.mon	(file-imports)
+	   .limp math			(library-imports)
+
+one file holds one class or one model
+imports are for every class in file
+only imports outside of class-blocks
+A model cannot Import anything
+
+Note: opening { can be “begin” and closing } can be “end”
+classes:
+(static) (con) class classname : fatherclass {}
+
+class classname : fatherclass + model1 , model2
+
+or with class templates:
+class classname~? : fatherclass {}
+
+without : definition is the fatherclass Object. Object has no father.
+
+? as a datatype is only able to be created, not holding a value.
+Only a ptr~? can hold other variables with ? itself.
+
+the template sign ~ is only necessary on instanciating and declaring the class,
+not for inheritance.
+
+static instanciates a static $instance. A static class hasn’t got a constructor and destructor
+you can’t instanciate static
+
+con forbids inheritance.
+
+
+accessing class attributes:
+the order must be:
+classinstance.voidmethod()
+
+
+classinstance.(otherclass.voidmethod())
+
+when you want to access a field of a imported class you need to put that in parentheses. You
+
+Variables:
+Primary datatypes:
+bool = 1 bit true, false
+byte = 1 byte number without dot
+int = 4 bytes number without dot (0x=hex,0b=binary)
+float = 4 bytes number with dot
+double = double sized and precise float
+char = 1 byte of UTF-16 encode
+(void = for no return type on functions)
+
+Secondary datatypes:
+lambda~? = (a,b) -> a*b and then x = 4,5
+flex = runtime and changes datatype everytime
+str = char sequence (2 bytes * chars)
+ptr~? = pointer (ex. ptr~str = x). access pointed class’ attributes with >
+(subpr = void, but running parallel to normal program on call)
+
+datastructures:
+list~? = mutable-sized array
+arr~? = (immutable-sized) array
+dict~?+? = mutable-sized key-value with key as index
+
+When you use flex, you can use every class you want because of the runtime evaluation
+You don’t need flex, because if you declare a variable and leave the place for declaring the returnclass blank the returnclass becomes flex
+
+Everything on datatypes:
+Instances of classes only hold a instance of another class in the same hierarchy as the instances.
+Datatypes also hold these the same way, because when we assign str x = „test“, then „test“ is interpreted by the compiler as a instance of the class str. Here are the values which are interpreted as datatype instances:
+
+true
+false
+1234 (only digits)
+
+0x1234 (0xonly digits)
+
+0b1010 (0x1or0)
+
+12.34 (floating point number can be float and double, on flex is the number a double if it’s too
+big for a float)
+
+‚A‘ (one sign)
+“abc” (multiple chars)
+//Every ascii character a char (str) can be:
+" ", "!", """, "#", "$", "%", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":", ";", "<", "=", ">", "?", "@", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "[", "\", "]", "^", "_", "`", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "{", "|", "}", "~"
+
+
+(arg, arg) -> instanceofanonymous (lambda)
+[classinstance, classinstance1,classinstance2] (List or arr holding instances of the anonymous class)
+arg,arg (on this syntax is the lambda running)
+
+lists/arrs:
+The dimensions are defined from the last index to the first, ex.:
+x[firstindex][secondindex][thirdindex]
+index here equals one dimension and third is 1D, second 2D, first 3D.
+The number of []s indicates the number of lists listed in lists
+you need to place [] in []. for example:
+{[classinstance, classinstance1,classinstance2]} //1D
+
+{[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2]} //2D
+
+{[[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2]],
+[[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2],
+[classinstance, classinstance1,classinstance2]]} //3D
+
+you need to place a dimension in square brackets and seperate multiple of these to get a higher Dimension.
+
+dict:
+{
+keyinstance : valueinstance,
+keyinstance : valueinstance
+}
+
+Access in Datastructures:
+list~str x[]
+a datastructure need to put [] after the name. When you want to access one instance, get the index number and put that into the square brackets:
+x[1]
+To access the whole structure, call the name:
+x
+The Indexing is not the same everytime. Here is a summary:
+Lists:
+x[] and x[indexnum] as many []s as you want for dimensions
+Arrs:
+x[] and x[indexnum] as many []s as you want for dimensions
+dicts:
+x[] and x[key]
+
+More on datastructures:
+Here are some cases for clearance mentioned:
+
+arr~str x[] = {[“1”,”2”,”3”]}
+list~str y[] = Convert.toList(x)
+
+The Converting is only possible if the classes hold the same anonymous classes.
+
+list~str x[] = {[“1”,”2”,”3”]}
+list~str y[][] = {x, [x[1], “a”, “b”}
+is the same as {[“1”,”2”,”3”], [x[1], “a”, “b”]}
+is the same as {[“1”,”2”,”3”], [”2”, “a”, “b”}}
+
+
+Here are two examples. 1. x is one list and can be used as a part of a list with 2 dimensions. 2. x with it’s index has a value which is a str.
+
+
+Index-Operator:
+if you aren’t using every index you would need, for example use 2 indexes on a 3d list, you are getting an array.
+This index-Operator is getting one array in the current array. That means that you can put that behind a function for example, which returns an array.
+possible indices:
+normal index on arrays/lists: [int]
+dictionary index: [key]
+
+Everything on Arithmetic-operations:
+
+
+Holding anonymous classes:
++ and ?: operator.
++ on the template says, that the class can hold more than one class.
+
+Anonymous classes can be also used for methods without holding anything in the class itself. More in the method-section.
+
+The : operator means inheritance, but HERE in a way for holding anonymous classes so you can import a class and use children of it by defining it for example like:
+class~:anyfather
+class~?+?:anyfather
+So the ? needs to inherit anyfather.
+The : operator can be also used for methods and variables
+
+public ?:anyfather var
+public ?:anyfather func() {}
+
+
+But if you have multiple ?s in the ~, you are forced to use indices behind ? if you use it, because normally an array named ? of classes is created that Ex.:
+class test~?+?+?:anyfather : fathertest {
+	//first ? class
+	public ?[0] method() {
+		return ?[0] instance
+}
+//second ? class
+?[1] otherinstance
+//third ? class
+?[2] anotherinstance
+//error, because class ? array out of bounds
+?[3] otherinst
+}
+
+functions and predefined methods:
+(encapsulation) returnclass f(str a) {}
+
+Access ? in class-definition:
+
+constant:
+“con”
+con classname instance cannot be changed.
+con class classnames cannot be inherited.
+
+
+
+assignment chains:
+Normally, you assign something to a instance of a class. But you you can build chains out of multiple assignments in one statement.
+= left is right
+>> is like =, left is right
+<< right is left
+⇔ right is left and left is right (Switch values)
+There is no precedence, the compiler assigns from left to right. But you Can use parentheses to mark which assignment should come first.
+example
+a = b ⇔ c >> d << e
+a is b, b switches value with c, c is d and e is d.
+But there is a trap:
+a >> „somestr“ ⇔ c
+You can only use the switch Operator on variables and Not on values like strings, numbers etc.
+
+type converting and casting:
+convert:
+Convert.toBool() str, int
+Convert.toInt()  str, float, char
+Convert.toStr() bool,int,float,char
+Convert.toFloat() int, str, char
+Convert.toChar() int, str
+Convert.toBin() int, str, bool
+Convert.toHex() int, str
+Convert.toList() arr
+Convert.toArr() list
+
+upcast:
+fatherclass instance = (fatherclass as classinstance)
+instance here has only the classes defined in classinstance’s class, not new methods.
+downcast:
+class instance = new fatherclass()
+(instance as fatherclass).field
+instance here needs to downcast to access fields declared in child class.
+
+
+Everything on pointers:
+A ptr points to another place of the memory, to one classinstance holding a value.
+ptr~str *strpointer = pointedinstanceofhold
+ptr~str strpointer = ptrinstance
+ptr~flex holds memory address and not the type of that. You can cast this type of pointer later on
+
+
+deftip:
+deftip is keyword which you Can place before variables on the First assignment.
+deftip str x = „first“ | „second“ | „third“
+This means, that x only these three values are able to get assigned by x, not „fourth“ for example.
+You cannot deftip over deftip, or deftip after a Definition, but after initializing without assigning.
+
+Here is also a list/arr possible, so if you assign then the value will be checked and compared with every value.
+
+Varargs and …:
+When you use class… as instance in a method you can access $args as an array.
+public con func(str…)
+
+predefined methods/variables list:
+
+called by compiler:
+$init(args) //called as classname instance = new classnameorson(args). Polydefinable
+$deinit(args) //on “kill classinstance ”. Monodefinable
+$main() //cannot be called. Monodefineable
+$main(str…) //Access args via $args
+$onimp() //called when the file is imported. If you import a file, it can happen that the file has multiple classes with multiple onimps, so the compiler calls them top to bottom. Monodefinable
+
+variables:
+$this //instance of current class
+$super //instance of current class’ fatherclass
+$null //used for allocating nothing in memory
+$args //Array in section of function that uses varargs
+
+
+the static instance:
+$instance //universal instance of every static class to use
+
+
+return:
+Every Function returns an instance/value of the returnclass, except void and thread
+
+After Return is executed the function ends.
+
+
+
+encapsulation:
+public = for children and imports
+(default) = for children, no imports
+private = only for class, no children, no imports
+
+Abstraction:
+there are „model“s, which define a abstractive Field with methods
+The methods there need to be redefined in every class that inherits the model of the class
+Everything that is in the method Can be Changed in that section. You Can also the function from super.function()
+You Can put more methods in that Block but then the Childclasses Need to to redefine them aso.
+You only Need to call $model if fatherclass is using it (Child of Object)
+ex.:
+class human{
+  model{
+    public str x() {
+      Return „x“
+    }
+  }
+}
+
+But there are also standalone models.
+
+
+Everything on functions and lambda:
+encaps con returnclass f(retclass arg) {}
+A lambda‘s content is built like this:
+lambda name = (retclass arg, retclass arg1) -> return retclassinstance
+
+Multistatements are deprecated!!
+
+functions can be declared once.
+You are able to get use the function as parameter and also assign functions to functions
+
+public con str x( int f() ){
+int c() = f()
+f()
+}
+
+
+Overriding, Overloading and selfnaming:
+When to use Overriding:
+In a class, you are able to declare a function with the same attributes, name and arguments as a new overridden function. You can access the function of the fatherclass with $super.samefunc()
+When to use Overloading in methods:
+You can declare a method only once.
+When a method has another returnclass, another “version of the method” is created.
+
+When to use selfname:
+You cannot import class with the same name, because compiler can’t decide between two classes in the same merged-file.
+You cannot overload and selfname variables, because one variablename exists only once  and you the compiler can’t decide which variable should be used on call where you don’t need the class behind them.
+
+Compiler‘s metainfo:
+Metainformation is necessary to give the compiler and the coder information about what ist happening or what has happened.
+
+These are the following metainformations:
+.overr
+.overl
+.depr
+.unused
+.operator
+.debug
+.test
+.limp
+.fimp
+
+Operator overloading:
+Here you can change the following class dependent operators like * but not something like [].
+Unary Operators are like:
+a++
+a.++()
+And binary operators are like
+a+b
+a.+(b)
+So if you override you need to declare the operator in a‘s class with the parameter of b‘s class.
+You Can declare following unary and binary
+
+unary:
+++ (pre)
+— (Post)
+
+
+binary:
+==, ===, <, >, <=, >=, !=
+&, |, ^, &&, ||, ^
++, -, *, /
+
+variable scope:
+
+
+Structures, loops and if
+
+Structures:
+sync {} //Every Statement will be executed at the same moment
+
+Conditianals:
+if(true) {}
+elseif(true) {}
+else {}
+
+Error-Handling:
+try {} expect(CastError e) {}
+try {} except(?:Error e, TestError ex) {} //”,” is like “or
+
+Loops:
+while(true) {}
+for(x = 0,  x > 5,  x++) {}
+for(5) {} //5 can be any Integer value
+iter(str value: listorarrofstrs) {}
+
+subpr, sync and (sub)processpools
+
+
+iter loop and the iterator-behavour:
+on
+iter(returnclass value: classinstance)
+The compiler translates that the value becomes classinstance.next()
+only if the classinstance hasnext()
+
+
+Errors and crash:
+A Error is a class inherited from Error.
+Constructor with message
+This has no real functionality, because you use the class “only for the name”.
+As it is called in a crash, the program stops execution
+An Error’s message is being printed in the crashlog function.
+
+crash:
+crash Errorclassinstance
+crash new Errorclass(messagestr)
+The execution is stopped.
+You can except them by handling the error.
+
+
+keyword-glossary
+limp
+fimp
+static
+con
+class
+deftip
+new
+kill
+public
+private
+as
+return
+sync
+if
+elseif
+else
+try
+except
+while
+for
+iter
+crash
+begin
+end
+
+Operator glossary:
+
+assignment:
+=
+>>
+<<
+⇔
+
+mathematical assignment:
++=, -=, *=, /=, %=, **=
+
+binary mathematical assignment:
+&=, |=, ^=
+
+Logical Boolean assignment:
+&&=, ||=, ^^=
+
+equivalence:
+==
+!=
+<=
+>=
+<
+>
+
+access class attributes:
+.
+
+access class attributes of value a pointer points to:
+->
+
+arithmetics:
++, -, *, /, **
+i++, i—
+++i, —i
+
+(bitwise)
+&, |, ^
+
+logics:
+&&, ||, ^^, !
+
+strings:
++ //string concat
+* //”str”*2 = “strstr”
++= //string = string + “other”
+*= //string = string * int
+
+chars:
++ //ascii decimal value + int behind = new char equivalent to decimal value
+- //ascii decimal value - int behind = new char equivalent to decimal value
+* //ascii decimal value * int behind = new char equivalent to decimal value
+/ //ascii decimal value / int behind = new char equivalent to decimal value
+% //ascii decimal value % int behind = new char equivalent to decimal value
++= //char = char + int behind
+-= //char = char - int behind
+*= //char = char * int behind
+/= //char = char / int behind
+%= //char = char % int behind
+(Here is only a int valid, because the ascii values are also decimal and if you divide a int by a float/double the endvalue is a floating point number, and these are invalid)
+
+
+inheritance and templates:
+:
+?
+~
+
+. //director
+
+$ //predefined
+-> //lambda separator from args to content
+
+?: // (trueorfalse) ? Returnvalueontrue :   returnvalueonfalse
+
+index:
+[]	 //get part of array.
+	//get ?-class of ?[]
+
+deftip:
+|
+
+(comments: singeline=//, multiline=/*test*/)
+
+
+signs that aren’t real operators:
+()
+arguments after class- and function definitions, class-instanciating and function-calls
+arguments after loops, if and other code structures
+precedence in mathematics, string and char operations
+segmentation on accessing class attributes
+segmentation on holding anonymous classes
+argument segmentation for lambda
+segmentation for casting
+
+[]
+indexing, on defintion and call (these are operators)
+indicate a list/arr, segment lists/arrs from other lists/arrs in multilists/-arrs.
+
+{}
+body segmentation for classes, functions, loops, if and other code structures
+
+,
+segment args in ()
+segment statements in lambda
+segment values in a list/arr and lists/arrs
+segment keyvalues
+segment ? in anonymous classes
+
+.
+directive (operator)
+accessing class-attributes and attributes of a instance’s class
+floating-point in floats and doubles
+
+
+“”
+string
+
+‘’
+char
+
+
+Every dependent class:
+standard datatypes:
+	str
+	char
+	int
+	float
+	double
+	bool
+	ptr
+	list
+	arr
+	dict
+	flex
+	lambda
+	ptr
+	subpr
+	void
+
+Standard classes:
+error //crash, except
+obj //every class inherits Obj somehow
+class //every class is a instance of the class class
+sys
+	convert
+	test
+
+
+Libraries to import:
+            math
+	gui
+
+Models:
+            iterator
+
+
+
+How the Compiler is Build:
+
+define the context-free grammar
+needs to be LL(1).
+Write Lexer which cuts stream of text into tokens (words, numbers, literals).
+Write top-down recursive descent parser for your grammar, which accepts or rejects input.
+Add syntax tree generation into your parser.
+Write a LLVM bytecode Converter from the AST for Platform independeny
+
+
+
+
+
+
+
+————-DEPRECATED IDEAS:
+
+Meta Declarations:
+#Metaclass(constructorarg1, constructorarg2)
+
+The compiler only runs the constructor
+You cannot instanciate those.
+
+A Metaclass is inheriting Meta
+Meta Declarations give the compiler information about how to act.
+The Meta-Handler can execute other code, redirect the merger,
+let the compiler behave like the declaration wants to and get information about:
+function/variable name
+function/variable args
+function/variable encapsulation
+function/variable staticness
+return type and return value / variable value
+
+There are also Compiler-Metaclasses defined by the Meta-Handler, which aren’t really a Metaclass.
+
+List of Compiler-Metaclasses:
+#Override
+#Overload
+#NoProgeny
+
+Tables:
+ytable
+xytable
+
+semicolons
+
+
+the … operator is used for:
+vartemplates: On template declaration can be used as many classes as they want
+If there is only the ~... It says that you don’t need one, but on ~?+... You need 1 and can use more
+
+Multistatements in lambda
+
+————— WHAT TO DO
+
+Variable scope
+Model
+Subpr , sync and processpools
+Enums
+Switch
+Quick for and iter ($i)
+Varargs and $args and Main
+and or xor not
+Code structure grammar
+Structs
+Datatypes better
+.directives
