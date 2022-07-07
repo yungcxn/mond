@@ -1,3 +1,0 @@
-/Users/efecan/Documents/GitHub/mond/mondc/cmake-build-debug/CMakeFiles/rebuild_cache.dir
-/Users/efecan/Documents/GitHub/mond/mondc/cmake-build-debug/CMakeFiles/edit_cache.dir
-/Users/efecan/Documents/GitHub/mond/mondc/cmake-build-debug/CMakeFiles/mondc.dir
