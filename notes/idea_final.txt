@@ -1,0 +1,489 @@
+mondc
+
+compiler generates executable
+mond-
+pre -> lexer -> parser -> optimizer -> linker -> codegen
+compiler generates assembly
+
+--------------------------------------------------------------------------------
+
+file names:
+
+test.mon
+
+-> pre
+test.monp
+
+-> rest of compiler
+test.s (assembly)
+
+--------------------------------------------------------------------------------
+
+what can a file contain?
+
+1. macros
+
+2. global variables
+
+3. functions
+
+4. classes
+
+5. models
+
+--------------------------------------------------------------------------------
+
+(global) variables
+
+- begin with global
+- in scope of every class or function, even if imported by other file
+- mustn't be initiated
+- can't be static
+- can be "public" for accessibility in files imported by
+- can be "con" for becoming a constant
+- syntax:
+
+global [public] (type) nameofvariable;
+global [con] [public] (type) nameofvariable = 5;
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+pointers
+
+- outside of classes: global variables
+- inside of classes: fields or local variables
+- ptr keyword used
+- act as a own datatype having a type itself
+- syntax:
+
+string string ptr variableorfieldname = otherstring;
+
+variableorfieldname = &otherstring;
+variableorfieldname =>= otherstring
+
+- "variablename" gives the memory location of the stored "otherstring"
+- the dereference operator "*" gives with "*variablename" the value it points to
+- the ampersand operator "&" gives with "&variablename" the own memory location.
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+function pointers
+
+- outside of classes: global variables
+- inside of classes: fields or local variables
+
+for example:
+
+int type ptr functionname(int a, int b);
+
+functionname =>= otherfunction;
+functionname = &otherfunction;
+
+- can be assigned to a function returning an int and taking 2 ints as an argument
+after assignment the function the pointer points to can be called via the
+dereference operator
+
+*functionname(2, 3);
+
+function pointers can't call the referenced function without dereferencing
+
+"functioname" gives the memory address of the function it points to
+"&functionname" gives the memory address of the pointer
+"*functionname(2, 3)" acts as a full function
+
+void ptr functionname(int a, int b);
+*functionname(int a, int b);
+
+give both a pointer to a function returning nothing;
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+flex pointers, flex function pointers
+
+--------------------------------------------------------------------------------
+
+functions
+
+- don't begin with global (scope irrelevant, purpose for functional language)
+- can't be static
+- can be "public" for accessibility in files imported by
+- syntax:
+
+[public] int functionname() {
+  return 0;
+}
+
+an example for a void-function without access mods:
+
+void functionname() {
+
+}
+
+functionname() {
+
+}
+
+- both declarations are the same since giving no return type indicates "void"
+
+- arguments are listed like
+
+functionname(int arg1, string arg2){}
+
+
+the function "functionname" cant be used for assigning operations, but the bare
+name without the function parameters can be used for getting assigned to
+function pointers or getting the own memory location via the ampersand operator.
+
+- contain control structures, create and assign variables / fields and call
+other functions
+
+--------------------------------------------------------------------------------
+
+classes
+
+[public] [classtype] class classname {
+
+
+}
+
+- can be public to get imported by other files
+
+- may contain following things:
+    - fields and special fields
+    - methods and special methods
+    - memberclasses and membermodels
+
+- may extend classes via inheritance
+- may implement models
+
+- classtypes for normal classes can be:
+    - con (can't get extended)
+    - blank (blank classes have own rules)
+
+-     -     -     -     -     -     -     -     -     -    -    -    -     -   -
+
+fields
+
+- can be static
+- have accessmods
+- need type
+
+[accessmod] (type) fieldname;
+[accessmod] int fieldname = 5;
+
+-    -     -     -      -     -     -     -     -       -      -      -      -
+
+methods
+
+- "functions" which are defined in classes as members
+- can be static
+- have accessmods
+
+[accessmod] [static] (returntype) functionname() {}
+
+- returntype can be "void" or nothing indicating a void type
+
+- contain control structures, create and assign variables / fields and call
+other functions
+
+-   -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -
+
+special fields and special methods
+
+$ : references "this", pointer to this object
+
+$init() : constructor, can have accessmods
+$deinit() : deconstructor, can have accessmods
+$old() : used in methods that get overridden, same params, same returntype
+
+$main(string... args) : main function, can also be outside of class,
+                        automatically public, static and void
+
+-   -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -
+
+memberclasses
+
+- class definition in other class
+- is automatically "static":
+    - in outerclass, accessed by "memberclass"
+    - outside of outerclass, accessed by "outerclass.memberclass"
+
+
+[accessmod] [classtype] class classname {}
+
+- may contain following things:
+    - fields and special fields
+    - methods and special methods
+    - memberclasses
+    - enums
+
+- may extend classes via inheritance
+- may implement models
+
+- classtypes for normal classes can be:
+    - con (constant classes can't get extended)
+    - blank (blank classes have own rules)
+
+--------------------------------------------------------------------------------
+
+blank classes
+
+- classes with the keyword "blank"
+- can't have private fields / methods
+- can have non-blank methods
+- can extend any non-constant class
+- can't get instanciated
+- blank classes implementing models don't need to implement model methods
+- syntax:
+
+blank class classname{
+
+}
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+blank methods
+
+- begin with the keyword "blank"
+- don't have code to execute; blank methods
+- can't be private
+- syntax:
+
+blank [accessmods] (returntype) functionname(int arg);
+
+--------------------------------------------------------------------------------
+
+models
+
+- java like interface
+- can implement other models
+- can be public to get imported by other files
+- can only consist of blank methods
+- syntax:
+
+[public] model modelname {
+
+}
+
+- blank methods must be implemented by implementing class
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+membermodels
+
+- model definition in other class
+- is automatically "static":
+    - in outerclass, accessed by "membermodel"
+    - outside of outerclass, accessed by "outerclass.membermodel"
+- can have any access mods
+
+[accessmod] model modelname {
+
+}
+
+--------------------------------------------------------------------------------
+
+(class/function/method/field) templates
+
+<?a, ?b, ?c> ?c functionname(?a x, ?b y) {
+
+}
+
+functionname<int, int, int>(3,4);
+
+- compiler creates for every function/class/method/field/global-variable
+  creation a single copy with concrete classes replacing the placeholders
+
+- placeholders begin with a "?"
+
+class exampleclass<?a, ?b, ?c> {}
+
+- inside of this class, the placeholders don't need to be redefined like in
+functions.
+
+- placeholders can be fixed to a superclass:
+
+<?a : superclassname>
+
+- placeholders can be fixed to a class implementing a model:
+
+<?a ++ modelname>
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+constructing, deconstructing, inline constructing, accessing fields
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+overriding (and overloading) operators
+
+
+--------------------------------------------------------------------------------
+
+access-modifier
+
+- following accessmods are available:
+
+family    = accessible in this class, inherited, import not accessible
+public    = accessible outside of scope, import accessible
+
+- global variables are private by default
+- functions are private by default
+- classes / models are private by default
+- fields / methods / memberclasses / membermodels are private by default
+- blank methods are public by default, can't be private
+
+--------------------------------------------------------------------------------
+
+inheritance, implementing models, "override"
+
+class exampleclass : superclass ++ model1, model2<int>, model3 {}
+
+- static methods aren't inherited
+
+- exampleclass gets the public / family fields and methods of superclass
+- exampleclass gets all blank methods from models and abstract superclass,
+they must've get overridden
+
+
+
+- syntax for override with calling old supermethod:
+
+override [oldaccessmod] (oldreturntype) oldfunctionname() {
+  return $old();
+}
+
+--------------------------------------------------------------------------------
+
+guess (automatically assigning types)
+
+- keyword "guess" instead of a class or datatype is possible in:
+
+- variables or fields on assignment, not initializing or assigning "null"
+- function/method return types, guessing the return type and using that
+- in arguments of function/method parameters, acts as a placeholder class,
+every call with a different datatype creates a copy
+
+--------------------------------------------------------------------------------
+
+control structures
+
+begin (object creation) {}
+  automatically executes deconstructor after
+
+--------------------------------------------------------------------------------
+
+datatypes
+
+--------------------------------------------------------------------------------
+
+"type" class for class reflection
+
+--------------------------------------------------------------------------------
+
+operators
+
+sizeof typeof instanceof
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+type casting operator     -   (type)            overridable
+
+  (int)
+
+  override operator int (type)() {
+    return 0;
+  }
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+array-by-range operator   -   [..]             overridable
+
+  [x...y]
+  [x...y, z]
+  [..y, z]
+  [..y]
+
+  override operator anyclass [..](anyclass y, anyclass z){
+    return null;
+  }
+
+--------------------------------------------------------------------------------
+
+
+Preprocessor "mondpre"
+
+- processes macros
+- e.g. merges files
+- imports "standard" library with public, global functions
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+macros
+
+- begin with %
+- syntax: %macroname arg1, arg2 (...);
+- get processed before compilation by "mondpre"
+
+current normal macros:
+%import onlinerepo;
+%include localfile.mon;
+%nostandard;                    (tells mondpre to not include standardlib)
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+special macros
+
+1. getter / setter / xetter
+
+  %getter typename, fieldname;
+  %getter accessmod, typename, fieldname;
+
+    if accessmod not given, public by default,
+    generates getter-method; replaces given macro with the following code:
+
+    (accessmod) typename get_fieldname() {
+      return $.fieldname;
+    }
+
+  %setter typename, fieldname;
+  %setter accessmod, typename, fieldname;
+
+    if accessmod not given, public by default,
+    generates setter-method; replaces given macro with the following code:
+
+    (accessmod) void set_fieldname(typename a) {
+      $.fieldname = a;
+    }
+
+  %xetter typename, fieldname;
+  %xetter accessmod, typename, fieldname;
+
+    this is replaced by both %setter and %getter with the same arguments,
+    creates getters and setters
+
+  %getter fieldname;
+
+    this is replaced by "%getter guess, fieldname"
+
+  %setter fieldname;
+
+    this is replaced by "%setter guess, fieldname"
+
+  %xetter fieldname;
+
+    this is replaced by "%xetter guess, fieldname"
+
+--------------------------------------------------------------------------------
+
+Lexer
+
+
+
+
+--------------------------------------------------------------------------------
+
+future "cool" features
+
+c function calls by including c libs
+libbus (called by "mondpre") handles imports via online repos
