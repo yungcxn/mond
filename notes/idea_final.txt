@@ -46,7 +46,7 @@ what can a file contain?
 global [public] (type) nameofvariable;
 global [con] [public] (type) nameofvariable = 5;
 
--     -     -     -     -     -     -     -     -     -     -     -     -     -
+--------------------------------------------------------------------------------
 
 pointers
 
@@ -56,10 +56,10 @@ pointers
 - act as a own datatype having a type itself
 - syntax:
 
-string string ptr variableorfieldname = otherstring;
+string ptr variableorfieldname = otherstring;
 
 variableorfieldname = &otherstring;
-variableorfieldname =>= otherstring
+variableorfieldname => otherstring
 
 - "variablename" gives the memory location of the stored "otherstring"
 - the dereference operator "*" gives with "*variablename" the value it points to
@@ -74,9 +74,9 @@ function pointers
 
 for example:
 
-int type ptr functionname(int a, int b);
+int funcptr functionname(int a, int b);
 
-functionname =>= otherfunction;
+functionname => otherfunction;
 functionname = &otherfunction;
 
 - can be assigned to a function returning an int and taking 2 ints as an argument
@@ -91,14 +91,29 @@ function pointers can't call the referenced function without dereferencing
 "&functionname" gives the memory address of the pointer
 "*functionname(2, 3)" acts as a full function
 
-void ptr functionname(int a, int b);
-*functionname(int a, int b);
+- these are the same:
 
-give both a pointer to a function returning nothing;
+void funcptr functionname(int a, int b);
+funcptr functionname(int a, int b);
+
+- dereference before calling
+*functionname(int a, int b);
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
-flex pointers, flex function pointers
+flex pointers
+
+- needs to be type casted before dereference
+- syntax:
+
+flexptr variable = &someint;
+int thisint = *((int)variable);
+
+variable = &somestring;
+string thisstring = *((string)variable);
+
+- type casting doesn't change the type of the variable itself, but the type they
+point to
 
 --------------------------------------------------------------------------------
 
@@ -129,7 +144,6 @@ functionname() {
 
 functionname(int arg1, string arg2){}
 
-
 the function "functionname" cant be used for assigning operations, but the bare
 name without the function parameters can be used for getting assigned to
 function pointers or getting the own memory location via the ampersand operator.
@@ -139,12 +153,80 @@ other functions
 
 --------------------------------------------------------------------------------
 
+lambda
+
+- can't be void
+
+returntype lambda variablename = (int arg1, int arg2) -> (arg1 * arg2);
+
+--------------------------------------------------------------------------------
+
+arrays
+
+- fixed size data collection
+- items accessible by [] with it's index starting on 0
+- negative numbers are used to get the last items
+- arrays automatically create a basepointer with it's name like this:
+
+int[] testvariable = [1,2,3];
+
+- arrays can also be created by ranges:
+
+- an array is also created by putting [] behind a type:
+
+int[3] testvariable;
+
+- or multidimensional (3x3) (array of array of int)
+
+int[3][3] testvariable;
+
+- for pointers:
+
+int[3] ptr testvariable;
+
+  pointer to int-array, int-array on dereference
+
+int ptr[3] testvariable;
+
+  array of pointers, int of dereference of item
+
+int[3] ptr[3] testvariable;
+
+  array of pointers, int-array of dereference of item
+  e.g. *(testvariable[0])[1] gets the 1st pointer, gets an int-array by
+  dereference and applys [1] to get the second int
+
+- instanciation works like this:
+
+int[3] testvariable = [1,2,3];
+
+  created a int[] array (array of with 3 elements);
+
+- testvariable now can't be assigned to a array bigger or smaller than this
+
+- arrays can also be created via the "range" notation
+
+int[] testvariable = [0..4,1];
+
+- the first number is the starting number, the number after it is the last
+- it can also be written like this:
+
+[..4,1]
+
+- since no starting number uses the default number 0
+- and the ",1" can also be removed because the default step is 1;
+
+[..4]
+
+- ranges are supported for all integers and floating-point-types
+- technically the range is constructed until the "<= 4" in this examples
+isn't met anymore
+
+--------------------------------------------------------------------------------
+
 classes
 
-[public] [classtype] class classname {
-
-
-}
+[public] [classtype] class classname {}
 
 - can be public to get imported by other files
 
@@ -196,7 +278,8 @@ $init() : constructor, can have accessmods
 $deinit() : deconstructor, can have accessmods
 $old() : used in methods that get overridden, same params, same returntype
 
-$main(string... args) : main function, can also be outside of class,
+$main()
+$main(string[] args) : main function, can also be outside of class,
                         automatically public, static and void
 
 -   -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -
@@ -236,9 +319,7 @@ blank classes
 - blank classes implementing models don't need to implement model methods
 - syntax:
 
-blank class classname{
-
-}
+blank class classname{}
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
@@ -309,14 +390,9 @@ functions.
 
 <?a ++ modelname>
 
--     -     -     -     -     -     -     -     -     -     -     -     -     -
+--------------------------------------------------------------------------------
 
-constructing, deconstructing, inline constructing, accessing fields
-
--     -     -     -     -     -     -     -     -     -     -     -     -     -
-
-overriding (and overloading) operators
-
+constructing, deconstructing, inline constructing, accessing fields TODO
 
 --------------------------------------------------------------------------------
 
@@ -345,13 +421,34 @@ class exampleclass : superclass ++ model1, model2<int>, model3 {}
 - exampleclass gets all blank methods from models and abstract superclass,
 they must've get overridden
 
-
-
 - syntax for override with calling old supermethod:
 
 override [oldaccessmod] (oldreturntype) oldfunctionname() {
   return $old();
 }
+
+--------------------------------------------------------------------------------
+
+type casting
+
+- normal pointers can't be type casted
+- arrays can't be type casted, only on it's items
+- flex pointers change the type pointed to if cast before dereferencing
+- basic casting can be applied to datatypes
+- up- and downcasting can be applied to objects and their base / superclass
+- syntax:
+
+int x = (int) 3.14f; (basic casting)
+
+flexptr x = someint;
+int ptr someintpointer = ((int)flexptr); (needed for flexptr)
+
+Derived d = Derived();
+Base b = (Base) d; (downcast)
+
+Base b = Base();
+Derived d = (Derived) b; (upcast)
+
 
 --------------------------------------------------------------------------------
 
@@ -361,52 +458,121 @@ guess (automatically assigning types)
 
 - variables or fields on assignment, not initializing or assigning "null"
 - function/method return types, guessing the return type and using that
-- in arguments of function/method parameters, acts as a placeholder class,
-every call with a different datatype creates a copy
 
 --------------------------------------------------------------------------------
 
-control structures
+control structures TODO
 
-begin (object creation) {}
-  automatically executes deconstructor after
+begin (objectclass object = objectclass()) {}
+
+  - automatically executes "delete object" after
+
+
+error handling; try-catch
+
+  try {
+    //do something...
+    Exception obj = Exception("message");
+    throw obj;
+  } catch(Exception x) {
+    //do something with x
+  }
+
+  - "throw" is an operator
+  - the standard library defines the class "Exception" for adequate use
+  - catch then defines an object and casts it's type onto the thrown object:
+
+  Exception x = (Exception) thrownobj; (theoretical first line in catch block)
 
 --------------------------------------------------------------------------------
 
-datatypes
+datatypes TODO
+
+basics
+
+  byte      1         0xff  20    0b11111111
+  word      2         0xffff  232 0b1111111111111111
+  int       4         123   0xFF  0b10101010
+  dint      8         123   0xFF  0b10101010
+  qint      16        123   0xFF  0b10101010
+  float     4         1.23f
+  double    8         2.5432
+  char      1         'a'  '\n' 123 255
+  unichar   2         u'x'  500
+  bool      1 bit     true false 1 0
+  void      0         only for functions
+
+compounds
+
+  string
+  unistring
+  array
+
+specials
+
+  lambda
+  ptr
+  funcptr
+  flexptr
+
 
 --------------------------------------------------------------------------------
 
-"type" class for class reflection
+operator support for classes
+
+- with the keyword "operator" classes can implement operator support for
+special operators capable of doing so
+
+- syntax:
+
+operator returnclass operatorname() {
+  return null;
+}
+
+- operators cannot be created by believes, the implementations follow strict
+rules
 
 --------------------------------------------------------------------------------
 
-operators
+operators TODO
 
-sizeof typeof instanceof
+special-operators
+
+  non overridable
+
+  1. delete operator - delete
+
+      delete variable;
+      calls variable.$deinit() if object, frees memory
+
+  2. throw operator - throw
+
+      throw variable;
+      if variable is null, terminates, otherwise gets passed onto catch-block in
+      try-catch
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
-type casting operator     -   (type)            overridable
+meta-operators
 
-  (int)
+  non overridable, evaluated during compilation
 
-  override operator int (type)() {
-    return 0;
-  }
+  1. spaceof operator -  spaceof
+
+      (spaceof variable)
+      produces int, the size the variable occupies in bytes
+
+  2. instanceof operator - instanceof
+
+      (variable instanceof classname)
+      produces boolean, if variable is object of classname or inherits from it
+
+  3. typeof operator - typeof
+
+      (typeof variable)
+      produces the type (class or datatype) of variable
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
-
-array-by-range operator   -   [..]             overridable
-
-  [x...y]
-  [x...y, z]
-  [..y, z]
-  [..y]
-
-  override operator anyclass [..](anyclass y, anyclass z){
-    return null;
-  }
 
 --------------------------------------------------------------------------------
 
@@ -464,22 +630,19 @@ special macros
 
   %getter fieldname;
 
-    this is replaced by "%getter guess, fieldname"
+    this is replaced by "%getter (typeof fieldname), fieldname"
 
   %setter fieldname;
 
-    this is replaced by "%setter guess, fieldname"
+    this is replaced by "%setter (typeof fieldname), fieldname"
 
   %xetter fieldname;
 
-    this is replaced by "%xetter guess, fieldname"
+    this is replaced by "%xetter (typeof fieldname), fieldname"
 
 --------------------------------------------------------------------------------
 
 Lexer
-
-
-
 
 --------------------------------------------------------------------------------
 
