@@ -71,10 +71,11 @@ function pointers
 
 - outside of classes: global variables
 - inside of classes: fields or local variables
+- funcpts DONT need names for it's arguments
 
 for example:
 
-int funcptr functionname(int a, int b);
+int funcptr functionname(int, int);
 
 functionname => otherfunction;
 functionname = &otherfunction;
@@ -93,11 +94,11 @@ function pointers can't call the referenced function without dereferencing
 
 - these are the same:
 
-void funcptr functionname(int a, int b);
-funcptr functionname(int a, int b);
+void funcptr functionname(int, int);
+funcptr functionname(int, int);
 
 - dereference before calling
-*functionname(int a, int b);
+*functionname(2,3);
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
@@ -151,13 +152,70 @@ function pointers or getting the own memory location via the ampersand operator.
 - contain control structures, create and assign variables / fields and call
 other functions
 
+-    -    -    -    -    -    -    -    -   -    -    -    -    -    -    -    -
+
+return values
+
+a function can return the following types:
+
+- any datatype (basic & compound)
+- flexptr
+- ptr
+- funcptr
+- void
+- any object of defined classes
+
+- notation for special ones:
+
+void funcptr functionname() {}
+funcptr functionname() {}
+
+void functionname() {}
+functionname() {}
+
+string ptr functionname() {}
+flexptr functionname() {}
+
+- functions can't return other functions nor lambdas
+
+-    -    -    -    -    -    -    -    -   -    -    -    -    -    -    -    -
+
+arguments (function parameters)
+
+- seperated by comma
+- definition needs type and name
+- arguments in function pointers aren't defined with names
+- "guess" keyword as type not valid
+- functions can't be arguments in other functions
+- function pointer can be:
+
+functionname(funcptr somevoidfunc()) {
+  *somevoidfunc();
+}
+
+functionname(&somerealfunction);
+
 --------------------------------------------------------------------------------
 
 lambda
 
 - can't be void
 
-returntype lambda variablename = (int arg1, int arg2) -> (arg1 * arg2);
+int lambda variablename = (int arg1, int arg2) -> (arg1 * arg2);
+
+- acts as a function, gets called via:
+
+variablename(2,3);
+
+- only function pointers can point to lambdas:
+
+int funcptr someptr(int, int) = &variablename;
+someptr(2,2);
+
+- this returns 2*2 = 4
+
+- lambdas can be reassigned, but are "newly" created since the new version
+doesn't fit in the same memory location as it has before
 
 --------------------------------------------------------------------------------
 
@@ -166,7 +224,6 @@ arrays
 - fixed size data collection
 - items accessible by [] with it's index starting on 0
 - negative numbers are used to get the last items
-- arrays automatically create a basepointer with it's name like this:
 
 int[] testvariable = [1,2,3];
 
@@ -392,7 +449,27 @@ functions.
 
 --------------------------------------------------------------------------------
 
-constructing, deconstructing, inline constructing, accessing fields TODO
+constructing, deconstructing, inline constructing, accessing fields
+
+Object obj = Object();
+
+- obj becomes an object of the example class "Object"
+
+delete obj;
+
+- obj gets garbage collected, deconstructor gets called before
+
+Object[2] obj = [Object(), Object()];
+
+- creates an array of objects
+
+Object obj = Object(){
+  .field = "something";
+  .otherfield = 5;
+};
+
+- inline constructing: constructing the object and set fields after init
+- field access is done by the member operator "." but without something before
 
 --------------------------------------------------------------------------------
 
@@ -478,7 +555,6 @@ error handling; try-catch
     //do something with x
   }
 
-  - "throw" is an operator
   - the standard library defines the class "Exception" for adequate use
   - catch then defines an object and casts it's type onto the thrown object:
 
@@ -520,12 +596,12 @@ specials
 
 operator support for classes
 
-- with the keyword "operator" classes can implement operator support for
-special operators capable of doing so
+- with the predefined operator' name, classes can implement operator support for
+special operators
 
 - syntax:
 
-operator returnclass operatorname() {
+returnclass $operatorname() {
   return null;
 }
 
@@ -542,13 +618,13 @@ special-operators
 
   1. delete operator - delete
 
-      delete variable;
-      calls variable.$deinit() if object, frees memory
+      delete a;
+      calls a.$deinit() if object, frees memory
 
   2. throw operator - throw
 
-      throw variable;
-      if variable is null, terminates, otherwise gets passed onto catch-block in
+      throw a;
+      if a is null, terminates, otherwise gets passed onto catch-block in
       try-catch
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
@@ -559,20 +635,186 @@ meta-operators
 
   1. spaceof operator -  spaceof
 
-      (spaceof variable)
-      produces int, the size the variable occupies in bytes
+      (spaceof a)
+      produces int, the size a occupies in bytes
 
   2. instanceof operator - instanceof
 
-      (variable instanceof classname)
-      produces boolean, if variable is object of classname or inherits from it
+      (a instanceof classname)
+      produces boolean, if a is object of classname or inherits from it
 
   3. typeof operator - typeof
 
-      (typeof variable)
-      produces the type (class or datatype) of variable
+      (typeof a)
+      produces the type (class or datatype) of a
+
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+access-operators
+
+  besides subscript non-overloadable
+
+  1. subscript operator - []
+
+    a[b]
+    e.g. in arrays returns the element of a on position b
+
+    returnclass $subscript(type argument)
+
+  2. dereference operator - *
+
+    *a
+    casts pointer to type pointed to, returns real object
+
+  3. address of operator - &
+
+    &a
+    returns the memory location of a
+
+  4. member operator
+
+    a.b
+    accesses the member of object (or of class if object static)
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+cast-operator
+
+  only basic and compound datatypes and classes are allowed, unary
+
+  A a = (A) b;
+
+  <?a> ?a $cast() {return null;} TODO
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+assignment-operators
+
+  0. (non-overridable) point_to operator:
+
+    a => b
+    pointer a points to value b
+
+  overridable, binary
+
+  1. assign operator - =
+
+    a = b;
+    copies b into a
+
+    void $assign(type arg) {}
+    type cannot be the class this operator is implemented by, illegal!
+
+  2. add_assign operator - +=
+
+    a += b;
+    void $add_assign(type arg){}
+
+  3. sub_assign - -=
+
+    a -= b;
+    void $sub_assign(type arg){}
+
+  4. mul_assign - *=
+
+    a *= b;
+    void $mul_assign(type arg){}
+
+  5. div_assign - /=
+
+    a /= b;
+    void $div_assign(type arg){}
+
+  6. mod_assign - %=
+
+    a %= b;
+    void $mod_assign(type arg){}
+
+  7. pow_assign - **=
+
+    a **= b;
+    void $pow_assign(type arg){}
+
+  8. and_assign - &=
+
+    a &= b;
+    void $and_assign(type arg){}
+
+  9. or_assign - |=
+
+    a |= b
+    void $or_assign(type arg){}
+
+  10. xor_assign - ^=
+
+    a ^= b
+    void $xor_assign(type arg){}
+
+  11. shiftl_assign - <<=
+
+    a <<= b
+    void $shiftl_assign(type arg){}
+
+  12. shiftr_assign - >>=
+
+    a >>= b
+    void $shiftr_assign(type arg){}
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+increment-decrement-operators
+
+  overridable, unary
+
+  1. pre_incr operator - ++a
+
+    ++a
+    increments first, then returns the value
+
+    returntype $pre_incr(){}
+
+  2. pre_decr operator - --a
+
+    --a
+    decrements first, then returns value
+
+    returntype $pre_incr(){}
+
+  3. post_incr operator - a++
+
+    a++
+    increments after return
+
+    returntype $post_incr(){}
+
+  4. post_decr operator - a--
+
+    a--
+    decrements after return
+
+    returntype
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+arithmetic-operators
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+logical-operators
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+comparison-operators
+
+-     -     -     -     -     -     -     -     -     -     -     -     -     -
+
+inline-computation-operators
+
+  non-overloadable, ternary
+
+?:
+if else
 
 --------------------------------------------------------------------------------
 
