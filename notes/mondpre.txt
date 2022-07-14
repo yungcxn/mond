@@ -1,0 +1,78 @@
+--------------------------------------------------------------------------------
+
+mondpre - the first component in mondc
+
+--------------------------------------------------------------------------------
+
+1. gets file.mon
+2. scans for macros
+3. executes macros
+4. rescans for macros until nothing is found
+
+--------------------------------------------------------------------------------
+
+macro list
+
+%include localfile.mon;
+%import onlinerepo;
+%nostandard;                     (tells mondpre to not include standardlib)
+%flag _SOME_NAME_123;            (stores string)
+%isset _SOME_NAME_123;           (produces boolean)
+%filebegin canonical/path;
+
+--------------------------------------------------------------------------------
+
+get/set/xet macros
+
+1. getter / setter / xetter
+
+  %getter typename, fieldname;
+  %getter accessmod, typename, fieldname;
+
+    if accessmod not given, public by default,
+    generates getter-method; replaces given macro with the following code:
+
+    (accessmod) typename get_fieldname() {
+      return $.fieldname;
+    }
+
+  %setter typename, fieldname;
+  %setter accessmod, typename, fieldname;
+
+    if accessmod not given, public by default,
+    generates setter-method; replaces given macro with the following code:
+
+    (accessmod) void set_fieldname(typename a) {
+      $.fieldname = a;
+    }
+
+  %xetter typename, fieldname;
+  %xetter accessmod, typename, fieldname;
+
+    this is replaced by both %setter and %getter with the same arguments,
+    creates getters and setters
+
+  %getter fieldname;
+
+    this is replaced by "%getter (typeof fieldname), fieldname"
+
+  %setter fieldname;
+
+    this is replaced by "%setter (typeof fieldname), fieldname"
+
+  %xetter fieldname;
+
+    this is replaced by "%xetter (typeof fieldname), fieldname"
+
+
+--------------------------------------------------------------------------------
+
+common flags created by the compiler
+
+_OS_WIN_x86_64
+_OS_WIN_x86_32
+_OS_MAC_ARM32
+_OS_MAC_ARM64
+_OS_MAC_x86_64
+
+--------------------------------------------------------------------------------

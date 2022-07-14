@@ -8,4 +8,4 @@ enable_testing()
 add_subdirectory (${PROJECT_SOURCE_DIR}/test)
 
 
-add_executable(mondc main.c)
+add_executable(mondc mondc.c)

@@ -195,6 +195,8 @@ functionname(funcptr somevoidfunc()) {
 
 functionname(&somerealfunction);
 
+- any types, even lambdas and funcptrs are allowed
+
 --------------------------------------------------------------------------------
 
 lambda
@@ -278,6 +280,10 @@ int[] testvariable = [0..4,1];
 - ranges are supported for all integers and floating-point-types
 - technically the range is constructed until the "<= 4" in this examples
 isn't met anymore
+
+--------------------------------------------------------------------------------
+
+strings TODO
 
 --------------------------------------------------------------------------------
 
@@ -562,7 +568,7 @@ error handling; try-catch
 
 --------------------------------------------------------------------------------
 
-datatypes TODO
+datatypes
 
 basics
 
@@ -623,9 +629,13 @@ special-operators
 
   2. throw operator - throw
 
-      throw a;
-      if a is null, terminates, otherwise gets passed onto catch-block in
-      try-catch
+    throw a;
+    if a is null, terminates, otherwise gets passed onto catch-block in
+    try-catch
+
+  3. asm operator - asm
+
+    asm "string";
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
@@ -736,20 +746,20 @@ assignment-operators
     a **= b;
     void $pow_assign(type arg){}
 
-  8. and_assign - &=
+  8. bitand_assign - &=
 
     a &= b;
-    void $and_assign(type arg){}
+    void $bitand_assign(type arg){}
 
-  9. or_assign - |=
+  9. bitor_assign - |=
 
     a |= b
-    void $or_assign(type arg){}
+    void $bitor_assign(type arg){}
 
-  10. xor_assign - ^=
+  10. bitxor_assign - ^=
 
     a ^= b
-    void $xor_assign(type arg){}
+    void $bitxor_assign(type arg){}
 
   11. shiftl_assign - <<=
 
@@ -760,6 +770,16 @@ assignment-operators
 
     a >>= b
     void $shiftr_assign(type arg){}
+
+  13. and_assign - &&=
+
+    a &&= b
+    void $and_assign(type arg){}
+
+  14. or_assign - ||=
+
+    a ||= b
+    void $or_assign(type arg){}
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
@@ -793,15 +813,51 @@ increment-decrement-operators
     a--
     decrements after return
 
-    returntype
+    returntype $post_decr(){}
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
 arithmetic-operators
 
+  overridable, unary and binary
+
+  1. positive operator - +
+
+  2. negative operator - -
+
+  3. add operator
+
+  4. sub operator
+
+  5. mul operator
+
+  6. div operator
+
+  7. mod operator
+
+  8. bitnot operator
+
+  9. bitand operator
+
+  10. bitor operator
+
+  11. bitxor operator
+
+  12. shiftr operator
+
+  13. shiftl operator
+
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
 logical-operators
+
+  overloadable, unary and binary
+
+  1. not operator
+
+  2. and operator
+
+  3. or operator
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
@@ -814,7 +870,6 @@ inline-computation-operators
   non-overloadable, ternary
 
 ?:
-if else
 
 --------------------------------------------------------------------------------
 
@@ -833,58 +888,30 @@ macros
 - syntax: %macroname arg1, arg2 (...);
 - get processed before compilation by "mondpre"
 
-current normal macros:
-%import onlinerepo;
-%include localfile.mon;
-%nostandard;                    (tells mondpre to not include standardlib)
-
--     -     -     -     -     -     -     -     -     -     -     -     -     -
-
-special macros
-
-1. getter / setter / xetter
-
-  %getter typename, fieldname;
-  %getter accessmod, typename, fieldname;
-
-    if accessmod not given, public by default,
-    generates getter-method; replaces given macro with the following code:
-
-    (accessmod) typename get_fieldname() {
-      return $.fieldname;
-    }
-
-  %setter typename, fieldname;
-  %setter accessmod, typename, fieldname;
-
-    if accessmod not given, public by default,
-    generates setter-method; replaces given macro with the following code:
-
-    (accessmod) void set_fieldname(typename a) {
-      $.fieldname = a;
-    }
-
-  %xetter typename, fieldname;
-  %xetter accessmod, typename, fieldname;
-
-    this is replaced by both %setter and %getter with the same arguments,
-    creates getters and setters
-
-  %getter fieldname;
-
-    this is replaced by "%getter (typeof fieldname), fieldname"
-
-  %setter fieldname;
-
-    this is replaced by "%setter (typeof fieldname), fieldname"
-
-  %xetter fieldname;
-
-    this is replaced by "%xetter (typeof fieldname), fieldname"
-
 --------------------------------------------------------------------------------
 
 Lexer
+
+--------------------------------------------------------------------------------
+
+"standard" lib ideas
+
+for() builder for arrays
+len(array) giving the length of an array or string
+
+--------------------------------------------------------------------------------
+
+coding philosophy
+
+1. oop is better than non-oop
+
+2. classes and similar things are PascalCased
+3. datatypes are all-lower
+4. variables, methods and functions are snake_cased
+5. constants are UPPER_SNAKE_CASE
+6. flags are _UPPER_SNAKE_CASE
+
+6. line indent should be 2 spaces
 
 --------------------------------------------------------------------------------
 
