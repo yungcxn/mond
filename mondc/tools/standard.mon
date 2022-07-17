@@ -1,0 +1,18 @@
+%flag USING_STANDARD
+
+class Exception {
+    family string msg;
+
+    $init(string msg) {
+        $.msg = msg;
+    }
+}
+
+int len(string s){
+    return (spaceof s);
+}
+
+int len(unistring s){
+    return (spaceof s) / 2;
+}
+

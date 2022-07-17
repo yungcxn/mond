@@ -197,6 +197,8 @@ functionname(&somerealfunction);
 
 - any types, even lambdas and funcptrs are allowed
 
+- "con" lets the function pass by value, normally pass by reference
+
 --------------------------------------------------------------------------------
 
 lambda

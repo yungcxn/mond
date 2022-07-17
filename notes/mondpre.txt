@@ -13,8 +13,8 @@ mondpre - the first component in mondc
 
 macro list
 
-%include localfile.mon;
-%import onlinerepo;
+%incl localfile.mon;
+%imp onlinerepo;
 %nostandard;                     (tells mondpre to not include standardlib)
 %flag _SOME_NAME_123;            (stores string)
 %isset _SOME_NAME_123;           (produces boolean)
@@ -74,5 +74,6 @@ _OS_WIN_x86_32
 _OS_MAC_ARM32
 _OS_MAC_ARM64
 _OS_MAC_x86_64
+USING_STANDARD
 
 --------------------------------------------------------------------------------

@@ -1,0 +1,24 @@
+%nostandard;
+%flag TEST_FLAG;
+
+global string somestring = "hello world";
+
+class test {
+
+    family int property;
+    public char somechar = 'c';
+    char otherchar = '\"';
+
+    %xetter otherchar;
+
+    $init(int property) {
+        $.property = property;
+    }
+
+}
+
+$main(){
+
+    test sometest = test(5);
+
+}
