@@ -33,10 +33,18 @@ int main(int argc, char *argv[]) {
         strcat(processedpath, filename);
         strcat(processedpath, PROCESSED_FILE_EXT);
 
+        char temppath[PATH_MAX];
+
+        strcat(processedpath, PROCESSED_TEMPFILE_EXT);
+
         FILE *targetfile = fopen(absolutepath, "r");
-        FILE *processedfile = fopen(processedpath, "wr");
-        CompilerInfo ppInfo = mondpre(targetfile, processedfile, argc, argv);
+        FILE *processedfile = fopen(processedpath, "w+");
+        FILE *tempfile = fopen(temppath, "w+");
+
+        CompilerInfo ppInfo = mondpre(targetfile, processedfile, tempfile, argc, argv);
         fclose(targetfile);
+        fclose(processedfile);
+        fclose(tempfile);
     }
     return 0;
 }

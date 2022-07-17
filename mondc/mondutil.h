@@ -1,7 +1,17 @@
 #ifndef MONDC_MONDUTIL_H
 #define MONDC_MONDUTIL_H
 
-#define FILESEP "//"
+#ifdef _WIN32
+#define FILESEP '\\'
+#define BUILD_FOLDER_NAME "build\\"
+#else
+#define FILESEP '/'
+#define BUILD_FOLDER_NAME "build/"
+#endif
+
+#define PROCESSED_FILE_EXT "p"
+#define PROCESSED_TEMPFILE_EXT "t"
+
 
 typedef struct pstring {
     size_t memsize;
@@ -85,12 +95,20 @@ int astrlen(const astring astr){
     return(strlen(astr.string));
 }
 
-void logerr(char* prefix, char* suffix){
+void logps(char* prefix, char* suffix){
     printf("%s %s\n", prefix, suffix);
 }
 
 void macro_not_found_err(char* name){
-    logerr("[macro]", strcat(name, " not found!"));
+    logps("[macro]", strcat(name, " not found!"));
+}
+
+void log(char* str){
+    printf("%s\n", str);
+}
+
+void logint(int i){
+    printf("%d\n", i);
 }
 
 char* getfilename(const char* path){
@@ -104,6 +122,40 @@ char* getfilename(const char* path){
         strncat(buf, c, 1);
     }
     return buf;
+}
+
+/*
+ * grows int array according to the next exponentiation of 2 to n
+ */
+void grow_intarr(int * buf[]){
+    unsigned int v = sizeof(*buf);
+
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v++;
+
+    int* copy = *buf;
+    *buf = malloc(v);
+    buf = *copy;
+}
+
+/*
+ * replaces next integer with value 0 in int array
+ */
+void safeappend_intarr(int *buf[], int val){
+    int elems = sizeof(*buf) / sizeof(int);
+    for(int i = 0; i<elems; i++){
+        if(*buf[i] == 0){
+            *buf[i] = val;
+            return;
+        }
+    }
+    grow_intarr(buf);
+    *buf[elems] = val;
 }
 
 #endif

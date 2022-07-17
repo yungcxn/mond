@@ -3,25 +3,23 @@
 #include <string.h>
 #include "mondutil.h"
 #include "mondpre.h"
+#include "llist.h"
+#include <unistd.h>
 
 /*
  * TODO:
- * 1. stop using pstring / char* for file saving
- * 2. cross include ????
- * 3. set os flags
+ * - cross include ????
+ * - set os flags
  */
 
 typedef struct CompilerInfo {
 
-    FILE* newfile;
     int* fileends;
 
 } CompilerInfo;
 
-astring initial_file;
-int import_standard_lib = 1;
 
-char* pre_readfile(FILE* fp){
+char* readfile(FILE* fp){
     fseek(fp, 0L, SEEK_END);
     int filesize = ftell(fp);
     fseek(fp, 0L, SEEK_SET);
@@ -31,238 +29,183 @@ char* pre_readfile(FILE* fp){
     return *contentout;
 }
 
-/*  removing macros after use   */
-void pre_delete_in_initial(int position){
-    initial_file.string[position] = ' ';
-}
+int pre_include_macro(int argc, char* arg, FILE* dest) {}
+int pre_flag_macro(int argc, char* arg, FILE* dest) {}
+int pre_isset_macro(int argc, char* arg, FILE* dest) {}
+int pre_filebegin_macro(int argc, char* arg, FILE* dest) {}
+int pre_getter_macro(int argc, char* arg, FILE* dest) {}
+int pre_setter_macro(int argc, char* arg, FILE* dest) {}
+int pre_xetter_macro(int argc, char* arg, FILE* dest) {}
 
-void pre_delete_in_initial_ranged(int begin, int end){
-    for(int i = begin; i <=end; i++){
-        pre_delete_in_initial(i);
-    }
-}
-
-void pre_delete_comments(){
-
-    int singlecomment_mode = 0;
-    int multicomment_mode = 0;
-    int string_mode = 0;
-    int char_mode = 0;
-
-    for(int i = 0; i< astrlen(initial_file); i++){
-        char c = initial_file.string[i];
-
-        if(c == '"'){
-            if(!char_mode && initial_file.string[i-1] != '\\'){
-                string_mode = !string_mode;
-            }
-        }
-
-        if(c == '\''){
-            if(!string_mode){
-                char_mode = !char_mode;
-            }
-        }
-
-        if(string_mode || char_mode){
-            continue;
-        }
-
-        if(c == COMMENT_SINGLE){
-            singlecomment_mode = 1;
-        }
-
-        if(singlecomment_mode && c == '\n'){
-            singlecomment_mode = 0;
-        }
-
-        if(c == COMMENT_MULTI_BEGIN_1){
-            if(initial_file.string[i+1] == COMMENT_MULTI_BEGIN_2){
-                singlecomment_mode = 0;
-                multicomment_mode = 1;
-            }
-        }
-
-        if(singlecomment_mode || multicomment_mode){
-            pre_delete_in_initial(i);
-        }
-
-        if(c == COMMENT_MULTI_END_2){
-            if(initial_file.string[i-1] == COMMENT_MULTI_END_1){
-                multicomment_mode = 0;
-            }
-        }
-
-
-
-    }
-}
-
-int pre_include_macro(const int argc, char* arg, const int execpos) {}
-int pre_flag_macro(const int argc, char* arg, const int execpos) {}
-int pre_isset_macro(const int argc, char* arg, const int execpos) {}
-int pre_filebegin_macro(const int argc, char* arg, const int execpos) {}
-int pre_getter_macro(const int argc, char* arg, const int execpos) {}
-int pre_setter_macro(const int argc, char* arg, const int execpos) {}
-int pre_xetter_macro(const int argc, char* arg, const int execpos) {}
-
-void call_macro(const char* macroname, const int argc, const char* argwordlist,
-                const size_t execbegin, const size_t execend){
+void call_macro(const char* macroname, int argc, char* argwordlist,
+                FILE* dest){
 
     int worked = 0;
 
     if(!strcmp(macroname, MACRO_INCLUDE)){
-        pre_delete_in_initial_ranged(execbegin, execend);
-        worked = pre_include_macro(argc, argwordlist, execbegin);
+        worked = pre_include_macro(argc, argwordlist, dest);
     }else if(!strcmp(macroname, MACRO_NOSTANDARD)){
-        pre_delete_in_initial_ranged(execbegin, execend);
-        import_standard_lib = 0;
         worked = 1;
     }else if(!strcmp(macroname, MACRO_FLAG)){
-        pre_delete_in_initial_ranged(execbegin, execend);
-        worked = pre_flag_macro(argc, argwordlist, execbegin);
+        worked = pre_flag_macro(argc, argwordlist, dest);
     }else if(!strcmp(macroname, MACRO_ISSET)){
-        pre_delete_in_initial_ranged(execbegin, execend);
-        worked = pre_isset_macro(argc, argwordlist, execbegin);
+        worked = pre_isset_macro(argc, argwordlist, dest);
     }else if(!strcmp(macroname, MACRO_FILEBEGIN)){
-        pre_delete_in_initial_ranged(execbegin, execend);
-        worked = pre_filebegin_macro(argc, argwordlist, execbegin);
+        worked = pre_filebegin_macro(argc, argwordlist, dest);
     }else if(!strcmp(macroname, MACRO_GETTER)){
-        pre_delete_in_initial_ranged(execbegin, execend);
-        worked = pre_getter_macro(argc, argwordlist, execbegin);
+        worked = pre_getter_macro(argc, argwordlist, dest);
     }else if(!strcmp(macroname, MACRO_SETTER)){
-        pre_delete_in_initial_ranged(execbegin, execend);
-        worked = pre_setter_macro(argc, argwordlist, execbegin);
+        worked = pre_setter_macro(argc, argwordlist, dest);
     }else if(!strcmp(macroname, MACRO_XETTER)){
-        pre_delete_in_initial_ranged(execbegin, execend);
-        worked = pre_xetter_macro(argc, argwordlist, execbegin);
+        worked = pre_xetter_macro(argc, argwordlist, dest);
     }else{
         macro_not_found_err(macroname);
     }
 
 }
 
-/*
- * returns boolean if macro successfully found and processed
- * executes only the given macro nametosearch, not multiple
- */
-int pre_scanfor_macro(const char* nametosearch){
-    int scanmacro_mode = 0;
-    size_t scanmacro_charpos = -1;
-    size_t scanmacro_endpos;
-    int parsingargs_mode = 0;
+void shortenfile(FILE* fp, int len){
+    fseeko(fp,-len,SEEK_END);
+    off_t position = ftello(fp);
+    ftruncate(fileno(fp), position);
+}
+
+void preprocess_file(FILE* src, FILE* dst){
+    char c;
+    char c0;
+
+    int scan_macroname_mode = 0;
+    int scan_macroargs_mode = 0;
     int string_mode = 0;
     int char_mode = 0;
 
-    int macro_argc;
-    pstring macro_argstr;
-    pstring macroname;
+    int single_comment_mode = 0;
+    int multi_comment_mode = 0;
 
-    for(size_t i = 0; i<strlen(initial_file.string); i++){
-        char c = initial_file.string[i];
+    int chardeletecount = 0;
+    astring macroname = create_astring("");
+    astring macroargs = create_astring(""); //seperated by space
+    int lastargc = 0;
 
-        if(c == '"'){
-            if(!char_mode && initial_file.string[i-1] != '\\'){
-                string_mode = !string_mode;
+    while ((c = fgetc(src)) != EOF)
+    {
+        if(!single_comment_mode || !multi_comment_mode){
+            if(c == '"'){
+                if(!char_mode && c0 != '\\'){
+                    string_mode = !string_mode;
+                }
+            }
+
+            if(c == '\''){
+                if(!string_mode){
+                    char_mode = !char_mode;
+                }
             }
         }
 
-        if(c == '\''){
-            if(!string_mode){
-                char_mode = !char_mode;
+        if(!char_mode || !string_mode){
+            if(c == COMMENT_SINGLE){
+                single_comment_mode = 1;
+            }
+
+            if(single_comment_mode && c == '\n'){
+                single_comment_mode = 0;
+            }
+
+            if(c == COMMENT_MULTI_BEGIN_1){
+                char c1 = fgetc(src);
+                if(c1 == COMMENT_MULTI_BEGIN_2){
+                    single_comment_mode = 0;
+                    multi_comment_mode = 1;
+                }
+                fseek(src, -1, SEEK_CUR);
+            }
+
+            if(c == COMMENT_MULTI_END_2){
+                if(c0 == COMMENT_MULTI_END_1){
+                    multi_comment_mode = 0;
+                }
             }
         }
 
-        if(string_mode || char_mode){
-            continue;
+        if(!single_comment_mode || !multi_comment_mode){
+            fputc(c,dst);
         }
 
-        if(parsingargs_mode){
-            macro_argstr = create_pstring("");
-            if(c != ';' && c != '\n'){
-                if(c == ','){
-                    safeappend_pstring(&macro_argstr, ' ');
-                    ++macro_argc;
-                }else{
-                    safeappend_pstring(&macro_argstr, c);
-                }
-            }else {
-                parsingargs_mode = 0;
+        if(!single_comment_mode || !multi_comment_mode || !string_mode || !char_mode){
 
-                if(pstrlen(macro_argstr) != 0){ //if there is an argument
-                    ++macro_argc;
-                }
-
-                call_macro(macroname.string, macro_argc, macro_argstr.string, scanmacro_charpos-1, i);
-
-                return 1;
-            }
-        }
-
-        if(scanmacro_mode){
-            if(scanmacro_charpos == -1){
-                if(c == " "){
-                    scanmacro_mode = 0;
-                    continue;
-                }
-                scanmacro_charpos = i;
-            }
-
-            if(c == ' ' || c == ';'){
-                scanmacro_endpos = i-1;
-
-                macroname = create_pstring("");
-                for(int a = 0; a < scanmacro_endpos - scanmacro_charpos; a++){
-                    safeappend_pstring(&macroname,initial_file.string[scanmacro_charpos + a]);
+            if(scan_macroname_mode || scan_macroargs_mode){
+                ++chardeletecount;
+                if(c == MACRO_END){
+                    scan_macroargs_mode = 0;
+                    scan_macroname_mode = 0;
+                    shortenfile(dst, chardeletecount);
+                    call_macro(macroname.string, lastargc, macroargs.string, dst);
+                    chardeletecount = 0;
+                    macroname = create_astring("");
+                    macroargs = create_astring("");
+                    lastargc = 0;
                 }
 
-                if(strcmp(nametosearch, macroname.string)){
-                    scanmacro_mode = 0;
-                }else{
-                    scanmacro_mode = 0;
-                    scanmacro_charpos = -1;
-                    scanmacro_endpos = 0;
-                    parsingargs_mode = 1;
+                if(scan_macroname_mode){
+                    if(c == ' '){
+                        scan_macroargs_mode = 1;
+                        scan_macroname_mode = 0;
+                        ++lastargc;
+                    }else{
+                        safeappend_astring(&macroname, c);
+                    }
+                }else if(scan_macroargs_mode){
+                    if(c == ','){
+                        safeappend_astring(&macroargs, " ");
+                        ++lastargc;
+                    }else{
+                        safeappend_astring(&macroargs, c);
+                    }
                 }
 
             }
-        }else if(c == '%'){
-            scanmacro_mode = 1;
+            if(c == MACRO_OP){
+                if(!scan_macroname_mode){
+                    ++chardeletecount;
+                }
+                scan_macroname_mode = 1;
+            }
         }
+
+
+
+
+        c0 = c;
     }
-    return 0;
+}
 
+void insert_standard_lib(FILE* realfile, FILE* tempfile){
 
 }
+
+
 /*
  * FILE* fp: file pointer to the target.mon file which will be preprocessed/ compiled
  * FILE* processedfp: file pointer to the target.monp where the processed version is stored
+ * FILE* tempfile: file pointer to target.monpt where subparts during processing are stored
  */
 
-CompilerInfo mondpre(FILE* fp, const FILE* processedfp, int argc, char *argv[]){
+CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile, int argc, char *argv[]){
 
     int include_macroleft = 0;
     int nostandard_macroleft = 0;
 
+    /*
+     * only detects macros which are recognized
+     */
+    int nomacro_left = 0;
+
     int *builtfileends[MAX_FILEENDS];
-
-    initial_file = create_astring(pre_readfile(fp));
-
-    pre_delete_comments();
-
-    while(!nostandard_macroleft) {
-        nostandard_macroleft = pre_scanfor_macro(MACRO_NOSTANDARD);
-    }
-
-    while(!include_macroleft) {
-        include_macroleft = pre_scanfor_macro(MACRO_INCLUDE);
-    }
 
     CompilerInfo compilerInfo = {
         .fileends = builtfileends
     };
-
-    fclose(newfile);
     free(builtfileends);
     return compilerInfo;
 }

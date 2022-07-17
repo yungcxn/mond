@@ -2,11 +2,11 @@
 #define MONDC_MONDPRE_H
 
 //path to this folder is the target .mon file
-#define BUILD_FOLDER_NAME "build/"
-
-#define PROCESSED_FILE_EXT "p"
 
 #define MAX_FILEENDS 10
+
+#define MACRO_OP '%'
+#define MACRO_END ';'
 
 #define COMMENT_SINGLE '#'
 #define COMMENT_MULTI_BEGIN_1 '/'

@@ -6,6 +6,7 @@ set(CMAKE_C_STANDARD 99)
 enable_testing()
 
 add_subdirectory (${PROJECT_SOURCE_DIR}/test)
+add_subdirectory (${PROJECT_SOURCE_DIR}/try)
 
 add_executable(mondc mondc.c)
 

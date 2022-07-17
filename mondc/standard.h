@@ -5,7 +5,7 @@
 
 const char standardlibtext[] =
     "%flag USING_STANDARD\n"
-    "class Exeption {\n"
+    "class Exception {\n"
     "    family string msg;\n"
     "    $init(string msg) {\n"
     "        $.msg = msg;\n"
