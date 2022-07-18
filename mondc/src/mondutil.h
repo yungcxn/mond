@@ -1,6 +1,8 @@
 #ifndef MONDC_MONDUTIL_H
 #define MONDC_MONDUTIL_H
 
+#include <stdlib.h>
+
 #ifdef _WIN32
 #define FILESEP '\\'
 #define BUILD_FOLDER_NAME "build\\"
@@ -11,6 +13,9 @@
 
 #define PROCESSED_FILE_EXT "p"
 #define PROCESSED_TEMPFILE_EXT "t"
+
+#define TRUE_EXPR "true"
+#define FALSE_EXPR "false"
 
 
 typedef struct pstring {
@@ -48,8 +53,8 @@ void safeset_pstring(pstring *pstr, const char *str){
     strcpy(pstr->string, str);
 }
 
-void safeappend_pstring(pstring *mstr, const char *str){
-    safeset_pstring(mstr, strcat(mstr->string, str));
+void safeappend_pstring(pstring *pstr, const char *str){
+    safeset_pstring(pstr, strcat(pstr->string, str));
 }
 
 void pstring_to_arr(const pstring mstr, char *buf[]){
@@ -95,24 +100,8 @@ int astrlen(const astring astr){
     return(strlen(astr.string));
 }
 
-void logps(char* prefix, char* suffix){
-    printf("%s %s\n", prefix, suffix);
-}
-
-void macro_not_found_err(char* name){
-    logps("[macro]", strcat(name, " not found!"));
-}
-
-void log(char* str){
-    printf("%s\n", str);
-}
-
-void logint(int i){
-    printf("%d\n", i);
-}
-
 char* getfilename(const char* path){
-    char buf[FILENAME_MAX];
+    char buf[strlen(path) + 1];
     for(int i = 0; i<strlen(path); i++){
         char c = path[i];
         if(c == FILESEP){
@@ -124,6 +113,20 @@ char* getfilename(const char* path){
     return buf;
 }
 
+char* get_containing_dir(const char* path){
+    int len = strlen(path);
+    char* dir = malloc(len + 1);
+    strcpy(dir, path);
+    while (len > 0) {
+        len--;
+        if (dir[len] == FILESEP) {
+            dir[len] = '\0';
+            break;
+        }
+    }
+    return dir;
+
+}
 /*
  * grows int array according to the next exponentiation of 2 to n
  */
@@ -140,7 +143,7 @@ void grow_intarr(int * buf[]){
 
     int* copy = *buf;
     *buf = malloc(v);
-    buf = *copy;
+    *buf = *copy;
 }
 
 /*
@@ -156,6 +159,16 @@ void safeappend_intarr(int *buf[], int val){
     }
     grow_intarr(buf);
     *buf[elems] = val;
+}
+
+char* readfile(FILE* fp){
+    fseek(fp, 0L, SEEK_END);
+    int filesize = ftell(fp);
+    fseek(fp, 0L, SEEK_SET);
+    char *contentout = malloc(filesize+1);
+    size_t red = fread(*contentout, 1, filesize, fp);
+    contentout[red] = 0;
+    return *contentout;
 }
 
 #endif

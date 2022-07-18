@@ -19,9 +19,57 @@ ll_string* ll_string_insert(ll_string* head, char* ptr){
     return temp;
 }
 
+ll_string* ll_string_delete0(ll_string* head){
+    return head->next;
+}
+/*
+ * returns boolean
+ */
+int ll_string_contains(ll_string* head, char* ptr){
+    ll_string* current = NULL;
+    for(current = head; current != NULL; current = current->next){
+        if(!strcmp(head->item, ptr)){
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int ll_string_at(ll_string* head, char* ptr){
+    int i = 0;
+    ll_string* current = NULL;
+    for(current = head; current != NULL; current = current->next){
+        if(!strcmp(head->item, ptr)){
+            return i;
+        }
+        ++i;
+    }
+    return i;
+}
+
+ll_string* ll_string_delete(ll_string* head, int index){
+    if(index == 0){
+        return head->next;
+    }
+
+    int i = 0;
+    ll_string* current = NULL;
+    for(current = head; current != NULL; current = current->next){
+        if(i-1 == index){
+            ll_string* temp = head->next;
+            head = temp->next;
+        }
+        ++i;
+    }
+    return head;
+
+}
+
 int ll_string_hasnext(const ll_string* ll){
     return ll->next != NULL;
 }
+
+
 
 void ll_string_reverse(ll_string** ll){
     ll_string* prev = NULL;
@@ -37,6 +85,16 @@ void ll_string_reverse(ll_string** ll){
 
     *ll = prev;
 }
+
+void ll_string_concat(ll_string **head, const ll_string* tocat){
+    ll_string_reverse(*head);
+    ll_string* current = NULL;
+    for(current = tocat; current != NULL; current = current->next){
+        *head = ll_string_insert(*head, current);
+    }
+    ll_string_reverse(*head);
+}
+
 
 void ll_string_iter(ll_string* toiter, void (*function)(void*)){
     ll_string* current = NULL;
@@ -74,5 +132,7 @@ void ll_string_pull_value(ll_string** ll, int index){
     free(temp);
 
 }
+
+
 
 #endif

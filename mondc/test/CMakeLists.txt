@@ -1,3 +1,2 @@
 cmake_minimum_required(VERSION 3.20)
 add_executable(tester test.c)
-add_test(tester tester)

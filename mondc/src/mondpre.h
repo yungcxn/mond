@@ -2,9 +2,6 @@
 #define MONDC_MONDPRE_H
 
 //path to this folder is the target .mon file
-
-#define MAX_FILEENDS 10
-
 #define MACRO_OP '%'
 #define MACRO_END ';'
 
@@ -18,7 +15,6 @@
 #define MACRO_NOSTANDARD "nostandard"
 #define MACRO_FLAG "flag"
 #define MACRO_ISSET "isset"
-#define MACRO_FILEBEGIN "filebegin"
 
 #define MACRO_GETTER "getter"
 #define MACRO_SETTER "setter"

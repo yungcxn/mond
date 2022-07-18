@@ -1,16 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
+
 project(mondc C)
 
 set(CMAKE_C_STANDARD 99)
 
-enable_testing()
+find_package(Python REQUIRED)
 
-add_subdirectory (${PROJECT_SOURCE_DIR}/test)
-add_subdirectory (${PROJECT_SOURCE_DIR}/try)
-
-add_executable(mondc mondc.c)
-
-execute_process(
-        COMMAND python generatestandard.py
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tools
-)
+add_subdirectory (${CMAKE_SOURCE_DIR}/src)
+add_subdirectory (${CMAKE_SOURCE_DIR}/try)
+add_subdirectory (${CMAKE_SOURCE_DIR}/test)

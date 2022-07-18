@@ -5,6 +5,7 @@
 #include <limits.h>
 
 int main(int argc, char *argv[]) {
+
     if(argc >= 2){
         char cwd[PATH_MAX];
         if (getcwd(cwd, sizeof(cwd)) == NULL) {
@@ -20,6 +21,10 @@ int main(int argc, char *argv[]) {
         strcpy(absolutepath, cwd);
         strcat(absolutepath, FILESEP);
         strcat(absolutepath, relativepath);
+
+        char absolutepath_folder[PATH_MAX];
+
+        strcpy(absolutepath_folder, get_containing_dir(absolutepath));
 
         char buildpath[PATH_MAX];
 
@@ -41,7 +46,7 @@ int main(int argc, char *argv[]) {
         FILE *processedfile = fopen(processedpath, "w+");
         FILE *tempfile = fopen(temppath, "w+");
 
-        CompilerInfo ppInfo = mondpre(targetfile, processedfile, tempfile, argc, argv);
+        CompilerInfo ppInfo = mondpre(targetfile, processedfile, tempfile, absolutepath_folder, buildpath, argc, argv);
         fclose(targetfile);
         fclose(processedfile);
         fclose(tempfile);
