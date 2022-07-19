@@ -12,6 +12,17 @@ typedef struct ll_string{
     struct stringitem* next;
 } ll_string;
 
+void ll_string_free(ll_string** head){
+    ll_string* tmp;
+
+    while (*head != NULL)
+    {
+        tmp = *head;
+        *head = (*head)->next;
+        free(tmp);
+    }
+}
+
 ll_string* ll_string_insert(ll_string* head, char* ptr){
     ll_string* temp = malloc(sizeof(struct ll_string));
     strcpy(temp->item, ptr);
@@ -19,8 +30,10 @@ ll_string* ll_string_insert(ll_string* head, char* ptr){
     return temp;
 }
 
-ll_string* ll_string_delete0(ll_string* head){
-    return head->next;
+void ll_string_delete0(ll_string** head){
+    ll_string *ref = *head;
+    *head = ref->next;
+    free(ref);
 }
 /*
  * returns boolean
@@ -47,29 +60,33 @@ int ll_string_at(ll_string* head, char* ptr){
     return i;
 }
 
-ll_string* ll_string_delete(ll_string* head, int index){
+void ll_string_delete(ll_string** head, int index){
+
     if(index == 0){
-        return head->next;
+        ll_string_delete0(*head);
     }
 
     int i = 0;
     ll_string* current = NULL;
-    for(current = head; current != NULL; current = current->next){
+
+    for(current = *head; current != NULL; current = current->next){
+
+        printf("%s", current->item);
+
         if(i-1 == index){
-            ll_string* temp = head->next;
-            head = temp->next;
+
+            ll_string* temp = current->next;
+            current->next = temp->next;
+            free(temp);
+            return;
         }
         ++i;
     }
-    return head;
-
 }
 
 int ll_string_hasnext(const ll_string* ll){
     return ll->next != NULL;
 }
-
-
 
 void ll_string_reverse(ll_string** ll){
     ll_string* prev = NULL;

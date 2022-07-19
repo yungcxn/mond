@@ -17,21 +17,21 @@
 typedef struct CompilerInfo {
 
     int* fileends;
-    astring flags;
+    astring_ptr flags;
 
 } CompilerInfo;
 
 /*
  *
  */
-astring pp_flags;
+astring_ptr pp_flags = NULL;
 
 
 /*
  * macrofunctions are writing via dest filepointer at the current position the preprocessor stopped at
  */
 
-void parse_get_set_macro_args(int argc, char* argwordlist, pstring* accessmod, pstring* typename, pstring* fieldname){
+void parse_get_set_macro_args(int argc, char* argwordlist, astring_ptr* accessmod, astring_ptr* typename, astring_ptr* fieldname){
     if(argc == 3){
         int nextarg = 1;
         for(int i = 0; i< strlen(argwordlist);i++){
@@ -41,11 +41,11 @@ void parse_get_set_macro_args(int argc, char* argwordlist, pstring* accessmod, p
                 continue;
             }
             if(nextarg == 1){
-                safeappend_pstring(accessmod, c);
+                safeappend_astring(accessmod, c);
             }else if(nextarg == 2){
-                safeappend_pstring(typename, c);
+                safeappend_astring(typename, c);
             }else if(nextarg == 3){
-                safeappend_pstring(fieldname, c);
+                safeappend_astring(fieldname, c);
             }
 
         }
@@ -59,23 +59,23 @@ void parse_get_set_macro_args(int argc, char* argwordlist, pstring* accessmod, p
             }
 
             else if(nextarg == 1){
-                safeappend_pstring(typename, c);
+                safeappend_astring(typename, c);
             }else if(nextarg == 2){
-                safeappend_pstring(fieldname, c);
+                safeappend_astring(fieldname, c);
             }
 
         }
     }else if(argc == 1){
         for(int i = 0; i< strlen(argwordlist);i++){
             char c = argwordlist[i];
-            safeappend_pstring(fieldname, c);
+            safeappend_astring(fieldname, c);
         }
     }
 
-    if(pstrlen(*typename) == 0){
-        safeset_pstring(typename, "(typeof ");
-        safeappend_pstring(typename, fieldname->string);
-        safeappend_pstring(typename, ")");
+    if(astrlen(*typename) == 0){
+        safeset_astring(typename, "(typeof ");
+        safeappend_astring(typename, (*fieldname)->string);
+        safeappend_astring(typename, ")");
     }
 
 }
@@ -105,7 +105,7 @@ int pre_isset_macro(int argc, char* argwordlist, FILE* dest) {
     }
 
     char* result = FALSE_EXPR; //since > TRUE_EXPR for bigger buffer length
-    if(strstr(pp_flags.string, argwordlist) != NULL){
+    if(strstr(pp_flags->string, argwordlist) != NULL){
         result = TRUE_EXPR;
     }
 
@@ -118,50 +118,58 @@ int pre_isset_macro(int argc, char* argwordlist, FILE* dest) {
 
 int pre_getter_macro(int argc, char* argwordlist, FILE* dest) {
 
-    pstring typename = create_pstring("");
-    pstring fieldname = create_pstring("");
-    pstring accessmod = create_pstring("");
+    astring_ptr typename = create_astring("");
+    astring_ptr fieldname = create_astring("");
+    astring_ptr accessmod = create_astring("");
 
     parse_get_set_macro_args(argc, argwordlist, &accessmod, &typename, &fieldname);
 
     /*
      * file writing manually with macros in macrogen.h
      */
-    if(pstrlen(accessmod) != 0){
-        fputs(accessmod.string, dest);
+    if(astrlen(accessmod) != 0){
+        fputs(accessmod->string, dest);
     }
 
     fputc(' ', dest);
-    fputs(typename.string, dest);
+    fputs(typename->string, dest);
     fputs(GETTER1, dest);
-    fputs(fieldname.string, dest);
+    fputs(fieldname->string, dest);
     fputs(GETTER2, dest);
-    fputs(fieldname.string, dest);
+    fputs(fieldname->string, dest);
     fputs(GETTER3, dest);
+
+    sfree_astring(accessmod);
+    sfree_astring(typename);
+    sfree_astring(fieldname);
 
 }
 
 int pre_setter_macro(int argc, char* argwordlist, FILE* dest) {
-    pstring typename = create_pstring("");
-    pstring fieldname = create_pstring("");
-    pstring accessmod = create_pstring("");
+    astring_ptr typename = create_astring("");
+    astring_ptr fieldname = create_astring("");
+    astring_ptr accessmod = create_astring("");
 
     parse_get_set_macro_args(argc, argwordlist, &accessmod, &typename, &fieldname);
 
     /*
      * file writing manually with macros in macrogen.h
      */
-    if(pstrlen(accessmod) != 0){
-        fputs(accessmod.string, dest);
+    if(astrlen(accessmod) != 0){
+        fputs(accessmod->string, dest);
     }
 
     fputs(SETTER1, dest);
-    fputs(fieldname.string, dest);
+    fputs(fieldname->string, dest);
     fputs(SETTER2, dest);
-    fputs(typename.string, dest);
+    fputs(typename->string, dest);
     fputs(SETTER3, dest);
-    fputs(fieldname.string, dest);
+    fputs(fieldname->string, dest);
     fputs(SETTER4, dest);
+
+    sfree_astring(accessmod);
+    sfree_astring(typename);
+    sfree_astring(fieldname);
 }
 
 int pre_xetter_macro(int argc, char* argwordlist, FILE* dest) {
@@ -218,8 +226,8 @@ int preprocess_file(FILE* src, FILE* dst){
     int multi_comment_mode = 0;
 
     int chardeletecount = 0;
-    astring macroname = create_astring("");
-    astring macroargs = create_astring(""); //seperated by space
+    astring_ptr macroname = NULL;
+    astring_ptr macroargs = NULL; //seperated by space
     int lastargc = 0;
 
     ll_string* inclusion_directives = NULL;
@@ -275,10 +283,10 @@ int preprocess_file(FILE* src, FILE* dst){
                     scan_macroargs_mode = 0;
                     scan_macroname_mode = 0;
                     shortenfile(dst, chardeletecount);
-                    if(!strcmp(macroname.string, MACRO_INCLUDE)){
-                        inclusion_directives = ll_string_insert(inclusion_directives, macroargs.string);
+                    if(!strcmp(macroname->string, MACRO_INCLUDE)){
+                        inclusion_directives = ll_string_insert(inclusion_directives, macroargs->string);
                     }else{
-                        call_macro(macroname.string, lastargc, macroargs.string, dst);
+                        call_macro(macroname->string, lastargc, macroargs->string, dst);
                     }
 
                     chardeletecount = 0;
@@ -315,6 +323,10 @@ int preprocess_file(FILE* src, FILE* dst){
 
         c0 = c;
     }
+
+    sfree_astring(macroname);
+    sfree_astring(macroargs);
+
     return inclusion_directives;
 }
 
@@ -375,6 +387,7 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
         /*
          * relative filepaths to current_processing_files location
          */
+
         ll_string* inclusion_directives = preprocess_file(current_processing_file, current_temp_file);
 
 
@@ -411,8 +424,8 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
              * does the same thing as down here...
              */
             if(ll_string_contains(inclusion_dir_queue, link->item)){
-                inclusion_dir_queue = ll_string_delete(
-                        inclusion_dir_queue,
+                ll_string_delete(
+                        &inclusion_dir_queue,
                         ll_string_contains(inclusion_dir_queue, link->item));
             }
 
@@ -431,13 +444,15 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
              *  2. double imports
              */
             if(ll_string_contains(all_files_to_include, tempppfilename)){
-                all_files_to_include = ll_string_delete(
-                        all_files_to_include,
+                ll_string_delete(
+                        &all_files_to_include,
                         ll_string_contains(all_files_to_include, tempppfilename));
             }
 
             all_files_to_include = ll_string_insert(all_files_to_include, tempppfilename);
         }
+
+        ll_string_free(&inclusion_directives);
     }
 
     /*
@@ -488,6 +503,11 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
 
     fclose(current_processing_file);
     fclose(current_temp_file);
+
+    sfree_astring(pp_flags);
+
+    ll_string_free(inclusion_dir_queue);
+    ll_string_free(all_files_to_include);
 
     return compilerInfo;
 }
