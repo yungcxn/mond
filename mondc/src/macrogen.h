@@ -21,5 +21,4 @@
 //fieldname
 #define SETTER4 " = x;\n\n"
 
-
 #endif

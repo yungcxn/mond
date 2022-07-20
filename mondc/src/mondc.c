@@ -6,6 +6,15 @@
 
 int main(int argc, char *argv[]) {
 
+    printf("\nstarting mondc...\n");
+    if(argc == 1){
+        printf("no arguments given.\n");
+        return 0;
+    }
+
+    printf("first arg: %s\n", argv[1]);
+
+
     if(argc >= 2){
         char cwd[PATH_MAX];
         if (getcwd(cwd, sizeof(cwd)) == NULL) {
@@ -19,7 +28,7 @@ int main(int argc, char *argv[]) {
         char absolutepath[PATH_MAX];
 
         strcpy(absolutepath, cwd);
-        strcat(absolutepath, FILESEP);
+        strcat(absolutepath, FILESEP_S);
         strcat(absolutepath, relativepath);
 
         char absolutepath_folder[PATH_MAX];
@@ -29,7 +38,7 @@ int main(int argc, char *argv[]) {
         char buildpath[PATH_MAX];
 
         strcpy(buildpath, cwd);
-        strcat(buildpath, FILESEP);
+        strcat(buildpath, FILESEP_S);
         strcat(buildpath, BUILD_FOLDER_NAME);
 
         char processedpath[PATH_MAX];

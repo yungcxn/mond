@@ -5,9 +5,11 @@
 
 #ifdef _WIN32
 #define FILESEP '\\'
+#define FILESEP_S "\\"
 #define BUILD_FOLDER_NAME "build\\"
 #else
 #define FILESEP '/'
+#define FILESEP_S "/"
 #define BUILD_FOLDER_NAME "build/"
 #endif
 
@@ -46,17 +48,21 @@ void safeset_astring(astring_ptr* astr, const char *str){
     size_t reallen = strlen(str)+1;
 
     int i = 0;
+    unsigned int fmemsize = (*astr)->memsize;
 
-    while(reallen > (*astr)->memsize){
-        (*astr)->memsize *= 2;
+    while(reallen > fmemsize){
+        fmemsize *= 2;
         if(!i){
             i = 1;
         }
     }
 
     if(i){
-        *astr = (astring_ptr) realloc(*astr, sizeof(astring) + (*astr)->memsize);
+
+        *astr = (astring_ptr) realloc(*astr, sizeof(astring) + fmemsize);
     }
+
+    (*astr)->memsize = fmemsize;
 
     strcpy((*astr)->string, str);
 }
@@ -79,20 +85,48 @@ void safeappend_astring(astring_ptr* astr, const char *str){
     size_t reallen = strlen(begin)+ strlen(str)+1;
 
     int i = 0;
+    unsigned int fmemsize = (*astr)->memsize;
 
-    while(reallen > (*astr)->memsize){
-        (*astr)->memsize *= 2;
+    while(reallen > fmemsize){
+        fmemsize *= 2;
         if(!i){
             i = 1;
         }
     }
 
     if(i){
-        *astr = (astring_ptr) realloc(*astr, sizeof(astring) + (*astr)->memsize);
+
+        *astr = (astring_ptr) realloc(*astr, sizeof(astring) + fmemsize);
     }
 
+    (*astr)->memsize = fmemsize;
     strcpy((*astr)->string, begin);
     strcat((*astr)->string, str);
+}
+
+void safeappendc_astring(astring_ptr* astr, const char c){
+    char begin[strlen((*astr)->string)+1];
+    strcpy(begin, (*astr)->string);
+    size_t reallen = strlen(begin)+2;
+
+    int i = 0;
+    unsigned int fmemsize = (*astr)->memsize;
+
+    while(reallen > fmemsize){
+        fmemsize *= 2;
+        if(!i){
+            i = 1;
+        }
+    }
+
+    if(i){
+
+        *astr = (astring_ptr) realloc(*astr, sizeof(astring) + fmemsize);
+    }
+
+    (*astr)->memsize = fmemsize;
+    strcpy((*astr)->string, begin);
+    (*astr)->string[reallen-1] = c;
 }
 
 int astrlen(const astring_ptr astr){

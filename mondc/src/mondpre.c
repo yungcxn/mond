@@ -21,14 +21,10 @@ typedef struct CompilerInfo {
 
 } CompilerInfo;
 
-/*
- *
- */
 astring_ptr pp_flags = NULL;
 
-
 /*
- * macrofunctions are writing via dest filepointer at the current position the preprocessor stopped at
+ * macrofunctions are writing via dest filepointer at the current position the mondpre stopped at
  */
 
 void parse_get_set_macro_args(int argc, char* argwordlist, astring_ptr* accessmod, astring_ptr* typename, astring_ptr* fieldname){
@@ -41,11 +37,11 @@ void parse_get_set_macro_args(int argc, char* argwordlist, astring_ptr* accessmo
                 continue;
             }
             if(nextarg == 1){
-                safeappend_astring(accessmod, c);
+                safeappendc_astring(accessmod, c);
             }else if(nextarg == 2){
-                safeappend_astring(typename, c);
+                safeappendc_astring(typename, c);
             }else if(nextarg == 3){
-                safeappend_astring(fieldname, c);
+                safeappendc_astring(fieldname, c);
             }
 
         }
@@ -59,16 +55,16 @@ void parse_get_set_macro_args(int argc, char* argwordlist, astring_ptr* accessmo
             }
 
             else if(nextarg == 1){
-                safeappend_astring(typename, c);
+                safeappendc_astring(typename, c);
             }else if(nextarg == 2){
-                safeappend_astring(fieldname, c);
+                safeappendc_astring(fieldname, c);
             }
 
         }
     }else if(argc == 1){
         for(int i = 0; i< strlen(argwordlist);i++){
             char c = argwordlist[i];
-            safeappend_astring(fieldname, c);
+            safeappendc_astring(fieldname, c);
         }
     }
 
@@ -114,6 +110,8 @@ int pre_isset_macro(int argc, char* argwordlist, FILE* dest) {
         fputc(result[i], dest);
     }
     fputc(' ', dest); //padding for lexing
+
+    return 1;
 }
 
 int pre_getter_macro(int argc, char* argwordlist, FILE* dest) {
@@ -143,6 +141,7 @@ int pre_getter_macro(int argc, char* argwordlist, FILE* dest) {
     sfree_astring(typename);
     sfree_astring(fieldname);
 
+    return 1;
 }
 
 int pre_setter_macro(int argc, char* argwordlist, FILE* dest) {
@@ -170,11 +169,15 @@ int pre_setter_macro(int argc, char* argwordlist, FILE* dest) {
     sfree_astring(accessmod);
     sfree_astring(typename);
     sfree_astring(fieldname);
+
+    return 1;
 }
 
 int pre_xetter_macro(int argc, char* argwordlist, FILE* dest) {
     pre_getter_macro(argc, argwordlist, dest);
     pre_setter_macro(argc, argwordlist, dest);
+
+    return 1;
 }
 
 
@@ -211,9 +214,9 @@ void shortenfile(FILE* fp, int len){
 }
 
 /*
- * returns whether an file-importing macro (e.g. %incl) was found
+ * returns whether a file-importing macro (e.g. %incl) was found
  */
-int preprocess_file(FILE* src, FILE* dst){
+ll_string* preprocess_file(FILE* src, FILE* dst){
     char c;
     char c0;
 
@@ -232,7 +235,7 @@ int preprocess_file(FILE* src, FILE* dst){
 
     ll_string* inclusion_directives = NULL;
 
-    while ((c = fgetc(src)) != EOF)
+    while ((c = fgetc(src)) != EOF) //NOLINT
     {
         if(!single_comment_mode || !multi_comment_mode){
             if(c == '"'){
@@ -258,7 +261,7 @@ int preprocess_file(FILE* src, FILE* dst){
             }
 
             if(c == COMMENT_MULTI_BEGIN_1){
-                char c1 = fgetc(src);
+                char c1 = fgetc(src); //NOLINT
                 if(c1 == COMMENT_MULTI_BEGIN_2){
                     single_comment_mode = 0;
                     multi_comment_mode = 1;
@@ -301,14 +304,14 @@ int preprocess_file(FILE* src, FILE* dst){
                         scan_macroname_mode = 0;
                         ++lastargc;
                     }else{
-                        safeappend_astring(&macroname, c);
+                        safeappendc_astring(&macroname, c);
                     }
                 }else if(scan_macroargs_mode){
                     if(c == ','){
-                        safeappend_astring(&macroargs, " ");
+                        safeappendc_astring(&macroargs, ' ');
                         ++lastargc;
                     }else{
-                        safeappend_astring(&macroargs, c);
+                        safeappendc_astring(&macroargs, c);
                     }
                 }
 
@@ -342,7 +345,7 @@ void insert_standard_lib(FILE* realfile, FILE* realdest){
  */
 
 CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
-                     const char* absolutepath, const char* buildpath, int argc, char *argv[]){
+                     char* absolutepath, char* buildpath, int argc, char *argv[]){
 
     pp_flags = create_astring("");
 
@@ -359,7 +362,7 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
 
     /*
      * ordered list for merging files later, only file names: file.mon + pp-ext + temp-ext
-     * beginning with latest inserted file
+     * beginning with the latest inserted file
      */
     ll_string* all_files_to_include = NULL;
 
@@ -405,7 +408,7 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
             char pathtobuild[PATH_MAX];
 
             strcpy(pathtobuild, current_processing_folder);
-            strcat(pathtobuild, FILESEP);
+            strcat(pathtobuild, FILESEP_S);
             strcat(pathtobuild, temp->item);
 
             strcpy(temp->item, pathtobuild);
@@ -471,10 +474,10 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
     ll_string_reverse(&all_files_to_include);
     ll_string* temp;
     for(temp = all_files_to_include; temp != NULL; temp = temp->next){
-        char* tempfile_abspath[PATH_MAX];
+        char tempfile_abspath[PATH_MAX];
         strcpy(tempfile_abspath, buildpath);
         strcat(tempfile_abspath, temp->item);
-        FILE* tempfile = fopen(tempfile_abspath, "r");
+        FILE* tfile = fopen(tempfile_abspath, "r");
 
         char c;
         if(linecount != 0){
@@ -482,18 +485,18 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
             /*
              * insert padding after every file + putting the current linecount into builtfileends
              */
-            fputc('\n',tempfile);
+            fputc('\n',tfile);
             safeappend_intarr(&builtfileends, ++linecount);
         }
 
-        while ((c = fgetc(tempfile)) != EOF){
+        while ((c = fgetc(tfile)) != EOF){ //NOLINT
             if(c == '\n'){
                 ++linecount;
             }
             fputc(c,processedfp);
         }
 
-        fclose(tempfile);
+        fclose(tfile);
     }
 
     CompilerInfo compilerInfo = {
@@ -506,8 +509,8 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
 
     sfree_astring(pp_flags);
 
-    ll_string_free(inclusion_dir_queue);
-    ll_string_free(all_files_to_include);
+    ll_string_free(&inclusion_dir_queue);
+    ll_string_free(&all_files_to_include);
 
     return compilerInfo;
 }

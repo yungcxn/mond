@@ -1,4 +1,4 @@
-%flag USING_STANDARD
+%flag SOMEFLAG
 
 class Exception {
     family string msg;

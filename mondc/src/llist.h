@@ -9,7 +9,7 @@
 
 typedef struct ll_string{
     char item[1024];
-    struct stringitem* next;
+    struct ll_string* next;
 } ll_string;
 
 void ll_string_free(ll_string** head){
@@ -67,19 +67,17 @@ void ll_string_delete(ll_string** head, int index){
     }
 
     int i = 0;
-    ll_string* current = NULL;
+    ll_string* current = *head;
 
-    for(current = *head; current != NULL; current = current->next){
+    while(current != NULL){
 
-        printf("%s", current->item);
-
-        if(i-1 == index){
-
+        if(index-1 == i){
             ll_string* temp = current->next;
             current->next = temp->next;
             free(temp);
             return;
         }
+        current = current->next;
         ++i;
     }
 }
@@ -104,12 +102,15 @@ void ll_string_reverse(ll_string** ll){
 }
 
 void ll_string_concat(ll_string **head, const ll_string* tocat){
-    ll_string_reverse(*head);
-    ll_string* current = NULL;
-    for(current = tocat; current != NULL; current = current->next){
-        *head = ll_string_insert(*head, current);
+    ll_string_reverse(head);
+    ll_string* current = tocat;
+    ll_string_reverse(&current);
+    while(current != NULL){
+        *head = ll_string_insert(*head, current->item);
+        current = current->next;
     }
-    ll_string_reverse(*head);
+
+    ll_string_reverse(head);
 }
 
 

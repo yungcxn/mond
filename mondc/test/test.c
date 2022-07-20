@@ -1,9 +1,7 @@
 #include <stdio.h>
 
 int main(){
-    printf("starting to test...");
-
-
+    printf("starting test.c...\n");
 
     return 0;
 }
