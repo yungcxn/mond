@@ -1,6 +1,3 @@
-%nostandard;
-%flag TEST_FLAG;
-
 global string somestring = "hello world";
 
 class test {

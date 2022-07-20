@@ -13,8 +13,7 @@ mondpre - the first component in mondc
 
 macro list
 
-%incl localfile.mon;
-%imp onlinerepo;
+%incl localfile.mon;    or    %incl somelib
 %nostandard;                     (tells mondpre to not include standardlib)
 %flag _SOME_NAME_123;            (stores string)
 %isset _SOME_NAME_123;           (produces boolean)
@@ -69,11 +68,10 @@ get/set/xet macros
 
 common flags created by the compiler
 
-_OS_WIN_x86_64
-_OS_WIN_x86_32
-_OS_MAC_ARM32
-_OS_MAC_ARM64
-_OS_MAC_x86_64
-USING_STANDARD
+_OS_WIN64
+_OS_WIN32
+_OS_LINUX
+_OS_UNIX
+_OS_MAC
 
 --------------------------------------------------------------------------------

@@ -7,12 +7,14 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "mondutil.h"
+#include "util/mondutil.h"
 #include "mondpre.h"
-#include "llist.h"
+#include "util/llist.h"
 #include "macrogen.h"
 #include <unistd.h>
 #include <limits.h>
+#include "util/astring.h"
+#include "mondc.h"
 
 typedef struct CompilerInfo {
 
@@ -22,6 +24,13 @@ typedef struct CompilerInfo {
 } CompilerInfo;
 
 astring_ptr pp_flags = NULL;
+
+void add_sysdefined_flags(astring_ptr* flags){
+    safeappendc_astring(flags, ' ');
+    safeappend_astring(flags, MONDC_OS_FLAG);
+    safeappendc_astring(flags, ' ');
+}
+
 
 /*
  * macrofunctions are writing via dest filepointer at the current position the mondpre stopped at
@@ -215,8 +224,9 @@ void shortenfile(FILE* fp, int len){
 
 /*
  * returns whether a file-importing macro (e.g. %incl) was found
+ * nostandard_called is 0 by default
  */
-ll_string* preprocess_file(FILE* src, FILE* dst){
+ll_string* preprocess_file(FILE* src, FILE* dst, int* nostandard_called){
     char c;
     char c0;
 
@@ -288,6 +298,8 @@ ll_string* preprocess_file(FILE* src, FILE* dst){
                     shortenfile(dst, chardeletecount);
                     if(!strcmp(macroname->string, MACRO_INCLUDE)){
                         inclusion_directives = ll_string_insert(inclusion_directives, macroargs->string);
+                    }else if(!strcmp(macroname->string, MACRO_NOSTANDARD)){
+                        *nostandard_called = 1;
                     }else{
                         call_macro(macroname->string, lastargc, macroargs->string, dst);
                     }
@@ -348,6 +360,7 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
                      char* absolutepath, char* buildpath, int argc, char *argv[]){
 
     pp_flags = create_astring("");
+    add_sysdefined_flags(&pp_flags);
 
     /*
      * boolean which is flipped when every file to include is in it's tempfile (every macro removed)
@@ -390,9 +403,9 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
         /*
          * relative filepaths to current_processing_files location
          */
-
-        ll_string* inclusion_directives = preprocess_file(current_processing_file, current_temp_file);
-
+        int was_nostd_called = 0;
+        ll_string* inclusion_directives = preprocess_file(current_processing_file, current_temp_file,
+                                                          &was_nostd_called);
 
 
         if(inclusion_directives == NULL && inclusion_dir_queue == NULL){
@@ -405,7 +418,19 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
          */
         ll_string* temp = NULL;
         for(temp = inclusion_directives; temp != NULL; temp = temp->next){
+
             char pathtobuild[PATH_MAX];
+
+            if(strstr(temp->item, MOND_FILE_EXT) != strlen(temp->item)-4){ //if it's not found
+
+                /*
+                 * here are mondlibs handled
+                 */
+                strcpy(pathtobuild, MONDLIB_LOC);
+                strcat(pathtobuild, temp->item);
+            }
+
+
 
             strcpy(pathtobuild, current_processing_folder);
             strcat(pathtobuild, FILESEP_S);
@@ -418,6 +443,16 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
          * last include is at front; reverse to be the last
          */
         ll_string_reverse(&inclusion_directives);
+
+        //standard lib should be imported here
+        if(!was_nostd_called){
+            char stdliblocation[PATH_MAX];
+            strcpy(stdliblocation, MONDLIB_LOC);
+            strcat(stdliblocation,STDLIBNAME);
+        }
+
+        ll_string_concat(&inclusion_directives, );
+
         ll_string_concat(&inclusion_dir_queue, inclusion_directives);
 
         ll_string* link = NULL;
@@ -461,8 +496,6 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
     /*
      * merging mode begins
      */
-
-    //standard lib should be imported here
 
     /*
      * llist should begin with the first imported file, the more significant at the top of the list...

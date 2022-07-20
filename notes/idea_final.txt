@@ -573,16 +573,21 @@ error handling; try-catch
 datatypes
 
 basics
+  names     bytesize  examples                          format by default
 
-  byte      1         0xff  20    0b11111111
-  word      2         0xffff  232 0b1111111111111111
-  int       4         123   0xFF  0b10101010
-  dint      8         123   0xFF  0b10101010
-  qint      16        123   0xFF  0b10101010
-  float     4         1.23f
-  double    8         2.5432
-  char      1         'a'  '\n' 123 255
-  unichar   2         u'x'  500
+  byte      1         0xff  20    0b11111111            signed
+  word      2         0xffff  232 0b1111111111111111    signed
+  int       4         123   0xFF  0b10101010            signed
+  dint      8         123   0xFF  0b10101010            signed
+  qint      16        123   0xFF  0b10101010            signed
+  float     4         1.23f                             signed
+  double    8         2.5432                            signed
+  char      1         'a'  '\n' 123 255                 ??
+  unichar   2         u'x'  500                         ??
+
+  s_byte or u_byte determine signed or unsigned on every datatype until now
+
+  
   bool      1 bit     true false 1 0
   void      0         only for functions
 

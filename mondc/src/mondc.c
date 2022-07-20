@@ -1,19 +1,53 @@
 #include <stdio.h>
-#include "mondpre.c"
-#include "mondutil.h"
 #include <unistd.h>
 #include <limits.h>
+#include "util/logger.h"
+#include "mondpre.c"
+#include "util/mondutil.h"
+#include "mondc.h"
+
+void print_usage(){
+    logl("usage:");
+    logl("  $ mondc file.mon");
+    logl("  $ mondc dir/file.mon");
+    logl("  $ mondc \"file.mon\"");
+    logn();
+}
+
+/*
+ * if this returns 1 (FAILURE), program exists
+ */
+int usage_handler(int argc, char *argv[]){
+
+    if(argc == 1){
+        logn();
+        logl("no arguments given...");
+        print_usage();
+        return 1;
+    }
+
+    if(argc > 2){
+        logn();
+        logs("all arguments after \"");
+        logs(argv[2]);
+        logs("\" are unused");
+    }
+
+    return 0;
+}
+
 
 int main(int argc, char *argv[]) {
 
-    printf("\nstarting mondc...\n");
-    if(argc == 1){
-        printf("no arguments given.\n");
-        return 0;
+    logn();
+    logs("starting mondc <");
+    logs(MONDC_VERSION);
+    logs(">...");
+    logn();
+
+    if(usage_handler(argc, argv)){
+        return EXIT_SUCCESS;
     }
-
-    printf("first arg: %s\n", argv[1]);
-
 
     if(argc >= 2){
         char cwd[PATH_MAX];

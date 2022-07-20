@@ -1,9 +1,9 @@
 #include <stdio.h>
-#include "../src/llist.h"
+#include "../src/util/llist.h"
 
 int main(){
 
-
+/*
     ll_string* linkedlist = NULL;
     linkedlist = ll_string_insert(linkedlist, "yoo");
     linkedlist = ll_string_insert(linkedlist, "test");
@@ -24,7 +24,10 @@ int main(){
     ll_string_delete(&linkedlist,3);
 
     ll_string_iter(linkedlist, ll_string_print_single);
-    ll_string_free(&linkedlist);
+    ll_string_free(&linkedlist);*/
+
+    char *t[20] = {"abs","cd", "wwww"};
+    printf("%s", t[1]);
 
 
     return 0;
