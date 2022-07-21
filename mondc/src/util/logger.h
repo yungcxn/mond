@@ -11,7 +11,7 @@ void logn(){
     printf("\n");
 }
 
-void logl(char* s){
+void logline(char* s){
     logs(s);logn();
 }
 
@@ -37,7 +37,7 @@ void dbg_logn(){
 #endif
 }
 
-void dbg_logl(char* s){
+void dbg_logline(char* s){
 #ifdef _DEBUG
     dbg_logpre(); dbg_logs(s);dbg_logn();
 #endif
@@ -49,4 +49,10 @@ void dbg_logi(int i){
 #endif
 
 }
+
+int errorlog(char* line, int code){
+    printf("[ERROR] %s\n", line);
+    return code;
+}
+
 #endif

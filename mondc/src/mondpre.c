@@ -345,10 +345,6 @@ ll_string* preprocess_file(FILE* src, FILE* dst, int* nostandard_called){
     return inclusion_directives;
 }
 
-void insert_standard_lib(FILE* realfile, FILE* realdest){
-
-}
-
 /*
  * FILE* fp: file pointer to the target.mon file which will be preprocessed/ compiled
  * FILE* processedfp: file pointer to the target.monp where the processed version is stored
@@ -390,6 +386,7 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
 
             char nextbuildfile[PATH_MAX];
             strcpy(nextbuildfile, buildpath);
+            strncat(nextbuildfile, &FILESEP,1);
             strcat(nextbuildfile, getfilename(inclusion_dir_queue->item));
             strcat(nextbuildfile, PROCESSED_FILE_EXT);
             strcat(nextbuildfile, PROCESSED_TEMPFILE_EXT);
@@ -430,10 +427,8 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
                 strcat(pathtobuild, temp->item);
             }
 
-
-
             strcpy(pathtobuild, current_processing_folder);
-            strcat(pathtobuild, FILESEP_S);
+            strncat(pathtobuild, &FILESEP, 1);
             strcat(pathtobuild, temp->item);
 
             strcpy(temp->item, pathtobuild);
@@ -449,9 +444,10 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
             char stdliblocation[PATH_MAX];
             strcpy(stdliblocation, MONDLIB_LOC);
             strcat(stdliblocation,STDLIBNAME);
+            ll_string_insert(&inclusion_directives, stdliblocation);
         }
 
-        ll_string_concat(&inclusion_directives, );
+
 
         ll_string_concat(&inclusion_dir_queue, inclusion_directives);
 
@@ -509,6 +505,7 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
     for(temp = all_files_to_include; temp != NULL; temp = temp->next){
         char tempfile_abspath[PATH_MAX];
         strcpy(tempfile_abspath, buildpath);
+        strncat(tempfile_abspath, &FILESEP, 1);
         strcat(tempfile_abspath, temp->item);
         FILE* tfile = fopen(tempfile_abspath, "r");
 

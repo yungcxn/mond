@@ -2,35 +2,20 @@
 #define MONDC_MONDUTIL_H
 
 #include <stdlib.h>
-
-#ifdef _WIN32
-#define FILESEP '\\'
-#define FILESEP_S "\\"
-#define BUILD_FOLDER_NAME "build\\"
-#else
-#define FILESEP '/'
-#define FILESEP_S "/"
-#define BUILD_FOLDER_NAME "build/"
-#endif
-
-#define PROCESSED_FILE_EXT "p"
-#define PROCESSED_TEMPFILE_EXT "t"
-#define MOND_FILE_EXT ".mon"
-
-#define TRUE_EXPR "true"
-#define FALSE_EXPR "false"
+#include "../mondc.h"
 
 char* getfilename(const char* path){
-    char buf[strlen(path) + 1];
-    for(int i = 0; i<strlen(path); i++){
-        char c = path[i];
-        if(c == FILESEP){
-            strcpy(buf, "");
-            continue;
+    int len = strlen(path);
+
+    for(int i=len-1; i>0; i--)
+    {
+        if(path[i]=='\\' || path[i]=='//' || path[i]=='/' )
+        {
+            path = path+i+1;
+            break;
         }
-        strncat(buf, c, 1);
     }
-    return buf;
+    return path;
 }
 
 char* get_containing_dir(const char* path){
@@ -38,7 +23,7 @@ char* get_containing_dir(const char* path){
     char* dir = malloc(len + 1);
     strcpy(dir, path);
     while (len > 0) {
-        len--;
+        --len;
         if (dir[len] == FILESEP) {
             dir[len] = '\0';
             break;
@@ -90,5 +75,6 @@ char* readfile(FILE* fp){
     contentout[red] = 0;
     return *contentout;
 }
+
 
 #endif

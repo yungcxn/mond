@@ -26,8 +26,7 @@ int main(){
     ll_string_iter(linkedlist, ll_string_print_single);
     ll_string_free(&linkedlist);*/
 
-    char *t[20] = {"abs","cd", "wwww"};
-    printf("%s", t[1]);
+    printf("%s", get_containing_dir("user/ddd/file.mondd"));
 
 
     return 0;
