@@ -1,33 +1,33 @@
 #include <stdio.h>
 #include "../src/util/llist.h"
+#include "../src/util/astring.h"
 
 int main(){
 
-/*
-    ll_string* linkedlist = NULL;
-    linkedlist = ll_string_insert(linkedlist, "yoo");
-    linkedlist = ll_string_insert(linkedlist, "test");
-    linkedlist = ll_string_insert(linkedlist, "chair");
-    linkedlist = ll_string_insert(linkedlist, "table");
 
-    ll_string_reverse(&linkedlist);
-    ll_string_pull_value(&linkedlist, 2);
+    ll_string* inclusion_directives = NULL;
+    inclusion_directives = ll_string_insert(inclusion_directives, "testdira");
+    inclusion_directives = ll_string_insert(inclusion_directives, "testdirb");
+    inclusion_directives = ll_string_insert(inclusion_directives, "testdirc");
+    inclusion_directives = ll_string_insert(inclusion_directives, "testdird");
 
-    ll_string* test = NULL;
-    test = ll_string_insert(test, "c");
-    test = ll_string_insert(test, "a");
-    test = ll_string_insert(test, "n");
-    test = ll_string_insert(test, "xx");
+    ll_string* inclusion_dir_queue = NULL;
+    inclusion_dir_queue = ll_string_insert(inclusion_dir_queue, "testdirq");
+    inclusion_dir_queue = ll_string_insert(inclusion_dir_queue, "testdirb");
+    inclusion_dir_queue = ll_string_insert(inclusion_dir_queue, "testdirx");
 
-    ll_string_concat(&linkedlist, test);
+    ll_string* link = NULL;
+    for(link = inclusion_directives; link != NULL; link = link->next){
+        printf("searching for %s\n", link->item);
 
-    ll_string_delete(&linkedlist,3);
+        if(ll_string_contains(inclusion_dir_queue, link->item)){
+            printf("found\n");
+            printf("%d\n", ll_string_at(inclusion_dir_queue, link->item));
+            ll_string_delete(&inclusion_dir_queue, ll_string_at(inclusion_dir_queue, link->item));
+        }
+    }
 
-    ll_string_iter(linkedlist, ll_string_print_single);
-    ll_string_free(&linkedlist);*/
-
-    printf("%s", get_containing_dir("user/ddd/file.mondd"));
-
+    ll_string_iter(inclusion_dir_queue, ll_string_print_single);
 
     return 0;
 }

@@ -32,48 +32,13 @@ char* get_containing_dir(const char* path){
     return dir;
 
 }
-/*
- * grows int array according to the next exponentiation of 2 to n
- */
-void grow_intarr(int * buf[]){
-    unsigned int v = sizeof(*buf);
 
-    v--;
-    v |= v >> 1;
-    v |= v >> 2;
-    v |= v >> 4;
-    v |= v >> 8;
-    v |= v >> 16;
-    v++;
-
-    int* copy = *buf;
-    *buf = malloc(v);
-    *buf = *copy;
-}
-
-/*
- * replaces next integer with value 0 in int array
- */
-void safeappend_intarr(int *buf[], int val){
-    int elems = sizeof(*buf) / sizeof(int);
-    for(int i = 0; i<elems; i++){
-        if(*buf[i] == 0){
-            *buf[i] = val;
-            return;
-        }
-    }
-    grow_intarr(buf);
-    *buf[elems] = val;
-}
-
-char* readfile(FILE* fp){
+int fsize(FILE *fp){
+    int prev=ftell(fp);
     fseek(fp, 0L, SEEK_END);
-    int filesize = ftell(fp);
-    fseek(fp, 0L, SEEK_SET);
-    char *contentout = malloc(filesize+1);
-    size_t red = fread(*contentout, 1, filesize, fp);
-    contentout[red] = 0;
-    return *contentout;
+    int sz=ftell(fp);
+    fseek(fp,prev,SEEK_SET); //go back to where we were
+    return sz;
 }
 
 

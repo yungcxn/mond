@@ -43,9 +43,11 @@ int usage_handler(int argc, char *argv[]){
 int main(int argc, char *argv[]) {
 
     logn();
+    logs(TCGRN);
     logs("starting mondc <");
     logs(MONDC_VERSION);
     logs(">...");
+    logs(TCRESET);
     logn();
 
     dbg_logline("initiated");
@@ -127,6 +129,12 @@ int main(int argc, char *argv[]) {
 
         dbg_logpre();dbg_logs("processedpath = ");dbg_logs(processedpath);dbg_logn();
 
+        char joinedpath[PATH_MAX];
+        strcpy(joinedpath, processedpath);
+        strcat(joinedpath, PROCESSED_JOINEDFILE_EXT);
+
+        dbg_logpre();dbg_logs("joinedpath = ");dbg_logs(joinedpath);dbg_logn();
+
         char temppath[PATH_MAX];
 
         strcpy(temppath, processedpath);
@@ -134,17 +142,23 @@ int main(int argc, char *argv[]) {
 
         dbg_logpre();dbg_logs("temppath = ");dbg_logs(temppath);dbg_logn();
 
-        FILE *targetfile = fopen(absolutepath, "r");
+        FILE *targetfile = fopen(absolutepath, "r+");
         FILE *processedfile = fopen(processedpath, "w+");
         FILE *tempfile = fopen(temppath, "w+");
+        FILE *joinedfile = fopen(joinedpath, "w+");
 
-        if(targetfile == NULL || processedfile == NULL || tempfile == NULL){
-            return errorlog("cannot access files to be compiled", 5);
+        if(targetfile == NULL || processedfile == NULL || tempfile == NULL || joinedfile == NULL){
+            reporterror("cannot access files to be compiled", 5);
         }
 
-        CompilerInfo ppInfo = mondpre(targetfile, processedfile, tempfile, absolutepath_folder, buildpath, argc, argv);
+        CompilerInfo ppInfo = mondpre(targetfile, processedfile, tempfile, joinedfile,
+                                      absolutepath_folder, buildpath, temppath, argc, argv);
 
-        logline("PREPROCESSOR (MONDPRE) is done!");
+        if(fsize(processedfile) == 0){
+            reporterror("file to be lexed is empty!",0);
+        }
+
+        logline(TCGRN "mondpre is done!" TCRESET);
 
         fclose(targetfile);
         fclose(processedfile);

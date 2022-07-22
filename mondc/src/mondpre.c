@@ -2,7 +2,6 @@
 /*
  * TODO:
  * - cross include ????
- * - set os flags
  */
 
 #include <stdio.h>
@@ -17,26 +16,23 @@
 #include "mondc.h"
 
 typedef struct CompilerInfo {
-
-    int* fileends;
+    int fileends[MAX_FILE_INCLUDES];
     astring_ptr flags;
-
 } CompilerInfo;
 
 astring_ptr pp_flags = NULL;
 
 void add_sysdefined_flags(astring_ptr* flags){
-    safeappendc_astring(flags, ' ');
     safeappend_astring(flags, MONDC_OS_FLAG);
     safeappendc_astring(flags, ' ');
-}
 
+}
 
 /*
  * macrofunctions are writing via dest filepointer at the current position the mondpre stopped at
  */
-
 void parse_get_set_macro_args(int argc, char* argwordlist, astring_ptr* accessmod, astring_ptr* typename, astring_ptr* fieldname){
+
     if(argc == 3){
         int nextarg = 1;
         for(int i = 0; i< strlen(argwordlist);i++){
@@ -211,7 +207,7 @@ void call_macro(const char* macroname, int argc, char* argwordlist,
     }else if(!strcmp(macroname, MACRO_XETTER)){
         worked = pre_xetter_macro(argc, argwordlist, dest);
     }else{
-
+      //TODO
     }
 
 }
@@ -220,15 +216,18 @@ void shortenfile(FILE* fp, int len){
     fseeko(fp,-len,SEEK_END);
     off_t position = ftello(fp);
     ftruncate(fileno(fp), position);
+    dbg_logpre();dbg_logs("shortened file by -");dbg_logi(len);dbg_logn();
 }
 
 /*
  * returns whether a file-importing macro (e.g. %incl) was found
  * nostandard_called is 0 by default
  */
-ll_string* preprocess_file(FILE* src, FILE* dst, int* nostandard_called){
+ll_string* preprocess_file(int only_includes, FILE* src, FILE* dst, int* nostandard_called){
+
     char c;
-    char c0;
+    char c0 = '\0';
+    char c00 = '\0';
 
     int scan_macroname_mode = 0;
     int scan_macroargs_mode = 0;
@@ -239,8 +238,8 @@ ll_string* preprocess_file(FILE* src, FILE* dst, int* nostandard_called){
     int multi_comment_mode = 0;
 
     int chardeletecount = 0;
-    astring_ptr macroname = NULL;
-    astring_ptr macroargs = NULL; //seperated by space
+    astring_ptr macroname = create_astring("");
+    astring_ptr macroargs = create_astring(""); //seperated by space
     int lastargc = 0;
 
     ll_string* inclusion_directives = NULL;
@@ -255,13 +254,13 @@ ll_string* preprocess_file(FILE* src, FILE* dst, int* nostandard_called){
             }
 
             if(c == '\''){
-                if(!string_mode){
+                if(!string_mode && c0 != '\\'){
                     char_mode = !char_mode;
                 }
             }
         }
 
-        if(!char_mode || !string_mode){
+        if(!char_mode && !string_mode){
             if(c == COMMENT_SINGLE){
                 single_comment_mode = 1;
             }
@@ -277,33 +276,39 @@ ll_string* preprocess_file(FILE* src, FILE* dst, int* nostandard_called){
                     multi_comment_mode = 1;
                 }
                 fseek(src, -1, SEEK_CUR);
-            }else if(c == COMMENT_MULTI_END_2){
-                if(c0 == COMMENT_MULTI_END_1){
+            }
+            if(c0 == COMMENT_MULTI_END_2 && multi_comment_mode){
+                if(c00 == COMMENT_MULTI_END_1){
                     multi_comment_mode = 0;
                 }
             }
         }
 
-        if(!single_comment_mode || !multi_comment_mode){
+        if(!single_comment_mode && !multi_comment_mode){
             fputc(c,dst);
+            dbg_logc(c);
         }
 
-        if(!single_comment_mode || !multi_comment_mode || !string_mode || !char_mode){
-
+        if(!single_comment_mode && !multi_comment_mode && !string_mode && !char_mode){
             if(scan_macroname_mode || scan_macroargs_mode){
                 ++chardeletecount;
                 if(c == MACRO_END){
-                    scan_macroargs_mode = 0;
+                    dbg_logline("pp -> found endmacro character");
                     scan_macroname_mode = 0;
-                    shortenfile(dst, chardeletecount);
-                    if(!strcmp(macroname->string, MACRO_INCLUDE)){
+                    scan_macroargs_mode = 0;
+
+                    if(!strcmp(macroname->string, MACRO_INCLUDE) && only_includes){
+                        shortenfile(dst, chardeletecount);
                         inclusion_directives = ll_string_insert(inclusion_directives, macroargs->string);
-                    }else if(!strcmp(macroname->string, MACRO_NOSTANDARD)){
+                    }else if(!strcmp(macroname->string, MACRO_NOSTANDARD) && only_includes){
+                        shortenfile(dst, chardeletecount);
                         *nostandard_called = 1;
                     }else{
-                        call_macro(macroname->string, lastargc, macroargs->string, dst);
+                        if(!only_includes){
+                            shortenfile(dst, chardeletecount);
+                            call_macro(macroname->string, lastargc, macroargs->string, dst);
+                        }
                     }
-
                     chardeletecount = 0;
                     macroname = create_astring("");
                     macroargs = create_astring("");
@@ -323,20 +328,25 @@ ll_string* preprocess_file(FILE* src, FILE* dst, int* nostandard_called){
                         safeappendc_astring(&macroargs, ' ');
                         ++lastargc;
                     }else{
-                        safeappendc_astring(&macroargs, c);
+                        if(c != ' '){
+                            safeappendc_astring(&macroargs, c);
+                        }
+
                     }
                 }
 
             }
             if(c == MACRO_OP){
-                if(!scan_macroname_mode){
+                if(!scan_macroargs_mode){
                     ++chardeletecount;
+                    scan_macroname_mode = 1;
                 }
-                scan_macroname_mode = 1;
             }
         }
 
+        c00 = c0;
         c0 = c;
+
     }
 
     sfree_astring(macroname);
@@ -350,13 +360,15 @@ ll_string* preprocess_file(FILE* src, FILE* dst, int* nostandard_called){
  * FILE* processedfp: file pointer to the target.monp where the processed version is stored
  * FILE* tempfile: file pointer to target.monpt where subparts during processing are stored
  * char* absolutepath: the path to FILE* fp
+ * char* temppath: the path to FILE* tempfile
  */
 
-CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
-                     char* absolutepath, char* buildpath, int argc, char *argv[]){
+CompilerInfo mondpre(FILE* fp, FILE* processedfile, FILE *tempfile, FILE* joinedfile,
+                     char* absolutepath, char* buildpath, char* temppath, int argc, char *argv[]){
 
     pp_flags = create_astring("");
     add_sysdefined_flags(&pp_flags);
+    dbg_logpre();dbg_logs("added following flags: ");dbg_logs(pp_flags->string);dbg_logn();
 
     /*
      * boolean which is flipped when every file to include is in it's tempfile (every macro removed)
@@ -364,7 +376,9 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
     int file_scanning_to_temps = 0;
 
     FILE* current_processing_file = fp;
+    dbg_logline("file being processed next is first file");
     FILE* current_temp_file = tempfile;
+    dbg_logline("tempfile being filled next is first file");
     char* current_processing_folder = absolutepath;
 
     ll_string* inclusion_dir_queue = NULL;
@@ -394,6 +408,9 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
             current_processing_file = fopen(inclusion_dir_queue->item, "w+");
             current_temp_file = fopen(nextbuildfile, "w+");
 
+            dbg_logpre();dbg_logs("file being processed next is ");dbg_logs(inclusion_dir_queue->item);dbg_logn();
+            dbg_logpre();dbg_logs("tempfile being filled next is ");dbg_logs(nextbuildfile);dbg_logn();
+
             ll_string_delete0(&inclusion_dir_queue);
         }
 
@@ -401,9 +418,22 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
          * relative filepaths to current_processing_files location
          */
         int was_nostd_called = 0;
-        ll_string* inclusion_directives = preprocess_file(current_processing_file, current_temp_file,
+        ll_string* inclusion_directives = preprocess_file(1, current_processing_file, current_temp_file,
                                                           &was_nostd_called);
-
+#ifdef _DEBUG
+        if(inclusion_directives == NULL){
+            dbg_logline("no inclusion directives!");
+        }else{
+            ll_string* current = NULL;
+            for(current = inclusion_directives; current != NULL; current = current->next){
+                dbg_logpre();dbg_logs("added inclusion directive: ");dbg_logs(inclusion_directives->item);dbg_logn();
+            }
+        }
+        dbg_logn();
+#endif
+        /*
+         * only include macros are resolved and merged together at the end into
+         */
 
         if(inclusion_directives == NULL && inclusion_dir_queue == NULL){
             file_scanning_to_temps = 1;
@@ -414,77 +444,95 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
          * this is for constructing them to absolute paths
          */
         ll_string* temp = NULL;
-        for(temp = inclusion_directives; temp != NULL; temp = temp->next){
+        if(inclusion_directives != NULL){
+            for(temp = inclusion_directives; temp != NULL; temp = temp->next){
 
-            char pathtobuild[PATH_MAX];
+                char pathtobuild[PATH_MAX];
 
-            if(strstr(temp->item, MOND_FILE_EXT) != strlen(temp->item)-4){ //if it's not found
+                if(strstr(temp->item, MOND_FILE_EXT) != strlen(temp->item)-4){ //if it's not found
+
+                    /*
+                     * here are mondlibs handled
+                     */
+                    strcpy(pathtobuild, MONDLIB_LOC);
+                    strcat(pathtobuild, temp->item);
+                    strcat(pathtobuild, MOND_FILE_EXT);
+                }
+
+                strcpy(pathtobuild, current_processing_folder);
+                strncat(pathtobuild, &FILESEP, 1);
+                strcat(pathtobuild, temp->item);
+                strcpy(temp->item, pathtobuild);
+
+                dbg_logpre();dbg_logs("modded inclusion directive: ");dbg_logs(pathtobuild);dbg_logn();
+            }
+
+            //standard lib is imported here
+            if(!was_nostd_called){
+                char stdliblocation[PATH_MAX];
+                strcpy(stdliblocation, MONDLIB_LOC);
+                strcat(stdliblocation,STDLIBNAME);
+                ll_string_insert(&inclusion_directives, stdliblocation);
+                dbg_logpre();dbg_logs("standardlib added at: ");dbg_logs(stdliblocation);dbg_logn();
+            }
+
+            /*
+            * last include is at front; reverse to be the last
+            */
+            ll_string_reverse(&inclusion_directives);
+
+            ll_string_concat(&inclusion_dir_queue, inclusion_directives);
+
+            ll_string* link = NULL;
+            for(link = inclusion_directives; link != NULL; link = link->next){
 
                 /*
-                 * here are mondlibs handled
+                 * does the same thing as down here...
                  */
-                strcpy(pathtobuild, MONDLIB_LOC);
-                strcat(pathtobuild, temp->item);
+                if(ll_string_contains(inclusion_dir_queue, link->item)){
+                    ll_string_delete(
+                            &inclusion_dir_queue,
+                            ll_string_at(inclusion_dir_queue, link->item));
+                }
+
+                char* inclusion_abspath = link->item;
+
+                char tempppfilename[FILENAME_MAX];
+                strcpy(tempppfilename, getfilename(inclusion_abspath));
+                strcat(tempppfilename, PROCESSED_FILE_EXT);
+                strcat(tempppfilename, PROCESSED_TEMPFILE_EXT);
+
+                /*
+                 * if filename is already imported, delete the old one, then assign
+                 * since all_files_to_include is like a queue, this solves following problems:
+                 *
+                 *  1. already imported files being needed by newer processed files
+                 *  2. double imports
+                 */
+                if(ll_string_contains(all_files_to_include, tempppfilename)){
+                    ll_string_delete(
+                            &all_files_to_include,
+                            ll_string_at(all_files_to_include, tempppfilename));
+                }
+
+                if(all_files_to_include != NULL){
+                    ll_string_reverse(&all_files_to_include);
+                }
+                /*
+                 * the currently imported file is concatenated at the end of the queue
+                 */
+                all_files_to_include = ll_string_insert(all_files_to_include, tempppfilename);
+
+                if(all_files_to_include != NULL){
+                    ll_string_reverse(&all_files_to_include);
+                }
             }
-
-            strcpy(pathtobuild, current_processing_folder);
-            strncat(pathtobuild, &FILESEP, 1);
-            strcat(pathtobuild, temp->item);
-
-            strcpy(temp->item, pathtobuild);
+        }else{
+            dbg_logline("no inclusion directives to modify!");dbg_logn();
         }
 
-        /*
-         * last include is at front; reverse to be the last
-         */
-        ll_string_reverse(&inclusion_directives);
-
-        //standard lib should be imported here
-        if(!was_nostd_called){
-            char stdliblocation[PATH_MAX];
-            strcpy(stdliblocation, MONDLIB_LOC);
-            strcat(stdliblocation,STDLIBNAME);
-            ll_string_insert(&inclusion_directives, stdliblocation);
-        }
-
-
-
-        ll_string_concat(&inclusion_dir_queue, inclusion_directives);
-
-        ll_string* link = NULL;
-        for(link = inclusion_directives; link != NULL; link = link->next){
-
-            /*
-             * does the same thing as down here...
-             */
-            if(ll_string_contains(inclusion_dir_queue, link->item)){
-                ll_string_delete(
-                        &inclusion_dir_queue,
-                        ll_string_contains(inclusion_dir_queue, link->item));
-            }
-
-            char* inclusion_abspath = link->item;
-
-            char tempppfilename[FILENAME_MAX];
-            strcpy(tempppfilename, getfilename(inclusion_abspath));
-            strcat(tempppfilename, PROCESSED_FILE_EXT);
-            strcat(tempppfilename, PROCESSED_TEMPFILE_EXT);
-
-            /*
-             * if filename is already imported, delete the old one, then assign
-             * since all_files_to_include is like a queue, this solves following problems:
-             *
-             *  1. already imported files being needed by newer processed files
-             *  2. double imports
-             */
-            if(ll_string_contains(all_files_to_include, tempppfilename)){
-                ll_string_delete(
-                        &all_files_to_include,
-                        ll_string_contains(all_files_to_include, tempppfilename));
-            }
-
-            all_files_to_include = ll_string_insert(all_files_to_include, tempppfilename);
-        }
+        fclose(current_processing_file);
+        fclose(current_temp_file);
 
         ll_string_free(&inclusion_directives);
     }
@@ -492,50 +540,85 @@ CompilerInfo mondpre(FILE* fp, FILE* processedfp, FILE *tempfile,
     /*
      * merging mode begins
      */
+    dbg_logline("file-merging to .monpj begins!");
+
+    if(all_files_to_include != NULL){
+        ll_string_reverse(&all_files_to_include);
+    }
+
+    /*
+     * the main .monpt is added at the end of the list
+     */
+    all_files_to_include = ll_string_insert(all_files_to_include, temppath);
+
+    if(all_files_to_include != NULL){
+        ll_string_reverse(&all_files_to_include);
+    }
 
     /*
      * llist should begin with the first imported file, the more significant at the top of the list...
      */
-
     int linecount = 1;
-    int builtfileends[2];
+    ll_int* builtfileends = NULL;
 
-    ll_string_reverse(&all_files_to_include);
     ll_string* temp;
     for(temp = all_files_to_include; temp != NULL; temp = temp->next){
-        char tempfile_abspath[PATH_MAX];
-        strcpy(tempfile_abspath, buildpath);
-        strncat(tempfile_abspath, &FILESEP, 1);
-        strcat(tempfile_abspath, temp->item);
-        FILE* tfile = fopen(tempfile_abspath, "r");
+
+        FILE* tfile = fopen(temp->item, "r");
+        if(tfile == NULL){
+            reporterror("couldn't open included file to join", 5);
+        }
+
+        dbg_logpre();dbg_logs("located to merge: ");dbg_logs(temp->item);dbg_logn();
 
         char c;
-        if(linecount != 0){
+        if(linecount != 1){
 
             /*
              * insert padding after every file + putting the current linecount into builtfileends
              */
-            fputc('\n',tfile);
-            safeappend_intarr(&builtfileends, ++linecount);
+            fputc('\n',joinedfile);
+            builtfileends = ll_int_insert(builtfileends, ++linecount);
+            dbg_logpre();dbg_logs("file separator at ");dbg_logi(linecount);dbg_logn();
         }
-
         while ((c = fgetc(tfile)) != EOF){ //NOLINT
+            dbg_logc(c);
             if(c == '\n'){
                 ++linecount;
             }
-            fputc(c,processedfp);
+            fputc(c,joinedfile);
+
         }
 
         fclose(tfile);
     }
 
+    /*
+     * file separating linebreaks are inserted in reversed order
+     */
+    ll_int_reverse(&builtfileends);
+    ll_int* temp_ll_int = NULL;
+    int builtfileendsarr[MAX_FILE_INCLUDES];
+    int i = 0;
+    for(temp_ll_int = builtfileends; temp_ll_int != NULL; temp_ll_int = temp_ll_int->next){
+        if(i > MAX_FILE_INCLUDES-1){
+            reporterror("more files included than allowed!", 0);
+        }
+        builtfileendsarr[i] = temp_ll_int->item;
+        ++i;
+    }
+
+    /*
+     * now a merged file without include or nostd macros is available at build/example.monpj
+     * return and nostandard_called bools aren't needed
+     */
+    fseek(joinedfile, 0, SEEK_SET);
+    preprocess_file(0, joinedfile, processedfile, NULL);
+
     CompilerInfo compilerInfo = {
-        .fileends = builtfileends,
+        .fileends = builtfileendsarr,
         .flags = pp_flags
     };
-
-    fclose(current_processing_file);
-    fclose(current_temp_file);
 
     sfree_astring(pp_flags);
 

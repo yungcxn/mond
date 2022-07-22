@@ -20,4 +20,6 @@
 #define MACRO_SETTER "setter"
 #define MACRO_XETTER "xetter"
 
+#define MAX_FILE_INCLUDES 2048
+
 #endif

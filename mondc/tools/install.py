@@ -20,6 +20,6 @@ elif platform == "darwin":
 elif platform == "win32":
     libloc = "C:/include/" + libloc
 
-print("copying libraries to..." + libloc)
+print("copying libraries to... " + libloc)
 
 copy_tree(localpath, libloc)

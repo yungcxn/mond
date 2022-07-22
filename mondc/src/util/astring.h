@@ -108,7 +108,8 @@ void safeappendc_astring(astring_ptr* astr, const char c){
 
     (*astr)->memsize = fmemsize;
     strcpy((*astr)->string, begin);
-    (*astr)->string[reallen-1] = c;
+    (*astr)->string[reallen-2] = c;
+    (*astr)->string[reallen-1] = '\0';
 }
 
 int astrlen(const astring_ptr astr){

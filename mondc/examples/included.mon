@@ -1,0 +1,3 @@
+%nostandard;
+
+global string included = "includedstr";

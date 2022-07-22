@@ -8,17 +8,17 @@
 //accessmod typename
 #define GETTER1 " get_"
 //fieldname
-#define GETTER2 "() { \n  return $."
+#define GETTER2 "() {return $."
 //fieldname
-#define GETTER3 ";\n\n"
+#define GETTER3 ";}"
 
 //accessmod
 #define SETTER1 " void set_"
 //fieldname
 #define SETTER2 "("
 //typename
-#define SETTER3 " x) {\n  $."
+#define SETTER3 " x) {$."
 //fieldname
-#define SETTER4 " = x;\n\n"
+#define SETTER4 " = x;}"
 
 #endif

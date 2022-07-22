@@ -1,0 +1,26 @@
+global string somestring = "hello world";
+
+
+class test {
+
+    family int property;
+    public char somechar = 'c';
+    char otherchar = '\"';
+
+     char get_otherchar() {return $.otherchar;} void set_otherchar(char x) {$.otherchar = x;}
+
+    $init(int property) {
+        $.property = property;
+    }
+
+}
+
+
+
+$main(){
+
+    test sometest = test(5);
+    boolean b =  true ;
+    boolean x =  false ;
+    string teststring = "/*string*/";
+}

@@ -1,12 +1,13 @@
 global string somestring = "hello world";
 
+#some irrelevant comment
 class test {
 
     family int property;
     public char somechar = 'c';
     char otherchar = '\"';
 
-    %xetter otherchar;
+    %xetter char ,otherchar;
 
     $init(int property) {
         $.property = property;
@@ -14,8 +15,15 @@ class test {
 
 }
 
+/*
+multiline comment
+multi
+ulti*/
+
 $main(){
 
     test sometest = test(5);
-
+    boolean b = %isset _OS_MAC;;
+    boolean x = %isset SOME_RANDOM_FLAG;;
+    string teststring = "/*string*/";
 }

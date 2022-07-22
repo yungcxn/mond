@@ -1,4 +1,6 @@
-%flag SOMEFLAG
+%nostandard;
+%flag SOMEFLAG;
+
 
 class Exception {
     family string msg;
