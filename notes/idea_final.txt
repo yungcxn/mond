@@ -183,7 +183,7 @@ arguments (function parameters)
 - seperated by comma
 - definition needs type and name
 - arguments in function pointers aren't defined with names
-- "guess" keyword as type not valid
+- guess type not valid
 - functions can't be arguments in other functions
 - function pointer can be:
 
@@ -531,9 +531,12 @@ Derived d = (Derived) b; (upcast)
 
 --------------------------------------------------------------------------------
 
-guess (automatically assigning types)
+guessing type (automatically assigning types)
 
-- keyword "guess" instead of a class or datatype is possible in:
+- giving no information about the type instead of a class or datatype is
+possible like this:
+
+TODO
 
 - variables or fields on assignment, not initializing or assigning "null"
 - function/method return types, guessing the return type and using that
@@ -586,8 +589,6 @@ cond - acts as a if collection
 
 if / eif / else
 
-do () if () else ();
-
 -   -   -   -   -   -   -   -   -   -   -   -   -  -   -   -   -   -   -   -   -
 
 while / dowhile
@@ -596,9 +597,9 @@ while / dowhile
 
 for
 
-for(each)
+for(each) (as keyword)
 
--   -   -   -   -   -   -   -   -   -   -   -   -  -   -   -   -   -   -   -   -
+sfor(each) (creating $i as iteration element temporarily)
 
 --------------------------------------------------------------------------------
 
@@ -624,7 +625,7 @@ basics
   char      1         'a'  '\n' 123 255                 ??
   unichar   2         u'x'  500                         ??
 
-  s_byte or u_byte determine signed or unsigned on every datatype until now
+  u_byte determines unsignedness on every datatype until now
 
 
   bool      1 bit     true false 1 0
@@ -920,13 +921,18 @@ comparison-operators
 
   6. not_eq operator
 
+comparison-chains possible
+
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
 inline-computation-operators
 
   non-overloadable, ternary
 
-?:
+  do () if () else ();
+  () ? () : ();
+
+  - the first one is a statement, the second one an expression
 
 --------------------------------------------------------------------------------
 

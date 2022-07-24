@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://squidfunk.github.io/mkdocs-material/schema.json
+
+site_name: monddocs
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: teal
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - toc.integrate
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: "https://github.com/yungcxn"
+
+copyright: 2019 - 2022 &copy; yungcxn
