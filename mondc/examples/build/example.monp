@@ -1,3 +1,33 @@
+
+
+
+
+class Exception {
+    family string msg;
+
+    $init(string msg) {
+        $.msg = msg;
+    }
+}
+
+int len(string s){
+    return (spaceof s);
+}
+
+int len(unistring s){
+    return (spaceof s) / 2;
+}
+
+
+void sumfunction(){
+    int y = 5;
+}
+
+
+global string includedstring = "hi";
+
+
+
 global string somestring = "hello world";
 
 
@@ -23,4 +53,7 @@ $main(){
     boolean b =  true ;
     boolean x =  false ;
     string teststring = "/*string*/";
+    int modx = 19 % 5;
+    modx %= 2;
+
 }

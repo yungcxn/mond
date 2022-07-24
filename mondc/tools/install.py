@@ -2,7 +2,7 @@
 installation script for mondc compiler
 '''
 import os.path
-from distutils.dir_util import copy_tree
+from distutils.dir_util import copy_tree, remove_tree
 
 print("installing mondc...")
 print()
@@ -20,6 +20,7 @@ elif platform == "darwin":
 elif platform == "win32":
     libloc = "C:/include/" + libloc
 
+print("clearing... " + libloc)
+remove_tree(libloc)
 print("copying libraries to... " + libloc)
-
 copy_tree(localpath, libloc)

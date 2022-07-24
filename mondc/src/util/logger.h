@@ -22,7 +22,7 @@ void logn(){
 }
 
 void logline(char* s){
-    logs(s);logn();
+    puts(s);
 }
 
 void logi(int i){
@@ -49,7 +49,7 @@ void dbg_logn(){
 
 void dbg_logline(char* s){
 #ifdef _DEBUG
-    dbg_logpre(); dbg_logs(s);dbg_logn();
+    dbg_logpre(); puts(s);
 #endif
 }
 

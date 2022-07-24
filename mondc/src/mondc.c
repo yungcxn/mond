@@ -1,12 +1,14 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <limits.h>
-#include "util/logger.h"
-#include "mondpre.c"
-#include "util/mondutil.h"
-#include "mondc.h"
-#include <sys/types.h>
 #include <sys/stat.h>
+
+#include "mondc.h"
+#include "mondpre.c"
+
+#include "util/logger.h"
+#include "util/mondutil.h"
+
 
 void print_usage(){
     logn();
@@ -96,8 +98,9 @@ int main(int argc, char *argv[]) {
         dbg_logpre();dbg_logs("absolutepath = ");dbg_logs(absolutepath);dbg_logn();
 
         char absolutepath_folder[PATH_MAX];
-
-        strcpy(absolutepath_folder, get_containing_dir(absolutepath));
+        char* containingdir_abspath = get_containing_dir(absolutepath);
+        strcpy(absolutepath_folder, containingdir_abspath);
+        free(containingdir_abspath);
 
         dbg_logpre();dbg_logs("absolutepath_folder = ");dbg_logs(absolutepath_folder);dbg_logn();
 
@@ -105,7 +108,9 @@ int main(int argc, char *argv[]) {
 
         strcpy(buildpath, cwd);
         strncat(buildpath, &FILESEP, 1);
-        strcat(buildpath, get_containing_dir(relativepath));
+        char* containingdir_relpath = get_containing_dir(relativepath);
+        strcat(buildpath, containingdir_relpath);
+        free(containingdir_relpath);
         strncat(buildpath, &FILESEP, 1);
         strcat(buildpath, BUILD_FOLDER_NAME);
 
@@ -118,6 +123,9 @@ int main(int argc, char *argv[]) {
             dbg_logline("build folder was created!");
         }
 
+        remove_directory(buildpath);
+        dbg_logline("build folder cleared!");
+
         dbg_logpre();dbg_logs("buildpath = ");dbg_logs(buildpath);dbg_logn();
 
         char processedpath[PATH_MAX];
@@ -129,40 +137,25 @@ int main(int argc, char *argv[]) {
 
         dbg_logpre();dbg_logs("processedpath = ");dbg_logs(processedpath);dbg_logn();
 
-        char joinedpath[PATH_MAX];
-        strcpy(joinedpath, processedpath);
-        strcat(joinedpath, PROCESSED_JOINEDFILE_EXT);
-
-        dbg_logpre();dbg_logs("joinedpath = ");dbg_logs(joinedpath);dbg_logn();
-
-        char temppath[PATH_MAX];
-
-        strcpy(temppath, processedpath);
-        strcat(temppath, PROCESSED_TEMPFILE_EXT);
-
-        dbg_logpre();dbg_logs("temppath = ");dbg_logs(temppath);dbg_logn();
 
         FILE *targetfile = fopen(absolutepath, "r+");
         FILE *processedfile = fopen(processedpath, "w+");
-        FILE *tempfile = fopen(temppath, "w+");
-        FILE *joinedfile = fopen(joinedpath, "w+");
 
-        if(targetfile == NULL || processedfile == NULL || tempfile == NULL || joinedfile == NULL){
+
+        if(targetfile == NULL || processedfile == NULL){
             reporterror("cannot access files to be compiled", 5);
         }
 
-        CompilerInfo ppInfo = mondpre(targetfile, processedfile, tempfile, joinedfile,
-                                      absolutepath_folder, buildpath, temppath, argc, argv);
+        mondpre(targetfile, processedfile, absolutepath_folder, buildpath, argc, argv);
 
         if(fsize(processedfile) == 0){
             reporterror("file to be lexed is empty!",0);
         }
 
-        logline(TCGRN "mondpre is done!" TCRESET);
+        logn();logline(TCGRN "mondpre is done!" TCRESET);
 
         fclose(targetfile);
         fclose(processedfile);
-        fclose(tempfile);
 
     }
     return 0;

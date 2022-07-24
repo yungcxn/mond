@@ -13,15 +13,13 @@ FILESEP = '\\';
 #endif
 
 #define PROCESSED_FILE_EXT "p"
-#define PROCESSED_TEMPFILE_EXT "t"
-#define PROCESSED_JOINEDFILE_EXT "j"
+
 #define MOND_FILE_EXT ".mon"
 
 #define TRUE_EXPR "true"
 #define FALSE_EXPR "false"
 
 #define MONDC_VERSION "0.1"
-#define STDLIBNAME "standard.mon"
 
 //--- os section ---//
 

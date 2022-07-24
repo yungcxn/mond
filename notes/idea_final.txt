@@ -39,12 +39,11 @@ what can a file contain?
 - in scope of every class or function, even if imported by other file
 - mustn't be initiated
 - can't be static
-- can be "public" for accessibility in files imported by
 - can be "con" for becoming a constant
 - syntax:
 
-global [public] (type) nameofvariable;
-global [con] [public] (type) nameofvariable = 5;
+global (type) nameofvariable;
+global [con] (type) nameofvariable = 5;
 
 --------------------------------------------------------------------------------
 
@@ -122,10 +121,9 @@ functions
 
 - don't begin with global (scope irrelevant, purpose for functional language)
 - can't be static
-- can be "public" for accessibility in files imported by
 - syntax:
 
-[public] int functionname() {
+int functionname() {
   return 0;
 }
 
@@ -291,9 +289,7 @@ strings TODO
 
 classes
 
-[public] [classtype] class classname {}
-
-- can be public to get imported by other files
+[classtype] class classname {}
 
 - may contain following things:
     - fields and special fields
@@ -403,11 +399,10 @@ models
 
 - java like interface
 - can implement other models
-- can be public to get imported by other files
 - can only consist of blank methods
 - syntax:
 
-[public] model modelname {
+model modelname {
 
 }
 
@@ -483,16 +478,15 @@ Object obj = Object(){
 
 access-modifier
 
-- following accessmods are available:
+- following accessmods are available for classmembers
 
-family    = accessible in this class, inherited, import not accessible
-public    = accessible outside of scope, import accessible
+family    = accessible in this class, inherited
+public    = accessible outside of class scope
+(default) = accessible only inside class scope
 
-- global variables are private by default
-- functions are private by default
-- classes / models are private by default
-- fields / methods / memberclasses / membermodels are private by default
-- blank methods are public by default, can't be private
+- blank methods are public by default
+- everything else is only accessible inside the class, not even for subclasses
+accessible
 
 --------------------------------------------------------------------------------
 
@@ -552,21 +546,66 @@ begin (objectclass object = objectclass()) {}
 
   - automatically executes "delete object" after
 
+-   -   -   -   -   -   -   -   -   -   -   -   -  -   -   -   -   -   -   -   -
 
 error handling; try-catch
 
   try {
-    //do something...
+    #do something...
     Exception obj = Exception("message");
     throw obj;
   } catch(Exception x) {
-    //do something with x
+    #do something with x
   }
 
   - the standard library defines the class "Exception" for adequate use
   - catch then defines an object and casts it's type onto the thrown object:
 
   Exception x = (Exception) thrownobj; (theoretical first line in catch block)
+
+-   -   -   -   -   -   -   -   -   -   -   -   -  -   -   -   -   -   -   -   -
+
+cond - acts as a if collection
+
+  cond {
+    (boolexpr) {   }
+    (anotherboolexpr) {   }
+    else {} #optional
+  }
+
+  cond (variable) {
+    (expr) {   }
+    (anotherexpr) {   }
+    else {} #optional
+  }
+
+  - in the second example, variable is compared via the "==" operator with the
+  expression
+
+-   -   -   -   -   -   -   -   -   -   -   -   -  -   -   -   -   -   -   -   -
+
+if / eif / else
+
+do () if () else ();
+
+-   -   -   -   -   -   -   -   -   -   -   -   -  -   -   -   -   -   -   -   -
+
+while / dowhile
+
+-   -   -   -   -   -   -   -   -   -   -   -   -  -   -   -   -   -   -   -   -
+
+for
+
+for(each)
+
+-   -   -   -   -   -   -   -   -   -   -   -   -  -   -   -   -   -   -   -   -
+
+--------------------------------------------------------------------------------
+
+control-structure control
+
+skip;
+leave;
 
 --------------------------------------------------------------------------------
 
@@ -587,7 +626,7 @@ basics
 
   s_byte or u_byte determine signed or unsigned on every datatype until now
 
-  
+
   bool      1 bit     true false 1 0
   void      0         only for functions
 
@@ -721,7 +760,6 @@ assignment-operators
     copies b into a
 
     void $assign(type arg) {}
-    type cannot be the class this operator is implemented by, illegal!
 
   2. add_assign operator - +=
 
@@ -870,6 +908,18 @@ logical-operators
 
 comparison-operators
 
+  1. bigger operator
+
+  2. smaller operator
+
+  3. bigger_eq operator
+
+  4. smaller_eq operator
+
+  5. eq operator
+
+  6. not_eq operator
+
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 
 inline-computation-operators
@@ -885,7 +935,6 @@ Preprocessor "mondpre"
 
 - processes macros
 - e.g. merges files
-- imports "standard" library with public, global functions
 
 -     -     -     -     -     -     -     -     -     -     -     -     -     -
 

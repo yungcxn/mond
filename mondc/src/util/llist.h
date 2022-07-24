@@ -63,7 +63,7 @@ int ll_string_at(ll_string* head, char* ptr){
 void ll_string_delete(ll_string** head, int index){
 
     if(index == 0){
-        ll_string_delete0(*head);
+        ll_string_delete0(head);
     }
 
     int i = 0;
@@ -113,6 +113,16 @@ void ll_string_concat(ll_string **head, const ll_string* tocat){
     ll_string_reverse(head);
 }
 
+void ll_string_frontconcat(ll_string **head, const ll_string* tocat){
+    ll_string* current = tocat;
+    ll_string_reverse(&current);
+    while(current != NULL){
+        *head = ll_string_insert(*head, current->item);
+        current = current->next;
+    }
+
+}
+
 
 void ll_string_iter(ll_string* toiter, void (*function)(void*)){
     ll_string* current = NULL;
@@ -121,8 +131,18 @@ void ll_string_iter(ll_string* toiter, void (*function)(void*)){
     }
 }
 
-void ll_string_print_single(ll_string* ll){
-    printf("%s\n", ll->item);
+void ll_string_print(ll_string* ll){
+    int first = 1;
+    printf("[");
+    ll_string* current = NULL;
+    for(current = ll; current != NULL; current = current->next){
+        if(!first){
+            printf(", ");
+        }
+        printf("%s", current->item);
+        first = 0;
+    }
+    printf("]");
 }
 
 
