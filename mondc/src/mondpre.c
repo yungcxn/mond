@@ -266,6 +266,7 @@ void recursive_incl_pp_file(FILE* src, FILE* dst, char* cwdpath){
 
     int scan_macroname_mode = 0;
     int scan_macroargs_mode = 0;
+    int macroargs_string_mode = 0;
     int string_mode = 0;
     int char_mode = 0;
 
@@ -329,7 +330,7 @@ void recursive_incl_pp_file(FILE* src, FILE* dst, char* cwdpath){
         if(!single_comment_mode && !multi_comment_mode && !string_mode && !char_mode){
             if(scan_macroname_mode || scan_macroargs_mode){
                 ++chardeletecount;
-                if(c == MACRO_END){
+                if(c == MACRO_END && !macroargs_string_mode){
 
                     scan_macroname_mode = 0;
                     scan_macroargs_mode = 0;
@@ -393,16 +394,22 @@ void recursive_incl_pp_file(FILE* src, FILE* dst, char* cwdpath){
                     if(c == ' '){
                         scan_macroargs_mode = 1;
                         scan_macroname_mode = 0;
+                        macroargs_string_mode = 0;
                         ++lastargc;
                     }else{
                         safeappendc_astring(&macroname, c);
                     }
                 }else if(scan_macroargs_mode){
-                    if(c == ','){
+                    if(c == '"'){
+                        macroargs_string_mode = !macroargs_string_mode;
+                    }
+                    else if(c == ',' && !macroargs_string_mode){
                         safeappendc_astring(&macroargs, ' ');
                         ++lastargc;
                     }else{
-                        if(c != ' '){
+                        if(macroargs_string_mode){
+                            safeappendc_astring(&macroargs, c);
+                        }else if(c != ' '){
                             safeappendc_astring(&macroargs, c);
                         }
 
@@ -410,11 +417,12 @@ void recursive_incl_pp_file(FILE* src, FILE* dst, char* cwdpath){
                 }
 
             }
-            if(c == MACRO_OP){
+            if(c == MACRO_OP && !macroargs_string_mode){
                 if(!scan_macroargs_mode){
                     chardeletecount = 1;
                     scan_macroname_mode = 1;
                     scan_macroargs_mode = 0;
+                    macroargs_string_mode = 0;
                     safeset_astring(&macroname, "");
                     safeset_astring(&macroargs, "");
                 }

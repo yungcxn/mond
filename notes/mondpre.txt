@@ -16,7 +16,6 @@ macro list
 %incl localfile.mon;    or        %incl somelib
 %flag _SOME_NAME_123;            (stores string)
 %isset _SOME_NAME_123;           (produces boolean)
-%filebegin canonical/path;
 
 --------------------------------------------------------------------------------
 

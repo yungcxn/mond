@@ -35,15 +35,15 @@ what can a file contain?
 
 (global) variables
 
-- begin with global
+- begin with glob
 - in scope of every class or function, even if imported by other file
 - mustn't be initiated
 - can't be static
 - can be "con" for becoming a constant
 - syntax:
 
-global (type) nameofvariable;
-global [con] (type) nameofvariable = 5;
+glob (type) nameofvariable;
+glob [con] (type) nameofvariable = 5;
 
 --------------------------------------------------------------------------------
 
