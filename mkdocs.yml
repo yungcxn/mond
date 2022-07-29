@@ -8,10 +8,8 @@ theme:
     - scheme: slate
       primary: teal
   features:
-    - navigation.instant
     - navigation.tracking
     - navigation.tabs
-    - navigation.tabs.sticky
     - navigation.sections
     - toc.integrate
 

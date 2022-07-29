@@ -1,6 +1,6 @@
 # Function pointers
 
-Function pointers belong to the `special types` as well as the pointers.
+Function pointers belong to the `special datatypes` as well as the pointers.
 
 For them the `funcptr` keyword is used. Special information is needed on definition:
 
@@ -22,3 +22,11 @@ myfptr => somefunc;
 ```
 
 Function pointers can also be `void` and not giving a returntype results in `void`.
+
+```
+void funcptr myptr();
+
+# is the same as
+
+funcptr myptr();
+```

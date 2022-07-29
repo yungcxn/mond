@@ -1,9 +1,11 @@
 # Pointers
 
-The pointer type belongs to the `special types`,
+The pointer type belongs to the `special datatypes`,
 having extra operators and syntax.
 
 A normal pointer's size is 8 bytes and only points to a memory location where a single value is stored. Objects and variables of datatypes but not functions.
+
+They can point to other function pointers.
 
 The `ptr` keyword defines pointers:
 
