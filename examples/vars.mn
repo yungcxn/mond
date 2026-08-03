@@ -1,0 +1,6 @@
+$main() {
+    u32 x = 10
+    y = 20  # default: u32
+    mut u32 z = 30
+    z = 40
+}
