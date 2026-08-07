@@ -3,4 +3,8 @@ $main() {
     y = 20  # default: u32
     mut u32 z = 30
     z = 40
+    a = 10.999
+
+    my_str = "Hello, world!"
+    my_char = 'A'
 }

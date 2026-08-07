@@ -4,10 +4,10 @@ pub fn DynBuf(T: type) type {
     return struct {
         alloc: std.mem.Allocator,
         buf: []T,
-        head: usize = 0,
-        cap: usize,
+        head: u32 = 0,
+        cap: u32,
 
-        pub fn init(alloc: std.mem.Allocator, initial_cap: usize) @This() {
+        pub fn init(alloc: std.mem.Allocator, initial_cap: u32) @This() {
             if (initial_cap == 0) @panic("Zero cap'd dynbuf");
             return @This(){
                 .alloc = alloc,
@@ -25,7 +25,12 @@ pub fn DynBuf(T: type) type {
             self.buf = self.alloc.realloc(self.buf, self.cap) catch @panic("OOM");
         }
 
-        pub fn push(self: @This(), value: T) void {
+        pub fn peek(self: *@This()) ?T {
+            if (self.head == 0) return null;
+            return self.buf[self.head - 1];
+        }
+
+        pub fn push(self: *@This(), value: T) void {
             if (self.head >= self.cap) self.grow();
 
             self.buf[self.head] = value;

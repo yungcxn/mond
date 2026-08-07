@@ -1,0 +1,12 @@
+{
+  "configurations": [
+    {
+      "name": "dbg mond",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/mond",
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

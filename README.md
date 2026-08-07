@@ -10,7 +10,7 @@ I really love Zig, and would define some of the philosophic ideas of this langua
 
 1. Ideally, features should be used by intuition rather than introducing "cool toy semantics" that are unsatisfying to use for experienced users of other common programming languages. 
 2. Feature spectrum should not be huge to disallow hundred equally-adequate solutions to a problem solvable through 1-3 good ways.
-3. What can be done in compile-time should be done in compile-time -> compile-time templates (for functions and types) and -control-flow must supported.  
+3. What can be done in compile-time should be done in compile-time -> compile-time templates (for functions and types) and -control-flow must be supported.  
 4. Type construction does not need to be complex -> no complex type construction like in Zig.
 5. force good code practices by error -> force constants, force dead code removal...
 6. Types are nice, type inference is ugly (in most cases).
