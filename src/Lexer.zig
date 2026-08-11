@@ -1,22 +1,25 @@
 const std = @import("std");
 const DynBuf = @import("ds/dynbuf.zig").DynBuf;
 
-const vertwspace = [_]u8{ ' ', '\t' };
 const anywspace = [_]u8{ ' ', '\t', '\r', '\n' };
-const TextSpan = @Vector(2, u32);
 
-const Token = enum(u8) {
+pub const TextSpan = @Vector(2, u32);
+pub const Token = enum(u8) {
     none,
 
     // keywords, must be of form kw_...
-    kw_main,
+    kw_return,
+    kw_u8,
     kw_u32,
+    kw_f32,
+    kw_bool,
     kw_mut,
     kw_true,
     kw_false,
+    kw_if,
+    kw_else,
 
-    // punctuators, must be of form @"xpct_..."
-    //   just @"pct_..." means it's an clear punctuator
+    // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
     @"pct_$",
     @"pct_\n",
     @"pct_(",
@@ -29,9 +32,11 @@ const Token = enum(u8) {
     @"pct_}",
 
     @"xpct_=",
+    @"xpct_!",
     @"xpct_+",
     @"xpct_-",
     @"xpct_*",
+    @"xpct_%",
     @"xpct_/",
 
     @"xpct_==",
@@ -98,22 +103,14 @@ const Token = enum(u8) {
         }
         return null;
     }
-
-    pub inline fn needs_textspan(tok: Token) bool {
-        return @intFromEnum(tok) >= @intFromEnum(Token.identifier);
-    }
 };
 
 // if `tok` needs a textspan, the next 4 bytes are a ref in `spans`
-const AmbigToken = packed union {
-    tok: Token,
-    idx_part: u8,
-};
 
 src_code: []u8,
 cursor: u32 = 0,
 
-tokens: DynBuf(AmbigToken),
+tokens: DynBuf(Token),
 spans: DynBuf(TextSpan),
 
 // -> `null`: outside of `src_code`
@@ -170,21 +167,9 @@ inline fn pop_srcbyte(self: *@This()) ?u8 {
     return self.peek_srcbyte();
 }
 
-inline fn push_tok(self: *@This(), tok: Token) void {
-    self.tokens.push(.{ .tok = tok });
-}
-
-inline fn push_spanned_tok(self: *@This(), from: u32, tok: Token) void {
-    const newspan_idx = self.spans.head;
-    const idx_bytes: [4]u8 = @bitCast(newspan_idx);
-    self.spans.push(.{ from, self.cursor });
-
-    const newtok: AmbigToken = .{ .tok = tok };
-    self.tokens.push(newtok);
-    inline for (idx_bytes) |b| {
-        const newidx: AmbigToken = .{ .idx_part = b };
-        self.tokens.push(newidx);
-    }
+inline fn push(self: *@This(), tok: Token, opt_cursor0: ?u32) void {
+    self.tokens.push(tok);
+    self.spans.push(if (opt_cursor0) |c0| .{ c0, self.cursor } else .{ 0, 0 });
 }
 
 // we assume to always start on "something worth to scan" (no whitespace)
@@ -207,7 +192,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
                     '0'...'9' => continue,
                     else => break,
                 };
-                self.push_spanned_tok(cursor0, if (has_dot) .val_float else .val_int);
+                self.push(if (has_dot) .val_float else .val_int, cursor0);
             },
             '\'' => { // val_char
                 const cursor0 = self.cursor;
@@ -227,13 +212,13 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 }
 
                 self.cursor -= 1;
-                self.push_spanned_tok(cursor0, .val_char);
+                self.push(.val_char, cursor0);
                 self.cursor += 1;
             },
             '"' => { // val_string
                 const cursor0 = self.cursor;
                 if (self.take_esc('"')) {
-                    self.push_spanned_tok(cursor0, .val_string);
+                    self.push(.val_string, cursor0);
                 } else return error.LexingError_StringScanEOF;
                 self.cursor += 1;
             },
@@ -246,26 +231,27 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 };
 
                 if (Token.kw_from_str(self.src_code[cursor0..self.cursor])) |found_kw| {
-                    self.push_tok(found_kw);
+                    self.push(found_kw, null);
                 } else {
-                    self.push_spanned_tok(cursor0, .identifier);
+                    self.push(.identifier, cursor0);
                 }
             },
             // clear punctuators (@"pct_...")
             '\n' => {
-                if (self.tokens.peek()) |last_tok| if (last_tok.tok != .@"pct_\n") {
-                    self.push_tok(.@"pct_\n"); // reduces overall token count if \n\n\n...
-                };
+                // TODO
+                // if (self.tokens.peek()) |last_tok| if (last_tok.tok != .@"pct_\n") {
+                //     self.push_tok(.@"pct_\n"); // reduces overall token count if \n\n\n...
+                // };
             },
-            '$' => self.push_tok(.@"pct_$"),
-            '(' => self.push_tok(.@"pct_("),
-            ')' => self.push_tok(.@"pct_)"),
-            '[' => self.push_tok(.@"pct_["),
-            ']' => self.push_tok(.@"pct_]"),
-            '<' => self.push_tok(.@"pct_<"),
-            '>' => self.push_tok(.@"pct_>"),
-            '{' => self.push_tok(.@"pct_{"),
-            '}' => self.push_tok(.@"pct_}"),
+            '$' => self.push(.@"pct_$", null),
+            '(' => self.push(.@"pct_(", null),
+            ')' => self.push(.@"pct_)", null),
+            '[' => self.push(.@"pct_[", null),
+            ']' => self.push(.@"pct_]", null),
+            '<' => self.push(.@"pct_<", null),
+            '>' => self.push(.@"pct_>", null),
+            '{' => self.push(.@"pct_{", null),
+            '}' => self.push(.@"pct_}", null),
 
             else => { // unclear punctuators (@"pct_...")
                 const cursor0 = self.cursor - 1;
@@ -285,12 +271,12 @@ inline fn gen_next_tok(self: *@This()) !bool {
 
                 if (longest_valid_punct) |punct| {
                     self.cursor = cursor0 + longest_punctc;
-                    self.push_tok(punct);
+                    self.push(punct, null);
                 } else return error.LexingError_InvalidPunctuator;
             },
         }
 
-        return self.safe_skip_set(vertwspace);
+        return self.safe_skip_set(anywspace);
     }
     return false;
 }
@@ -301,15 +287,15 @@ pub fn gen_tokens(self: *@This()) !void {
 }
 
 pub fn dbg_print_tokens(self: *@This(), io: std.Io) void {
+    std.Io.File.stdout().writeStreamingAll(io, "[DBG LEXER TOKENS]\n\n") catch @panic("print failed");
+
     var i: u32 = 0;
     while (i < self.tokens.head) : (i += 1) {
-        const tok: Token = self.tokens.buf[i].tok;
-        const tokname: []const u8 = if (tok != .@"pct_\n") @tagName(tok) else "pct_\\n";
-        std.Io.File.stdout().writeStreamingAll(io, tokname) catch @panic("print failed");
+        const tok: Token = self.tokens.buf[i];
+        std.Io.File.stdout().writeStreamingAll(io, @tagName(tok)) catch @panic("print failed");
 
-        if (Token.needs_textspan(tok)) {
-            const idx: u32 = @bitCast(self.tokens.buf[i + 1 ..][0..4].*);
-            const span: TextSpan = self.spans.buf[idx];
+        const span: TextSpan = self.spans.buf[i];
+        if (span[0] != 0 and span[1] != 0) {
             const txt: []const u8 = self.src_code[span[0]..span[1]];
 
             std.Io.File.stdout().writeStreamingAll(io, " := ") catch @panic("print failed");
@@ -320,4 +306,6 @@ pub fn dbg_print_tokens(self: *@This(), io: std.Io) void {
 
         std.Io.File.stdout().writeStreamingAll(io, "\n") catch @panic("print failed");
     }
+
+    std.Io.File.stdout().writeStreamingAll(io, "\n[END DBG LEXER TOKENS]\n") catch @panic("print failed");
 }

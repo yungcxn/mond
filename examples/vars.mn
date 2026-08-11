@@ -1,4 +1,4 @@
-$main() {
+u32 main() {
     u32 x = 10
     y = 20  # default: u32
     mut u32 z = 30
@@ -7,4 +7,9 @@ $main() {
 
     my_str = "Hello, world!"
     my_char = 'A'
+
+    mut myboolvar = true
+    myboolvar = false
+
+    return 0
 }
