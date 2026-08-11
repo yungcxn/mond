@@ -108,7 +108,7 @@ pub fn SoD(StructT: type) type {
             return self.get(head - 1);
         }
 
-        pub fn getField(
+        pub fn get_field(
             self: *@This(),
             comptime field: @EnumLiteral(),
             idx: u32,
@@ -116,7 +116,7 @@ pub fn SoD(StructT: type) type {
             return @field(self.pool, @tagName(field)).get(idx);
         }
 
-        pub fn peekField(
+        pub fn peek_field(
             self: *@This(),
             comptime field: @EnumLiteral(),
         ) ?@TypeOf(@field(self.pool, @tagName(field))).Elem {
