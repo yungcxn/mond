@@ -1,0 +1,99 @@
+$import("somelib")
+
+# fixed func signature
+i32 add_i32(i32 a, i32 b) {
+    return a + b
+}
+
+# "void" does not exist, it's always induced
+my_void_func() {
+    print("Hello, world!")
+}
+
+# first set of parentheses is comptime, second set is runtime
+T mytemplfunc(type T, bool add_or_sub)(T a, T b) {
+    constif (add_or_sub) {
+        return a + b
+    } constelse {
+        return a - b
+    }
+}
+
+type Person(u8[10] name, i32 age = 18, *u8 address)
+
+type Point(type A, type B)(A x, B y)
+
+# $IFace(AddablePoint) will provide its interface
+type AddablePoint(type A, type B)(A x, B y) {
+    add(AddablePoint other) {
+        $.x += other.x
+        $.y += other.y
+    }
+}
+
+iface Iterable(type ElementType) {
+    bool has_next()
+    ElementType next()
+}
+
+// type def through alias
+type opt_u8 = $Optional(u8, 0xFF)
+type err_u8 = $Error(u8, 0xFF)
+type err_opt_u8 = $Error($Optional(u8, 0xFE), 0xFF)
+
+type ByteStream(*u8 buf, u32 cursor) <Iterable(u8)> {
+
+    $init(*u8 in_buf) {
+        return ByteStream(buf = in_buf, cursor = 0)
+    }
+
+    $deinit() {} # could be left out
+
+    pub opt_u8 pop() {
+        if (bs.cursor >= bs.buf.len) {
+            return null
+        }
+
+        defer $.cursor += 1
+        return $.buf[$.cursor]
+    }
+
+    pub bool has_next() {
+        return $.cursor < $.buf.len
+    }
+
+    pub u8 next() {
+        defer $.cursor++
+        return $.buf[$.cursor]
+    }
+
+}
+
+# type alias
+type Point2D = Point(i32, i32)
+# func alias, not templated
+u32[u32, u32] add = mytemplfunc(u32, true)
+
+$main() {
+    u8[2] my_str0 = ['h', 'i']      type: u8[2]
+    u8[2] my_str1 = "hi"  # h i     type: u8[2]
+    u8[]  my_str2 = "hi"  # h i     type: u8[2]
+    &u8   c_str   = "hi"  # h i \0  type: pointer to constant u8(s)
+    induced_str   = "hi"  # h i     type: u8[2]
+
+    println(c_str)
+
+    # control flow:
+}
+```
+
+Lambdas:
+
+```
+u32[u32, u32] add_lambda1  = u32 (u32 a, u32 b) return a + b
+
+u32[u32, u32] add_lambda5  = u32 (u32 a, u32 b) {
+    side_effect(a,b)
+    return a + b
+}
+```

@@ -144,5 +144,12 @@ pub fn SoD(StructT: type) type {
             }
             return result;
         }
+
+        pub fn sliced_field(
+            self: *const @This(),
+            comptime field: @EnumLiteral(),
+        ) []@TypeOf(@field(self.pool, @tagName(field))).Elem {
+            return @field(self.pool, @tagName(field)).sliced();
+        }
     };
 }
