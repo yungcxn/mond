@@ -1,119 +1,133 @@
 const std = @import("std");
-const DynBuf = @import("ds/dynbuf.zig").DynBuf;
+const SoD = @import("ds/dynbuf.zig").SoD;
 
 const anywspace = [_]u8{ ' ', '\t', '\r', '\n' };
 
 pub const TextSpan = @Vector(2, u32);
-pub const Token = enum(u8) {
-    none,
 
-    // keywords, must be of form kw_...
-    kw_return,
-    kw_u8,
-    kw_u32,
-    kw_f32,
-    kw_bool,
-    kw_mut,
-    kw_true,
-    kw_false,
-    kw_if,
-    kw_else,
+pub const Token = struct {
+    tk: Kind,
+    span: TextSpan,
 
-    // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
-    @"pct_$",
-    @"pct_\n",
-    @"pct_(",
-    @"pct_)",
-    @"pct_[",
-    @"pct_]",
-    @"pct_<",
-    @"pct_>",
-    @"pct_{",
-    @"pct_}",
+    pub const Kind = enum(u8) {
+        none,
 
-    @"xpct_=",
-    @"xpct_!",
-    @"xpct_+",
-    @"xpct_-",
-    @"xpct_*",
-    @"xpct_%",
-    @"xpct_/",
+        // keywords, must be of form kw_...
+        kw_return,
+        kw_u8,
+        kw_u32,
+        kw_f32,
+        kw_bool,
+        kw_mut,
+        kw_true,
+        kw_false,
+        kw_if,
+        kw_else,
 
-    @"xpct_==",
-    @"xpct_+=",
-    @"xpct_-=",
-    @"xpct_*=",
-    @"xpct_/=",
-    @"xpct_++",
-    @"xpct_--",
-    @"xpct_**",
+        // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
+        @"pct_$",
+        @"pct_\n",
+        @"pct_(",
+        @"pct_)",
+        @"pct_[",
+        @"pct_]",
+        @"pct_<",
+        @"pct_>",
+        @"pct_{",
+        @"pct_}",
 
-    @"xpct_&&=",
+        @"xpct_=",
+        @"xpct_!",
+        @"xpct_+",
+        @"xpct_-",
+        @"xpct_*",
+        @"xpct_%",
+        @"xpct_/",
+        @"xpct_&",
+        @"xpct_|",
+        @"xpct_^",
+        @"xpct_<",
+        @"xpct_>",
 
-    // everything below this needs a textspan //
+        @"xpct_==",
+        @"xpct_+=",
+        @"xpct_-=",
+        @"xpct_*=",
+        @"xpct_/=",
+        @"xpct_++",
+        @"xpct_--",
+        @"xpct_**",
+        @"xpct_||",
+        @"xpct_^^",
+        @"xpct_&&",
+        @"xpct_!=",
+        @"xpct_<=",
+        @"xpct_>=",
 
-    identifier,
+        @"xpct_&&=",
 
-    // values, must be of form val_...
-    val_string,
-    val_int,
-    val_float,
-    val_char,
+        // everything below this needs a textspan //
 
-    fn xpcts(comptime len: u32) []const struct { []const u8, Token } {
-        return comptime blk: {
-            var list: []const struct { []const u8, Token } = &.{};
-            for (@typeInfo(@This()).@"enum".fields) |field| {
-                if (!std.mem.startsWith(u8, field.name, "xpct_") or field.name.len != 5 + len) continue;
-                list = list ++ .{.{ field.name[5 .. 5 + len], @field(@This(), field.name) }};
-            }
-            break :blk list;
+        identifier,
+
+        // values, must be of form val_...
+        val_string,
+        val_int,
+        val_float,
+        val_char,
+
+        fn xpcts(comptime len: u32) []const struct { []const u8, Token.Kind } {
+            return comptime blk: {
+                var list: []const struct { []const u8, Token.Kind } = &.{};
+                for (@typeInfo(@This()).@"enum".fields) |field| {
+                    if (!std.mem.startsWith(u8, field.name, "xpct_") or field.name.len != 5 + len) continue;
+                    list = list ++ .{.{ field.name[5 .. 5 + len], @field(@This(), field.name) }};
+                }
+                break :blk list;
+            };
+        }
+
+        fn keywords() []const struct { []const u8, Token.Kind } {
+            return comptime blk: {
+                var list: []const struct { []const u8, Token.Kind } = &.{};
+                for (@typeInfo(@This()).@"enum".fields) |field| {
+                    if (!std.mem.startsWith(u8, field.name, "kw_")) continue;
+                    list = list ++ .{.{ field.name[3..field.name.len], @field(@This(), field.name) }};
+                }
+                break :blk list;
+            };
+        }
+
+        const xpct_tbl: []const []const struct { []const u8, Token.Kind } = &.{
+            xpcts(1),
+            xpcts(2),
+            xpcts(3),
         };
-    }
 
-    fn keywords() []const struct { []const u8, Token } {
-        return comptime blk: {
-            var list: []const struct { []const u8, Token } = &.{};
-            for (@typeInfo(@This()).@"enum".fields) |field| {
-                if (!std.mem.startsWith(u8, field.name, "kw_")) continue;
-                list = list ++ .{.{ field.name[3..field.name.len], @field(@This(), field.name) }};
+        const kw_tbl: []const struct { []const u8, Token.Kind } = keywords();
+
+        pub inline fn xpct_from_str(xpct_str: []const u8) ?Token.Kind {
+            for (xpct_tbl[xpct_str.len - 1]) |xpct_pair| {
+                if (std.mem.eql(u8, xpct_str, xpct_pair[0])) return xpct_pair[1];
             }
-            break :blk list;
-        };
-    }
+            return null;
+        }
 
-    const xpct_tbl: []const []const struct { []const u8, Token } = &.{
-        xpcts(1),
-        xpcts(2),
-        xpcts(3),
+        pub inline fn kw_from_str(kw_str: []const u8) ?Token.Kind {
+            for (kw_tbl) |kw_pair| {
+                if (std.mem.eql(u8, kw_str, kw_pair[0])) return kw_pair[1];
+            }
+            return null;
+        }
     };
-
-    const kw_tbl: []const struct { []const u8, Token } = keywords();
-
-    pub inline fn xpct_from_str(xpct_str: []const u8) ?Token {
-        for (xpct_tbl[xpct_str.len - 1]) |xpct_pair| {
-            if (std.mem.eql(u8, xpct_str, xpct_pair[0])) return xpct_pair[1];
-        }
-        return null;
-    }
-
-    pub inline fn kw_from_str(kw_str: []const u8) ?Token {
-        for (kw_tbl) |kw_pair| {
-            if (std.mem.eql(u8, kw_str, kw_pair[0])) return kw_pair[1];
-        }
-        return null;
-    }
 };
 
-// if `tok` needs a textspan, the next 4 bytes are a ref in `spans`
-
-src_code: []u8,
+src_bytes: []u8,
 cursor: u32 = 0,
 
-tokens: DynBuf(Token),
-spans: DynBuf(TextSpan),
+tokens: SoD(Token),
 
-// -> `null`: outside of `src_code`
+// -> `null`: outside of `src_bytes`
 inline fn at_set(self: *@This(), comptime charset: anytype) ?bool {
     const viewed = self.peek_srcbyte() orelse return null;
     inline for (charset) |char| {
@@ -122,7 +136,7 @@ inline fn at_set(self: *@This(), comptime charset: anytype) ?bool {
     return false;
 }
 
-// -> `false`: outside of `src_code`
+// -> `false`: outside of `src_bytes`
 inline fn safe_skip_set(self: *@This(), comptime charset: anytype) bool {
     while (self.at_set(charset)) |is_at| {
         if (is_at) {
@@ -134,7 +148,7 @@ inline fn safe_skip_set(self: *@This(), comptime charset: anytype) bool {
     return false;
 }
 
-// -> `false`: outside of `src_code`
+// -> `false`: outside of `src_bytes`
 // esc: escaped, exc: exclusive (cursor is at `char` + 1)
 inline fn take_esc(self: *@This(), char: u8) bool {
     var c0: u8 = 0;
@@ -153,9 +167,9 @@ inline fn adv_until(self: *@This(), char: u8) !void {
 }
 
 inline fn peek_srcbyte(self: *@This()) ?u8 {
-    if (self.cursor < self.src_code.len) {
+    if (self.cursor < self.src_bytes.len) {
         @branchHint(.likely);
-        return self.src_code[self.cursor];
+        return self.src_bytes[self.cursor];
     } else {
         @branchHint(.unlikely);
         return null;
@@ -167,14 +181,16 @@ inline fn pop_srcbyte(self: *@This()) ?u8 {
     return self.peek_srcbyte();
 }
 
-inline fn push(self: *@This(), tok: Token, opt_cursor0: ?u32) void {
-    self.tokens.push(tok);
-    self.spans.push(if (opt_cursor0) |c0| .{ c0, self.cursor } else .{ 0, 0 });
+inline fn push_tok(self: *@This(), tok: Token.Kind, opt_cursor0: ?u32) void {
+    self.tokens.push(.{
+        .tk = tok,
+        .span = if (opt_cursor0) |c0| .{ c0, self.cursor } else .{ 0, 0 },
+    });
 }
 
 // we assume to always start on "something worth to scan" (no whitespace)
 // therefore, we scan and advance cursor until next "worthy-to-scan" char
-// -> `false`: outside of `src_code`
+// -> `false`: outside of `src_bytes`
 inline fn gen_next_tok(self: *@This()) !bool {
     if (self.pop_srcbyte()) |c0| {
         switch (c0) {
@@ -192,7 +208,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
                     '0'...'9' => continue,
                     else => break,
                 };
-                self.push(if (has_dot) .val_float else .val_int, cursor0);
+                self.push_tok(if (has_dot) .val_float else .val_int, cursor0);
             },
             '\'' => { // val_char
                 const cursor0 = self.cursor;
@@ -212,13 +228,13 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 }
 
                 self.cursor -= 1;
-                self.push(.val_char, cursor0);
+                self.push_tok(.val_char, cursor0);
                 self.cursor += 1;
             },
             '"' => { // val_string
                 const cursor0 = self.cursor;
                 if (self.take_esc('"')) {
-                    self.push(.val_string, cursor0);
+                    self.push_tok(.val_string, cursor0);
                 } else return error.LexingError_StringScanEOF;
                 self.cursor += 1;
             },
@@ -230,10 +246,10 @@ inline fn gen_next_tok(self: *@This()) !bool {
                     else => break,
                 };
 
-                if (Token.kw_from_str(self.src_code[cursor0..self.cursor])) |found_kw| {
-                    self.push(found_kw, null);
+                if (Token.Kind.kw_from_str(self.src_bytes[cursor0..self.cursor])) |found_kw| {
+                    self.push_tok(found_kw, null);
                 } else {
-                    self.push(.identifier, cursor0);
+                    self.push_tok(.identifier, cursor0);
                 }
             },
             // clear punctuators (@"pct_...")
@@ -243,25 +259,25 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 //     self.push_tok(.@"pct_\n"); // reduces overall token count if \n\n\n...
                 // };
             },
-            '$' => self.push(.@"pct_$", null),
-            '(' => self.push(.@"pct_(", null),
-            ')' => self.push(.@"pct_)", null),
-            '[' => self.push(.@"pct_[", null),
-            ']' => self.push(.@"pct_]", null),
-            '<' => self.push(.@"pct_<", null),
-            '>' => self.push(.@"pct_>", null),
-            '{' => self.push(.@"pct_{", null),
-            '}' => self.push(.@"pct_}", null),
+            '$' => self.push_tok(.@"pct_$", null),
+            '(' => self.push_tok(.@"pct_(", null),
+            ')' => self.push_tok(.@"pct_)", null),
+            '[' => self.push_tok(.@"pct_[", null),
+            ']' => self.push_tok(.@"pct_]", null),
+            '<' => self.push_tok(.@"pct_<", null),
+            '>' => self.push_tok(.@"pct_>", null),
+            '{' => self.push_tok(.@"pct_{", null),
+            '}' => self.push_tok(.@"pct_}", null),
 
             else => { // unclear punctuators (@"pct_...")
                 const cursor0 = self.cursor - 1;
-                var longest_valid_punct: ?Token = null;
+                var longest_valid_punct: ?Token.Kind = null;
                 var longest_punctc: u32 = 0;
 
                 inline for (1..4) |i| {
-                    if (self.cursor >= self.src_code.len) break;
+                    if (self.cursor >= self.src_bytes.len) break;
 
-                    if (Token.xpct_from_str(self.src_code[cursor0..self.cursor])) |found_punct| {
+                    if (Token.Kind.xpct_from_str(self.src_bytes[cursor0..self.cursor])) |found_punct| {
                         longest_valid_punct = found_punct;
                         longest_punctc = i;
                     } else break;
@@ -271,7 +287,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
 
                 if (longest_valid_punct) |punct| {
                     self.cursor = cursor0 + longest_punctc;
-                    self.push(punct, null);
+                    self.push_tok(punct, null);
                 } else return error.LexingError_InvalidPunctuator;
             },
         }
@@ -290,13 +306,13 @@ pub fn dbg_print_tokens(self: *@This(), io: std.Io) void {
     std.Io.File.stdout().writeStreamingAll(io, "[DBG LEXER TOKENS]\n\n") catch @panic("print failed");
 
     var i: u32 = 0;
-    while (i < self.tokens.head) : (i += 1) {
-        const tok: Token = self.tokens.buf[i];
-        std.Io.File.stdout().writeStreamingAll(io, @tagName(tok)) catch @panic("print failed");
-
-        const span: TextSpan = self.spans.buf[i];
+    while (i < self.tokens.len()) : (i += 1) {
+        const spanned_tok = self.tokens.get(i) orelse unreachable;
+        const tk = spanned_tok.tk;
+        const span = spanned_tok.span;
+        std.Io.File.stdout().writeStreamingAll(io, @tagName(tk)) catch @panic("print failed");
         if (span[0] != 0 and span[1] != 0) {
-            const txt: []const u8 = self.src_code[span[0]..span[1]];
+            const txt: []const u8 = self.src_bytes[span[0]..span[1]];
 
             std.Io.File.stdout().writeStreamingAll(io, " := ") catch @panic("print failed");
             std.Io.File.stdout().writeStreamingAll(io, txt) catch @panic("print failed");

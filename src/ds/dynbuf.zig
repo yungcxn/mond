@@ -151,5 +151,14 @@ pub fn SoD(StructT: type) type {
         ) []@TypeOf(@field(self.pool, @tagName(field))).Elem {
             return @field(self.pool, @tagName(field)).sliced();
         }
+
+        pub fn field_ptr(
+            self: *@This(),
+            comptime field: @EnumLiteral(),
+            idx: u32,
+        ) ?*@TypeOf(@field(self.pool, @tagName(field))).Elem {
+            if (idx >= self.len()) return null;
+            return &@field(self.pool, @tagName(field)).buf[idx];
+        }
     };
 }

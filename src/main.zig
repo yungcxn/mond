@@ -1,5 +1,6 @@
 const std = @import("std");
 const Lexer = @import("Lexer.zig");
+const Parser = @import("Parser.zig");
 
 inline fn alloc_file_bytes(alloc: std.mem.Allocator, io: std.Io, file: std.Io.File) []u8 {
     const max_file_size = 50 * 1024 * 1024;
@@ -25,13 +26,11 @@ pub fn main(init: std.process.Init) void {
     defer alloc.free(in_bytes);
 
     var lexer: Lexer = .{
-        .src_code = in_bytes,
-        .spans = .init(alloc, 1000),
+        .src_bytes = in_bytes,
         .tokens = .init(alloc, 10000),
     };
 
     defer {
-        lexer.spans.deinit();
         lexer.tokens.deinit();
     }
 
@@ -40,10 +39,14 @@ pub fn main(init: std.process.Init) void {
         const err_msg = std.fmt.bufPrint(
             &buf,
             "{s}, on token: '{c}' (pos={d})",
-            .{ @errorName(e), lexer.src_code[lexer.cursor - 1], lexer.cursor - 1 },
+            .{ @errorName(e), lexer.src_bytes[lexer.cursor - 1], lexer.cursor - 1 },
         ) catch @panic("OOM, could not print error");
         @panic(err_msg);
     };
 
     if (debug) lexer.dbg_print_tokens(io);
+
+    var parser: Parser = .init(alloc, lexer.tokens, in_bytes);
+
+    parser.build_ast() catch |e| @panic(@errorName(e));
 }
