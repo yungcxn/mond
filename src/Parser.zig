@@ -355,14 +355,14 @@ inline fn realize_span(self: *@This(), span: Lexer.TextSpan) []const u8 {
     return self.src_bytes[span[0]..span[1]];
 }
 
-fn eval_stmt(self: *@This()) !?u32 {
-    const tok = self.pop_tok() orelse return null;
+fn eval_stmt(self: *@This()) !u32 {
+    const tok = self.pop_tok() orelse return error.EOF;
 
     switch (tok.tk) {
         .@"pct_{" => {
             const parent_exec_block_idx = self.tree.push_node(.stmt_exec_block);
             while (true) {
-                const child_stmt_idx = try self.eval_expr() orelse return error.EOF;
+                const child_stmt_idx = try self.eval_expr();
                 self.tree.new_extra_childref(parent_exec_block_idx, child_stmt_idx);
 
                 const peeked = self.peek_tok_kind() orelse return error.EOF;
@@ -370,13 +370,13 @@ fn eval_stmt(self: *@This()) !?u32 {
             }
         },
         .kw_if => {
-            const child_expr_idx = try self.eval_expr() orelse return error.EOF;
-            const child_stmt_idx = try self.eval_stmt() orelse return error.EOF;
+            const child_expr_idx = try self.eval_expr();
+            const child_stmt_idx = try self.eval_stmt();
 
             const peeked = self.peek_tok_kind() orelse return error.EOF;
             if (peeked == .kw_else) {
                 _ = self.pop_tok();
-                const alt_child_stmt_idx = try self.eval_stmt() orelse return error.EOF;
+                const alt_child_stmt_idx = try self.eval_stmt();
                 const parent_if_else_idx = self.tree.push_node(.stmt_if_else);
                 self.tree.new_extra_childref(parent_if_else_idx, child_expr_idx);
                 self.tree.new_extra_childref(parent_if_else_idx, child_stmt_idx);
@@ -398,19 +398,19 @@ fn eval_stmt(self: *@This()) !?u32 {
 
 // assumed: `tok_cursor` is at first relevant token of a `expr_type`
 // -> `null`: outside of text ; `u32`: the index of the topmost parent created here
-fn eval_expr(self: *@This()) !?u32 {
+fn eval_expr(self: *@This()) !u32 {
     const P = @TypeOf(self);
 
     const prec_parse = struct {
-        pub fn prec_parse(self_: P, min_prec: u32) !?u32 {
-            const tok = self_.pop_tok() orelse return null;
+        pub fn prec_parse(self_: P, min_prec: u32) !u32 {
+            const tok = self_.pop_tok() orelse return error.EOF;
 
             var left_idx: u32 = undefined;
 
             if (tok.tk == .@"pct_(") {
                 // nested () just recurses into ourselves at min_prec 0
                 const paren_node_idx = self_.tree.push_node(.expr_paren);
-                left_idx = try prec_parse(self_, 0) orelse return error.EOF;
+                left_idx = try prec_parse(self_, 0);
 
                 self_.tree.set_node_arg0(paren_node_idx, left_idx);
                 left_idx = paren_node_idx;
@@ -420,7 +420,7 @@ fn eval_expr(self: *@This()) !?u32 {
             } else if (Tree.Node.tok_to_expr_unary[@intFromEnum(tok.tk)] != .none) {
                 const unary_nt = Tree.Node.tok_to_expr_unary[@intFromEnum(tok.tk)];
                 const unary_node_idx = self_.tree.push_node(unary_nt);
-                const child_idx = try prec_parse(self_, 0) orelse return error.EOF;
+                const child_idx = try prec_parse(self_, 0);
 
                 self_.tree.set_node_arg0(unary_node_idx, child_idx);
                 left_idx = unary_node_idx;
@@ -440,7 +440,7 @@ fn eval_expr(self: *@This()) !?u32 {
                 self_.tok_cursor += 1;
 
                 const op_node_idx = self_.tree.push_node(bin_lookup.nt);
-                const right_idx = try prec_parse(self_, bin_lookup.prec + 1) orelse return error.EOF;
+                const right_idx = try prec_parse(self_, bin_lookup.prec + 1);
 
                 self_.tree.set_node_arg0(op_node_idx, left_idx);
                 self_.tree.set_node_arg1(op_node_idx, right_idx);
@@ -458,7 +458,7 @@ fn eval_expr(self: *@This()) !?u32 {
 // assumed: `tok_cursor` is at first relevant token of a `expr_type`
 // also assumed: this func is not used if the token cursor is on a optionally given type
 // -> `null`: outside of text ; `u32`: the index of the topmost parent created here
-fn eval_type(self: *@This()) !?u32 {
+fn eval_type(self: *@This()) !u32 {
     var first_node_idx: ?u32 = null;
     var last_parent_idx: ?u32 = null;
     var done: bool = false;
@@ -479,7 +479,7 @@ fn eval_type(self: *@This()) !?u32 {
                 if (next_tok == .@"pct_]") {
                     self.tree.set_node_arg1(new_child_idx, 0xFFFFFFFF);
                 } else {
-                    const expr_node_idx = try self.eval_expr() orelse return error.EOF;
+                    const expr_node_idx = try self.eval_expr();
                     self.tree.set_node_arg1(new_child_idx, expr_node_idx);
                 }
             },
@@ -508,8 +508,8 @@ fn eval_type(self: *@This()) !?u32 {
 
 // assumed: `tok_cursor` is at first relevant token of a `param_deftuple`
 // -> `null`: outside of text ; `u32`: the index of the topmost parent created here
-fn eval_param_deftuple(self: *@This()) !?u32 {
-    const tok0 = self.pop_tok() orelse return null;
+fn eval_param_deftuple(self: *@This()) !u32 {
+    const tok0 = self.pop_tok() orelse return error.EOF;
 
     if (tok0.tk != .@"pct_(") return error.ParenAssumed;
 
@@ -526,7 +526,7 @@ fn eval_param_deftuple(self: *@This()) !?u32 {
         children_idxs[paramc] = defsingle_node_idx;
         paramc += 1;
 
-        const child_type_idx = try self.eval_type() orelse return error.EOF;
+        const child_type_idx = try self.eval_type();
 
         const next_tok = self.pop_tok() orelse return error.EOF;
         if (next_tok.tk != .identifier) return error.IdentifierAssumed;
@@ -560,7 +560,7 @@ fn eval_func(self: *@This()) !bool {
         children_idxs[1] = self.tree.push_data_node(.expr_identifier, self.realize_span(peeked_tok0.span));
     } else {
         // typed, typexxx funcxxx(...)
-        children_idxs[0] = try self.eval_type() orelse return error.EOF;
+        children_idxs[0] = try self.eval_type();
 
         const next_tok = self.pop_tok() orelse return error.EOF;
         if (next_tok.tk != .identifier) return error.IdentifierAssumed;
@@ -568,8 +568,8 @@ fn eval_func(self: *@This()) !bool {
     }
 
     // cursor should be on '(' token
-    children_idxs[2] = try self.eval_param_deftuple() orelse return error.EOF;
-    children_idxs[3] = try self.eval_stmt() orelse return error.EOF;
+    children_idxs[2] = try self.eval_param_deftuple();
+    children_idxs[3] = try self.eval_stmt();
 
     inline for (children_idxs) |childidx| {
         self.tree.new_extra_childref(func_node_idx, childidx);
