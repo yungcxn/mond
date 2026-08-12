@@ -8,6 +8,7 @@ pub const Tree = struct {
         nk: Kind,
         args: @Vector(2, u32),
 
+        // TODO: to nice types with enough info to get rid of loosely setting children and/or metadata arguments
         pub const Kind = enum(u8) {
             none,
 
