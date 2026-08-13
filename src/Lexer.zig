@@ -242,7 +242,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 const cursor0 = self.cursor - 1;
 
                 while (self.peek_srcbyte()) |c| : (self.cursor += 1) switch (c) {
-                    'a'...'z', 'A'...'Z', '_' => continue,
+                    'a'...'z', 'A'...'Z', '_', '0'...'9' => continue,
                     else => break,
                 };
 

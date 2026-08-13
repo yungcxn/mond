@@ -1,0 +1,65 @@
+(* This is just for an overview and not to be used by parser generators, as I desipse them *)
+
+(* TOKENS AND HELPERS *)
+
+helper_digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+helper_alph = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" 
+                  | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" | "A"
+                  | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" 
+                  | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z";
+
+
+val_int = helper_digit, { helper_digit } ;
+val_float = { helper_digit }, ".",  helper_digit, { helper_digit } ;
+val_string = '"', { ? any character without unescaped '"' ? },  '"' ;
+val_char = "'",   [ "\\" ], ? any character ?,  "'" ;
+kw = "return" | "u8" | "u32" | "f32" | "bool" | "mut" | "true" | "false" | "if" | "else" ;
+type_kw = "u8" | "u32" | "f32" | "bool" ;
+identifier = ( helper_alph|"_" , {helper_alph|helper_digit|"_"} ) - kw;
+
+
+(* START *)
+file = { func_def };
+
+func_def = [typeexpr], identifier, [param_deftuple], stmt;
+
+typeexpr = "[", expr, "]", typeexpr 
+         | "*", typeexpr
+         | "&", typeexpr
+         | type_kw
+         | identifier;
+
+param_deftuple = "(", { param_defsingle, "," }, param_defsingle,  ")";
+
+param_defsingle = typeexpr, identifier;
+
+stmt                = stmt_execblock
+                    | stmt_if
+                    | stmt_if_else
+                    | stmt_if_elseif
+                    | stmt_if_elseif_else
+                    | stmt_return
+                    | stmt_assign
+                    | stmt_funccall;
+
+stmt_execblock      = "{", { stmt }, "}";
+stmt_if             = "if", expr, stmt;
+stmt_if_else        = "if", expr, stmt, "else", stmt;
+stmt_if_elseif      = "if", expr, stmt, ("elseif", expr, stmt), { "elseif", expr, stmt };
+stmt_if_elseif_else = "if", expr, stmt, ("elseif", expr, stmt), { "elseif", expr, stmt }, "else", stmt;
+stmt_return         = "return", [ expr ];
+stmt_assign         = [ typeexpr ], [ "mut" ], identifier, "=", expr;
+stmt_funccall       = identifier, ( param_calltuple | ("(", ")") ) ;
+
+param_calltuple  = "(", { expr, "," }, expr,  ")";
+
+expr            = expr_parens
+                | expr_op_binary
+                | expr_op_unary
+                | expr_funccall
+                | identifier;
+
+expr_parens     = "(", expr, ")";
+expr_op_binary  = expr, op_binary, expr;
+expr_op_unary   = op_unary, expr;
+expr_funccall   = identifier, ( param_calltuple | ("(", ")") );
