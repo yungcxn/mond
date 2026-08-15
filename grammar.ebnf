@@ -21,7 +21,7 @@ identifier = ( helper_alph|"_" , {helper_alph|helper_digit|"_"} ) - kw;
 (* START *)
 file = { func_def };
 
-func_def = [typeexpr], identifier, [param_deftuple], stmt;
+func_def = [typeexpr], identifier, "(", (")" | [param_deftuple]), stmt;
 
 typeexpr = "[", expr, "]", typeexpr 
          | "*", typeexpr
@@ -29,37 +29,40 @@ typeexpr = "[", expr, "]", typeexpr
          | type_kw
          | identifier;
 
-param_deftuple = "(", { param_defsingle, "," }, param_defsingle,  ")";
+param_deftuple = { param_singledef, "," }, param_singledef, ")";
 
-param_defsingle = typeexpr, identifier;
+param_singledef = typeexpr, identifier;
 
-stmt                = stmt_execblock
-                    | stmt_if
-                    | stmt_if_else
-                    | stmt_if_elseif
-                    | stmt_if_elseif_else
-                    | stmt_return
-                    | stmt_assign
-                    | stmt_funccall;
+stmt                = "{", stmt_execblock
+                    | "if", (stmt_if | stmt_if_else)
+                    | "return", stmt_return
 
-stmt_execblock      = "{", { stmt }, "}";
-stmt_if             = "if", expr, stmt;
-stmt_if_else        = "if", expr, stmt, "else", stmt;
-stmt_if_elseif      = "if", expr, stmt, ("elseif", expr, stmt), { "elseif", expr, stmt };
-stmt_if_elseif_else = "if", expr, stmt, ("elseif", expr, stmt), { "elseif", expr, stmt }, "else", stmt;
-stmt_return         = "return", [ expr ];
-stmt_assign         = [ typeexpr ], [ "mut" ], identifier, "=", expr;
-stmt_funccall       = identifier, ( param_calltuple | ("(", ")") ) ;
+                    (* the complex cases: *)
+                    | "mut", stmt_assign,
+                    | expr,
+                    | stmt_assign;
+
+                    
+
+stmt_execblock      = { stmt }, "}";
+stmt_if             = expr, stmt;
+stmt_if_else        = expr, stmt, "else", stmt;
+stmt_return         = [ expr ];
+stmt_assign         = typeexpr, identifier, "=", expr
+                    | identifier, "=", expr;
+
 
 param_calltuple  = "(", { expr, "," }, expr,  ")";
 
-expr            = expr_parens
-                | expr_op_binary
-                | expr_op_unary
-                | expr_funccall
-                | identifier;
+expr            = "(", expr_parens
+                | op_unary, expr_op_unary
+                | identifier | val_int | val_float | val_string | val_char | "true" | "false"
+                | expr, "[", ("]" | expr_indexing)
+                | expr, "(", (")" | expr_funccall)
+                | op_binary, expr_op_binary;
 
-expr_parens     = "(", expr, ")";
-expr_op_binary  = expr, op_binary, expr;
-expr_op_unary   = op_unary, expr;
-expr_funccall   = identifier, ( param_calltuple | ("(", ")") );
+expr_parens     = expr, ")";
+expr_indexing   = expr, "]";
+expr_op_binary  = expr;
+expr_op_unary   = expr;
+expr_funccall   = { expr, "," }, expr, ")";

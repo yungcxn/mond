@@ -31,10 +31,9 @@ pub const Token = struct {
         @"pct_)",
         @"pct_[",
         @"pct_]",
-        @"pct_<",
-        @"pct_>",
         @"pct_{",
         @"pct_}",
+        @"pct_,",
 
         @"xpct_=",
         @"xpct_!",
@@ -264,10 +263,9 @@ inline fn gen_next_tok(self: *@This()) !bool {
             ')' => self.push_tok(.@"pct_)", null),
             '[' => self.push_tok(.@"pct_[", null),
             ']' => self.push_tok(.@"pct_]", null),
-            '<' => self.push_tok(.@"pct_<", null),
-            '>' => self.push_tok(.@"pct_>", null),
             '{' => self.push_tok(.@"pct_{", null),
             '}' => self.push_tok(.@"pct_}", null),
+            ',' => self.push_tok(.@"pct_,", null),
 
             else => { // unclear punctuators (@"pct_...")
                 const cursor0 = self.cursor - 1;

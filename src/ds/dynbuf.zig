@@ -43,6 +43,13 @@ pub fn DynBuf(T: type) type {
             self.head += 1;
         }
 
+        pub inline fn append(self: *@This(), values: []const T) void {
+            const new_head = self.head + @as(u32, @intCast(values.len));
+            while (new_head > self.cap) self.grow();
+            @memcpy(self.buf[self.head..new_head], values);
+            self.head = new_head;
+        }
+
         pub inline fn sliced(self: *const @This()) []T {
             return self.buf[0..self.head];
         }

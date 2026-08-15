@@ -18,10 +18,14 @@ pub const Node = struct {
 
         param_calltuple,
 
-        stmt_assign,
+        stmt_mut_untyped_assign, // identifier, expr
+        stmt_mut_typed_assign, // typeexpr, identifier, expr
+        stmt_untyped_assign, // identifier, expr
+        stmt_typed_assign, // typeexpr, identifier, expr
 
         stmt_funccall,
         stmt_exec_block,
+        stmt_return,
         stmt_if,
         stmt_if_else,
         stmt_if_elseif,
@@ -76,9 +80,9 @@ pub const Node = struct {
     pub const tok_to_typeexpr = blk: {
         var t: [256]Node.Kind = @splat(.none);
         t[@intFromEnum(Lexer.Token.Kind.kw_u8)] = .typeexpr_builtin_u8;
-        t[@intFromEnum(Lexer.Token.kw_u32)] = .typeexpr_builtin_u32;
-        t[@intFromEnum(Lexer.Token.kw_f32)] = .typeexpr_builtin_f32;
-        t[@intFromEnum(Lexer.Token.kw_bool)] = .typeexpr_builtin_bool;
+        t[@intFromEnum(Lexer.Token.Kind.kw_u32)] = .typeexpr_builtin_u32;
+        t[@intFromEnum(Lexer.Token.Kind.kw_f32)] = .typeexpr_builtin_f32;
+        t[@intFromEnum(Lexer.Token.Kind.kw_bool)] = .typeexpr_builtin_bool;
         break :blk t;
     };
 
@@ -272,19 +276,15 @@ pub inline fn set_node_arg1(self: *@This(), target_node: u32, val: u32) void {
 pub inline fn push_extra_childrefs(
     self: *@This(),
     parent_idx: u32,
-    childc: comptime_int,
-    childrefs: [childc]u32,
+    childrefs: []const u32,
 ) void {
     const args_ptr = self.ast_nodes.field_ptr(.args, parent_idx) orelse unreachable;
     if (args_ptr.*[1] == 0) {
         args_ptr.*[0] = self.extra_childrefs.head;
     }
 
-    inline for (childrefs) |ref| {
-        self.extra_childrefs.push(ref);
-    }
-
-    args_ptr.*[1] += childc;
+    self.extra_childrefs.append(childrefs);
+    args_ptr.*[1] += @intCast(childrefs.len);
 }
 
 // -> `u32`: idx where node was pushed into
