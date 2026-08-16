@@ -44,6 +44,7 @@ pub const Node = struct {
         expr_funccall,
         expr_paren,
         expr_indexed,
+        expr_member,
 
         expr_unary_neg,
         expr_unary_logical_neg,
@@ -75,6 +76,30 @@ pub const Node = struct {
         expr_float,
         expr_char,
         expr_bool,
+    };
+
+    pub const extrachilded_nodekinds = blk: {
+        var t: [256]bool = @splat(false);
+        t[@intFromEnum(Node.Kind.func_def)] = true;
+        t[@intFromEnum(Node.Kind.stmt_exec_block)] = true;
+        t[@intFromEnum(Node.Kind.stmt_if_else)] = true;
+        t[@intFromEnum(Node.Kind.stmt_mut_typed_assign)] = true;
+        t[@intFromEnum(Node.Kind.stmt_typed_assign)] = true;
+        t[@intFromEnum(Node.Kind.param_calltuple)] = true;
+        t[@intFromEnum(Node.Kind.param_deftuple)] = true;
+        break :blk t;
+    };
+
+    pub const nonchilded_nodekinds = blk: {
+        var t: [256]bool = @splat(false);
+        t[@intFromEnum(Node.Kind.expr_identifier)] = true;
+        t[@intFromEnum(Node.Kind.expr_string)] = true;
+        t[@intFromEnum(Node.Kind.expr_int)] = true;
+        t[@intFromEnum(Node.Kind.expr_float)] = true;
+        t[@intFromEnum(Node.Kind.expr_char)] = true;
+        t[@intFromEnum(Node.Kind.expr_bool)] = true;
+        t[@intFromEnum(Node.Kind.expr_bool)] = true;
+        break :blk t;
     };
 
     pub const tok_to_typeexpr = blk: {
@@ -125,8 +150,6 @@ pub const Node = struct {
         t[@intFromEnum(Lexer.Token.Kind.val_int)] = .expr_int;
         t[@intFromEnum(Lexer.Token.Kind.val_float)] = .expr_float;
         t[@intFromEnum(Lexer.Token.Kind.val_char)] = .expr_char;
-        t[@intFromEnum(Lexer.Token.Kind.kw_true)] = .expr_bool;
-        t[@intFromEnum(Lexer.Token.Kind.kw_false)] = .expr_bool;
         break :blk t;
     };
 };
@@ -142,7 +165,6 @@ pub const DataStore = struct {
     data_ints: DynBuf(u64),
     data_floats: DynBuf(f64),
     data_chars: DynBuf(u8),
-    data_bools: DynBuf(bool),
 
     pub fn init(alloc: std.mem.Allocator) @This() {
         return @This(){
@@ -152,7 +174,6 @@ pub const DataStore = struct {
             .data_ints = .init(alloc, 10000),
             .data_floats = .init(alloc, 10000),
             .data_chars = .init(alloc, 10000),
-            .data_bools = .init(alloc, 10000),
         };
     }
 
@@ -162,7 +183,6 @@ pub const DataStore = struct {
         self.data_ints.deinit();
         self.data_floats.deinit();
         self.data_chars.deinit();
-        self.data_bools.deinit();
     }
 
     pub inline fn store(self: *@This(), store_for_nk: Node.Kind, data: anytype) u32 {
@@ -190,10 +210,6 @@ pub const DataStore = struct {
                 const parsed_char = parse_char(data);
                 self.data_chars.push(parsed_char);
                 pushed_idx = self.data_chars.head - 1;
-            },
-            .expr_bool => if (comptime @TypeOf(data) == bool) {
-                self.data_bools.push(data);
-                pushed_idx = self.data_bools.head - 1;
             },
             else => unreachable,
         }
@@ -304,4 +320,148 @@ pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, data: anytype)
     self.set_node_arg0(new_node_idx, stored_idx);
 
     return new_node_idx;
+}
+
+const COL_RESET = "\x1b[0m";
+const COL_DIM = "\x1b[90m";
+const COL_KIND = "\x1b[36m";
+const COL_LEAF = "\x1b[32m";
+const COL_FUNC = "\x1b[1;35m";
+const COL_ERR = "\x1b[31m";
+const COL_NONE = "\x1b[2;37m";
+
+fn wr(io: std.Io, s: []const u8) void {
+    std.Io.File.stdout().writeStreamingAll(io, s) catch @panic("print failed");
+}
+
+fn leaf_label(self: *@This(), buf: []u8, node: Node) []const u8 {
+    const idx = node.args[0];
+    return switch (node.nk) {
+        .expr_identifier => self.data_store.data_identifiers.buf[idx],
+        .expr_string => self.data_store.data_strings.buf[idx],
+        .expr_int => std.fmt.bufPrint(buf, "{d}", .{self.data_store.data_ints.buf[idx]}) catch "?",
+        .expr_float => std.fmt.bufPrint(buf, "{d}", .{self.data_store.data_floats.buf[idx]}) catch "?",
+        .expr_char => std.fmt.bufPrint(buf, "'{c}'", .{self.data_store.data_chars.buf[idx]}) catch "?",
+        .expr_bool => if (node.args[0] == 1) "true" else "false",
+        else => "",
+    };
+}
+
+fn print_placeholder(io: std.Io, prefix: []const u8, is_last: bool) void {
+    wr(io, prefix);
+    wr(io, if (is_last) "└── " else "├── ");
+    wr(io, COL_NONE ++ "∅ (none)" ++ COL_RESET ++ "\n");
+}
+
+fn print_node(self: *@This(), io: std.Io, idx: u32, prefix: []const u8, is_first: bool, is_last: bool) anyerror!void {
+    wr(io, prefix);
+    wr(io, if (is_first) "" else if (is_last) "└── " else "├── ");
+
+    const node = self.ast_nodes.get(idx) orelse {
+        wr(io, COL_ERR);
+        wr(io, "<missing node #");
+        var idx_buf: [16]u8 = undefined;
+        wr(io, std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch "?");
+        wr(io, ">");
+        wr(io, COL_RESET);
+        wr(io, "\n");
+        return;
+    };
+
+    const is_leaf = Node.nonchilded_nodekinds[@intFromEnum(node.nk)];
+
+    if (!is_first) {
+        wr(io, if (is_leaf) COL_LEAF else COL_KIND);
+        wr(io, @tagName(node.nk));
+        wr(io, COL_RESET);
+    }
+
+    if (is_leaf) {
+        var label_buf: [64]u8 = undefined;
+        const label = self.leaf_label(&label_buf, node);
+        if (label.len != 0) {
+            wr(io, COL_DIM);
+            wr(io, "  \"");
+            wr(io, label);
+            wr(io, "\"");
+            wr(io, COL_RESET);
+        }
+    }
+
+    if (!is_first) wr(io, "\n");
+
+    if (is_leaf) return;
+
+    var prefix_buf: [1024]u8 = undefined;
+    const ext = if (is_first) "" else if (is_last) "    " else "\xe2\x94\x82   "; // "│   "
+    const new_prefix = std.fmt.bufPrint(&prefix_buf, "{s}{s}", .{ prefix, ext }) catch prefix;
+
+    if (Node.extrachilded_nodekinds[@intFromEnum(node.nk)]) {
+        const start = node.args[0];
+        const count = node.args[1];
+
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            const childref = self.extra_childrefs.buf[start + i];
+            const child_is_last = i == count - 1;
+            if (childref == 0xFFFFFFFF) {
+                print_placeholder(io, new_prefix, child_is_last);
+            } else {
+                try self.print_node(io, childref, new_prefix, false, child_is_last);
+            }
+        }
+        return;
+    }
+
+    var children: [2]u32 = undefined;
+    var childc: usize = 0;
+    const a = node.args[0];
+    const b = node.args[1];
+    if (a != 0 and a != 0xFFFFFFFF) {
+        children[childc] = a;
+        childc += 1;
+    }
+    if (b != 0 and b != 0xFFFFFFFF) {
+        children[childc] = b;
+        childc += 1;
+    }
+
+    for (children[0..childc], 0..) |child_idx, i| {
+        try self.print_node(io, child_idx, new_prefix, false, i == childc - 1);
+    }
+}
+
+pub fn debug_print_tree(self: *@This(), io: std.Io, func_ids: []const u32) !void {
+    wr(io, COL_DIM);
+    wr(io, "[DEBUG PARSER AST DUMP]\n");
+    wr(io, COL_RESET);
+
+    for (func_ids, 0..) |funcid, i| {
+        const node = self.ast_nodes.get(funcid) orelse {
+            wr(io, COL_ERR);
+            wr(io, "func: <missing>\n\n");
+            wr(io, COL_RESET);
+            continue;
+        };
+
+        var num_buf: [16]u8 = undefined;
+        const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch "?";
+
+        wr(io, COL_FUNC);
+        wr(io, @tagName(node.nk));
+        wr(io, " (#");
+        wr(io, num_str);
+        wr(io, ")");
+        wr(io, COL_RESET);
+        wr(io, "\n");
+
+        try self.print_node(io, funcid, "", true, true);
+        wr(io, "\n");
+    }
+
+    var stats_buf: [64]u8 = undefined;
+    const stats = std.fmt.bufPrint(&stats_buf, "{d} functions, {d} nodes total", .{ func_ids.len, self.ast_nodes.len() }) catch "";
+    wr(io, COL_DIM);
+    wr(io, stats);
+    wr(io, "\n" ++ COL_RESET);
 }

@@ -26,7 +26,6 @@ pub const Token = struct {
 
         // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
         @"pct_$",
-        @"pct_\n",
         @"pct_(",
         @"pct_)",
         @"pct_[",
@@ -35,6 +34,7 @@ pub const Token = struct {
         @"pct_}",
         @"pct_,",
 
+        @"xpct_.",
         @"xpct_=",
         @"xpct_!",
         @"xpct_+",
@@ -180,10 +180,11 @@ inline fn pop_srcbyte(self: *@This()) ?u8 {
     return self.peek_srcbyte();
 }
 
-inline fn push_tok(self: *@This(), tok: Token.Kind, opt_cursor0: ?u32) void {
+// a span is always stored for user-debug purposes, but really needed only for certain token-types
+inline fn push_tok(self: *@This(), tok: Token.Kind, c0: u32) void {
     self.tokens.push(.{
         .tk = tok,
-        .span = if (opt_cursor0) |c0| .{ c0, self.cursor } else .{ 0, 0 },
+        .span = .{ c0, self.cursor },
     });
 }
 
@@ -246,26 +247,20 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 };
 
                 if (Token.Kind.kw_from_str(self.src_bytes[cursor0..self.cursor])) |found_kw| {
-                    self.push_tok(found_kw, null);
+                    self.push_tok(found_kw, cursor0);
                 } else {
                     self.push_tok(.identifier, cursor0);
                 }
             },
             // clear punctuators (@"pct_...")
-            '\n' => {
-                // TODO
-                // if (self.tokens.peek()) |last_tok| if (last_tok.tok != .@"pct_\n") {
-                //     self.push_tok(.@"pct_\n"); // reduces overall token count if \n\n\n...
-                // };
-            },
-            '$' => self.push_tok(.@"pct_$", null),
-            '(' => self.push_tok(.@"pct_(", null),
-            ')' => self.push_tok(.@"pct_)", null),
-            '[' => self.push_tok(.@"pct_[", null),
-            ']' => self.push_tok(.@"pct_]", null),
-            '{' => self.push_tok(.@"pct_{", null),
-            '}' => self.push_tok(.@"pct_}", null),
-            ',' => self.push_tok(.@"pct_,", null),
+            '$' => self.push_tok(.@"pct_$", self.cursor - 1),
+            '(' => self.push_tok(.@"pct_(", self.cursor - 1),
+            ')' => self.push_tok(.@"pct_)", self.cursor - 1),
+            '[' => self.push_tok(.@"pct_[", self.cursor - 1),
+            ']' => self.push_tok(.@"pct_]", self.cursor - 1),
+            '{' => self.push_tok(.@"pct_{", self.cursor - 1),
+            '}' => self.push_tok(.@"pct_}", self.cursor - 1),
+            ',' => self.push_tok(.@"pct_,", self.cursor - 1),
 
             else => { // unclear punctuators (@"pct_...")
                 const cursor0 = self.cursor - 1;
@@ -285,7 +280,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
 
                 if (longest_valid_punct) |punct| {
                     self.cursor = cursor0 + longest_punctc;
-                    self.push_tok(punct, null);
+                    self.push_tok(punct, cursor0);
                 } else return error.LexingError_InvalidPunctuator;
             },
         }
@@ -300,26 +295,15 @@ pub fn gen_tokens(self: *@This()) !void {
     while (try self.gen_next_tok()) {}
 }
 
-pub fn dbg_print_tokens(self: *@This(), io: std.Io) void {
-    std.Io.File.stdout().writeStreamingAll(io, "[DBG LEXER TOKENS]\n\n") catch @panic("print failed");
+pub fn handle_err(self: *@This(), io: std.Io, e: anyerror) noreturn {
+    var buf: [1024]u8 = undefined;
+    const err_msg = std.fmt.bufPrint(
+        &buf,
+        "{s}, on token: '{c}' (pos={d})",
+        .{ @errorName(e), self.src_bytes[self.cursor - 1], self.cursor - 1 },
+    ) catch @panic("OOM, could not print error");
 
-    var i: u32 = 0;
-    while (i < self.tokens.len()) : (i += 1) {
-        const spanned_tok = self.tokens.get(i) orelse unreachable;
-        const tk = spanned_tok.tk;
-        const span = spanned_tok.span;
-        std.Io.File.stdout().writeStreamingAll(io, @tagName(tk)) catch @panic("print failed");
-        if (span[0] != 0 and span[1] != 0) {
-            const txt: []const u8 = self.src_bytes[span[0]..span[1]];
+    std.Io.File.stdout().writeStreamingAll(io, err_msg) catch @panic("print failed");
 
-            std.Io.File.stdout().writeStreamingAll(io, " := ") catch @panic("print failed");
-            std.Io.File.stdout().writeStreamingAll(io, txt) catch @panic("print failed");
-
-            i += 4;
-        }
-
-        std.Io.File.stdout().writeStreamingAll(io, "\n") catch @panic("print failed");
-    }
-
-    std.Io.File.stdout().writeStreamingAll(io, "\n[END DBG LEXER TOKENS]\n") catch @panic("print failed");
+    return std.process.exit(1);
 }
