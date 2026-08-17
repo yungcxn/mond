@@ -18,10 +18,10 @@ pub const Node = struct {
 
         param_calltuple,
 
-        stmt_mut_untyped_assign, // identifier, expr
-        stmt_mut_typed_assign, // typeexpr, identifier, expr
-        stmt_untyped_assign, // identifier, expr
-        stmt_typed_assign, // typeexpr, identifier, expr
+        stmt_mut_untyped_assign,
+        stmt_mut_typed_assign,
+        stmt_untyped_assign,
+        stmt_typed_assign,
 
         stmt_funccall,
         stmt_exec_block,
@@ -156,126 +156,19 @@ pub const Node = struct {
 
 ast_nodes: SoD(Node),
 extra_childrefs: DynBuf(u32), // children of node i must be contiguous here
-data_store: DataStore,
+span_store: []const Lexer.TextSpan,
 
-pub const DataStore = struct {
-    alloc: std.mem.Allocator,
-    data_identifiers: DynBuf([]const u8),
-    data_strings: DynBuf([]const u8),
-    data_ints: DynBuf(u64),
-    data_floats: DynBuf(f64),
-    data_chars: DynBuf(u8),
-
-    pub fn init(alloc: std.mem.Allocator) @This() {
-        return @This(){
-            .alloc = alloc,
-            .data_identifiers = .init(alloc, 10000),
-            .data_strings = .init(alloc, 10000),
-            .data_ints = .init(alloc, 10000),
-            .data_floats = .init(alloc, 10000),
-            .data_chars = .init(alloc, 10000),
-        };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        self.data_identifiers.deinit();
-        self.data_strings.deinit();
-        self.data_ints.deinit();
-        self.data_floats.deinit();
-        self.data_chars.deinit();
-    }
-
-    pub inline fn store(self: *@This(), store_for_nk: Node.Kind, data: anytype) u32 {
-        var pushed_idx: u32 = undefined;
-        switch (store_for_nk) {
-            .expr_identifier => if (comptime @TypeOf(data) == []const u8) {
-                self.data_identifiers.push(data);
-                pushed_idx = self.data_identifiers.head - 1;
-            },
-            .expr_string => if (comptime @TypeOf(data) == []const u8) {
-                self.data_strings.push(data);
-                pushed_idx = self.data_strings.head - 1;
-            },
-            .expr_int => if (comptime @TypeOf(data) == []const u8) {
-                const parsed_int = parse_u64(data);
-                self.data_ints.push(parsed_int);
-                pushed_idx = self.data_ints.head - 1;
-            },
-            .expr_float => if (comptime @TypeOf(data) == []const u8) {
-                const parsed_float = parse_f64(data);
-                self.data_floats.push(parsed_float);
-                pushed_idx = self.data_floats.head - 1;
-            },
-            .expr_char => if (comptime @TypeOf(data) == []const u8) {
-                const parsed_char = parse_char(data);
-                self.data_chars.push(parsed_char);
-                pushed_idx = self.data_chars.head - 1;
-            },
-            else => unreachable,
-        }
-
-        return pushed_idx;
-    }
-
-    inline fn parse_u64(s: []const u8) u64 {
-        var result: u64 = 0;
-        for (s) |c| {
-            result = result * 10 + (c - '0');
-        }
-        return result;
-    }
-
-    inline fn parse_f64(s: []const u8) f64 {
-        var int_part: u64 = 0;
-        var frac_part: u64 = 0;
-        var frac_div: f64 = 1;
-        var seen_dot = false;
-
-        for (s) |c| {
-            if (c == '.') {
-                seen_dot = true;
-                continue;
-            }
-            if (seen_dot) {
-                frac_part = frac_part * 10 + (c - '0');
-                frac_div *= 10;
-            } else {
-                int_part = int_part * 10 + (c - '0');
-            }
-        }
-
-        return @as(f64, @floatFromInt(int_part)) + @as(f64, @floatFromInt(frac_part)) / frac_div;
-    }
-
-    fn parse_char(s: []const u8) u8 {
-        if (s[0] == '\\') {
-            return switch (s[1]) {
-                'n' => '\n',
-                't' => '\t',
-                'r' => '\r',
-                '\\' => '\\',
-                '\'' => '\'',
-                '"' => '"',
-                '0' => 0,
-                else => unreachable,
-            };
-        }
-        return s[0];
-    }
-};
-
-pub fn init(alloc: std.mem.Allocator) @This() {
+pub fn init(alloc: std.mem.Allocator, span_store: []const Lexer.TextSpan) @This() {
     return @This(){
         .ast_nodes = .init(alloc, 10000),
         .extra_childrefs = .init(alloc, 10000),
-        .data_store = .init(alloc),
+        .span_store = span_store,
     };
 }
 
 pub fn deinit(self: *@This()) void {
     self.ast_nodes.deinit();
     self.extra_childrefs.deinit();
-    self.data_store.deinit();
 }
 
 pub inline fn set_node_arg0(self: *@This(), target_node: u32, val: u32) void {
@@ -309,15 +202,9 @@ pub inline fn push_node(self: *@This(), nodekind: Node.Kind) u32 {
     return self.ast_nodes.len() - 1;
 }
 
-pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, data: anytype) u32 {
-    comptime {
-        const T = @TypeOf(data);
-        if (T != bool and T != []const u8) @compileError("wrong data: " ++ @typeName(T));
-    }
-
+pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, span_idx: u32) u32 {
     const new_node_idx = self.push_node(nodekind);
-    const stored_idx = self.data_store.store(nodekind, data);
-    self.set_node_arg0(new_node_idx, stored_idx);
+    self.set_node_arg0(new_node_idx, span_idx);
 
     return new_node_idx;
 }
@@ -334,17 +221,10 @@ fn wr(io: std.Io, s: []const u8) void {
     std.Io.File.stdout().writeStreamingAll(io, s) catch @panic("print failed");
 }
 
-fn leaf_label(self: *@This(), buf: []u8, node: Node) []const u8 {
+fn leaf_label(self: *@This(), src_bytes: []const u8, node: Node) []const u8 {
     const idx = node.args[0];
-    return switch (node.nk) {
-        .expr_identifier => self.data_store.data_identifiers.buf[idx],
-        .expr_string => self.data_store.data_strings.buf[idx],
-        .expr_int => std.fmt.bufPrint(buf, "{d}", .{self.data_store.data_ints.buf[idx]}) catch "?",
-        .expr_float => std.fmt.bufPrint(buf, "{d}", .{self.data_store.data_floats.buf[idx]}) catch "?",
-        .expr_char => std.fmt.bufPrint(buf, "'{c}'", .{self.data_store.data_chars.buf[idx]}) catch "?",
-        .expr_bool => if (node.args[0] == 1) "true" else "false",
-        else => "",
-    };
+    const span = self.span_store[idx];
+    return src_bytes[span[0]..span[1]];
 }
 
 fn print_placeholder(io: std.Io, prefix: []const u8, is_last: bool) void {
@@ -353,7 +233,7 @@ fn print_placeholder(io: std.Io, prefix: []const u8, is_last: bool) void {
     wr(io, COL_NONE ++ "∅ (none)" ++ COL_RESET ++ "\n");
 }
 
-fn print_node(self: *@This(), io: std.Io, idx: u32, prefix: []const u8, is_first: bool, is_last: bool) anyerror!void {
+fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefix: []const u8, is_first: bool, is_last: bool) anyerror!void {
     wr(io, prefix);
     wr(io, if (is_first) "" else if (is_last) "└── " else "├── ");
 
@@ -377,8 +257,7 @@ fn print_node(self: *@This(), io: std.Io, idx: u32, prefix: []const u8, is_first
     }
 
     if (is_leaf) {
-        var label_buf: [64]u8 = undefined;
-        const label = self.leaf_label(&label_buf, node);
+        const label = self.leaf_label(src_bytes, node);
         if (label.len != 0) {
             wr(io, COL_DIM);
             wr(io, "  \"");
@@ -407,7 +286,7 @@ fn print_node(self: *@This(), io: std.Io, idx: u32, prefix: []const u8, is_first
             if (childref == 0xFFFFFFFF) {
                 print_placeholder(io, new_prefix, child_is_last);
             } else {
-                try self.print_node(io, childref, new_prefix, false, child_is_last);
+                try self.print_node(io, src_bytes, childref, new_prefix, false, child_is_last);
             }
         }
         return;
@@ -427,11 +306,11 @@ fn print_node(self: *@This(), io: std.Io, idx: u32, prefix: []const u8, is_first
     }
 
     for (children[0..childc], 0..) |child_idx, i| {
-        try self.print_node(io, child_idx, new_prefix, false, i == childc - 1);
+        try self.print_node(io, src_bytes, child_idx, new_prefix, false, i == childc - 1);
     }
 }
 
-pub fn debug_print_tree(self: *@This(), io: std.Io, func_ids: []const u32) !void {
+pub fn debug_print_tree(self: *@This(), io: std.Io, src_bytes: []const u8, func_ids: []const u32) !void {
     wr(io, COL_DIM);
     wr(io, "[DEBUG PARSER AST DUMP]\n");
     wr(io, COL_RESET);
@@ -455,7 +334,7 @@ pub fn debug_print_tree(self: *@This(), io: std.Io, func_ids: []const u32) !void
         wr(io, COL_RESET);
         wr(io, "\n");
 
-        try self.print_node(io, funcid, "", true, true);
+        try self.print_node(io, src_bytes, funcid, "", true, true);
         wr(io, "\n");
     }
 

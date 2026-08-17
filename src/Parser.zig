@@ -15,12 +15,13 @@ pub fn init(
     alloc: std.mem.Allocator,
     tokens: SoD(Lexer.Token),
     src_bytes: []const u8,
+    span_store: []const Lexer.TextSpan,
 ) @This() {
     return @This(){
         .alloc = alloc,
         .tokens = tokens,
         .src_bytes = src_bytes,
-        .tree = .init(alloc),
+        .tree = .init(alloc, span_store),
         .func_cache = .init(alloc, 1000),
     };
 }
@@ -34,19 +35,6 @@ inline fn peek_tok_kind(self: *@This()) ?Lexer.Token.Kind {
     return self.tokens.get_field(.tk, self.tok_cursor);
 }
 
-inline fn peek_tok(self: *@This()) ?Lexer.Token {
-    return self.tokens.get(self.tok_cursor);
-}
-
-inline fn peek_n_tok_kind(self: *@This(), n: comptime_int) ?[n]Lexer.Token.Kind {
-    var ret: [n]Lexer.Token.Kind = undefined;
-    inline for (0..n) |i| {
-        ret[i] = self.tokens.get_field(.tk, self.tok_cursor + @as(u32, i)) orelse return null;
-    }
-
-    return ret;
-}
-
 inline fn peek_n_tok(self: *@This(), n: comptime_int) ?[n]Lexer.Token {
     var ret: [n]Lexer.Token = undefined;
     inline for (0..n) |i| {
@@ -56,18 +44,9 @@ inline fn peek_n_tok(self: *@This(), n: comptime_int) ?[n]Lexer.Token {
     return ret;
 }
 
-inline fn pop_tok(self: *@This()) ?Lexer.Token {
-    defer self.tok_cursor += 1;
-    return self.tokens.get(self.tok_cursor);
-}
-
 inline fn pop_tok_kind(self: *@This()) ?Lexer.Token.Kind {
     defer self.tok_cursor += 1;
     return self.tokens.get_field(.tk, self.tok_cursor);
-}
-
-inline fn realize_span(self: *@This(), span: Lexer.TextSpan) []const u8 {
-    return self.src_bytes[span[0]..span[1]];
 }
 
 fn eval_stmt(self: *@This()) !u32 {
@@ -98,7 +77,7 @@ fn eval_stmt(self: *@This()) !u32 {
             const ch_stmt_idx = try self.eval_stmt();
 
             if ((self.peek_tok_kind() orelse return error.EOF) == .kw_else) {
-                _ = self.pop_tok();
+                self.tok_cursor += 1;
                 const alt_ch_stmt_idx = try self.eval_stmt();
                 parent_idx = self.tree.push_node(.stmt_if_else);
                 self.tree.push_extra_childrefs(parent_idx, &.{ ch_expr_idx, ch_stmt_idx, alt_ch_stmt_idx });
@@ -136,13 +115,13 @@ inline fn eval_helper_assign_target(self: *@This(), base_identifier_idx: u32) !u
 fn eval_helper_expr_or_assign(self: *@This(), comptime assign_is_mut: bool, comptime exclude_expr_eval: bool) !u32 {
     const cursor_start = self.tok_cursor;
     const tokinfo = try self.eval_identifier_or_typeexpr_or_expr();
-    const tok_next = self.peek_tok() orelse return error.EOF;
+    const tok_next = self.peek_tok_kind() orelse return error.EOF;
 
     var parent_idx: u32 = undefined;
     var ch_identifier_idx: u32 = undefined;
     var ch_expr_idx: u32 = undefined;
 
-    if (tokinfo[1] == 1 or (tokinfo[1] == 0 and tok_next.tk == .identifier)) {
+    if (tokinfo[1] == 1 or (tokinfo[1] == 0 and tok_next == .identifier)) {
         var ch_typeexpr_idx: u32 = undefined;
         if (tokinfo[1] == 1) {
             ch_typeexpr_idx = tokinfo[0];
@@ -159,9 +138,9 @@ fn eval_helper_expr_or_assign(self: *@This(), comptime assign_is_mut: bool, comp
         self.tree.push_extra_childrefs(parent_idx, &.{ ch_typeexpr_idx, ch_identifier_idx, ch_expr_idx });
     } else if (tokinfo[1] == 0) {
         ch_identifier_idx = try self.eval_helper_assign_target(tokinfo[0]);
-        const after_target = self.peek_tok() orelse return error.EOF;
+        const after_target = self.peek_tok_kind() orelse return error.EOF;
 
-        if (after_target.tk == .@"xpct_=") {
+        if (after_target == .@"xpct_=") {
             self.tok_cursor += 1;
             ch_expr_idx = try self.eval_expr(0);
 
@@ -234,22 +213,23 @@ inline fn eval_helper_postfix_step(self: *@This(), left_idx: u32, comptime allow
 }
 
 fn eval_expr(self: *@This(), depth: u32) anyerror!u32 {
-    const tok = self.pop_tok() orelse return error.EOF;
+    const tok_a_at = self.tok_cursor;
+    const tok = self.pop_tok_kind() orelse return error.EOF;
 
     var left_idx: u32 = undefined;
 
-    if (tok.tk == .@"pct_(") {
+    if (tok == .@"pct_(") {
         left_idx = self.tree.push_node(.expr_paren);
         self.tree.set_node_arg0(left_idx, try eval_expr(self, 0));
         if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_)") return error.MissingEnclosingParen;
-    } else if (ParseTree.Node.tok_to_expr_unary[@intFromEnum(tok.tk)] != .none) {
-        left_idx = self.tree.push_node(ParseTree.Node.tok_to_expr_unary[@intFromEnum(tok.tk)]);
+    } else if (ParseTree.Node.tok_to_expr_unary[@intFromEnum(tok)] != .none) {
+        left_idx = self.tree.push_node(ParseTree.Node.tok_to_expr_unary[@intFromEnum(tok)]);
         self.tree.set_node_arg0(left_idx, try eval_expr(self, 0));
-    } else if (ParseTree.Node.tok_to_expr_data[@intFromEnum(tok.tk)] != .none) {
-        left_idx = self.tree.push_data_node(ParseTree.Node.tok_to_expr_data[@intFromEnum(tok.tk)], self.realize_span(tok.span));
-    } else if (tok.tk == .kw_true or tok.tk == .kw_false) {
+    } else if (ParseTree.Node.tok_to_expr_data[@intFromEnum(tok)] != .none) {
+        left_idx = self.tree.push_data_node(ParseTree.Node.tok_to_expr_data[@intFromEnum(tok)], tok_a_at);
+    } else if (tok == .kw_true or tok == .kw_false) {
         left_idx = self.tree.push_node(.expr_bool);
-        if (tok.tk == .kw_true) self.tree.set_node_arg0(left_idx, 1);
+        if (tok == .kw_true) self.tree.set_node_arg0(left_idx, 1);
     } else return error.SyntaxError;
 
     while (true) {
@@ -288,19 +268,20 @@ inline fn could_be_at_typeexpr(self: *@This()) !bool {
 }
 
 fn eval_typeexpr(self: *@This()) !u32 {
-    const tok_a = self.pop_tok() orelse return error.EOF;
+    const tok_a_at = self.tok_cursor;
+    const tok_a = self.pop_tok_kind() orelse return error.EOF;
 
-    if (tok_a.tk == .identifier) {
+    if (tok_a == .identifier) {
         const id = self.tree.push_node(.typeexpr_type_custom);
-        self.tree.set_node_arg0(id, self.tree.push_data_node(.expr_identifier, self.realize_span(tok_a.span)));
+        self.tree.set_node_arg0(id, self.tree.push_data_node(.expr_identifier, tok_a_at));
         return id;
     }
 
-    const typeexpr_lookup = ParseTree.Node.tok_to_typeexpr[@intFromEnum(tok_a.tk)];
+    const typeexpr_lookup = ParseTree.Node.tok_to_typeexpr[@intFromEnum(tok_a)];
     if (typeexpr_lookup != .none) return self.tree.push_node(typeexpr_lookup);
 
     var parent_idx: u32 = 0;
-    switch (tok_a.tk) {
+    switch (tok_a) {
         .@"xpct_*" => parent_idx = self.tree.push_node(.typeexpr_builtin_pointer),
         .@"xpct_&" => parent_idx = self.tree.push_node(.typeexpr_builtin_constpointer),
         .@"pct_[" => {
@@ -383,23 +364,25 @@ inline fn eval_param_deftuple(self: *@This()) !u32 {
 }
 
 inline fn eval_identifier(self: *@This()) !u32 {
-    const next_tok = self.pop_tok() orelse return error.EOF;
-    if (next_tok.tk != .identifier) return error.IdentifierAssumed;
-    return self.tree.push_data_node(.expr_identifier, self.realize_span(next_tok.span));
+    const next_tok_at = self.tok_cursor;
+    const next_tok = self.pop_tok_kind() orelse return error.EOF;
+    if (next_tok != .identifier) return error.IdentifierAssumed;
+    return self.tree.push_data_node(.expr_identifier, next_tok_at);
 }
 
 fn eval_func(self: *@This()) !u32 {
     const cursor_before = self.tok_cursor;
-    const tok_a = self.pop_tok() orelse return error.EOF;
-    const tok_b = self.pop_tok() orelse return error.EOF;
+    const tok_a_at = self.tok_cursor;
+    const tok_a = self.pop_tok_kind() orelse return error.EOF;
+    const tok_b = self.pop_tok_kind() orelse return error.EOF;
 
     const func_node_idx = self.tree.push_node(.func_def);
 
     var children_idxs: [4]u32 = undefined;
 
-    if (tok_a.tk == .identifier and tok_b.tk == .@"pct_(") {
+    if (tok_a == .identifier and tok_b == .@"pct_(") {
         children_idxs[0] = 0xFFFFFFFF;
-        children_idxs[1] = self.tree.push_data_node(.expr_identifier, self.realize_span(tok_a.span));
+        children_idxs[1] = self.tree.push_data_node(.expr_identifier, tok_a_at);
         self.tok_cursor -= 1;
     } else {
         self.tok_cursor = cursor_before;

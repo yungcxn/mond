@@ -32,9 +32,9 @@ pub fn main(init: std.process.Init) void {
     defer lexer.tokens.deinit();
     lexer.gen_tokens() catch |e| return lexer.handle_err(io, e);
 
-    var parser: Parser = .init(alloc, lexer.tokens, in_bytes);
+    var parser: Parser = .init(alloc, lexer.tokens, in_bytes, lexer.tokens.sliced_field(.span));
     defer parser.deinit();
     parser.build_ast() catch |e| parser.handle_err(io, e);
 
-    if (debug) parser.tree.debug_print_tree(io, parser.func_cache.sliced()) catch |e| @panic(@errorName(e));
+    if (debug) parser.tree.debug_print_tree(io, in_bytes, parser.func_cache.sliced()) catch |e| @panic(@errorName(e));
 }
