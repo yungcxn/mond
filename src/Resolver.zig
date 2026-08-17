@@ -43,3 +43,5 @@ types: DynBuf(ComposedType),
 symbols: []const Lexer.TextSpan,
 
 scopes: SoD(Scope),
+
+// TODO: all templates must be concrete for a clear and concrete High-IR

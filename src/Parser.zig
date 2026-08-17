@@ -201,7 +201,7 @@ inline fn eval_helper_postfix_step(self: *@This(), left_idx: u32, comptime allow
             self.tok_cursor += 1;
             right_idx = 0xFFFFFFFF;
         } else {
-            right_idx = try self.eval_param_calltuple();
+            right_idx = try self.eval_tuple_exprs();
         }
     } else {
         return null;
@@ -297,8 +297,8 @@ fn eval_typeexpr(self: *@This()) !u32 {
     return parent_idx;
 }
 
-inline fn eval_param_calltuple(self: *@This()) anyerror!u32 {
-    const deftuple_node_idx = self.tree.push_node(.param_calltuple);
+inline fn eval_tuple_exprs(self: *@This()) anyerror!u32 {
+    const deftuple_node_idx = self.tree.push_node(.tuple_exprs);
 
     var children_idxs: [64]u32 = undefined;
     var paramc: u8 = 0;
@@ -327,8 +327,8 @@ inline fn eval_param_calltuple(self: *@This()) anyerror!u32 {
     return deftuple_node_idx;
 }
 
-inline fn eval_param_deftuple(self: *@This()) !u32 {
-    const deftuple_node_idx = self.tree.push_node(.param_deftuple);
+inline fn eval_tuple_typed_identifiers(self: *@This()) !u32 {
+    const deftuple_node_idx = self.tree.push_node(.tuple_typed_identifiers);
 
     var children_idxs: [64]u32 = undefined;
     var paramc: u8 = 0;
@@ -336,7 +336,7 @@ inline fn eval_param_deftuple(self: *@This()) !u32 {
     while (true) {
         if (paramc >= children_idxs.len) return error.TooManyArguments;
 
-        const defsingle_node_idx = self.tree.push_node(.param_defsingle);
+        const defsingle_node_idx = self.tree.push_node(.tuple_elem_typed_identifier);
         children_idxs[paramc] = defsingle_node_idx;
         paramc += 1;
 
@@ -399,7 +399,7 @@ fn eval_func(self: *@This()) !u32 {
         children_idxs[2] = 0xFFFFFFFF;
     } else {
         self.tok_cursor -= 1;
-        children_idxs[2] = try self.eval_param_deftuple();
+        children_idxs[2] = try self.eval_tuple_typed_identifiers();
     }
     children_idxs[3] = try self.eval_stmt();
 

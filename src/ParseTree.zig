@@ -12,39 +12,67 @@ pub const Node = struct {
 
         func_def,
         type_def,
+        enum_def, // TODO
+        iface_def, // TODO
 
-        param_deftuple,
-        param_defsingle,
+        // special (sub)statements
+        tuple_typed_identifiers, // for function definitions
+        tuple_elem_typed_identifier, // element of above
+        tuple_exprs, // for function calls
 
-        param_calltuple,
+        tuple_assigned_identifiers, // TODO for e.g. type structure init
+        tuple_elem_assigned_identifier, // TODO element of above
+
+        match_case, // TODO
+
+        methods_block, // TODO
+
+        // statements
+        stmt_exec_block,
 
         stmt_mut_untyped_assign,
         stmt_mut_typed_assign,
         stmt_untyped_assign,
         stmt_typed_assign,
-
         stmt_funccall,
-        stmt_exec_block,
+
         stmt_return,
         stmt_if,
         stmt_if_else,
-        stmt_if_elseif,
-        stmt_if_elseif_else,
+        stmt_match, // TODO
+        stmt_for, // TODO // for (seq) {}
+        stmt_for_ext, // TODO // for (x : seq) {}
+        stmt_while, // TODO // while (i < 5) {}
+        stmt_while_ext, // TODO // while (i < 5, i++) {}
+        stmt_loop, // TODO // loop {}
+        stmt_loop_ext, // TODO // loop (i++) {}
+        stmt_brk, // TODO
+        stmt_cont, // TODO
+        stmt_defer, // TODO
 
+        // expressions that express a type
         typeexpr_builtin_u8,
+        typeexpr_builtin_u16,
         typeexpr_builtin_u32,
+        typeexpr_builtin_u64,
+        typeexpr_builtin_f8,
+        typeexpr_builtin_f16,
         typeexpr_builtin_f32,
+        typeexpr_builtin_f64,
         typeexpr_builtin_bool,
         typeexpr_builtin_pointer,
         typeexpr_builtin_constpointer,
         typeexpr_builtin_array,
 
         typeexpr_type_custom,
+        typeexpr_templated_type_custom, // TODO
 
+        // real expressions with (possible) value
         expr_funccall,
         expr_paren,
         expr_indexed,
         expr_member,
+        expr_genseq, // TODO // expr, (..=, expr |..<, expr | ..) also for match
 
         expr_unary_neg,
         expr_unary_logical_neg,
@@ -85,8 +113,8 @@ pub const Node = struct {
         t[@intFromEnum(Node.Kind.stmt_if_else)] = true;
         t[@intFromEnum(Node.Kind.stmt_mut_typed_assign)] = true;
         t[@intFromEnum(Node.Kind.stmt_typed_assign)] = true;
-        t[@intFromEnum(Node.Kind.param_calltuple)] = true;
-        t[@intFromEnum(Node.Kind.param_deftuple)] = true;
+        t[@intFromEnum(Node.Kind.tuple_exprs)] = true;
+        t[@intFromEnum(Node.Kind.tuple_typed_identifiers)] = true;
         break :blk t;
     };
 
@@ -105,8 +133,13 @@ pub const Node = struct {
     pub const tok_to_typeexpr = blk: {
         var t: [256]Node.Kind = @splat(.none);
         t[@intFromEnum(Lexer.Token.Kind.kw_u8)] = .typeexpr_builtin_u8;
+        t[@intFromEnum(Lexer.Token.Kind.kw_u16)] = .typeexpr_builtin_u16;
         t[@intFromEnum(Lexer.Token.Kind.kw_u32)] = .typeexpr_builtin_u32;
+        t[@intFromEnum(Lexer.Token.Kind.kw_u64)] = .typeexpr_builtin_u64;
+        t[@intFromEnum(Lexer.Token.Kind.kw_f8)] = .typeexpr_builtin_f8;
+        t[@intFromEnum(Lexer.Token.Kind.kw_f16)] = .typeexpr_builtin_f16;
         t[@intFromEnum(Lexer.Token.Kind.kw_f32)] = .typeexpr_builtin_f32;
+        t[@intFromEnum(Lexer.Token.Kind.kw_f64)] = .typeexpr_builtin_f64;
         t[@intFromEnum(Lexer.Token.Kind.kw_bool)] = .typeexpr_builtin_bool;
         break :blk t;
     };

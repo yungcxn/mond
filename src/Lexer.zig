@@ -15,17 +15,31 @@ pub const Token = struct {
         // keywords, must be of form kw_...
         kw_return,
         kw_u8,
+        kw_u16,
         kw_u32,
+        kw_u64,
+        kw_f8,
+        kw_f16,
         kw_f32,
+        kw_f64,
         kw_bool,
         kw_mut,
         kw_true,
         kw_false,
-        kw_if,
-        kw_else,
+        kw_match, // match () {}
+        kw_if, // if (i < 5) {}
+        kw_else, // else {}
+        kw_for,
+        kw_while,
+        kw_loop,
+        kw_brk,
+        kw_cont,
+        kw_defer,
+        kw_type,
+        kw_enum,
+        kw_iface,
 
         // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
-        @"pct_$",
         @"pct_(",
         @"pct_)",
         @"pct_[",
@@ -62,8 +76,14 @@ pub const Token = struct {
         @"xpct_!=",
         @"xpct_<=",
         @"xpct_>=",
+        @"xpct_<-", // for unwrap/<<<-cast
+        @"xpct_=>", // for `expr_match`
+        @"xpct_..", // for `expr_genseq`
 
         @"xpct_&&=",
+        @"xpct_<<<", // for subinterfacing
+        @"xpct_..<", // for `expr_genseq`
+        @"xpct_..=", // for `expr_genseq`
 
         // everything below this needs a textspan //
 
@@ -76,6 +96,7 @@ pub const Token = struct {
         val_char,
 
         fn xpcts(comptime len: u32) []const struct { []const u8, Token.Kind } {
+            @setEvalBranchQuota(10000);
             return comptime blk: {
                 var list: []const struct { []const u8, Token.Kind } = &.{};
                 for (@typeInfo(@This()).@"enum".fields) |field| {
@@ -238,7 +259,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 } else return error.LexingError_StringScanEOF;
                 self.cursor += 1;
             },
-            'a'...'z', 'A'...'Z', '_' => { // literal or keyword
+            'a'...'z', 'A'...'Z', '_', '$' => { // literal or keyword
                 const cursor0 = self.cursor - 1;
 
                 while (self.peek_srcbyte()) |c| : (self.cursor += 1) switch (c) {
@@ -253,7 +274,6 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 }
             },
             // clear punctuators (@"pct_...")
-            '$' => self.push_tok(.@"pct_$", self.cursor - 1),
             '(' => self.push_tok(.@"pct_(", self.cursor - 1),
             ')' => self.push_tok(.@"pct_)", self.cursor - 1),
             '[' => self.push_tok(.@"pct_[", self.cursor - 1),

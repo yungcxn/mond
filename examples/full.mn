@@ -31,17 +31,22 @@ type AddablePoint(type A, type B)(A x, B y) {
     }
 }
 
-iface Iterable(type ElementType) {
-    bool has_next()
-    ElementType next()
+iface Addable(type ElementType) {
+    void add(ElementType other)
 }
 
-// type def through alias
-type opt_u8 = $Optional(u8, 0xFF)
-type err_u8 = $Error(u8, 0xFF)
-type err_opt_u8 = $Error($Optional(u8, 0xFE), 0xFF)
+type AddablePoint2D(i32 x, i32 y) <<< Addable(AddablePoint2D) {
+    add(AddablePoint2D other) {
+        $.x += other.x
+        $.y += other.y
+    }
+}
 
-type ByteStream(*u8 buf, u32 cursor) <Iterable(u8)> {
+enum u8 MyEnum(A = 0x01, B = 0x02, C = 0x03) {
+    # space for functions
+}
+
+type ByteStream(*u8 buf, u32 cursor) {
 
     $init(*u8 in_buf) {
         return ByteStream(buf = in_buf, cursor = 0)
@@ -49,9 +54,17 @@ type ByteStream(*u8 buf, u32 cursor) <Iterable(u8)> {
 
     $deinit() {} # could be left out
 
+    u8 $next() {
+        return $.buf[$.cursor]
+    }
+
+    $has_next() {
+        return $.cursor < $.buf.len
+    }
+
     pub opt_u8 pop() {
         if (bs.cursor >= bs.buf.len) {
-            return null
+            return none
         }
 
         defer $.cursor += 1
@@ -66,13 +79,26 @@ type ByteStream(*u8 buf, u32 cursor) <Iterable(u8)> {
         defer $.cursor++
         return $.buf[$.cursor]
     }
-
 }
+
+// type def through alias
+type opt_u8 = $opt(u8, 0xFF)
+type status_err = $errset(EOF = 0xFE, OOM = 0xFD)
+type my_u8 = $wrap(status_err, opt_u8) 
 
 # type alias
 type Point2D = Point(i32, i32)
 # func alias, not templated
 u32[u32, u32] add = mytemplfunc(u32, true)
+
+my_u8 calc_something(u32 i) { # TODO
+    match (i) {
+        0 => return none,
+        1 => return EOF,
+        2 => return OOM,
+        _ => return 42,
+    }
+}
 
 $main() {
     u8[2] my_str0 = ['h', 'i']      type: u8[2]
@@ -83,17 +109,12 @@ $main() {
 
     println(c_str)
 
-    # control flow:
+    # TODO $as(u8, 5)
 }
-```
 
-Lambdas:
-
-```
 u32[u32, u32] add_lambda1  = u32 (u32 a, u32 b) return a + b
 
 u32[u32, u32] add_lambda5  = u32 (u32 a, u32 b) {
     side_effect(a,b)
     return a + b
 }
-```
