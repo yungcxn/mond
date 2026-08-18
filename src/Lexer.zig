@@ -18,6 +18,10 @@ pub const Token = struct {
         kw_u16,
         kw_u32,
         kw_u64,
+        kw_i8,
+        kw_i16,
+        kw_i32,
+        kw_i64,
         kw_f8,
         kw_f16,
         kw_f32,
@@ -26,9 +30,9 @@ pub const Token = struct {
         kw_mut,
         kw_true,
         kw_false,
-        kw_match, // match () {}
-        kw_if, // if (i < 5) {}
-        kw_else, // else {}
+        kw_match,
+        kw_if,
+        kw_else,
         kw_for,
         kw_while,
         kw_loop,
@@ -47,6 +51,8 @@ pub const Token = struct {
         @"pct_{",
         @"pct_}",
         @"pct_,",
+        @"pct_~",
+        @"pct_:",
 
         @"xpct_.",
         @"xpct_=",
@@ -77,13 +83,18 @@ pub const Token = struct {
         @"xpct_<=",
         @"xpct_>=",
         @"xpct_<-", // for unwrap/<<<-cast
+
         @"xpct_=>", // for `expr_match`
         @"xpct_..", // for `expr_genseq`
+        @"xpct_??", // for opt unwrap expression
+        @"xpct_!!", // for err unwrap expression
 
         @"xpct_&&=",
         @"xpct_<<<", // for subinterfacing
         @"xpct_..<", // for `expr_genseq`
         @"xpct_..=", // for `expr_genseq`
+        @"xpct_!<-", // for err unwrap
+        @"xpct_!?<-", // for opt unwrap
 
         // everything below this needs a textspan //
 
@@ -281,6 +292,8 @@ inline fn gen_next_tok(self: *@This()) !bool {
             '{' => self.push_tok(.@"pct_{", self.cursor - 1),
             '}' => self.push_tok(.@"pct_}", self.cursor - 1),
             ',' => self.push_tok(.@"pct_,", self.cursor - 1),
+            '~' => self.push_tok(.@"pct_~", self.cursor - 1),
+            ':' => self.push_tok(.@"pct_:", self.cursor - 1),
 
             else => { // unclear punctuators (@"pct_...")
                 const cursor0 = self.cursor - 1;

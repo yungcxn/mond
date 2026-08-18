@@ -109,6 +109,27 @@ $main() {
 
     println(c_str)
 
+    # errors, optionals, ...
+
+    val = calc_something(0)
+
+
+    valopt_or_2 = calc_something(1) !! 2
+    # same as 
+    # valopt_or_2 = if (calc_something(1) !<- x) x else 2
+
+    valopt = calc_something(1) !! 
+    # same as 
+    # valopt = if (calc_something(1) !<- x) x else return calc_something(1)
+
+    valreal_or_2 = valopt ?? 2
+    # same as 
+    # valopt = if (valopt ?<- x) x else 2
+
+    valreal = valopt ??
+    # same as 
+    # valopt = if (valopt ?<- x) x else return valopt
+    
     # TODO $as(u8, 5)
 }
 

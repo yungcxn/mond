@@ -87,6 +87,104 @@ fn eval_stmt(self: *@This()) !u32 {
                 self.tree.set_node_arg1(parent_idx, ch_stmt_idx);
             }
         },
+        .kw_match => {
+            self.tok_cursor += 1;
+
+            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_(") return error.OpenParenAssumed;
+
+            parent_idx = self.tree.push_node(.stmt_match);
+            self.tree.set_node_arg0(parent_idx, try self.eval_expr(0));
+
+            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_)") return error.CloseParenAssumed;
+
+            const ch_block_idx = self.tree.push_node(.match_block);
+            self.tree.set_node_arg1(parent_idx, ch_block_idx);
+
+            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_{") return error.OpenCurlyBraceAssumed;
+
+            var children_idxs: [512]u32 = undefined;
+            var childc: u32 = 0;
+
+            // TODO match cases sep'd with comma. USE tuple_exprs!
+            while (true) {
+                if (childc >= children_idxs.len) return error.TooManyMatchCases;
+
+                children_idxs[childc] = self.tree.push_node(.match_case);
+                self.tree.set_node_arg0(children_idxs[childc], self.eval_expr(0));
+
+                if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_=>") return error.MatchCaseArrowAssumed;
+
+                self.tree.set_node_arg1(children_idxs[childc], self.eval_stmt());
+                childc += 1;
+
+                const tok_after_matchcase = self.peek_tok_kind() orelse return error.EOF;
+                switch (tok_after_matchcase) {
+                    .@"pct_," => {
+                        self.tok_cursor += 1;
+
+                        if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_}") break;
+                    },
+                    .@"pct_}" => break,
+                    else => return error.CommaOrBlockEndAssumed,
+                }
+            }
+
+            self.tok_cursor += 1;
+            self.tree.push_extra_childrefs(ch_block_idx, children_idxs[0..childc]);
+        },
+        .kw_for, .kw_while => |kw| {
+            self.tok_cursor += 1;
+
+            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_(") return error.OpenParenAssumed;
+
+            const ch_expr_a_idx = try .self.eval_expr(0);
+            var ch_expr_b_idx: ?u32 = null;
+
+            if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_:") {
+                self.tok_cursor += 1;
+
+                ch_expr_b_idx = self.eval_expr(0);
+            }
+
+            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_)") return error.CloseParenAssumed;
+
+            const ch_stmt_idx = try self.eval_stmt();
+
+            if (ch_expr_b_idx) |b_idx| {
+                parent_idx = self.tree.push_node(if (kw == .kw_for) .stmt_for_ext else .stmt_while_ext);
+                self.tree.push_extra_childrefs(parent_idx, &.{ ch_expr_a_idx, b_idx, ch_stmt_idx });
+            } else {
+                parent_idx = self.tree.push_node(if (kw == .kw_for) .stmt_for else .stmt_while);
+                self.tree.set_node_arg0(parent_idx, ch_expr_a_idx);
+                self.tree.set_node_arg1(parent_idx, ch_stmt_idx);
+            }
+        },
+        .kw_loop => {
+            self.tok_cursor += 1;
+
+            var ch_expr_b_idx: ?u32 = null;
+
+            if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_(") {
+                self.tok_cursor += 1;
+
+                ch_expr_b_idx = self.eval_expr(0);
+
+                if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_)") return error.CloseParenAssumed;
+            }
+
+            parent_idx = self.tree.push_node(if (ch_expr_b_idx) |_| .stmt_loop_ext else .stmt_loop);
+            self.tree.set_node_arg0(parent_idx, if (ch_expr_b_idx) |b_idx| b_idx else 0xFFFFFFFF);
+            self.tree.set_node_arg1(parent_idx, try self.eval_stmt());
+        },
+        .kw_cont, .kw_brk => |kw| {
+            self.tok_cursor += 1;
+            parent_idx = self.tree.push_node(if (kw == .kw_cont) .stmt_cont else .stmt_brk);
+        },
+        .kw_defer => {
+            self.tok_cursor += 1;
+            parent_idx = self.tree.push_node(.stmt_defer);
+            self.tree.set_node_arg0(parent_idx, try self.eval_stmt());
+        },
         .kw_return => {
             self.tok_cursor += 1;
 
