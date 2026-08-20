@@ -105,16 +105,21 @@ fn eval_stmt(self: *@This()) !u32 {
             var children_idxs: [512]u32 = undefined;
             var childc: u32 = 0;
 
-            // TODO match cases sep'd with comma. USE tuple_exprs!
             while (true) {
                 if (childc >= children_idxs.len) return error.TooManyMatchCases;
 
                 children_idxs[childc] = self.tree.push_node(.match_case);
-                self.tree.set_node_arg0(children_idxs[childc], self.eval_expr(0));
 
-                if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_=>") return error.MatchCaseArrowAssumed;
+                var case_ch_idx = try self.eval_expr(0);
+                if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_,") {
+                    case_ch_idx = try self.eval_tuple_exprs(case_ch_idx, .@"xpct_=>");
+                    self.tok_cursor += 1;
+                } else {
+                    if ((self.pop_tok_kind() orelse return error.EOF) != .@"xpct_=>") return error.MatchCaseArrowAssumed;
+                }
+                self.tree.set_node_arg0(children_idxs[childc], case_ch_idx);
 
-                self.tree.set_node_arg1(children_idxs[childc], self.eval_stmt());
+                self.tree.set_node_arg1(children_idxs[childc], try self.eval_stmt());
                 childc += 1;
 
                 const tok_after_matchcase = self.peek_tok_kind() orelse return error.EOF;
@@ -137,13 +142,13 @@ fn eval_stmt(self: *@This()) !u32 {
 
             if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_(") return error.OpenParenAssumed;
 
-            const ch_expr_a_idx = try .self.eval_expr(0);
+            const ch_expr_a_idx = try self.eval_expr(0);
             var ch_expr_b_idx: ?u32 = null;
 
             if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_:") {
                 self.tok_cursor += 1;
 
-                ch_expr_b_idx = self.eval_expr(0);
+                ch_expr_b_idx = try self.eval_expr(0);
             }
 
             if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_)") return error.CloseParenAssumed;
@@ -167,7 +172,7 @@ fn eval_stmt(self: *@This()) !u32 {
             if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_(") {
                 self.tok_cursor += 1;
 
-                ch_expr_b_idx = self.eval_expr(0);
+                ch_expr_b_idx = try self.eval_expr(0);
 
                 if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_)") return error.CloseParenAssumed;
             }
@@ -184,6 +189,11 @@ fn eval_stmt(self: *@This()) !u32 {
             self.tok_cursor += 1;
             parent_idx = self.tree.push_node(.stmt_defer);
             self.tree.set_node_arg0(parent_idx, try self.eval_stmt());
+        },
+        .kw_deinit => {
+            self.tok_cursor += 1;
+            parent_idx = self.tree.push_node(.stmt_deinit);
+            self.tree.set_node_arg0(parent_idx, try self.eval_expr(0));
         },
         .kw_return => {
             self.tok_cursor += 1;
@@ -278,31 +288,44 @@ inline fn could_be_at_expr(self: *@This()) !bool {
 }
 
 inline fn eval_helper_postfix_step(self: *@This(), left_idx: u32, comptime allow_call: bool) !?u32 {
-    const next_tok = self.peek_tok_kind() orelse return null;
-
     var node_idx: u32 = 0;
     var right_idx: u32 = 0;
 
-    if (next_tok == .@"pct_[") {
-        self.tok_cursor += 1;
-        node_idx = self.tree.push_node(.expr_indexed);
-        right_idx = try self.eval_expr(0);
-        if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_]") return error.ClosingBracketAssumed;
-    } else if (next_tok == .@"xpct_.") {
-        self.tok_cursor += 1;
-        node_idx = self.tree.push_node(.expr_member);
-        right_idx = try self.eval_identifier();
-    } else if (allow_call and next_tok == .@"pct_(") {
-        self.tok_cursor += 1;
-        node_idx = self.tree.push_node(.expr_funccall);
-        if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_)") {
+    switch (self.peek_tok_kind() orelse return null) {
+        .@"pct_[" => {
             self.tok_cursor += 1;
-            right_idx = 0xFFFFFFFF;
-        } else {
-            right_idx = try self.eval_tuple_exprs();
-        }
-    } else {
-        return null;
+            node_idx = self.tree.push_node(.expr_indexed);
+            right_idx = try self.eval_expr(0);
+            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_]") return error.ClosingBracketAssumed;
+        },
+        .@"xpct_." => {
+            self.tok_cursor += 1;
+            node_idx = self.tree.push_node(.expr_member);
+            right_idx = try self.eval_identifier();
+        },
+        .@"xpct_<-", .@"xpct_!<-", .@"xpct_?<-" => |tok| {
+            self.tok_cursor += 1;
+            node_idx = self.tree.push_node(switch (tok) {
+                .@"xpct_<-" => .expr_aliasarrow,
+                .@"xpct_!<-" => .expr_errarrow,
+                .@"xpct_?<-" => .expr_optarrow,
+                else => unreachable,
+            });
+            right_idx = try self.eval_identifier();
+
+            // TODO hint using ) by peeking?
+        },
+        .@"pct_(" => if (comptime allow_call) {
+            self.tok_cursor += 1;
+            node_idx = self.tree.push_node(.expr_funccall);
+            if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_)") {
+                self.tok_cursor += 1;
+                right_idx = 0xFFFFFFFF;
+            } else {
+                right_idx = try self.eval_tuple_exprs(null, .@"pct_)");
+            }
+        },
+        else => return null,
     }
 
     self.tree.set_node_arg0(node_idx, left_idx);
@@ -395,11 +418,16 @@ fn eval_typeexpr(self: *@This()) !u32 {
     return parent_idx;
 }
 
-inline fn eval_tuple_exprs(self: *@This()) anyerror!u32 {
+inline fn eval_tuple_exprs(self: *@This(), early_evald_expr: ?u32, comptime end_tok: Lexer.Token.Kind) anyerror!u32 {
     const deftuple_node_idx = self.tree.push_node(.tuple_exprs);
 
     var children_idxs: [64]u32 = undefined;
     var paramc: u8 = 0;
+
+    if (early_evald_expr) |evald_expr| {
+        children_idxs[0] = evald_expr;
+        paramc += 1;
+    }
 
     while (true) {
         if (paramc >= children_idxs.len) return error.TooManyParameters;
@@ -408,7 +436,7 @@ inline fn eval_tuple_exprs(self: *@This()) anyerror!u32 {
         paramc += 1;
 
         switch (self.pop_tok_kind() orelse return error.EOF) {
-            .@"pct_)" => break,
+            end_tok => break,
             .@"pct_," => {
                 if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_)") {
                     break;

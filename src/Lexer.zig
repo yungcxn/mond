@@ -42,6 +42,7 @@ pub const Token = struct {
         kw_type,
         kw_enum,
         kw_iface,
+        kw_deinit,
 
         // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
         @"pct_(",
@@ -94,7 +95,7 @@ pub const Token = struct {
         @"xpct_..<", // for `expr_genseq`
         @"xpct_..=", // for `expr_genseq`
         @"xpct_!<-", // for err unwrap
-        @"xpct_!?<-", // for opt unwrap
+        @"xpct_?<-", // for opt unwrap
 
         // everything below this needs a textspan //
 

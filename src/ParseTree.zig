@@ -11,7 +11,7 @@ pub const Node = struct {
         none,
 
         func_def,
-        type_def,
+        type_def, // TODO
         enum_u8_def, // TODO
         enum_u16_def, // TODO
         enum_u32_def, // TODO
@@ -30,10 +30,10 @@ pub const Node = struct {
         tuple_assigned_identifiers, // TODO for e.g. type structure init
         tuple_elem_assigned_identifier, // TODO element of above
 
-        match_case, // TODO
+        match_case,
 
         match_block,
-        methods_block, // TODO
+        methods_block,
 
         // statements
         stmt_exec_block,
@@ -57,6 +57,7 @@ pub const Node = struct {
         stmt_brk,
         stmt_cont,
         stmt_defer,
+        stmt_deinit,
 
         // expressions that express a type
         typeexpr_builtin_u8,
@@ -85,13 +86,23 @@ pub const Node = struct {
         expr_indexed,
         expr_member,
         expr_genseq, // TODO // expr, (..=, expr |..<, expr | ..) also for match
-        expr_inlinedefer, // TODO ~
-        expr_labelarrow, // TODO <-
-        expr_errarrow, // TODO
-        expr_optarrow, // TODO
+        expr_aliasarrow,
+        expr_errarrow,
+        expr_optarrow,
         expr_subinterfaces, // TODO <<<
         expr_if_else, // TODO
+        expr_match, // TODO
+        expr_for, // TODO
+        expr_for_ext, // TODO
+        expr_while, // TODO
+        expr_while_ext, // TODO
+        expr_deinit, // TODO
+        expr_inline_defer, // TODO
+        expr_inline_defer_deinit, // TODO
         expr_return, // TODO
+
+        // these accept any valued expression on both sides, unlike those above, that still
+        //   logically be "unary/binary"
 
         expr_unary_neg,
         expr_unary_logical_neg,
@@ -115,8 +126,8 @@ pub const Node = struct {
         expr_binary_mod,
         expr_binary_pow,
 
-        expr_binary_errunwrap, // TODO
-        expr_binary_optunwrap, // TODO
+        expr_binary_errunwrap,
+        expr_binary_optunwrap,
 
         // leave nodes with first arg pointing into respective data_* buf //
 
@@ -182,7 +193,8 @@ pub const Node = struct {
 
     pub const tok_to_tagged_expr_binary = blk: {
         var t: [256]packed struct { nt: Node.Kind, prec: u8 } = @splat(.{ .nt = .none, .prec = 0 });
-
+        t[@intFromEnum(Lexer.Token.Kind.@"xpct_!!")] = .{ .nt = .expr_binary_errunwrap, .prec = 2 };
+        t[@intFromEnum(Lexer.Token.Kind.@"xpct_??")] = .{ .nt = .expr_binary_optunwrap, .prec = 2 };
         t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = .{ .nt = .expr_binary_logical_or, .prec = 3 };
         t[@intFromEnum(Lexer.Token.Kind.@"xpct_^^")] = .{ .nt = .expr_binary_logical_xor, .prec = 3 };
         t[@intFromEnum(Lexer.Token.Kind.@"xpct_&&")] = .{ .nt = .expr_binary_logical_and, .prec = 4 };
