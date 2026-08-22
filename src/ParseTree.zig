@@ -75,6 +75,7 @@ pub const Node = struct {
         typeexpr_builtin_bool,
         typeexpr_builtin_pointer,
         typeexpr_builtin_constpointer,
+        typeexpr_builtin_varref, // TODO ^
         typeexpr_builtin_array,
 
         typeexpr_type_custom,
@@ -82,24 +83,34 @@ pub const Node = struct {
 
         // real expressions with (possible) value
         expr_funccall,
+        expr_array,
         expr_paren,
         expr_indexed,
         expr_member,
-        expr_genseq, // TODO // expr, (..=, expr |..<, expr | ..) also for match
+        expr_dereference,
+        expr_genseq_inc,
+        expr_genseq_exc,
+        expr_genseq_from,
         expr_aliasarrow,
         expr_errarrow,
         expr_optarrow,
+        expr_errunwrap,
+        expr_optunwrap,
         expr_subinterfaces, // TODO <<<
-        expr_if_else, // TODO
-        expr_match, // TODO
-        expr_for, // TODO
-        expr_for_ext, // TODO
-        expr_while, // TODO
-        expr_while_ext, // TODO
-        expr_deinit, // TODO
-        expr_inline_defer, // TODO
-        expr_inline_defer_deinit, // TODO
-        expr_return, // TODO
+        expr_if_else,
+        expr_match,
+        expr_for,
+        expr_for_ext,
+        expr_while,
+        expr_while_ext,
+        expr_loop,
+        expr_loop_ext,
+
+        expr_defer,
+        expr_deinit,
+        expr_return,
+        expr_brk,
+        expr_cont,
 
         // these accept any valued expression on both sides, unlike those above, that still
         //   logically be "unary/binary"
@@ -125,9 +136,6 @@ pub const Node = struct {
         expr_binary_div,
         expr_binary_mod,
         expr_binary_pow,
-
-        expr_binary_errunwrap,
-        expr_binary_optunwrap,
 
         // leave nodes with first arg pointing into respective data_* buf //
 
@@ -193,8 +201,6 @@ pub const Node = struct {
 
     pub const tok_to_tagged_expr_binary = blk: {
         var t: [256]packed struct { nt: Node.Kind, prec: u8 } = @splat(.{ .nt = .none, .prec = 0 });
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_!!")] = .{ .nt = .expr_binary_errunwrap, .prec = 2 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_??")] = .{ .nt = .expr_binary_optunwrap, .prec = 2 };
         t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = .{ .nt = .expr_binary_logical_or, .prec = 3 };
         t[@intFromEnum(Lexer.Token.Kind.@"xpct_^^")] = .{ .nt = .expr_binary_logical_xor, .prec = 3 };
         t[@intFromEnum(Lexer.Token.Kind.@"xpct_&&")] = .{ .nt = .expr_binary_logical_and, .prec = 4 };

@@ -86,9 +86,10 @@ pub const Token = struct {
         @"xpct_<-", // for unwrap/<<<-cast
 
         @"xpct_=>", // for `expr_match`
-        @"xpct_..", // for `expr_genseq`
+        @"xpct_.*", // for `expr_genseq`
         @"xpct_??", // for opt unwrap expression
         @"xpct_!!", // for err unwrap expression
+        @"xpct_..",
 
         @"xpct_&&=",
         @"xpct_<<<", // for subinterfacing

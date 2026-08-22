@@ -31,37 +31,147 @@ pub fn deinit(self: *@This()) void {
     self.func_cache.deinit();
 }
 
-inline fn peek_tok_kind(self: *@This()) ?Lexer.Token.Kind {
+inline fn peek_tok(self: *@This()) ?Lexer.Token.Kind {
     return self.tokens.get_field(.tk, self.tok_cursor);
 }
 
-inline fn peek_n_tok(self: *@This(), n: comptime_int) ?[n]Lexer.Token {
-    var ret: [n]Lexer.Token = undefined;
-    inline for (0..n) |i| {
-        ret[i] = self.tokens.get(self.tok_cursor + @as(u32, i)) orelse return null;
-    }
-
-    return ret;
-}
-
-inline fn pop_tok_kind(self: *@This()) ?Lexer.Token.Kind {
+inline fn pop_tok(self: *@This()) ?Lexer.Token.Kind {
     defer self.tok_cursor += 1;
     return self.tokens.get_field(.tk, self.tok_cursor);
 }
 
-fn eval_stmt(self: *@This()) !u32 {
-    const tok_kind = self.peek_tok_kind() orelse return error.EOF;
+inline fn eat_assert_tok(self: *@This(), comptime tok: Lexer.Token.Kind) !void {
+    const chosen_error: anyerror = comptime switch (tok) {
+        else => error.EOF, // TODO detailed errors wrt `tok`
+    };
+
+    if ((self.pop_tok() orelse return error.EOF) != tok) return chosen_error;
+}
+
+inline fn peek_eq_tok(self: *@This(), comptime tok: Lexer.Token.Kind) !bool {
+    return (self.peek_tok() orelse return error.EOF) == tok;
+}
+
+inline fn eval_helper_loop(self: *@This(), comptime statemented: bool) anyerror!u32 {
+    var parent_idx: u32 = 0;
+
+    var ch_expr_b_idx: ?u32 = null;
+
+    if (try self.peek_eq_tok(.@"pct_(")) {
+        self.tok_cursor += 1;
+
+        ch_expr_b_idx = try self.eval_expr(0);
+
+        try self.eat_assert_tok(.@"pct_)");
+    }
+
+    const nk: ParseTree.Node.Kind = if (ch_expr_b_idx != null)
+        (if (statemented) .stmt_loop_ext else .expr_loop_ext)
+    else
+        (if (statemented) .stmt_loop else .expr_loop);
+
+    parent_idx = self.tree.push_node(nk);
+    self.tree.set_node_arg0(parent_idx, if (ch_expr_b_idx) |b_idx| b_idx else 0xFFFFFFFF);
+    self.tree.set_node_arg1(parent_idx, if (statemented) try self.eval_stmt() else try self.eval_expr(0));
+
+    return parent_idx;
+}
+
+inline fn eval_helper_for_while(self: *@This(), comptime for_for: bool, comptime statemented: bool) anyerror!u32 {
+    var parent_idx: u32 = 0;
+
+    try self.eat_assert_tok(.@"pct_(");
+    const ch_expr_a_idx = try self.eval_expr(0);
+    var ch_expr_b_idx: ?u32 = null;
+    if (try self.peek_eq_tok(.@"pct_:")) {
+        self.tok_cursor += 1;
+
+        ch_expr_b_idx = try self.eval_expr(0);
+    }
+    try self.eat_assert_tok(.@"pct_)");
+
+    const ch_to_exec_idx = if (statemented) try self.eval_stmt() else try self.eval_expr(0);
+
+    if (ch_expr_b_idx) |b_idx| {
+        const nk: ParseTree.Node.Kind = if (for_for)
+            (if (statemented) .stmt_for_ext else .expr_for_ext)
+        else
+            (if (statemented) .stmt_while_ext else .expr_while_ext);
+
+        parent_idx = self.tree.push_node(nk);
+        self.tree.push_extra_childrefs(parent_idx, &.{ ch_expr_a_idx, b_idx, ch_to_exec_idx });
+    } else {
+        const nk: ParseTree.Node.Kind = if (for_for)
+            (if (statemented) .stmt_for else .expr_for)
+        else
+            (if (statemented) .stmt_while else .expr_while);
+
+        parent_idx = self.tree.push_node(nk);
+        self.tree.set_node_arg0(parent_idx, ch_expr_a_idx);
+        self.tree.set_node_arg1(parent_idx, ch_to_exec_idx);
+    }
+    return parent_idx;
+}
+
+inline fn eval_helper_match(self: *@This(), comptime statemented: bool) !u32 {
+    const parent_idx = self.tree.push_node(if (statemented) .stmt_match else .expr_match);
+
+    try self.eat_assert_tok(.@"pct_(");
+    self.tree.set_node_arg0(parent_idx, try self.eval_expr(0));
+    try self.eat_assert_tok(.@"pct_)");
+
+    const ch_block_idx = self.tree.push_node(.match_block);
+    self.tree.set_node_arg1(parent_idx, ch_block_idx);
+
+    try self.eat_assert_tok(.@"pct_{");
+
+    var children_idxs: [512]u32 = undefined;
+    var childc: u32 = 0;
+
+    while (true) {
+        if (childc >= children_idxs.len) return error.TooManyMatchCases;
+
+        children_idxs[childc] = self.tree.push_node(.match_case);
+
+        var case_ch_idx = try self.eval_expr(0);
+        if (try self.peek_eq_tok(.@"pct_,")) {
+            case_ch_idx = try self.eval_tuple_exprs(case_ch_idx, .@"xpct_=>");
+            self.tok_cursor += 1;
+        } else {
+            try self.eat_assert_tok(.@"xpct_=>");
+        }
+        self.tree.set_node_arg0(children_idxs[childc], case_ch_idx);
+
+        self.tree.set_node_arg1(children_idxs[childc], if (statemented) try self.eval_stmt() else try self.eval_expr(0));
+        childc += 1;
+
+        const tok_after_matchcase = self.peek_tok() orelse return error.EOF;
+        switch (tok_after_matchcase) {
+            .@"pct_," => {
+                self.tok_cursor += 1;
+
+                if (try self.peek_eq_tok(.@"pct_}")) break;
+            },
+            .@"pct_}" => break,
+            else => return error.CommaOrBlockEndAssumed,
+        }
+    }
+
+    self.tok_cursor += 1;
+    self.tree.push_extra_childrefs(ch_block_idx, children_idxs[0..childc]);
+    return parent_idx;
+}
+
+fn eval_stmt(self: *@This()) anyerror!u32 {
     var parent_idx: u32 = undefined;
 
-    switch (tok_kind) {
+    switch (self.pop_tok() orelse return error.EOF) {
         .@"pct_{" => {
-            self.tok_cursor += 1;
-
             var children_idxs: [512]u32 = undefined;
             var childc: u32 = 0;
 
             parent_idx = self.tree.push_node(.stmt_exec_block);
-            while ((self.peek_tok_kind() orelse return error.EOF) != .@"pct_}") {
+            while (!try self.peek_eq_tok(.@"pct_}")) {
                 if (childc >= children_idxs.len) return error.TooManySubstatements;
                 children_idxs[childc] = try self.eval_stmt();
                 childc += 1;
@@ -71,12 +181,12 @@ fn eval_stmt(self: *@This()) !u32 {
             self.tree.push_extra_childrefs(parent_idx, children_idxs[0..childc]);
         },
         .kw_if => {
-            self.tok_cursor += 1;
-
+            try self.eat_assert_tok(.@"pct_(");
             const ch_expr_idx = try self.eval_expr(0);
+            try self.eat_assert_tok(.@"pct_)");
             const ch_stmt_idx = try self.eval_stmt();
 
-            if ((self.peek_tok_kind() orelse return error.EOF) == .kw_else) {
+            if (try self.peek_eq_tok(.kw_else)) {
                 self.tok_cursor += 1;
                 const alt_ch_stmt_idx = try self.eval_stmt();
                 parent_idx = self.tree.push_node(.stmt_if_else);
@@ -87,143 +197,38 @@ fn eval_stmt(self: *@This()) !u32 {
                 self.tree.set_node_arg1(parent_idx, ch_stmt_idx);
             }
         },
-        .kw_match => {
-            self.tok_cursor += 1;
-
-            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_(") return error.OpenParenAssumed;
-
-            parent_idx = self.tree.push_node(.stmt_match);
-            self.tree.set_node_arg0(parent_idx, try self.eval_expr(0));
-
-            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_)") return error.CloseParenAssumed;
-
-            const ch_block_idx = self.tree.push_node(.match_block);
-            self.tree.set_node_arg1(parent_idx, ch_block_idx);
-
-            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_{") return error.OpenCurlyBraceAssumed;
-
-            var children_idxs: [512]u32 = undefined;
-            var childc: u32 = 0;
-
-            while (true) {
-                if (childc >= children_idxs.len) return error.TooManyMatchCases;
-
-                children_idxs[childc] = self.tree.push_node(.match_case);
-
-                var case_ch_idx = try self.eval_expr(0);
-                if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_,") {
-                    case_ch_idx = try self.eval_tuple_exprs(case_ch_idx, .@"xpct_=>");
-                    self.tok_cursor += 1;
-                } else {
-                    if ((self.pop_tok_kind() orelse return error.EOF) != .@"xpct_=>") return error.MatchCaseArrowAssumed;
-                }
-                self.tree.set_node_arg0(children_idxs[childc], case_ch_idx);
-
-                self.tree.set_node_arg1(children_idxs[childc], try self.eval_stmt());
-                childc += 1;
-
-                const tok_after_matchcase = self.peek_tok_kind() orelse return error.EOF;
-                switch (tok_after_matchcase) {
-                    .@"pct_," => {
-                        self.tok_cursor += 1;
-
-                        if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_}") break;
-                    },
-                    .@"pct_}" => break,
-                    else => return error.CommaOrBlockEndAssumed,
-                }
-            }
-
-            self.tok_cursor += 1;
-            self.tree.push_extra_childrefs(ch_block_idx, children_idxs[0..childc]);
-        },
-        .kw_for, .kw_while => |kw| {
-            self.tok_cursor += 1;
-
-            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_(") return error.OpenParenAssumed;
-
-            const ch_expr_a_idx = try self.eval_expr(0);
-            var ch_expr_b_idx: ?u32 = null;
-
-            if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_:") {
-                self.tok_cursor += 1;
-
-                ch_expr_b_idx = try self.eval_expr(0);
-            }
-
-            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_)") return error.CloseParenAssumed;
-
-            const ch_stmt_idx = try self.eval_stmt();
-
-            if (ch_expr_b_idx) |b_idx| {
-                parent_idx = self.tree.push_node(if (kw == .kw_for) .stmt_for_ext else .stmt_while_ext);
-                self.tree.push_extra_childrefs(parent_idx, &.{ ch_expr_a_idx, b_idx, ch_stmt_idx });
-            } else {
-                parent_idx = self.tree.push_node(if (kw == .kw_for) .stmt_for else .stmt_while);
-                self.tree.set_node_arg0(parent_idx, ch_expr_a_idx);
-                self.tree.set_node_arg1(parent_idx, ch_stmt_idx);
-            }
-        },
-        .kw_loop => {
-            self.tok_cursor += 1;
-
-            var ch_expr_b_idx: ?u32 = null;
-
-            if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_(") {
-                self.tok_cursor += 1;
-
-                ch_expr_b_idx = try self.eval_expr(0);
-
-                if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_)") return error.CloseParenAssumed;
-            }
-
-            parent_idx = self.tree.push_node(if (ch_expr_b_idx) |_| .stmt_loop_ext else .stmt_loop);
-            self.tree.set_node_arg0(parent_idx, if (ch_expr_b_idx) |b_idx| b_idx else 0xFFFFFFFF);
-            self.tree.set_node_arg1(parent_idx, try self.eval_stmt());
-        },
-        .kw_cont, .kw_brk => |kw| {
-            self.tok_cursor += 1;
-            parent_idx = self.tree.push_node(if (kw == .kw_cont) .stmt_cont else .stmt_brk);
-        },
+        .kw_match => parent_idx = try self.eval_helper_match(true),
+        .kw_for => parent_idx = try self.eval_helper_for_while(true, true),
+        .kw_while => parent_idx = try self.eval_helper_for_while(false, true),
+        .kw_loop => parent_idx = try self.eval_helper_loop(true),
+        .kw_cont => parent_idx = self.tree.push_node(.stmt_cont),
+        .kw_brk => parent_idx = self.tree.push_node(.stmt_brk),
         .kw_defer => {
-            self.tok_cursor += 1;
             parent_idx = self.tree.push_node(.stmt_defer);
             self.tree.set_node_arg0(parent_idx, try self.eval_stmt());
         },
         .kw_deinit => {
-            self.tok_cursor += 1;
             parent_idx = self.tree.push_node(.stmt_deinit);
             self.tree.set_node_arg0(parent_idx, try self.eval_expr(0));
         },
         .kw_return => {
-            self.tok_cursor += 1;
-
             parent_idx = self.tree.push_node(.stmt_return);
-            const opt_ch_expr_idx = if (try self.could_be_at_expr()) try self.eval_expr(0) else null;
-            self.tree.set_node_arg0(parent_idx, if (opt_ch_expr_idx) |idx| idx else 0xFFFFFFFF);
+            self.tree.set_node_arg0(parent_idx, if (try self.could_be_at_expr()) try self.eval_expr(0) else 0xFFFFFFFF);
         },
-        .kw_mut => {
-            self.tok_cursor += 1;
-            parent_idx = try self.eval_helper_expr_or_assign(true, true);
+        .kw_mut => parent_idx = try self.eval_helper_expr_or_assign(true, true),
+        else => {
+            self.tok_cursor -= 1;
+            parent_idx = try self.eval_helper_expr_or_assign(false, false);
         },
-        else => parent_idx = try self.eval_helper_expr_or_assign(false, false),
     }
 
     return parent_idx;
 }
 
-inline fn eval_helper_assign_target(self: *@This(), base_identifier_idx: u32) !u32 {
-    var target_idx = base_identifier_idx;
-    while (true) {
-        target_idx = (try self.eval_helper_postfix_step(target_idx, false)) orelse break;
-    }
-    return target_idx;
-}
-
 fn eval_helper_expr_or_assign(self: *@This(), comptime assign_is_mut: bool, comptime exclude_expr_eval: bool) !u32 {
     const cursor_start = self.tok_cursor;
     const tokinfo = try self.eval_identifier_or_typeexpr_or_expr();
-    const tok_next = self.peek_tok_kind() orelse return error.EOF;
+    const tok_next = self.peek_tok() orelse return error.EOF;
 
     var parent_idx: u32 = undefined;
     var ch_identifier_idx: u32 = undefined;
@@ -239,14 +244,19 @@ fn eval_helper_expr_or_assign(self: *@This(), comptime assign_is_mut: bool, comp
         }
 
         ch_identifier_idx = try self.eval_identifier();
-        if ((self.pop_tok_kind() orelse return error.EOF) != .@"xpct_=") return error.AssignSignAssumed;
+
+        try self.eat_assert_tok(.@"xpct_=");
+
         ch_expr_idx = try self.eval_expr(0);
 
         parent_idx = self.tree.push_node(if (assign_is_mut) .stmt_mut_typed_assign else .stmt_typed_assign);
         self.tree.push_extra_childrefs(parent_idx, &.{ ch_typeexpr_idx, ch_identifier_idx, ch_expr_idx });
     } else if (tokinfo[1] == 0) {
-        ch_identifier_idx = try self.eval_helper_assign_target(tokinfo[0]);
-        const after_target = self.peek_tok_kind() orelse return error.EOF;
+        ch_identifier_idx = tokinfo[0];
+
+        while (true) ch_identifier_idx = (try self.eval_helper_postfix_step(ch_identifier_idx, false)) orelse break;
+
+        const after_target = self.peek_tok() orelse return error.EOF;
 
         if (after_target == .@"xpct_=") {
             self.tok_cursor += 1;
@@ -267,7 +277,7 @@ fn eval_helper_expr_or_assign(self: *@This(), comptime assign_is_mut: bool, comp
 }
 
 inline fn eval_identifier_or_typeexpr_or_expr(self: *@This()) !struct { u32, u8 } {
-    const tok = self.peek_tok_kind() orelse return error.EOF;
+    const tok = self.peek_tok() orelse return error.EOF;
     if (tok == .identifier) {
         return .{ try self.eval_identifier(), 0 };
     } else if (try self.could_be_at_typeexpr()) {
@@ -278,7 +288,7 @@ inline fn eval_identifier_or_typeexpr_or_expr(self: *@This()) !struct { u32, u8 
 }
 
 inline fn could_be_at_expr(self: *@This()) !bool {
-    const tok = self.peek_tok_kind() orelse return error.EOF;
+    const tok = self.peek_tok() orelse return error.EOF;
 
     return tok == .@"pct_(" or
         tok == .kw_true or
@@ -287,45 +297,82 @@ inline fn could_be_at_expr(self: *@This()) !bool {
         (ParseTree.Node.tok_to_expr_data[@intFromEnum(tok)] != .none);
 }
 
+inline fn could_be_at_typeexpr(self: *@This()) !bool {
+    const tok = self.peek_tok() orelse return error.EOF;
+
+    return tok == .identifier or
+        tok == .@"xpct_*" or
+        tok == .@"xpct_&" or
+        tok == .@"pct_[" or
+        ParseTree.Node.tok_to_typeexpr[@intFromEnum(tok)] != .none;
+}
+
 inline fn eval_helper_postfix_step(self: *@This(), left_idx: u32, comptime allow_call: bool) !?u32 {
     var node_idx: u32 = 0;
     var right_idx: u32 = 0;
 
-    switch (self.peek_tok_kind() orelse return null) {
+    switch (self.pop_tok() orelse return null) {
+        .@"xpct_.*" => node_idx = self.tree.push_node(.expr_dereference),
+        .kw_defer => {
+            node_idx = self.tree.push_node(.expr_defer);
+            right_idx = try self.eval_expr(0);
+        },
         .@"pct_[" => {
-            self.tok_cursor += 1;
             node_idx = self.tree.push_node(.expr_indexed);
             right_idx = try self.eval_expr(0);
-            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_]") return error.ClosingBracketAssumed;
+            try self.eat_assert_tok(.@"pct_]");
         },
         .@"xpct_." => {
-            self.tok_cursor += 1;
             node_idx = self.tree.push_node(.expr_member);
             right_idx = try self.eval_identifier();
         },
-        .@"xpct_<-", .@"xpct_!<-", .@"xpct_?<-" => |tok| {
-            self.tok_cursor += 1;
-            node_idx = self.tree.push_node(switch (tok) {
-                .@"xpct_<-" => .expr_aliasarrow,
-                .@"xpct_!<-" => .expr_errarrow,
-                .@"xpct_?<-" => .expr_optarrow,
-                else => unreachable,
-            });
+        .@"xpct_<-" => {
+            node_idx = self.tree.push_node(.expr_aliasarrow);
             right_idx = try self.eval_identifier();
-
-            // TODO hint using ) by peeking?
+            // TODO hint the user should enclose in () by peeking if (
+        },
+        .@"xpct_!<-" => {
+            node_idx = self.tree.push_node(.expr_errarrow);
+            right_idx = try self.eval_identifier();
+        },
+        .@"xpct_?<-" => {
+            node_idx = self.tree.push_node(.expr_errunwrap);
+            right_idx = try self.eval_identifier();
+        },
+        .@"xpct_??" => {
+            node_idx = self.tree.push_node(.expr_optunwrap);
+            right_idx = if (try self.could_be_at_expr()) try self.eval_expr(0) else 0xFFFFFFFF;
+        },
+        .@"xpct_!!" => {
+            node_idx = self.tree.push_node(.expr_optarrow);
+            right_idx = if (try self.could_be_at_expr()) try self.eval_expr(0) else 0xFFFFFFFF;
+        },
+        .@"xpct_..=" => {
+            node_idx = self.tree.push_node(.expr_genseq_inc);
+            right_idx = try self.eval_expr(0);
+        },
+        .@"xpct_..<" => {
+            node_idx = self.tree.push_node(.expr_genseq_exc);
+            right_idx = try self.eval_expr(0);
+        },
+        .@"xpct_.." => {
+            node_idx = self.tree.push_node(.expr_genseq_from);
+            right_idx = 0xFFFFFFFF;
         },
         .@"pct_(" => if (comptime allow_call) {
-            self.tok_cursor += 1;
             node_idx = self.tree.push_node(.expr_funccall);
-            if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_)") {
+            if ((self.peek_tok() orelse return error.EOF) == .@"pct_)") {
                 self.tok_cursor += 1;
                 right_idx = 0xFFFFFFFF;
             } else {
                 right_idx = try self.eval_tuple_exprs(null, .@"pct_)");
             }
         },
-        else => return null,
+        else => {
+            // a helper func is not to consume anything if doing nothing
+            self.tok_cursor += 1;
+            return null;
+        },
     }
 
     self.tree.set_node_arg0(node_idx, left_idx);
@@ -335,23 +382,90 @@ inline fn eval_helper_postfix_step(self: *@This(), left_idx: u32, comptime allow
 
 fn eval_expr(self: *@This(), depth: u32) anyerror!u32 {
     const tok_a_at = self.tok_cursor;
-    const tok = self.pop_tok_kind() orelse return error.EOF;
 
     var left_idx: u32 = undefined;
 
-    if (tok == .@"pct_(") {
-        left_idx = self.tree.push_node(.expr_paren);
-        self.tree.set_node_arg0(left_idx, try eval_expr(self, 0));
-        if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_)") return error.MissingEnclosingParen;
-    } else if (ParseTree.Node.tok_to_expr_unary[@intFromEnum(tok)] != .none) {
-        left_idx = self.tree.push_node(ParseTree.Node.tok_to_expr_unary[@intFromEnum(tok)]);
-        self.tree.set_node_arg0(left_idx, try eval_expr(self, 0));
-    } else if (ParseTree.Node.tok_to_expr_data[@intFromEnum(tok)] != .none) {
-        left_idx = self.tree.push_data_node(ParseTree.Node.tok_to_expr_data[@intFromEnum(tok)], tok_a_at);
-    } else if (tok == .kw_true or tok == .kw_false) {
-        left_idx = self.tree.push_node(.expr_bool);
-        if (tok == .kw_true) self.tree.set_node_arg0(left_idx, 1);
-    } else return error.SyntaxError;
+    switch (self.pop_tok() orelse return error.EOF) {
+        .@"pct_(" => {
+            left_idx = self.tree.push_node(.expr_paren);
+            self.tree.set_node_arg0(left_idx, try eval_expr(self, 0));
+            try self.eat_assert_tok(.@"pct_)");
+        },
+        .@"pct_[" => {
+            left_idx = self.tree.push_node(.expr_array);
+
+            var children_idxs: [512]u32 = undefined;
+            var childc: u32 = 0;
+
+            while (true) {
+                if (childc >= children_idxs.len) return error.TooManyElements;
+
+                children_idxs[childc] = try self.eval_expr(0);
+                childc += 1;
+
+                switch (self.peek_tok() orelse return error.EOF) {
+                    .@"pct_," => {
+                        self.tok_cursor += 1;
+
+                        if (try self.peek_eq_tok(.@"pct_]")) break;
+                    },
+                    .@"pct_]" => break,
+                    else => return error.CommaOrArrayEndAssumed,
+                }
+            }
+
+            self.tok_cursor += 1;
+            self.tree.push_extra_childrefs(left_idx, children_idxs[0..childc]);
+        },
+        .kw_if => {
+            left_idx = self.tree.push_node(.expr_if_else);
+
+            try self.eat_assert_tok(.@"pct_(");
+            const ch_cond_expr_idx = try self.eval_expr(0);
+            try self.eat_assert_tok(.@"pct_)");
+            const ch_lhs_expr_idx = try self.eval_expr(0);
+            try self.eat_assert_tok(.kw_else);
+            const ch_rhs_expr_idx = try self.eval_expr(0);
+
+            self.tree.push_extra_childrefs(left_idx, &.{ ch_cond_expr_idx, ch_lhs_expr_idx, ch_rhs_expr_idx });
+        },
+        .kw_match => left_idx = try self.eval_helper_match(false),
+        .kw_for => left_idx = try self.eval_helper_for_while(true, false),
+        .kw_while => left_idx = try self.eval_helper_for_while(false, false),
+        .kw_loop => left_idx = try self.eval_helper_loop(false),
+        .kw_deinit => {
+            left_idx = self.tree.push_node(.expr_deinit);
+            self.tree.set_node_arg0(left_idx, if (try self.could_be_at_expr()) try self.eval_expr(0) else 0xFFFFFFFF);
+        },
+        .kw_return => {
+            left_idx = self.tree.push_node(.expr_return);
+            self.tree.set_node_arg0(left_idx, if (try self.could_be_at_expr()) try self.eval_expr(0) else 0xFFFFFFFF);
+        },
+        .kw_brk => left_idx = self.tree.push_node(.expr_brk),
+        .kw_cont => left_idx = self.tree.push_node(.expr_cont),
+        .@"xpct_..=" => {
+            left_idx = self.tree.push_node(.expr_genseq_inc);
+            self.tree.set_node_arg0(left_idx, 0xFFFFFFFF);
+            self.tree.set_node_arg1(left_idx, try self.eval_expr(0));
+        },
+        .@"xpct_..<" => {
+            left_idx = self.tree.push_node(.expr_genseq_exc);
+            self.tree.set_node_arg0(left_idx, 0xFFFFFFFF);
+            self.tree.set_node_arg1(left_idx, try self.eval_expr(0));
+        },
+        .kw_true, .kw_false => |tok| {
+            left_idx = self.tree.push_node(.expr_bool);
+            if (tok == .kw_true) self.tree.set_node_arg0(left_idx, 1);
+        },
+        else => |tok| {
+            if (ParseTree.Node.tok_to_expr_unary[@intFromEnum(tok)] != .none) {
+                left_idx = self.tree.push_node(ParseTree.Node.tok_to_expr_unary[@intFromEnum(tok)]);
+                self.tree.set_node_arg0(left_idx, try self.eval_expr(0));
+            } else if (ParseTree.Node.tok_to_expr_data[@intFromEnum(tok)] != .none) {
+                left_idx = self.tree.push_data_node(ParseTree.Node.tok_to_expr_data[@intFromEnum(tok)], tok_a_at);
+            } else return error.SyntaxError;
+        },
+    }
 
     while (true) {
         if (try self.eval_helper_postfix_step(left_idx, true)) |stepped| {
@@ -359,7 +473,7 @@ fn eval_expr(self: *@This(), depth: u32) anyerror!u32 {
             continue;
         }
 
-        const next_tok = self.peek_tok_kind() orelse break;
+        const next_tok = self.peek_tok() orelse break;
         const bin_lookup = ParseTree.Node.tok_to_tagged_expr_binary[@intFromEnum(next_tok)];
         if (bin_lookup.nt == .none) break;
         if (bin_lookup.prec < depth) break;
@@ -378,19 +492,9 @@ fn eval_expr(self: *@This(), depth: u32) anyerror!u32 {
     return left_idx;
 }
 
-inline fn could_be_at_typeexpr(self: *@This()) !bool {
-    const tok = self.peek_tok_kind() orelse return error.EOF;
-
-    return tok == .identifier or
-        tok == .@"xpct_*" or
-        tok == .@"xpct_&" or
-        tok == .@"pct_[" or
-        ParseTree.Node.tok_to_typeexpr[@intFromEnum(tok)] != .none;
-}
-
 fn eval_typeexpr(self: *@This()) !u32 {
     const tok_a_at = self.tok_cursor;
-    const tok_a = self.pop_tok_kind() orelse return error.EOF;
+    const tok_a = self.pop_tok() orelse return error.EOF;
 
     if (tok_a == .identifier) {
         const id = self.tree.push_node(.typeexpr_type_custom);
@@ -407,9 +511,9 @@ fn eval_typeexpr(self: *@This()) !u32 {
         .@"xpct_&" => parent_idx = self.tree.push_node(.typeexpr_builtin_constpointer),
         .@"pct_[" => {
             parent_idx = self.tree.push_node(.typeexpr_builtin_array);
-            const next_tok = self.peek_tok_kind() orelse return error.EOF;
+            const next_tok = self.peek_tok() orelse return error.EOF;
             self.tree.set_node_arg1(parent_idx, if (next_tok == .@"pct_]") 0xFFFFFFFF else try self.eval_expr(0));
-            if ((self.pop_tok_kind() orelse return error.EOF) != .@"pct_]") return error.ClosingBracketAssumed;
+            try self.eat_assert_tok(.@"pct_]");
         },
         else => return error.InvalidTypeTok,
     }
@@ -435,10 +539,10 @@ inline fn eval_tuple_exprs(self: *@This(), early_evald_expr: ?u32, comptime end_
         children_idxs[paramc] = try self.eval_expr(0);
         paramc += 1;
 
-        switch (self.pop_tok_kind() orelse return error.EOF) {
+        switch (self.pop_tok() orelse return error.EOF) {
             end_tok => break,
             .@"pct_," => {
-                if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_)") {
+                if (try self.peek_eq_tok(.@"pct_)")) {
                     break;
                 } else {
                     continue;
@@ -471,10 +575,10 @@ inline fn eval_tuple_typed_identifiers(self: *@This()) !u32 {
         self.tree.set_node_arg0(defsingle_node_idx, child_type_idx);
         self.tree.set_node_arg1(defsingle_node_idx, child_identifier_idx);
 
-        switch (self.pop_tok_kind() orelse return error.EOF) {
+        switch (self.pop_tok() orelse return error.EOF) {
             .@"pct_)" => break,
             .@"pct_," => {
-                if ((self.peek_tok_kind() orelse return error.EOF) == .@"pct_)") {
+                if (try self.peek_eq_tok(.@"pct_)")) {
                     break;
                 } else {
                     continue;
@@ -491,7 +595,7 @@ inline fn eval_tuple_typed_identifiers(self: *@This()) !u32 {
 
 inline fn eval_identifier(self: *@This()) !u32 {
     const next_tok_at = self.tok_cursor;
-    const next_tok = self.pop_tok_kind() orelse return error.EOF;
+    const next_tok = self.pop_tok() orelse return error.EOF;
     if (next_tok != .identifier) return error.IdentifierAssumed;
     return self.tree.push_data_node(.expr_identifier, next_tok_at);
 }
@@ -499,8 +603,8 @@ inline fn eval_identifier(self: *@This()) !u32 {
 fn eval_func(self: *@This()) !u32 {
     const cursor_before = self.tok_cursor;
     const tok_a_at = self.tok_cursor;
-    const tok_a = self.pop_tok_kind() orelse return error.EOF;
-    const tok_b = self.pop_tok_kind() orelse return error.EOF;
+    const tok_a = self.pop_tok() orelse return error.EOF;
+    const tok_b = self.pop_tok() orelse return error.EOF;
 
     const func_node_idx = self.tree.push_node(.func_def);
 
@@ -516,21 +620,12 @@ fn eval_func(self: *@This()) !u32 {
         children_idxs[1] = try self.eval_identifier();
     }
 
-    const tok_c = self.pop_tok_kind() orelse return error.EOF;
-    const tok_d = self.pop_tok_kind() orelse return error.EOF;
+    try self.eat_assert_tok(.@"pct_(");
 
-    if (tok_c != .@"pct_(") return error.OpenParenAssumed;
-
-    if (tok_d == .@"pct_)") {
-        children_idxs[2] = 0xFFFFFFFF;
-    } else {
-        self.tok_cursor -= 1;
-        children_idxs[2] = try self.eval_tuple_typed_identifiers();
-    }
+    children_idxs[2] = if (try self.peek_eq_tok(.@"pct_)")) 0xFFFFFFFF else try self.eval_tuple_typed_identifiers();
     children_idxs[3] = try self.eval_stmt();
 
     self.tree.push_extra_childrefs(func_node_idx, &children_idxs);
-
     return func_node_idx;
 }
 
