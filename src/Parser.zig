@@ -31,25 +31,25 @@ pub fn deinit(self: *@This()) void {
     self.func_cache.deinit();
 }
 
-inline fn peek_tok(self: *@This(), comptime skip_end: bool) ?Lexer.Token.Kind {
+inline fn peek_tok(self: *@This()) ?Lexer.Token.Kind {
     return self.tokens.get_field(.tk, self.tok_cursor);
 }
 
-inline fn pop_tok(self: *@This(), comptime skip_end: bool) ?Lexer.Token.Kind {
+inline fn pop_tok(self: *@This()) ?Lexer.Token.Kind {
     defer self.tok_cursor += 1;
     return self.tokens.get_field(.tk, self.tok_cursor);
 }
 
-inline fn eat_assert_tok(self: *@This(), comptime tok: Lexer.Token.Kind, comptime skip_end: bool) !void {
+inline fn eat_assert_tok(self: *@This(), comptime tok: Lexer.Token.Kind) !void {
     const chosen_error: anyerror = comptime switch (tok) {
         else => error.EOF, // TODO detailed errors wrt `tok`
     };
 
-    if ((self.pop_tok(skip_end) orelse return error.EOF) != tok) return chosen_error;
+    if ((self.pop_tok() orelse return error.EOF) != tok) return chosen_error;
 }
 
-inline fn peek_eq_tok(self: *@This(), comptime tok: Lexer.Token.Kind, comptime skip_end: bool) !bool {
-    return (self.peek_tok(skip_end) orelse return error.EOF) == tok;
+inline fn peek_eq_tok(self: *@This(), comptime tok: Lexer.Token.Kind) !bool {
+    return (self.peek_tok() orelse return error.EOF) == tok;
 }
 
 inline fn eval_helper_loop(self: *@This(), comptime statemented: bool) anyerror!u32 {
