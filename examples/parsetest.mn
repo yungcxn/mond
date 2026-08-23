@@ -9,7 +9,7 @@ u32 add(u32 a, u32 b) {
 }
 
 bool is_positive(u32 x) {
-    if x > 0 {
+    if (x > 0) {
         return true
     } else {
         return false
@@ -49,7 +49,7 @@ Point make_point(u32 x, u32 y) {
 
 fill(*u32 arr, u32 len, u32 value) {
     mut u32 i = 0
-    if i < len {
+    if (i < len) {
         arr[i] = value
     }
 }
@@ -61,11 +61,11 @@ main() {
     mut *u32 ptr = get_ptr()
     ptr[0] = 42
 
-    if is_positive(result) {
+    if (is_positive(result)) {
         result = square(result)
     } else {
         result = 0
     }
 
-    if true result = 1
+    if (true) result = 1
 }

@@ -31,25 +31,25 @@ pub fn deinit(self: *@This()) void {
     self.func_cache.deinit();
 }
 
-inline fn peek_tok(self: *@This()) ?Lexer.Token.Kind {
+inline fn peek_tok(self: *@This(), comptime skip_end: bool) ?Lexer.Token.Kind {
     return self.tokens.get_field(.tk, self.tok_cursor);
 }
 
-inline fn pop_tok(self: *@This()) ?Lexer.Token.Kind {
+inline fn pop_tok(self: *@This(), comptime skip_end: bool) ?Lexer.Token.Kind {
     defer self.tok_cursor += 1;
     return self.tokens.get_field(.tk, self.tok_cursor);
 }
 
-inline fn eat_assert_tok(self: *@This(), comptime tok: Lexer.Token.Kind) !void {
+inline fn eat_assert_tok(self: *@This(), comptime tok: Lexer.Token.Kind, comptime skip_end: bool) !void {
     const chosen_error: anyerror = comptime switch (tok) {
         else => error.EOF, // TODO detailed errors wrt `tok`
     };
 
-    if ((self.pop_tok() orelse return error.EOF) != tok) return chosen_error;
+    if ((self.pop_tok(skip_end) orelse return error.EOF) != tok) return chosen_error;
 }
 
-inline fn peek_eq_tok(self: *@This(), comptime tok: Lexer.Token.Kind) !bool {
-    return (self.peek_tok() orelse return error.EOF) == tok;
+inline fn peek_eq_tok(self: *@This(), comptime tok: Lexer.Token.Kind, comptime skip_end: bool) !bool {
+    return (self.peek_tok(skip_end) orelse return error.EOF) == tok;
 }
 
 inline fn eval_helper_loop(self: *@This(), comptime statemented: bool) anyerror!u32 {
@@ -136,7 +136,6 @@ inline fn eval_helper_match(self: *@This(), comptime statemented: bool) !u32 {
         var case_ch_idx = try self.eval_expr(0);
         if (try self.peek_eq_tok(.@"pct_,")) {
             case_ch_idx = try self.eval_tuple_exprs(case_ch_idx, .@"xpct_=>");
-            self.tok_cursor += 1;
         } else {
             try self.eat_assert_tok(.@"xpct_=>");
         }
@@ -227,35 +226,44 @@ fn eval_stmt(self: *@This()) anyerror!u32 {
 
 fn eval_helper_expr_or_assign(self: *@This(), comptime assign_is_mut: bool, comptime exclude_expr_eval: bool) !u32 {
     const cursor_start = self.tok_cursor;
-    const tokinfo = try self.eval_identifier_or_typeexpr_or_expr();
+
+    var idx_0: u32 = 0;
+    var evald_as: enum { became_identifier, became_typeexpr, became_expr } = undefined;
+    if (try self.peek_eq_tok(.identifier)) {
+        idx_0 = try self.eval_identifier();
+        evald_as = .became_identifier;
+    } else if (try self.could_be_at_typeexpr()) {
+        idx_0 = try self.eval_typeexpr();
+        evald_as = .became_typeexpr;
+    } else if (try self.could_be_at_expr()) {
+        idx_0 = try self.eval_expr(0);
+        evald_as = .became_expr;
+    } else return error.InvalidSyntax;
+
     const tok_next = self.peek_tok() orelse return error.EOF;
 
     var parent_idx: u32 = undefined;
     var ch_identifier_idx: u32 = undefined;
     var ch_expr_idx: u32 = undefined;
 
-    if (tokinfo[1] == 1 or (tokinfo[1] == 0 and tok_next == .identifier)) {
+    if (evald_as == .became_typeexpr or (evald_as == .became_identifier and tok_next == .identifier)) {
         var ch_typeexpr_idx: u32 = undefined;
-        if (tokinfo[1] == 1) {
-            ch_typeexpr_idx = tokinfo[0];
+        if (evald_as == .became_typeexpr) {
+            ch_typeexpr_idx = idx_0;
         } else {
             ch_typeexpr_idx = self.tree.push_node(.typeexpr_type_custom);
-            self.tree.set_node_arg0(ch_typeexpr_idx, tokinfo[0]);
+            self.tree.set_node_arg0(ch_typeexpr_idx, idx_0);
         }
 
         ch_identifier_idx = try self.eval_identifier();
-
         try self.eat_assert_tok(.@"xpct_=");
-
         ch_expr_idx = try self.eval_expr(0);
-
         parent_idx = self.tree.push_node(if (assign_is_mut) .stmt_mut_typed_assign else .stmt_typed_assign);
         self.tree.push_extra_childrefs(parent_idx, &.{ ch_typeexpr_idx, ch_identifier_idx, ch_expr_idx });
-    } else if (tokinfo[1] == 0) {
-        ch_identifier_idx = tokinfo[0];
+    } else if (evald_as == .became_identifier) {
+        ch_identifier_idx = idx_0;
 
         while (true) ch_identifier_idx = (try self.eval_helper_postfix_step(ch_identifier_idx, false)) orelse break;
-
         const after_target = self.peek_tok() orelse return error.EOF;
 
         if (after_target == .@"xpct_=") {
@@ -269,28 +277,29 @@ fn eval_helper_expr_or_assign(self: *@This(), comptime assign_is_mut: bool, comp
             self.tok_cursor = cursor_start;
             return self.eval_expr(0);
         } else return error.InvalidSyntax;
-    } else if (!exclude_expr_eval and tokinfo[1] == 2) {
-        return tokinfo[0];
+    } else if (!exclude_expr_eval and evald_as == .became_expr) {
+        return idx_0;
     } else return error.InvalidSyntax;
 
     return parent_idx;
-}
-
-inline fn eval_identifier_or_typeexpr_or_expr(self: *@This()) !struct { u32, u8 } {
-    const tok = self.peek_tok() orelse return error.EOF;
-    if (tok == .identifier) {
-        return .{ try self.eval_identifier(), 0 };
-    } else if (try self.could_be_at_typeexpr()) {
-        return .{ try self.eval_typeexpr(), 1 };
-    } else if (try self.could_be_at_expr()) {
-        return .{ try self.eval_expr(0), 2 };
-    } else return error.InvalidSyntax;
 }
 
 inline fn could_be_at_expr(self: *@This()) !bool {
     const tok = self.peek_tok() orelse return error.EOF;
 
     return tok == .@"pct_(" or
+        tok == .@"pct_[" or
+        tok == .kw_if or
+        tok == .kw_match or
+        tok == .kw_for or
+        tok == .kw_while or
+        tok == .kw_loop or
+        tok == .kw_deinit or
+        tok == .kw_return or
+        tok == .kw_brk or
+        tok == .kw_cont or
+        tok == .@"xpct_..=" or
+        tok == .@"xpct_..<" or
         tok == .kw_true or
         tok == .kw_false or
         (ParseTree.Node.tok_to_expr_unary[@intFromEnum(tok)] != .none) or
@@ -370,7 +379,7 @@ inline fn eval_helper_postfix_step(self: *@This(), left_idx: u32, comptime allow
         },
         else => {
             // a helper func is not to consume anything if doing nothing
-            self.tok_cursor += 1;
+            self.tok_cursor -= 1;
             return null;
         },
     }
@@ -539,10 +548,11 @@ inline fn eval_tuple_exprs(self: *@This(), early_evald_expr: ?u32, comptime end_
         children_idxs[paramc] = try self.eval_expr(0);
         paramc += 1;
 
-        switch (self.pop_tok() orelse return error.EOF) {
+        switch (self.peek_tok() orelse return error.EOF) {
             end_tok => break,
             .@"pct_," => {
-                if (try self.peek_eq_tok(.@"pct_)")) {
+                self.tok_cursor += 1;
+                if (try self.peek_eq_tok(end_tok)) {
                     break;
                 } else {
                     continue;
@@ -553,6 +563,7 @@ inline fn eval_tuple_exprs(self: *@This(), early_evald_expr: ?u32, comptime end_
     }
 
     self.tree.push_extra_childrefs(deftuple_node_idx, children_idxs[0..paramc]);
+    self.tok_cursor += 1;
 
     return deftuple_node_idx;
 }
@@ -575,9 +586,10 @@ inline fn eval_tuple_typed_identifiers(self: *@This()) !u32 {
         self.tree.set_node_arg0(defsingle_node_idx, child_type_idx);
         self.tree.set_node_arg1(defsingle_node_idx, child_identifier_idx);
 
-        switch (self.pop_tok() orelse return error.EOF) {
+        switch (self.peek_tok() orelse return error.EOF) {
             .@"pct_)" => break,
             .@"pct_," => {
+                self.tok_cursor += 1;
                 if (try self.peek_eq_tok(.@"pct_)")) {
                     break;
                 } else {
@@ -623,6 +635,7 @@ fn eval_func(self: *@This()) !u32 {
     try self.eat_assert_tok(.@"pct_(");
 
     children_idxs[2] = if (try self.peek_eq_tok(.@"pct_)")) 0xFFFFFFFF else try self.eval_tuple_typed_identifiers();
+    self.tok_cursor += 1;
     children_idxs[3] = try self.eval_stmt();
 
     self.tree.push_extra_childrefs(func_node_idx, &children_idxs);
@@ -659,11 +672,11 @@ pub fn handle_err(self: *@This(), io: std.Io, e: anyerror) noreturn {
 
     var lc: u32 = 0;
     for (0..lstart_cur) |i| {
-        if (i == '\n') lc += 1;
+        if (self.src_bytes[i] == '\n') lc += 1;
     }
 
     var buf: [1024]u8 = undefined;
-    var linebuf: [512]u8 = undefined;
+    var linebuf: [1024]u8 = undefined;
     @memset(linebuf[0 .. problem_span[0] - lstart_cur], ' ');
     @memset(linebuf[problem_span[0] - lstart_cur .. problem_span[1] - lstart_cur], '~');
 

@@ -11,6 +11,7 @@ pub const Token = struct {
 
     pub const Kind = enum(u8) {
         none,
+        end,
 
         // keywords, must be of form kw_...
         kw_return,
@@ -230,6 +231,13 @@ inline fn gen_next_tok(self: *@This()) !bool {
         switch (c0) {
             '#' => { // comment... skip until newline (inclusively)
                 self.adv_until('\n') catch return false;
+            },
+            '\n' => {
+                if (self.tokens.peek_field(.tk)) |last_tok| switch (last_tok) {
+                    // end-unsensitive tokens
+                    .end, .@"pct_(", .@"pct_[", .@"pct_{", .@"pct_}", .@"pct_,", .@"xpct_=>" => {},
+                    else => self.push_tok(.end, self.cursor - 1),
+                };
             },
             '0'...'9' => { // val_int or val_float
                 const cursor0 = self.cursor - 1;
