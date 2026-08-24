@@ -13,7 +13,9 @@ pub const Token = struct {
         none,
 
         // keywords, must be of form kw_...
-        kw_return,
+        kw_ret,
+        kw_fun,
+        kw_in,
         kw_u8,
         kw_u16,
         kw_u32,
@@ -54,6 +56,7 @@ pub const Token = struct {
         @"pct_,",
         @"pct_~",
         @"pct_:",
+        @"pct_;",
 
         @"xpct_.",
         @"xpct_=",
@@ -85,6 +88,7 @@ pub const Token = struct {
         @"xpct_>=",
         @"xpct_<-", // for unwrap/<<<-cast
 
+        @"xpct_->", // for func ret type
         @"xpct_=>", // for `expr_match`
         @"xpct_.*", // for `expr_genseq`
         @"xpct_??", // for opt unwrap expression

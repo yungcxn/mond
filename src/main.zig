@@ -36,5 +36,5 @@ pub fn main(init: std.process.Init) void {
     defer parser.deinit();
     parser.build_ast() catch |e| parser.handle_err(io, e);
 
-    if (debug) parser.tree.debug_print_tree(io, in_bytes, parser.func_cache.sliced()) catch |e| @panic(@errorName(e));
+    if (debug) parser.tree.debug_print_tree(io, in_bytes, parser.func_store.sliced()) catch |e| @panic(@errorName(e));
 }

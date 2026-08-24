@@ -1,95 +1,94 @@
 $import("somelib")
 
 # fixed func signature
-i32 add_i32(i32 a, i32 b) {
-    return a + b
+fun add_i32 = (i32 a, i32 b) -> i32 {
+    ret a + b;
 }
 
-# "void" does not exist, it's always induced
-my_void_func() {
-    print("Hello, world!")
+fun add_i32_alt0 = (i32 a, i32 b) {
+    ret a + b;
+}
+
+fun add_i32_alt1 = (i32 a, i32 b): ret a + b;
+
+# "void" does not eist, it's always induced
+fun my_void_func = () {
+    print("Hello, world!");
 }
 
 # first set of parentheses is comptime, second set is runtime
-T mytemplfunc(type T, bool add_or_sub)(T a, T b) {
-    constif (add_or_sub) {
-        return a + b
-    } constelse {
-        return a - b
+fun mytemplfunc = (type T, bool add_or_sub)(T a, T b) -> T {
+    buildif add_or_sub {
+        ret a + b;
+    } buildelse {
+        ret a - b;
     }
 }
 
-type Person(u8[10] name, i32 age = 18, *u8 address)
+type Person = (u8[10] name, i32 age = 18, *u8 address);
 
-type Point(type A, type B)(A x, B y)
+type Point = (type A, type B)(A x, B y);
 
 # $IFace(AddablePoint) will provide its interface
-type AddablePoint(type A, type B)(A x, B y) {
+type AddablePoint = (type A, type B)(A x, B y) {
     add(AddablePoint other) {
-        $.x += other.x
-        $.y += other.y
+        $.x += other.x;
+        $.y += other.y;
     }
 }
 
-iface Addable(type ElementType) {
-    void add(ElementType other)
+iface Addable = (type ElementType) {
+    void add(ElementType other);
 }
 
-type AddablePoint2D(i32 x, i32 y) <<< Addable(AddablePoint2D) {
+type AddablePoint2D = (i32 x, i32 y) <<< Addable(AddablePoint2D) {
     add(AddablePoint2D other) {
-        $.x += other.x
-        $.y += other.y
+        $.x += other.x;
+        $.y += other.y;
     }
 }
 
-enum u8 MyEnum(A = 0x01, B = 0x02, C = 0x03) {
+# enums have no "backing int" it's not valued, but expressed 
+enum MyEnum = (A = 0x01, B = 0x02, C = 0x03) {
     # space for functions
 }
 
-type ByteStream(*u8 buf, u32 cursor) {
+enum Color = (red, green, blue);
 
-    $init(*u8 in_buf) {
-        return ByteStream(buf = in_buf, cursor = 0)
+type ByteStream = (*u8 buf, prv u32 cursor) {
+
+    fun $init = (*u8 in_buf) -> ByteStream {
+        ret ByteStream(buf = in_buf, cursor = 0);
     }
 
-    $deinit() {} # could be left out
+    fun $deinit = () {} # could be left out
 
-    u8 $next() {
-        return $.buf[$.cursor]
+    fun $next = () {
+        ret $.buf[$.cursor defer $.cursor += 1];
     }
 
-    $has_next() {
-        return $.cursor < $.buf.len
+    fun $has_next = () {
+        ret $.cursor < $.buf.len;
     }
 
-    pub opt_u8 pop() {
+    pub fun pop = opt_u8 () {
         if (bs.cursor >= bs.buf.len) {
-            return none
+            ret none;
         }
 
-        defer $.cursor += 1
-        return $.buf[$.cursor]
-    }
-
-    pub bool has_next() {
-        return $.cursor < $.buf.len
-    }
-
-    pub u8 next() {
-        defer $.cursor++
-        return $.buf[$.cursor]
+        ret $.buf[$.cursor defer $.cursor += 1];
     }
 }
 
 // type def through alias
-type opt_u8 = $opt(u8, 0xFF)
-type status_err = $errset(EOF = 0xFE, OOM = 0xFD)
-type my_u8 = $wrap(status_err, opt_u8) 
+type opt_u8 = $Opt(u8, 0xFF);
+type status_err = $ErrSet(EOF = 0xFE, OOM = 0xFD);
+type my_u8 = $Wrap(status_err, opt_u8);
 
 # type alias
-type Point2D = Point(i32, i32)
+type Point2D = Point(i32, i32);
 # func alias, not templated
-u32[u32, u32] add = mytemplfunc(u32, true)
+(u32, u32)->(u32) add = mytemplfunc(u32, true);
 
 my_u8 calc_something(u32 i) { # TODO
     match (i) {
@@ -101,41 +100,42 @@ my_u8 calc_something(u32 i) { # TODO
 }
 
 $main() {
-    u8[2] my_str0 = ['h', 'i']      type: u8[2]
-    u8[2] my_str1 = "hi"  # h i     type: u8[2]
-    u8[]  my_str2 = "hi"  # h i     type: u8[2]
-    &u8   c_str   = "hi"  # h i \0  type: pointer to constant u8(s)
-    induced_str   = "hi"  # h i     type: u8[2]
+    u8[2] my_str0 = ['h', 'i'];      type: u8[2]
+    u8[2] my_str1 = "hi";  # h i     type: u8[2]
+    u8[]  my_str2 = "hi";  # h i     type: u8[2]
+    &u8   c_str   = "hi";  # h i \0  type: pointer to constant u8(s)
+    induced_str   = "hi";  # h i     type: u8[2]
 
-    println(c_str)
+    println(c_str);
 
     # errors, optionals, ...
 
-    val = calc_something(0)
+    val = calc_something(0);
 
 
-    valopt_or_2 = calc_something(1) !! 2
+    valopt_or_2 = calc_something(1) !! 2;
     # same as 
-    # valopt_or_2 = if (calc_something(1) !<- x) x else 2
+    # valopt_or_2 = if (calc_something(1) !<- x) x else 2;
 
-    valopt = calc_something(1) !! 
+    valopt = calc_something(1) !!;
     # same as 
-    # valopt = if (calc_something(1) !<- x) x else return calc_something(1)
+    # valopt = if (calc_something(1) !<- x) x else return calc_something(1);
 
-    valreal_or_2 = valopt ?? 2
+    valreal_or_2 = valopt ?? 2;
     # same as 
-    # valopt = if (valopt ?<- x) x else 2
+    # valopt = if (valopt ?<- x) x else 2;
 
-    valreal = valopt ??
+    valreal = valopt ??;
     # same as 
-    # valopt = if (valopt ?<- x) x else return valopt
+    # valopt = if (valopt ?<- x) x else return valopt;
     
     # TODO $as(u8, 5)
 }
 
-u32[u32, u32] add_lambda1  = u32 (u32 a, u32 b) return a + b
+# type is: (u32, u32)->(u32)
+fun add_lambda1  = (u32 a, u32 b): ret a + b;
 
-u32[u32, u32] add_lambda5  = u32 (u32 a, u32 b) {
-    side_effect(a,b)
-    return a + b
+fun add_lambda5  = (u32 a, u32 b) {
+    side_effect(a,b);
+    ret a + b;
 }

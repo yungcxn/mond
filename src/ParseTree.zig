@@ -12,14 +12,7 @@ pub const Node = struct {
 
         func_def,
         type_def, // TODO
-        enum_u8_def, // TODO
-        enum_u16_def, // TODO
-        enum_u32_def, // TODO
-        enum_u64_def, // TODO
-        enum_i8_def, // TODO
-        enum_i16_def, // TODO
-        enum_i32_def, // TODO
-        enum_i64_def, // TODO
+        enum__def, // TODO
         iface_def, // TODO
 
         // special (sub)statements
@@ -44,7 +37,7 @@ pub const Node = struct {
         stmt_typed_assign,
         stmt_funccall,
 
-        stmt_return,
+        stmt_ret,
         stmt_if,
         stmt_if_else,
         stmt_match,
@@ -60,30 +53,27 @@ pub const Node = struct {
         stmt_deinit,
 
         // expressions that express a type
-        typeexpr_builtin_u8,
-        typeexpr_builtin_u16,
-        typeexpr_builtin_u32,
-        typeexpr_builtin_u64,
-        typeexpr_builtin_i8,
-        typeexpr_builtin_i16,
-        typeexpr_builtin_i32,
-        typeexpr_builtin_i64,
-        typeexpr_builtin_f8,
-        typeexpr_builtin_f16,
-        typeexpr_builtin_f32,
-        typeexpr_builtin_f64,
-        typeexpr_builtin_bool,
-        typeexpr_builtin_pointer,
-        typeexpr_builtin_constpointer,
-        typeexpr_builtin_varref, // TODO ^
-        typeexpr_builtin_array,
 
-        typeexpr_type_custom,
-        typeexpr_templated_type_custom, // TODO
+        expr_type_builtin_u8,
+        expr_type_builtin_u16,
+        expr_type_builtin_u32,
+        expr_type_builtin_u64,
+        expr_type_builtin_i8,
+        expr_type_builtin_i16,
+        expr_type_builtin_i32,
+        expr_type_builtin_i64,
+        expr_type_builtin_f8,
+        expr_type_builtin_f16,
+        expr_type_builtin_f32,
+        expr_type_builtin_f64,
+        expr_type_builtin_bool,
+        expr_type_pointer,
+        expr_type_constpointer,
+        expr_type_varref, // TODO ^
+        expr_type_array,
 
         // real expressions with (possible) value
         expr_funccall,
-        expr_array,
         expr_paren,
         expr_indexed,
         expr_member,
@@ -147,7 +137,24 @@ pub const Node = struct {
         expr_bool,
     };
 
-    pub const extrachilded_nodekinds = blk: {
+    pub const assignable_expressions = blk: { // TODO
+        var t: [256]bool = @splat(false);
+        t[@intFromEnum(Node.Kind.expr_identifier)] = true;
+        t[@intFromEnum(Node.Kind.expr_member)] = true;
+        t[@intFromEnum(Node.Kind.expr_dereference)] = true;
+        break :blk t;
+    };
+
+    pub const statementable_expressions = blk: { // TODO
+        var t: [256]bool = @splat(false);
+        t[@intFromEnum(Node.Kind.expr_funccall)] = true;
+        t[@intFromEnum(Node.Kind.expr_defer)] = true;
+        t[@intFromEnum(Node.Kind.expr_errunwrap)] = true;
+        t[@intFromEnum(Node.Kind.expr_optunwrap)] = true;
+        break :blk t;
+    };
+
+    pub const extrachilded_nodekinds = blk: { // TODO
         var t: [256]bool = @splat(false);
         t[@intFromEnum(Node.Kind.func_def)] = true;
         t[@intFromEnum(Node.Kind.stmt_exec_block)] = true;
@@ -170,25 +177,50 @@ pub const Node = struct {
         t[@intFromEnum(Node.Kind.expr_float)] = true;
         t[@intFromEnum(Node.Kind.expr_char)] = true;
         t[@intFromEnum(Node.Kind.expr_bool)] = true;
-        t[@intFromEnum(Node.Kind.expr_bool)] = true;
         break :blk t;
     };
 
-    pub const tok_to_typeexpr = blk: {
-        var t: [256]Node.Kind = @splat(.none);
-        t[@intFromEnum(Lexer.Token.Kind.kw_u8)] = .typeexpr_builtin_u8;
-        t[@intFromEnum(Lexer.Token.Kind.kw_u16)] = .typeexpr_builtin_u16;
-        t[@intFromEnum(Lexer.Token.Kind.kw_u32)] = .typeexpr_builtin_u32;
-        t[@intFromEnum(Lexer.Token.Kind.kw_u64)] = .typeexpr_builtin_u64;
-        t[@intFromEnum(Lexer.Token.Kind.kw_i8)] = .typeexpr_builtin_i8;
-        t[@intFromEnum(Lexer.Token.Kind.kw_i16)] = .typeexpr_builtin_i16;
-        t[@intFromEnum(Lexer.Token.Kind.kw_i32)] = .typeexpr_builtin_i32;
-        t[@intFromEnum(Lexer.Token.Kind.kw_i64)] = .typeexpr_builtin_i64;
-        t[@intFromEnum(Lexer.Token.Kind.kw_f8)] = .typeexpr_builtin_f8;
-        t[@intFromEnum(Lexer.Token.Kind.kw_f16)] = .typeexpr_builtin_f16;
-        t[@intFromEnum(Lexer.Token.Kind.kw_f32)] = .typeexpr_builtin_f32;
-        t[@intFromEnum(Lexer.Token.Kind.kw_f64)] = .typeexpr_builtin_f64;
-        t[@intFromEnum(Lexer.Token.Kind.kw_bool)] = .typeexpr_builtin_bool;
+    pub const tok_to_typeexpr_start = blk: { // TODO
+        var t: [256]bool = @splat(false);
+        t[@intFromEnum(Lexer.Token.Kind.kw_u8)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_u16)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_u32)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_u64)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_i8)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_i16)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_i32)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_i64)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_f8)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_f16)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_f32)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_f64)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_bool)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = true;
+        t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = true;
+        t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = true;
+        break :blk t;
+    };
+
+    pub const tok_to_expr_start = blk: { // TODO
+        var t: [256]bool = undefined;
+        for (0..256) |i| {
+            t[i] = tok_to_typeexpr_start[i] or (tok_to_expr_unary[i] != .none) or (tok_to_expr_data[i] != .none);
+        }
+
+        t[@intFromEnum(Lexer.Token.Kind.@"pct_(")] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_if)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_match)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_for)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_while)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_loop)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_deinit)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_ret)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_brk)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_cont)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.@"xpct_..=")] = true;
+        t[@intFromEnum(Lexer.Token.Kind.@"xpct_..<")] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_true)] = true;
+        t[@intFromEnum(Lexer.Token.Kind.kw_false)] = true;
         break :blk t;
     };
 
