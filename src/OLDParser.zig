@@ -137,7 +137,7 @@ inline fn eval_helper_match(self: *@This(), comptime statemented: bool) !u32 {
 
         var case_ch_idx = try self.eval_expr(0, true);
         if (try self.peek_eq_tok(.@"pct_,")) {
-            case_ch_idx = try self.eval_tuple_exprs(case_ch_idx, .@"xpct_=>");
+            case_ch_idx = try self.eval_expression_tuple(case_ch_idx, .@"xpct_=>");
         } else {
             try self.eat_assert_tok(.@"xpct_=>");
         }
@@ -276,7 +276,7 @@ fn eval_expr(self: *@This(), depth: u32, comptime allow_type_expr: bool) anyerro
 
     var left_idx: u32 = undefined;
 
-    switch (self.pop_tok() orelse return error.EOF) {
+    switch (self.pop_tok() orelse return error.EOF) { // TODO add `type` and `fun` and function types
         .kw_u8 => if (comptime allow_type_expr) return self.tree.push_node(.expr_type_builtin_u8) else return error.TypeExprForbidden,
         .kw_u16 => if (comptime allow_type_expr) return self.tree.push_node(.expr_type_builtin_u16) else return error.TypeExprForbidden,
         .kw_u32 => if (comptime allow_type_expr) return self.tree.push_node(.expr_type_builtin_u32) else return error.TypeExprForbidden,
@@ -324,7 +324,7 @@ fn eval_expr(self: *@This(), depth: u32, comptime allow_type_expr: bool) anyerro
             }
 
             if (typeexpr_impossible) {
-                left_idx = if (empty) ch_idx else try self.eval_tuple_exprs(ch_idx, .@"pct_]");
+                left_idx = if (empty) ch_idx else try self.eval_expression_tuple(ch_idx, .@"pct_]");
             }
         },
         // here, the non-type-expression rules start
@@ -444,7 +444,7 @@ fn eval_expr(self: *@This(), depth: u32, comptime allow_type_expr: bool) anyerro
                     self.tok_cursor += 1;
                     possible_parents_rhs = 0xFFFFFFFF;
                 } else {
-                    possible_parents_rhs = try self.eval_tuple_exprs(null, .@"pct_)");
+                    possible_parents_rhs = try self.eval_expression_tuple(null, .@"pct_)");
                 }
             },
             else => {
@@ -479,8 +479,8 @@ fn eval_expr(self: *@This(), depth: u32, comptime allow_type_expr: bool) anyerro
     return left_idx;
 }
 
-inline fn eval_tuple_exprs(self: *@This(), early_evald_expr: ?u32, comptime end_tok: Lexer.Token.Kind) anyerror!u32 {
-    const deftuple_node_idx = self.tree.push_node(.tuple_exprs);
+inline fn eval_expression_tuple(self: *@This(), early_evald_expr: ?u32, comptime end_tok: Lexer.Token.Kind) anyerror!u32 {
+    const tuple_node_idx = self.tree.push_node(.tuple__expr);
 
     var children_idxs: [64]u32 = undefined;
     var paramc: u8 = 0;
@@ -510,14 +510,14 @@ inline fn eval_tuple_exprs(self: *@This(), early_evald_expr: ?u32, comptime end_
         }
     }
 
-    self.tree.push_extra_childrefs(deftuple_node_idx, children_idxs[0..paramc]);
+    self.tree.push_extra_childrefs(tuple_node_idx, children_idxs[0..paramc]);
     self.tok_cursor += 1;
 
-    return deftuple_node_idx;
+    return tuple_node_idx;
 }
 
-inline fn eval_tuple_typed_identifiers(self: *@This()) !u32 {
-    const deftuple_node_idx = self.tree.push_node(.tuple_typed_identifiers);
+inline fn eval_complex_tuple(self: *@This(), comptime typed: bool) !u32 {
+    const deftuple_node_idx = if (typed) self.tree.push_node(.tuple__type_identifier_optexpr) else self.tree.push_node(.tuple__identifier_optexpr);
 
     var children_idxs: [64]u32 = undefined;
     var paramc: u8 = 0;
@@ -525,16 +525,37 @@ inline fn eval_tuple_typed_identifiers(self: *@This()) !u32 {
     while (true) {
         if (paramc >= children_idxs.len) return error.TooManyArguments;
 
-        const defsingle_node_idx = self.tree.push_node(.tuple_elem_typed_identifier);
-        children_idxs[paramc] = defsingle_node_idx;
+        const child_type_idx = if (comptime typed) try self.eval_expr(0, true) else null;
+        const child_identifier_idx = try self.eval_identifier();
+
+        var next = self.peek_tok() orelse return error.EOF;
+        var subparent_idx: u32 = undefined;
+
+        if (next == .@"xpct_=") {
+            self.tok_cursor += 1;
+            const child_expr_idx = try self.eval_expr(0, true);
+            subparent_idx = self.tree.push_node(if (comptime typed) .tupleelem__type_identifier_expr else .tupleelem__identifier_expr);
+            if (comptime typed) {
+                self.tree.push_extra_childrefs(subparent_idx, &.{ child_type_idx, child_identifier_idx, child_expr_idx });
+            } else {
+                self.tree.set_node_arg0(subparent_idx, child_identifier_idx);
+                self.tree.set_node_arg0(subparent_idx, child_expr_idx);
+            }
+            next = self.peek_tok() orelse return error.EOF;
+        } else {
+            if (comptime typed) {
+                subparent_idx = self.tree.push_node(.tupleelem__type_identifier);
+                self.tree.set_node_arg0(subparent_idx, child_type_idx);
+                self.tree.set_node_arg1(subparent_idx, child_identifier_idx);
+            } else {
+                subparent_idx = child_identifier_idx;
+            }
+        }
+
+        children_idxs[paramc] = subparent_idx;
         paramc += 1;
 
-        const child_type_idx = try self.eval_expr(0, true);
-        const child_identifier_idx = try self.eval_identifier();
-        self.tree.set_node_arg0(defsingle_node_idx, child_type_idx);
-        self.tree.set_node_arg1(defsingle_node_idx, child_identifier_idx);
-
-        switch (self.peek_tok() orelse return error.EOF) {
+        switch (next) {
             .@"pct_)" => break,
             .@"pct_," => {
                 self.tok_cursor += 1;
@@ -554,6 +575,11 @@ inline fn eval_tuple_typed_identifiers(self: *@This()) !u32 {
     return deftuple_node_idx;
 }
 
+inline fn eval_tuple_assigned_identifiers(self: *@This()) !u32 { // TODO
+    const deftuple_node_idx = self.tree.push_node(.tuple_typed_identifiers);
+    return deftuple_node_idx;
+}
+
 inline fn eval_identifier(self: *@This()) !u32 {
     const next_tok_at = self.tok_cursor;
     const next_tok = self.pop_tok() orelse return error.EOF;
@@ -561,10 +587,10 @@ inline fn eval_identifier(self: *@This()) !u32 {
     return self.tree.push_data_node(.expr_identifier, next_tok_at);
 }
 
-fn eval_func(self: *@This()) !u32 {
+fn eval_func(self: *@This(), allow_bodyless: bool) !u32 {
     const func_node_idx = self.tree.push_node(.func_def);
 
-    // name, runtime args, rettype, stmt, [build args]
+    // name, runtime args, [rettype], (if allow_bodyless optional:) stmt, [build args]
     var children_idxs: [5]u32 = undefined;
     children_idxs[2] = 0xFFFFFFFF;
     children_idxs[4] = 0xFFFFFFFF;
@@ -573,45 +599,164 @@ fn eval_func(self: *@This()) !u32 {
     try self.eat_assert_tok(.@"xpct_=");
     try self.eat_assert_tok(.@"pct_(");
 
-    children_idxs[1] = if (try self.peek_eq_tok(.@"pct_)")) 0xFFFFFFFF else try self.eval_tuple_typed_identifiers();
+    children_idxs[1] = if (try self.peek_eq_tok(.@"pct_)")) 0xFFFFFFFF else try self.eval_complex_tuple(true);
 
-    if (try self.peek_eq_tok(.@"pct_(")) { // second arg block, so first is build args
+    if (try self.peek_eq_tok(.@"pct_(")) {
         self.tok_cursor += 1;
         children_idxs[4] = children_idxs[1];
-        children_idxs[1] = if (try self.peek_eq_tok(.@"pct_)")) 0xFFFFFFFF else try self.eval_tuple_typed_identifiers();
+        children_idxs[1] = if (try self.peek_eq_tok(.@"pct_)")) 0xFFFFFFFF else try self.eval_complex_tuple(true);
     }
 
-    if (try self.peek_eq_tok(.@"xpct_->")) {
+    const rettype_given: bool = try self.peek_eq_tok(.@"xpct_->");
+
+    if (rettype_given) {
         self.tok_cursor += 1;
         children_idxs[2] = try self.eval_expr(0, true);
     }
 
-    children_idxs[3] = try self.eval_stmt(false);
+    if (allow_bodyless and try self.peek_eq_tok(.@"pct_;")) {
+        self.tok_cursor += 1;
+        children_idxs[3] = 0xFFFFFFFF;
+    } else {
+        children_idxs[3] = try self.eval_stmt(rettype_given);
+    }
 
     self.tree.push_extra_childrefs(func_node_idx, &children_idxs);
     return func_node_idx;
 }
 
+inline fn eval_subinterfaces(self: *@This()) !u32 {
+    const parent_idx = self.tree.push_node(.expr_subinterfaces);
+
+    var ch_subinterfaces: [100]u32 = undefined;
+    ch_subinterfaces[0] = try self.eval_expr(0, true);
+    var subinterfacec: u32 = 1;
+
+    while (true) switch (self.peek_tok() orelse return error.EOF) {
+        .@"pct_," => {
+            self.tok_cursor += 1;
+            const next = self.peek_tok() orelse return error.EOF;
+            if (next == .@"pct_{" or next == .@"pct_;") break;
+        },
+        .@"pct_{", .@"pct_;" => break,
+        else => {
+            ch_subinterfaces[subinterfacec] = try self.eval_expr(0, true);
+            subinterfacec += 1;
+        },
+    };
+    self.tree.push_extra_childrefs(parent_idx, ch_subinterfaces[0..subinterfacec]);
+    return parent_idx;
+}
+
+inline fn eval_methods_block(self: *@This(), allow_bodyless_fns: bool) !u32 {
+    const parent_idx = self.tree.push_node(.expr_subinterfaces);
+
+    var children_idxs: [1024]u32 = undefined;
+    var childc: u32 = 0;
+
+    var peeked = self.peek_tok() orelse return error.EOF;
+    while (peeked != .@"pct_}") : (peeked = self.peek_tok() orelse return error.EOF) {
+        if (peeked == .kw_fun) {
+            self.tok_cursor += 1;
+            children_idxs[childc] = try self.eval_func(allow_bodyless_fns);
+            childc += 1;
+        } else {
+            return error.FunctionAssumed;
+        }
+    }
+
+    self.tree.push_extra_childrefs(parent_idx, children_idxs[0..childc]);
+
+    return parent_idx;
+}
+
 fn eval_type(self: *@This()) !u32 {
-    _ = self;
-    return if (0 == 0) error.EOF else 0;
+    // name, runtime args, [subinterfaces], [method_block], [build args]
+    var children_idxs: [5]u32 = undefined;
+    children_idxs[2] = 0xFFFFFFFF;
+    children_idxs[3] = 0xFFFFFFFF;
+    children_idxs[4] = 0xFFFFFFFF;
+
+    children_idxs[0] = try self.eval_identifier();
+    try self.eat_assert_tok(.@"xpct_=");
+    try self.eat_assert_tok(.@"pct_(");
+    children_idxs[1] = if (try self.peek_eq_tok(.@"pct_)")) return error.EmptyTypeDef else try self.eval_complex_tuple(true);
+
+    if (try self.peek_eq_tok(.@"pct_(")) {
+        self.tok_cursor += 1;
+        children_idxs[4] = children_idxs[1];
+        children_idxs[1] = if (try self.peek_eq_tok(.@"pct_)")) 0xFFFFFFFF else try self.eval_complex_tuple(true);
+    }
+
+    if (try self.peek_eq_tok(.@"xpct_<<<")) {
+        self.tok_cursor += 1;
+        children_idxs[2] = try self.eval_subinterfaces();
+    }
+
+    switch (self.peek_tok() orelse return error.EOF) {
+        .@"pct_{" => {
+            self.tok_cursor += 1;
+            children_idxs[3] = try self.eval_methods_block(false);
+        },
+        .@"pct_;" => {
+            self.tok_cursor += 1;
+        },
+        else => return error.InvalidSyntax,
+    }
+
+    const type_node_idx = self.tree.push_node(.type_def);
+    self.tree.push_extra_childrefs(type_node_idx, &children_idxs);
+    return type_node_idx;
 }
 
 fn eval_iface(self: *@This()) !u32 {
-    _ = self;
-    return if (0 == 0) error.EOF else 0;
+    // name, [subinterfaces], [method_block], [build args]
+    var children_idxs: [4]u32 = undefined;
+    children_idxs[1] = 0xFFFFFFFF;
+    children_idxs[2] = 0xFFFFFFFF;
+    children_idxs[3] = 0xFFFFFFFF;
+
+    children_idxs[0] = try self.eval_identifier();
+    try self.eat_assert_tok(.@"xpct_=");
+
+    if (try self.peek_eq_tok(.@"pct_(")) {
+        self.tok_cursor += 1;
+        children_idxs[3] = if (try self.peek_eq_tok(.@"pct_)")) return error.EmptyStaticArgs else try self.eval_complex_tuple(true);
+    }
+
+    if (try self.peek_eq_tok(.@"xpct_<<<")) {
+        self.tok_cursor += 1;
+        children_idxs[1] = try self.eval_subinterfaces();
+    }
+
+    switch (self.peek_tok() orelse return error.EOF) {
+        .@"pct_{" => {
+            self.tok_cursor += 1;
+            children_idxs[2] = try self.eval_methods_block(true);
+        },
+        else => return error.InvalidSyntax,
+    }
+
+    const iface_node_idx = self.tree.push_node(.iface_def);
+    self.tree.push_extra_childrefs(iface_node_idx, &children_idxs);
+    return iface_node_idx;
 }
 
 fn eval_enum(self: *@This()) !u32 {
-    _ = self;
-    return if (0 == 0) error.EOF else 0;
+    const enum_node_idx = self.tree.push_node(.enum_def);
+    const ch_identifier_idx = try self.eval_identifier();
+    const ch_def_idx = try self.eval_complex_tuple(false);
+    self.tree.set_node_arg0(enum_node_idx, ch_identifier_idx);
+    self.tree.set_node_arg1(enum_node_idx, ch_def_idx);
+    try self.eat_assert_tok(.@"pct_;");
+    return enum_node_idx;
 }
 
 pub fn build_ast(self: *@This()) !void {
     _ = self.tree.push_node(.none);
 
     while (self.tok_cursor < self.tokens.len()) switch (self.pop_tok() orelse return) {
-        .kw_fun => self.func_store.push(try self.eval_func()),
+        .kw_fun => self.func_store.push(try self.eval_func(false)),
         .kw_type => self.type_store.push(try self.eval_type()),
         .kw_iface => self.type_store.push(try self.eval_iface()),
         .kw_enum => self.type_store.push(try self.eval_enum()),

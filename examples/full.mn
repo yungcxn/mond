@@ -1,110 +1,202 @@
 $import("somelib")
 
-# fixed func signature
+# TODOs tuples?
+
+# globally the following is allowed:
+# - a  function definition
+# - a  type definition
+# - a  trait definition
+# - a  variant definition
+# - global constants
+# - $import
+
+# classical func signature
 fun add_i32 = (i32 a, i32 b) -> i32 {
     ret a + b;
 }
 
+# induced return type
 fun add_i32_alt0 = (i32 a, i32 b) {
     ret a + b;
 }
 
-fun add_i32_alt1 = (i32 a, i32 b): ret a + b;
+# automatic names
+fun add_i32_alt1 = (i32, i32) {
+    ret $0 + $1;
+}
 
-# "void" does not eist, it's always induced
+# non-code-block'd single line function
+fun add_i32_alt2 = (i32 a, i32 b) ret a + b;
+
+# with return type, needs colon
+fun add_i32_alt3 = (i32 a, i32 b) -> i32: ret a + b;
+
+# type is: (u32, u32)->(u32)
+fun add_lambda1  = (u32 a, u32 b) ret a + b;
+
+fun add_lambda5  = (u32 a, u32 b) {
+    side_effect(a,b);
+    ret a + b;
+}
+
+
+
+# "void" does not exist, it's always induced
 fun my_void_func = () {
     print("Hello, world!");
 }
 
 # first set of parentheses is comptime, second set is runtime
-fun mytemplfunc = (type T, bool add_or_sub)(T a, T b) -> T {
-    buildif add_or_sub {
+# stc arguments can be also: type, trait, variant, size-induced-arrays and (...)->(...)  - functions
+stc fun mytemplfunc = (type T, bool add_or_sub) -> (T a, T b) -> T {
+    stcif add_or_sub {
         ret a + b;
-    } buildelse {
+    } stcelse {
         ret a - b;
     }
 }
 
-type Person = (u8[10] name, i32 age = 18, *u8 address);
+# mutable fields in type, default: constant
+type Person = @([10]u8 name, mut i32 age = 18, mut *u8 address);
+# no c-alignment: (packed)
+type Packed = @@(u8 a, u16 b, u32 c); 
 
-type Point = (type A, type B)(A x, B y);
+# abstract type, Point here has no real size.
+stc fun Point = (type A, type B) -> @(A x, B y);
 
-# $IFace(AddablePoint) will provide its interface
-type AddablePoint = (type A, type B)(A x, B y) {
-    add(AddablePoint other) {
+# fully typed out, bad practice
+Person alice = Person(name = "Alice", age = 30, address = "123 Main St");
+# induced type
+bob          = Person(name = "Bob", age = 25, address = "456 Elm St");
+# copy struct with (with) and overriding tuple
+peter        = bob with (name = "peter", age = bob.age + 1); 
+
+# type definition with a belonging trait definition
+stc fun AddablePointTempl = (type A, type B) -> @(A x, B y) @{
+    fun add = (AddablePointTempl other) {
         $.x += other.x;
         $.y += other.y;
     }
 }
 
-iface Addable = (type ElementType) {
-    void add(ElementType other);
+# $Trait(AddablePoint) will provide its trait
+
+trait AddablePoint = @{
+    fun add = (Point other);
 }
 
-type AddablePoint2D = (i32 x, i32 y) <<< Addable(AddablePoint2D) {
-    add(AddablePoint2D other) {
+stc fun Addable = (type T) -> @{
+    fun add = (T other);
+}
+
+type AddablePoint2D = @(i32 x, i32 y) implof Addable(AddablePoint2D) @{
+    fun add = (AddablePoint2D other) {
         $.x += other.x;
         $.y += other.y;
     }
 }
 
-# enums have no "backing int" it's not valued, but expressed 
-enum MyEnum = (A = 0x01, B = 0x02, C = 0x03) {
-    # space for functions
-}
-
-enum Color = (red, green, blue);
-
-type ByteStream = (*u8 buf, prv u32 cursor) {
-
-    fun $init = (*u8 in_buf) -> ByteStream {
-        ret ByteStream(buf = in_buf, cursor = 0);
-    }
-
+type ByteStream = @(*u8 buf, priv u32 cursor) implof Iterable(u8) @{
+    fun $init = (*u8 in_buf) -> ByteStream: ret ByteStream(buf = in_buf, cursor = 0);
     fun $deinit = () {} # could be left out
-
-    fun $next = () {
-        ret $.buf[$.cursor defer $.cursor += 1];
-    }
-
-    fun $has_next = () {
-        ret $.cursor < $.buf.len;
-    }
-
-    pub fun pop = opt_u8 () {
-        if (bs.cursor >= bs.buf.len) {
-            ret none;
-        }
-
-        ret $.buf[$.cursor defer $.cursor += 1];
-    }
+    fun next = () ret $.buf[$.cursor defer $.cursor += 1];
+    fun has_next = () ret $.cursor < $.buf.len;
+    pub fun pop = () -> opt_u8: ret if ($.cursor >= $.buf.len) none else $.buf[$.cursor++];
 }
 
-// type def through alias
-type opt_u8 = $Opt(u8, 0xFF);
-type status_err = $ErrSet(EOF = 0xFE, OOM = 0xFD);
-type my_u8 = $Wrap(status_err, opt_u8);
-
-# type alias
-type Point2D = Point(i32, i32);
-# func alias, not templated
-(u32, u32)->(u32) add = mytemplfunc(u32, true);
-
-my_u8 calc_something(u32 i) { # TODO
-    match (i) {
-        0 => return none,
-        1 => return EOF,
-        2 => return OOM,
-        _ => return 42,
-    }
+# now abstracted:
+stc fun Stream = (type ChildType) -> @(*ChildType buf, priv u32 cursor) implof Iterable(ChildType) @{
+    fun $init = (*ChildType in_buf) -> ByteStream: ret ByteStream(buf = in_buf, cursor = 0);
+    fun $deinit = () {} # could be left out
+    fun next = () ret $.buf[$.cursor defer $.cursor += 1];
+    fun has_next = () ret $.cursor < $.buf.len;
+    pub fun pop = () -> $OptAuto(ChildType): ret if ($.cursor >= $.buf.len) none else $.buf[$.cursor++];
 }
 
-$main() {
-    u8[2] my_str0 = ['h', 'i'];      type: u8[2]
-    u8[2] my_str1 = "hi";  # h i     type: u8[2]
-    u8[]  my_str2 = "hi";  # h i     type: u8[2]
+# type alias from stc fun returning a type
+type Point_i32 = Point(i32, i32);
+# func alias from similar
+fun add = mytemplfunc(u32, true);
+
+# variants do different stuff, one is a use-case like c-enums:
+variant MyEnum = @(A = 0x01 | B = 0x02 | C = 0x03);
+# tagof operator returns the tag type, above is induced through max(for all members)
+# subset operator allows to define a subset of the variant
+variant Color   = @(Red | Green | Blue) tagof u32;
+variant Warm    = Color subset @(Red | Green);
+variant Warm2   = Color subset 0..=1;
+variant Warm3   = Color subset Color.Red..=Color.Green;
+variant Cold    = Color subset @(Blue);
+# union operator || allows to define a union of variants
+variant WarmCold = Warm || Cold;
+
+# variants as tagged unions:
+variant Message = @(                    # or with @@@ to have all members be equally sized, so this becomes a true c-union
+    Quit = 0x0 |
+    Move of Point(u8, u8) = 0x1 |
+    Write of &u8 = 0x2 |
+    Resize of @(u32 w, u32 h) = 0x3 |
+) tagof u8;
+
+# or "tagof none", which would mean all variant members should need a "payload type" as type is not prefixed by a tag
+# could be used to group types just by some name, not through structural data.
+# - to understand, each $Type(...) looks like this:
+#   Message.quit:   @(u8 $tag = 0x0)
+#   Message.move:   @(u8 $tag = 0x1, Point(u8, u8))
+#   Message.write:  @(u8 $tag = 0x2, &u8)
+#   Message.Resize:  @(u8 $tag = 0x3, @(u32 w, u32 h))
+
+# now with trait definition alltogether:
+variant Command = @(
+    Print of @(&u8 text) @{
+        fun print_with_newline = () println($.text);
+    } |
+    Exit of @(u8 code) @{
+        fun exit = () os.exit($.code);
+    } = 0x99 |
+    Sleep of @(u32 ms) @{
+        fun sleep = () os.sleep($.ms);
+    } |
+);
+
+# optionals and errors
+type opt8 = $Opt(u8, 0xFF);
+type err8 = $ErrSet(u8, @(EOF = 0xFE | OOM = 0xFD));
+type erropt8 = $Wrap(err8, opt8);
+
+fun calc_something = (u32 i) -> erropt8: match (i) {
+    0 => ret none,
+    1 => ret erropt8.EOF,
+    2 => ret erropt8.OOM,
+    _ => ret 42,
+}
+
+# function with "subject to" operator to bind predicate to function parameter
+type err_math = $ErrSet(u8, @(DivByZero = 0xFE | Overflow = 0xFD));
+type erropt_i32 = $Wrap(err_math, $Opt(i32, 0xFF));
+
+fun safe_div = (i32 a, i32 b) req(b != 0 else erropt_i32.DivByZero,) -> erropt_i32 {
+    ret a / b;
+}
+
+stc fun make_fixed_buf = (type T, u32 N) stcreq(N > 0) -> (T seed) -> [N]T {
+    [N]T buf = $splat(seed);
+    for i in 0..<N: buf[i] = seed;
+    ret buf;
+}
+
+# fine, N=8 is a comptime literal, check passes at compile time
+buf8 = make_fixed_buf(u8, 8)(0);
+
+# compile error: "stcreq violated: N > 0", caught before codegen, zero runtime cost
+# buf0 = make_fixed_buf(u8, 0)(0);
+
+fun $main = () {
+    [2]u8 my_str0 = ['h', 'i'];      type: [2]u8
+    [2]u8 my_str1 = "hi";  # h i     type: [2]u8
+    []u8  my_str2 = "hi";  # h i     type: [2]u8
     &u8   c_str   = "hi";  # h i \0  type: pointer to constant u8(s)
-    induced_str   = "hi";  # h i     type: u8[2]
+    induced_str   = "hi";  # h i     type: [2]u8
 
     println(c_str);
 
@@ -112,30 +204,29 @@ $main() {
 
     val = calc_something(0);
 
+    # the following gets translated into:
+    #   if (val == EOF or val == OOM) ...
+    # and that again into
+    #   if (val == 0xFE or val == 0xFD) ...
+    if val == error: println("val is either EOF or OOM");
+
+    if val == none: println("val is none");
 
     valopt_or_2 = calc_something(1) !! 2;
     # same as 
-    # valopt_or_2 = if (calc_something(1) !<- x) x else 2;
+    # valopt_or_2 = if calc_something(1) !<- x: x else 2;
 
     valopt = calc_something(1) !!;
     # same as 
-    # valopt = if (calc_something(1) !<- x) x else return calc_something(1);
+    # valopt = if calc_something(1) !<- x: x else ret calc_something(1);
 
     valreal_or_2 = valopt ?? 2;
     # same as 
-    # valopt = if (valopt ?<- x) x else 2;
+    # valopt = if valopt ?<- x: x else 2;
 
     valreal = valopt ??;
     # same as 
-    # valopt = if (valopt ?<- x) x else return valopt;
+    # valopt = if valopt ?<- x: x else ret valopt;
     
     # TODO $as(u8, 5)
-}
-
-# type is: (u32, u32)->(u32)
-fun add_lambda1  = (u32 a, u32 b): ret a + b;
-
-fun add_lambda5  = (u32 a, u32 b) {
-    side_effect(a,b);
-    ret a + b;
 }

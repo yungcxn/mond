@@ -8,252 +8,252 @@ pub const Node = struct {
     args: @Vector(2, u32),
 
     pub const Kind = enum(u8) {
-        none,
+        //     none,
 
-        func_def,
-        type_def, // TODO
-        enum__def, // TODO
-        iface_def, // TODO
+        //     func_def,
+        //     type_def,
+        //     enum_def, // TODO
+        //     iface_def, // TODO
 
-        // special (sub)statements
-        tuple_typed_identifiers, // for function definitions
-        tuple_elem_typed_identifier, // element of above
-        tuple_exprs, // for function calls and match cases
+        //     tuple__type_identifier_optexpr,
+        //     tupleelem__type_identifier,
+        //     tupleelem__type_identifier_expr,
 
-        tuple_assigned_identifiers, // TODO for e.g. type structure init
-        tuple_elem_assigned_identifier, // TODO element of above
+        //     tuple__identifier_optexpr,
+        //     tupleelem__identifier_expr,
+        //     // tupleelem_identifier => just an identifier
 
-        match_case,
+        //     tuple__expr, // for function calls and match cases
 
-        match_block,
-        methods_block,
+        //     match_case,
 
-        // statements
-        stmt_exec_block,
+        //     match_block,
+        //     methods_block,
 
-        stmt_mut_untyped_assign,
-        stmt_mut_typed_assign,
-        stmt_untyped_assign,
-        stmt_typed_assign,
-        stmt_funccall,
+        //     // statements
+        //     stmt_exec_block,
 
-        stmt_ret,
-        stmt_if,
-        stmt_if_else,
-        stmt_match,
-        stmt_for,
-        stmt_for_ext,
-        stmt_while,
-        stmt_while_ext,
-        stmt_loop,
-        stmt_loop_ext,
-        stmt_brk,
-        stmt_cont,
-        stmt_defer,
-        stmt_deinit,
+        //     stmt_mut_untyped_assign,
+        //     stmt_mut_typed_assign,
+        //     stmt_untyped_assign,
+        //     stmt_typed_assign,
+        //     stmt_funccall,
 
-        // expressions that express a type
+        //     stmt_ret,
+        //     stmt_if,
+        //     stmt_if_else,
+        //     stmt_match,
+        //     stmt_for,
+        //     stmt_for_ext,
+        //     stmt_while,
+        //     stmt_while_ext,
+        //     stmt_loop,
+        //     stmt_loop_ext,
+        //     stmt_brk,
+        //     stmt_cont,
+        //     stmt_defer,
+        //     stmt_deinit,
 
-        expr_type_builtin_u8,
-        expr_type_builtin_u16,
-        expr_type_builtin_u32,
-        expr_type_builtin_u64,
-        expr_type_builtin_i8,
-        expr_type_builtin_i16,
-        expr_type_builtin_i32,
-        expr_type_builtin_i64,
-        expr_type_builtin_f8,
-        expr_type_builtin_f16,
-        expr_type_builtin_f32,
-        expr_type_builtin_f64,
-        expr_type_builtin_bool,
-        expr_type_pointer,
-        expr_type_constpointer,
-        expr_type_varref, // TODO ^
-        expr_type_array,
+        //     // expressions that express a type
 
-        // real expressions with (possible) value
-        expr_funccall,
-        expr_paren,
-        expr_indexed,
-        expr_member,
-        expr_dereference,
-        expr_genseq_inc,
-        expr_genseq_exc,
-        expr_genseq_from,
-        expr_aliasarrow,
-        expr_errarrow,
-        expr_optarrow,
-        expr_errunwrap,
-        expr_optunwrap,
-        expr_subinterfaces, // TODO <<<
-        expr_if_else,
-        expr_match,
-        expr_for,
-        expr_for_ext,
-        expr_while,
-        expr_while_ext,
-        expr_loop,
-        expr_loop_ext,
+        //     expr_type_builtin_u8,
+        //     expr_type_builtin_u16,
+        //     expr_type_builtin_u32,
+        //     expr_type_builtin_u64,
+        //     expr_type_builtin_i8,
+        //     expr_type_builtin_i16,
+        //     expr_type_builtin_i32,
+        //     expr_type_builtin_i64,
+        //     expr_type_builtin_f8,
+        //     expr_type_builtin_f16,
+        //     expr_type_builtin_f32,
+        //     expr_type_builtin_f64,
+        //     expr_type_builtin_bool,
+        //     expr_type_pointer,
+        //     expr_type_constpointer,
+        //     expr_type_varref, // TODO ^
+        //     expr_type_array,
 
-        expr_defer,
-        expr_deinit,
-        expr_return,
-        expr_brk,
-        expr_cont,
+        //     // real expressions with (possible) value
+        //     expr_funccall,
+        //     expr_paren,
+        //     expr_indexed,
+        //     expr_member,
+        //     expr_dereference,
+        //     expr_genseq_inc,
+        //     expr_genseq_exc,
+        //     expr_genseq_from,
+        //     expr_aliasarrow,
+        //     expr_errarrow,
+        //     expr_optarrow,
+        //     expr_errunwrap,
+        //     expr_optunwrap,
+        //     expr_subinterfaces, // TODO <<<
+        //     expr_if_else,
+        //     expr_match,
+        //     expr_for,
+        //     expr_for_ext,
+        //     expr_while,
+        //     expr_while_ext,
+        //     expr_loop,
+        //     expr_loop_ext,
 
-        // these accept any valued expression on both sides, unlike those above, that still
-        //   logically be "unary/binary"
+        //     expr_defer,
+        //     expr_deinit,
+        //     expr_return,
+        //     expr_brk,
+        //     expr_cont,
 
-        expr_unary_neg,
-        expr_unary_logical_neg,
+        //     // these accept any valued expression on both sides, unlike those above, that still
+        //     //   logically be "unary/binary"
 
-        expr_binary_logical_or,
-        expr_binary_logical_xor,
-        expr_binary_logical_and,
-        expr_binary_bitwise_or,
-        expr_binary_bitwise_xor,
-        expr_binary_bitwise_and,
-        expr_binary_eq,
-        expr_binary_neq,
-        expr_binary_less,
-        expr_binary_greater,
-        expr_binary_less_eq,
-        expr_binary_greater_eq,
-        expr_binary_add,
-        expr_binary_sub,
-        expr_binary_mul,
-        expr_binary_div,
-        expr_binary_mod,
-        expr_binary_pow,
+        //     expr_unary_neg,
+        //     expr_unary_logical_neg,
 
-        // leave nodes with first arg pointing into respective data_* buf //
+        //     expr_binary_logical_or,
+        //     expr_binary_logical_xor,
+        //     expr_binary_logical_and,
+        //     expr_binary_bitwise_or,
+        //     expr_binary_bitwise_xor,
+        //     expr_binary_bitwise_and,
+        //     expr_binary_eq,
+        //     expr_binary_neq,
+        //     expr_binary_less,
+        //     expr_binary_greater,
+        //     expr_binary_less_eq,
+        //     expr_binary_greater_eq,
+        //     expr_binary_add,
+        //     expr_binary_sub,
+        //     expr_binary_mul,
+        //     expr_binary_div,
+        //     expr_binary_mod,
+        //     expr_binary_pow,
 
-        expr_identifier,
-        expr_string,
-        expr_int,
-        expr_float,
-        expr_char,
-        expr_bool,
+        //     // leave nodes with first arg pointing into respective data_* buf //
+
+        //     expr_identifier,
+        //     expr_string,
+        //     expr_int,
+        //     expr_float,
+        //     expr_char,
+        //     expr_bool,
     };
 
-    pub const assignable_expressions = blk: { // TODO
-        var t: [256]bool = @splat(false);
-        t[@intFromEnum(Node.Kind.expr_identifier)] = true;
-        t[@intFromEnum(Node.Kind.expr_member)] = true;
-        t[@intFromEnum(Node.Kind.expr_dereference)] = true;
-        break :blk t;
-    };
+    // pub const assignable_expressions = blk: { // TODO
+    //     var t: [256]bool = @splat(false);
+    //     t[@intFromEnum(Node.Kind.expr_identifier)] = true;
+    //     t[@intFromEnum(Node.Kind.expr_member)] = true;
+    //     t[@intFromEnum(Node.Kind.expr_dereference)] = true;
+    //     break :blk t;
+    // };
 
-    pub const statementable_expressions = blk: { // TODO
-        var t: [256]bool = @splat(false);
-        t[@intFromEnum(Node.Kind.expr_funccall)] = true;
-        t[@intFromEnum(Node.Kind.expr_defer)] = true;
-        t[@intFromEnum(Node.Kind.expr_errunwrap)] = true;
-        t[@intFromEnum(Node.Kind.expr_optunwrap)] = true;
-        break :blk t;
-    };
+    // pub const statementable_expressions = blk: { // TODO
+    //     var t: [256]bool = @splat(false);
+    //     t[@intFromEnum(Node.Kind.expr_funccall)] = true;
+    //     t[@intFromEnum(Node.Kind.expr_defer)] = true;
+    //     t[@intFromEnum(Node.Kind.expr_errunwrap)] = true;
+    //     t[@intFromEnum(Node.Kind.expr_optunwrap)] = true;
+    //     break :blk t;
+    // };
 
-    pub const extrachilded_nodekinds = blk: { // TODO
-        var t: [256]bool = @splat(false);
-        t[@intFromEnum(Node.Kind.func_def)] = true;
-        t[@intFromEnum(Node.Kind.stmt_exec_block)] = true;
-        t[@intFromEnum(Node.Kind.stmt_if_else)] = true;
-        t[@intFromEnum(Node.Kind.stmt_mut_typed_assign)] = true;
-        t[@intFromEnum(Node.Kind.stmt_typed_assign)] = true;
-        t[@intFromEnum(Node.Kind.tuple_exprs)] = true;
-        t[@intFromEnum(Node.Kind.tuple_typed_identifiers)] = true;
-        t[@intFromEnum(Node.Kind.match_block)] = true;
-        t[@intFromEnum(Node.Kind.stmt_for_ext)] = true;
-        t[@intFromEnum(Node.Kind.stmt_while_ext)] = true;
-        break :blk t;
-    };
+    // pub const extrachilded_nodekinds = blk: { // TODO
+    //     var t: [256]bool = @splat(false);
+    //     t[@intFromEnum(Node.Kind.func_def)] = true;
+    //     t[@intFromEnum(Node.Kind.stmt_exec_block)] = true;
+    //     t[@intFromEnum(Node.Kind.stmt_if_else)] = true;
+    //     t[@intFromEnum(Node.Kind.stmt_mut_typed_assign)] = true;
+    //     t[@intFromEnum(Node.Kind.stmt_typed_assign)] = true;
+    //     t[@intFromEnum(Node.Kind.match_block)] = true;
+    //     t[@intFromEnum(Node.Kind.stmt_for_ext)] = true;
+    //     t[@intFromEnum(Node.Kind.stmt_while_ext)] = true;
+    //     break :blk t;
+    // };
 
-    pub const nonchilded_nodekinds = blk: {
-        var t: [256]bool = @splat(false);
-        t[@intFromEnum(Node.Kind.expr_identifier)] = true;
-        t[@intFromEnum(Node.Kind.expr_string)] = true;
-        t[@intFromEnum(Node.Kind.expr_int)] = true;
-        t[@intFromEnum(Node.Kind.expr_float)] = true;
-        t[@intFromEnum(Node.Kind.expr_char)] = true;
-        t[@intFromEnum(Node.Kind.expr_bool)] = true;
-        break :blk t;
-    };
+    // pub const nonchilded_nodekinds = blk: {
+    //     var t: [256]bool = @splat(false);
+    //     t[@intFromEnum(Node.Kind.expr_identifier)] = true;
+    //     t[@intFromEnum(Node.Kind.expr_string)] = true;
+    //     t[@intFromEnum(Node.Kind.expr_int)] = true;
+    //     t[@intFromEnum(Node.Kind.expr_float)] = true;
+    //     t[@intFromEnum(Node.Kind.expr_char)] = true;
+    //     t[@intFromEnum(Node.Kind.expr_bool)] = true;
+    //     break :blk t;
+    // };
 
-    pub const tok_to_typeexpr_start = blk: { // TODO
-        var t: [256]bool = @splat(false);
-        t[@intFromEnum(Lexer.Token.Kind.kw_u8)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_u16)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_u32)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_u64)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_i8)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_i16)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_i32)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_i64)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_f8)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_f16)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_f32)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_f64)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_bool)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = true;
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = true;
-        t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = true;
-        break :blk t;
-    };
+    // pub const tok_to_typeexpr_start = blk: { // TODO
+    //     var t: [256]bool = @splat(false);
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_u8)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_u16)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_u32)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_u64)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_i8)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_i16)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_i32)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_i64)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_f8)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_f16)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_f32)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_f64)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_bool)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = true;
+    //     break :blk t;
+    // };
 
-    pub const tok_to_expr_start = blk: { // TODO
-        var t: [256]bool = undefined;
-        for (0..256) |i| {
-            t[i] = tok_to_typeexpr_start[i] or (tok_to_expr_unary[i] != .none) or (tok_to_expr_data[i] != .none);
-        }
+    // pub const tok_to_expr_start = blk: { // TODO
+    //     var t: [256]bool = undefined;
+    //     for (0..256) |i| {
+    //         t[i] = tok_to_typeexpr_start[i] or (tok_to_expr_unary[i] != .none) or (tok_to_expr_data[i] != .none);
+    //     }
 
-        t[@intFromEnum(Lexer.Token.Kind.@"pct_(")] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_if)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_match)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_for)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_while)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_loop)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_deinit)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_ret)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_brk)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_cont)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_..=")] = true;
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_..<")] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_true)] = true;
-        t[@intFromEnum(Lexer.Token.Kind.kw_false)] = true;
-        break :blk t;
-    };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"pct_(")] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_if)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_match)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_for)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_while)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_loop)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_deinit)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_ret)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_brk)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_cont)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_..=")] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_..<")] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_true)] = true;
+    //     t[@intFromEnum(Lexer.Token.Kind.kw_false)] = true;
+    //     break :blk t;
+    // };
 
-    pub const tok_to_expr_unary = blk: {
-        var t: [256]Node.Kind = @splat(.none);
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .expr_unary_neg;
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_!")] = .expr_unary_logical_neg;
-        break :blk t;
-    };
+    // pub const tok_to_expr_unary = blk: {
+    //     var t: [256]Node.Kind = @splat(.none);
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .expr_unary_neg;
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_!")] = .expr_unary_logical_neg;
+    //     break :blk t;
+    // };
 
-    pub const tok_to_tagged_expr_binary = blk: {
-        var t: [256]packed struct { nt: Node.Kind, prec: u8 } = @splat(.{ .nt = .none, .prec = 0 });
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = .{ .nt = .expr_binary_logical_or, .prec = 3 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_^^")] = .{ .nt = .expr_binary_logical_xor, .prec = 3 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_&&")] = .{ .nt = .expr_binary_logical_and, .prec = 4 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_|")] = .{ .nt = .expr_binary_bitwise_or, .prec = 5 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_^")] = .{ .nt = .expr_binary_bitwise_xor, .prec = 6 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = .{ .nt = .expr_binary_bitwise_and, .prec = 7 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_==")] = .{ .nt = .expr_binary_eq, .prec = 8 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_!=")] = .{ .nt = .expr_binary_neq, .prec = 8 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_<")] = .{ .nt = .expr_binary_less, .prec = 9 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_>")] = .{ .nt = .expr_binary_greater, .prec = 9 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_<=")] = .{ .nt = .expr_binary_less_eq, .prec = 9 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_>=")] = .{ .nt = .expr_binary_greater_eq, .prec = 9 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_+")] = .{ .nt = .expr_binary_add, .prec = 10 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .{ .nt = .expr_binary_sub, .prec = 10 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = .{ .nt = .expr_binary_mul, .prec = 11 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .nt = .expr_binary_div, .prec = 11 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .nt = .expr_binary_mod, .prec = 11 };
-        t[@intFromEnum(Lexer.Token.Kind.@"xpct_**")] = .{ .nt = .expr_binary_pow, .prec = 12 };
+    // pub const tok_to_tagged_expr_binary = blk: {
+    //     var t: [256]packed struct { nt: Node.Kind, prec: u8 } = @splat(.{ .nt = .none, .prec = 0 });
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = .{ .nt = .expr_binary_logical_or, .prec = 3 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_^^")] = .{ .nt = .expr_binary_logical_xor, .prec = 3 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&&")] = .{ .nt = .expr_binary_logical_and, .prec = 4 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_|")] = .{ .nt = .expr_binary_bitwise_or, .prec = 5 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_^")] = .{ .nt = .expr_binary_bitwise_xor, .prec = 6 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = .{ .nt = .expr_binary_bitwise_and, .prec = 7 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_==")] = .{ .nt = .expr_binary_eq, .prec = 8 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_!=")] = .{ .nt = .expr_binary_neq, .prec = 8 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_<")] = .{ .nt = .expr_binary_less, .prec = 9 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_>")] = .{ .nt = .expr_binary_greater, .prec = 9 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_<=")] = .{ .nt = .expr_binary_less_eq, .prec = 9 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_>=")] = .{ .nt = .expr_binary_greater_eq, .prec = 9 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_+")] = .{ .nt = .expr_binary_add, .prec = 10 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .{ .nt = .expr_binary_sub, .prec = 10 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = .{ .nt = .expr_binary_mul, .prec = 11 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .nt = .expr_binary_div, .prec = 11 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .nt = .expr_binary_mod, .prec = 11 };
+    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_**")] = .{ .nt = .expr_binary_pow, .prec = 12 };
 
-        break :blk t;
-    };
+    //     break :blk t;
+    // };
 
     pub const tok_to_expr_data = blk: {
         var t: [256]Node.Kind = @splat(.none);
