@@ -39,8 +39,6 @@ fun add_lambda5  = (u32 a, u32 b) {
     ret a + b;
 }
 
-
-
 # "void" does not exist, it's always induced
 fun my_void_func = () {
     print("Hello, world!");
@@ -48,7 +46,7 @@ fun my_void_func = () {
 
 # first set of parentheses is comptime, second set is runtime
 # stc arguments can be also: type, trait, variant, size-induced-arrays and (...)->(...)  - functions
-stc fun mytemplfunc = (type T, bool add_or_sub) -> (T a, T b) -> T {
+stcfun mytemplfunc = (type T, bool add_or_sub) -> (T a, T b) -> T {
     stcif add_or_sub {
         ret a + b;
     } stcelse {
@@ -62,7 +60,7 @@ type Person = @([10]u8 name, mut i32 age = 18, mut *u8 address);
 type Packed = @@(u8 a, u16 b, u32 c); 
 
 # abstract type, Point here has no real size.
-stc fun Point = (type A, type B) -> @(A x, B y);
+stcfun Point = (type A, type B) -> @(A x, B y);
 
 # fully typed out, bad practice
 Person alice = Person(name = "Alice", age = 30, address = "123 Main St");
@@ -72,7 +70,7 @@ bob          = Person(name = "Bob", age = 25, address = "456 Elm St");
 peter        = bob with (name = "peter", age = bob.age + 1); 
 
 # type definition with a belonging trait definition
-stc fun AddablePointTempl = (type A, type B) -> @(A x, B y) @{
+stcfun AddablePointTempl = (type A, type B) -> @(A x, B y) @{
     fun add = (AddablePointTempl other) {
         $.x += other.x;
         $.y += other.y;
@@ -85,7 +83,7 @@ trait AddablePoint = @{
     fun add = (Point other);
 }
 
-stc fun Addable = (type T) -> @{
+stcfun Addable = (type T) -> @{
     fun add = (T other);
 }
 
@@ -105,7 +103,7 @@ type ByteStream = @(*u8 buf, priv u32 cursor) implof Iterable(u8) @{
 }
 
 # now abstracted:
-stc fun Stream = (type ChildType) -> @(*ChildType buf, priv u32 cursor) implof Iterable(ChildType) @{
+stcfun Stream = (type ChildType) -> @(*ChildType buf, priv u32 cursor) implof Iterable(ChildType) @{
     fun $init = (*ChildType in_buf) -> ByteStream: ret ByteStream(buf = in_buf, cursor = 0);
     fun $deinit = () {} # could be left out
     fun next = () ret $.buf[$.cursor defer $.cursor += 1];
@@ -144,7 +142,7 @@ variant Message = @(                    # or with @@@ to have all members be equ
 #   Message.quit:   @(u8 $tag = 0x0)
 #   Message.move:   @(u8 $tag = 0x1, Point(u8, u8))
 #   Message.write:  @(u8 $tag = 0x2, &u8)
-#   Message.Resize:  @(u8 $tag = 0x3, @(u32 w, u32 h))
+#   Message.Resize: @(u8 $tag = 0x3, u32 w, u32 h)
 
 # now with trait definition alltogether:
 variant Command = @(
@@ -175,11 +173,11 @@ fun calc_something = (u32 i) -> erropt8: match (i) {
 type err_math = $ErrSet(u8, @(DivByZero = 0xFE | Overflow = 0xFD));
 type erropt_i32 = $Wrap(err_math, $Opt(i32, 0xFF));
 
-fun safe_div = (i32 a, i32 b) req(b != 0 else erropt_i32.DivByZero,) -> erropt_i32 {
+fun safe_div = (i32 a, i32 b where b != 0 else ret erropt_i32.DivByZero) -> erropt_i32 {
     ret a / b;
 }
 
-stc fun make_fixed_buf = (type T, u32 N) stcreq(N > 0) -> (T seed) -> [N]T {
+stcfun make_fixed_buf = (type T, u32 N where N > 0) -> (T seed) -> [N]T {
     [N]T buf = $splat(seed);
     for i in 0..<N: buf[i] = seed;
     ret buf;
@@ -188,7 +186,7 @@ stc fun make_fixed_buf = (type T, u32 N) stcreq(N > 0) -> (T seed) -> [N]T {
 # fine, N=8 is a comptime literal, check passes at compile time
 buf8 = make_fixed_buf(u8, 8)(0);
 
-# compile error: "stcreq violated: N > 0", caught before codegen, zero runtime cost
+# compile error: "static where violated: N > 0", caught before codegen, zero runtime cost
 # buf0 = make_fixed_buf(u8, 0)(0);
 
 fun $main = () {
@@ -228,5 +226,5 @@ fun $main = () {
     # same as 
     # valopt = if valopt ?<- x: x else ret valopt;
     
-    # TODO $as(u8, 5)
+    # TODO (100 as u32) operator
 }
