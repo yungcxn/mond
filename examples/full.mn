@@ -118,7 +118,7 @@ fun add = mytemplfunc(u32, true);
 
 # variants do different stuff, one is a use-case like c-enums:
 variant MyEnum = @(A = 0x01 | B = 0x02 | C = 0x03);
-# tagof operator returns the tag type, above is induced through max(for all members)
+# tagof operator sets the tag type, above is induced through max(for all members)
 # subset operator allows to define a subset of the variant
 variant Color   = @(Red | Green | Blue) tagof u32;
 variant Warm    = Color subset @(Red | Green);
@@ -127,6 +127,8 @@ variant Warm3   = Color subset Color.Red..=Color.Green;
 variant Cold    = Color subset @(Blue);
 # union operator || allows to define a union of variants
 variant WarmCold = Warm || Cold;
+# union operator also allows to use real types:
+variant WarmCold2 = Warm || Cold || u32;
 
 # variants as tagged unions:
 variant Message = @(                    # or with @@@ to have all members be equally sized, so this becomes a true c-union
@@ -142,7 +144,7 @@ variant Message = @(                    # or with @@@ to have all members be equ
 #   Message.quit:   @(u8 $tag = 0x0)
 #   Message.move:   @(u8 $tag = 0x1, Point(u8, u8))
 #   Message.write:  @(u8 $tag = 0x2, &u8)
-#   Message.Resize: @(u8 $tag = 0x3, u32 w, u32 h)
+#   Message.Resize: @(u8 $tag = 0x3, @(u32 w, u32 h))
 
 # now with trait definition alltogether:
 variant Command = @(
@@ -156,6 +158,42 @@ variant Command = @(
         fun sleep = () os.sleep($.ms);
     } |
 );
+
+# heterogenic variants:
+#   1) simple enum values:                           @(A | B | C)
+#   2) explicitly tagged enum values:                @(A = 0x01 | B = 0x02 | C = 0x03)
+#   3) enum values with payloads (types):            @(A of T1 | B of T2 | C of T3)
+#   4) explicitly tagged enum values with payloads:  @(A of T1 = 0x01 | B of T2 = 0x02 | C of T3 = 0)
+
+# homogenic variants: with @@@@, all members are equally sized, so this becomes a true c-union
+
+# (heterogenic/homogenic) none-tagged variants:   @(...) tagof none
+
+# union operator: 
+#  - homogenic and homogenic -> homogenic
+#  - heterogenic and heterogenic -> heterogenic
+#  - heterogenic and homogenic -> heterogenic
+#  - tagged and tagged -> tagged (tags must be disjunct or they will be overridden)
+#  - tagged and none-tagged -> behaves like none-tagged, but tags in tagged one still exist
+
+# ambiguously sized types (not usable as fields or variables, only as function parameters or return types):
+# - stcfun returning a type, a trait or a variant
+# - traits
+# - none-tagged variants
+# - heterogenic variants
+# - unsized arrays
+# - fun type
+# - type type
+
+# hard & soft templating
+#   - hard through stcfun params
+#   - soft in fun params when using:
+#     - stcfun returning a type, a trait or a variant
+#     - traits
+#     - none-tagged variants
+#     - heterogenic variants
+#     - unsized arrays
+
 
 # optionals and errors
 type opt8 = $Opt(u8, 0xFF);
