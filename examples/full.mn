@@ -26,13 +26,13 @@ fun add_i32_alt1 = (i32, i32) {
 }
 
 # non-code-block'd single line function
-fun add_i32_alt2 = (i32 a, i32 b) ret a + b;
+fun add_i32_alt2 = (i32 a, i32 b): ret a + b;
 
 # with return type, needs colon
 fun add_i32_alt3 = (i32 a, i32 b) -> i32: ret a + b;
 
 # type is: (u32, u32)->(u32)
-fun add_lambda1  = (u32 a, u32 b) ret a + b;
+fun add_lambda1  = (u32 a, u32 b): ret a + b;
 
 fun add_lambda5  = (u32 a, u32 b) {
     side_effect(a,b);
@@ -140,7 +140,7 @@ variant Message = @(                    # or with @@@ to have all members be equ
 
 # or "tagof none", which would mean all variant members should need a "payload type" as type is not prefixed by a tag
 # could be used to group types just by some name, not through structural data.
-# - to understand, each $Type(...) looks like this:
+# - to understand, each type looks like this:
 #   Message.quit:   @(u8 $tag = 0x0)
 #   Message.move:   @(u8 $tag = 0x1, Point(u8, u8))
 #   Message.write:  @(u8 $tag = 0x2, &u8)
@@ -182,18 +182,128 @@ variant Command = @(
 # - none-tagged variants
 # - heterogenic variants
 # - unsized arrays
+# - functions
 # - fun type
 # - type type
 
 # hard & soft templating
 #   - hard through stcfun params
-#   - soft in fun params when using:
+#   - soft in fun params (not return types! as they do not need constraints) when using:
 #     - stcfun returning a type, a trait or a variant
 #     - traits
-#     - none-tagged variants
 #     - heterogenic variants
 #     - unsized arrays
 
+# 1) simple enum values: @(A | B | C)
+variant Direction = @(North | South | East | West);
+fun describe_dir = (Direction d) -> &u8 {
+    ret match (d) {
+        Direction.North => "up",
+        Direction.South => "down",
+        Direction.East  => "right",
+        Direction.West  => "left",
+    };
+}
+# no soft-templating, returnable and storable as no payloads are used
+
+
+# 2) explicitly tagged enum values: @(A = 0x01 | B = 0x02 | C = 0x03)
+variant HttpStatus = @(Ok = 200 | NotFound = 404 | ServerError = 500) tagof u32;
+fun describe_status = (HttpStatus s) -> &u8 {
+    ret match (s) {
+        HttpStatus.Ok          => "OK",
+        HttpStatus.NotFound    => "Not Found",
+        HttpStatus.ServerError => "Server Error",
+    };
+}
+# same as above
+
+# 3) enum values with payloads: @(A of T1 | B of T2 | C of T3)
+variant Shape = @(
+    Circle of f32             |
+    Square of f32             |
+    Rect   of @(f32 w, f32 h) |
+);
+fun area = (Shape s) -> f32 {
+    # matches tags, could also use stcmatch(typeof s), would be better
+    ret match (s) {
+        Shape.Circle <- r    => 3.14159 * r * r,
+        Shape.Square <- side => side * side,
+        Shape.Rect   <- dims => dims.w * dims.h,
+    };
+}
+# unknown sized Shape -> soft-templated, not returnable and not storable
+
+
+# 4) explicitly tagged enum values with payloads:
+#    @(A of T1 = 0x01 | B of T2 = 0x02 | C of T3 = 0)
+variant Event = @(
+    Click of @(i32 x, i32 y) = 0x01 |
+    Key   of u8              = 0x02 |
+    Close                    = 0x03 |
+) tagof u8;
+fun handle_event = (Event e) {
+    # read same above
+    match (e) {
+        Event.Click <- pos  => println("click"),
+        Event.Key   <- code => println("key"),
+        Event.Close         => println("close"),
+    }
+}
+# same as above
+
+# 5) homogenic, tagged: @@@ forces all members to the same storage
+#    size (true c-union layout), still has a runtime tag
+variant Register = @@@(
+    AsInt   of i32 = 0x01 |
+    AsFloat of f32 = 0x02 |
+    AsBytes of [4]u8 = 0x03 |
+) tagof u8;
+fun reinterpret = (Register r) -> i32 {
+    # matches by tag, stcmatch(typeof r) could also be plain Register, which would then need to fallback to match by tag
+    ret match (r) {
+        Register.AsInt   <- i => i,
+        Register.AsFloat <- f => f as i32,
+        Register.AsBytes <- b => b as i32,
+    };
+}
+# no soft-templating, returnable and storable
+
+# 6) heterogenic, none-tagged: @(...) tagof none
+variant AnyPrintable = @(
+    AsInt  of i32 |
+    AsText of &u8 |
+    AsFlag of bool |
+) tagof none;
+fun print_any = (AnyPrintable v) {
+    # match by tag is not possible as there's no tag
+    stcmatch (typeof v) {
+        AnyPrintable.AsInt  <- i => println(i),
+        AnyPrintable.AsText <- t => println(t),
+        AnyPrintable.AsFlag <- f => println(f),
+    }
+}
+# soft-templated, not returnable and not storable
+
+
+# 7) homogenic, none-tagged: @@@(...) tagof none
+#    same comptime-only resolution as (7), but storage is
+#    uniform-sized across members
+variant AnyFixed32 = @@@(
+    AsInt   of i32 |
+    AsFloat of f32 |
+    AsBits  of [4]u8 |
+) tagof none;
+fun to_bits = (AnyFixed32 v) -> [4]u8 {
+    # match by tag is not possible as there's no tag - resolved per call site at comptime
+    ret stcmatch (typeof v) {
+        AnyFixed32.AsInt   <- i => i as [4]u8,
+        AnyFixed32.AsFloat <- f => f as [4]u8,
+        AnyFixed32.AsBits  <- b => b,
+        _                       => 0, # possible as this is storable and mustn't be fixed to a subtype
+    };
+}
+# soft-templated, returnable and storable (but not matchable by tag)
 
 # optionals and errors
 type opt8 = $Opt(u8, 0xFF);
@@ -216,8 +326,7 @@ fun safe_div = (i32 a, i32 b where b != 0 else ret erropt_i32.DivByZero) -> erro
 }
 
 stcfun make_fixed_buf = (type T, u32 N where N > 0) -> (T seed) -> [N]T {
-    [N]T buf = $splat(seed);
-    for i in 0..<N: buf[i] = seed;
+    [N]T buf = for i in 0..<N: seed;
     ret buf;
 }
 
@@ -235,6 +344,31 @@ fun $main = () {
     induced_str   = "hi";  # h i     type: [2]u8
 
     println(c_str);
+
+    # ----- expressed control flow -----
+    a = if (2 > 1) 42 else 0;
+
+    b = match (a) {
+        0 => 0,
+        42 => 1,
+        _ => 2,
+    };
+
+    c = for i: 0..<10: i;
+    # same as:
+    # mut c = 0;
+    # for i in 0..<10: c[i] = i;
+
+    mut [100]u32 d = $splat(0);
+    d = loop some_var += 5: some_generator(some_var) !! brk;     # may overflow tho
+    # same as:
+    # ...
+    # mut u32 hidden_i = 0;
+    # loop some_var += 5: d[hidden_i++] = some_generator(some_var) !! brk;
+        
+    mut [100]u32 e = $splat(0);
+    e = while true: some_var += 5: some_generator(some_var) !! brk;     # may overflow tho
+    # same as: see above
 
     # errors, optionals, ...
 
