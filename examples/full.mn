@@ -60,7 +60,9 @@ type Person = @([10]u8 name, mut i32 age = 18, mut *u8 address);
 type Packed = @@(u8 a, u16 b, u32 c); 
 
 # abstract type, Point here has no real size.
-stcfun Point = (type A, type B) -> @(A x, B y);
+stcfun Point = (type A, type B): @(A x, B y);
+# or
+# stcfun Point = (type A, type B) -> type: @(A x, B y);
 
 # fully typed out, bad practice
 Person alice = Person(name = "Alice", age = 30, address = "123 Main St");
@@ -70,7 +72,7 @@ bob          = Person(name = "Bob", age = 25, address = "456 Elm St");
 peter        = bob with (name = "peter", age = bob.age + 1); 
 
 # type definition with a belonging trait definition
-stcfun AddablePointTempl = (type A, type B) -> @(A x, B y) @{
+stcfun AddablePointTempl = (type A, type B): @(A x, B y) @{
     fun add = (AddablePointTempl other) {
         $.x += other.x;
         $.y += other.y;
@@ -83,7 +85,7 @@ trait AddablePoint = @{
     fun add = (Point other);
 }
 
-stcfun Addable = (type T) -> @{
+stcfun Addable = (type T): @{
     fun add = (T other);
 }
 
@@ -103,7 +105,7 @@ type ByteStream = @(*u8 buf, priv u32 cursor) implof Iterable(u8) @{
 }
 
 # now abstracted:
-stcfun Stream = (type ChildType) -> @(*ChildType buf, priv u32 cursor) implof Iterable(ChildType) @{
+stcfun Stream = (type ChildType): @(*ChildType buf, priv u32 cursor) implof Iterable(ChildType) @{
     fun $init = (*ChildType in_buf) -> ByteStream: ret ByteStream(buf = in_buf, cursor = 0);
     fun $deinit = () {} # could be left out
     fun next = () ret $.buf[$.cursor defer $.cursor += 1];
@@ -346,7 +348,7 @@ fun $main = () {
     println(c_str);
 
     # ----- expressed control flow -----
-    a = if (2 > 1) 42 else 0;
+    a = if 2 > 1: 42 else 0;
 
     b = match (a) {
         0 => 0,

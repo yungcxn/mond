@@ -1,0 +1,124 @@
+(* This is just for an overview and not to be used by parser generators, as I desipse them *)
+
+(* TOKENS AND HELPERS *)
+
+helper_digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+helper_alph = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" 
+            | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" 
+            | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" 
+            | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z";
+
+value_int = helper_digit, { helper_digit } ;
+value_float = { helper_digit }, ".",  helper_digit, { helper_digit } ;
+value_string = '"', { ? any character without unescaped '"' ? },  '"' ;
+value_character = "'",   [ "\\" ], ? any character ?,  "'" ;
+
+identifier = ( helper_alph|"_" , {helper_alph|helper_digit|"_"} ) - ? reserved keywords ?;
+
+
+(* START *)
+file = {"$import", "(", expression, ")", ";" }
+     | {statement_assign};
+
+statement_assign = ["pub"], ["inl"], ["mut"], [expression], identifier, { ",", identifier }, [","], ["=", expression], ";";
+
+(* externally defined as this is the only intersection between expr and stmt *)
+funccall = expression, "(", [ expression, { ",", expression }, [","] ], ")";
+
+expression = value_int | value_float | value_string | value_character | identifier
+           | funccall
+           | "(" , expression, ")"
+           | "[" , [ expression, { ",", expression }, [","], ] , "]"
+           | expression, "[", expression, "]"
+           | expression, ".."
+           | [expression], ("..<" | "..="), expression
+           | pre_unary_compute_operator, expression
+           | expression, binary_compute_operator, expression
+           | expression, post_unary_compute_operator
+           | expression, "oftype", expression
+           | expression, "as", expression    (* type cast *)
+           | expression, "<-", (identifier | identifier, { ",", identifier }, [","])
+           | expression, "?<-", (identifier | identifier, { ",", identifier }, [","])
+           | expression, "!<-", (identifier | identifier, { ",", identifier }, [","])
+           | "typeof", expression
+           | "sizeof", expression
+           | "none"
+           | "error"
+           (* control flow as expressions *)
+           | expression, "defer", expression
+           | "deinit", expression
+           | "cont"
+           | "brk"
+           | "ret", [expression]
+           | expression, "defer", "deinit"
+           | expression, "!!", [expression]
+           | expression, "??", [expression]
+           (* TODO if und so *)
+           | "if", expression, ":", expression, [ "else", expression ]
+           | "while", expression, [",", expression], ":", expression
+           | "for", expression, ["in", expression], ":", expression
+           | "loop", [expression], ":", expression
+           | "match", expression, "{", expression_match_body, "}"
+           (* what is always a type *)
+           | "*", expression
+           | "&", expression
+           | "[", (expression), "]", expression
+           | "u8" | "u16" | "u32" | "u64" | "u128"
+           | "i8" | "i16" | "i32" | "i64" | "i128"
+           | "f16" | "f32" | "f64" 
+           | "bool"
+           | "type" | "trait" | "variant" | "fun" | "stcfun" 
+           | "(", [ expression, { ",", expression }, [","] ], ")", "->", "(", (expression), ")"    (* function type *)
+           (* definitions *)
+           | type_definition
+           | trait_definition
+           | variant_definition
+           | function_definition
+           ;
+
+function_definition = function_definition_header, ( substatement | type_definition | trait_definition | variant_definition );
+function_definition_header = "(", [ function_parameter_definition, { ",", function_parameter_definition }, [","], ] , ")", [ "->", expression ];
+function_parameter_definition = ["mut"], ((expression, identifier) | expression), [ "=", expression ], [ "where", expression, ["else", expression] ];
+
+type_definition = type_definition_body, ["sizeof", expression], [trait_definition];
+type_definition_body = ("@@@(" | "@@(" | "@("), ((type_parameter_definition, ",") | (type_parameter_definition, { ",", type_parameter_definition }, [","],)), ")";
+type_parameter_definition = ["prv"], ["mut"], ((expression, identifier) | expression), [ "=", expression ], [ "where", expression, ["else", expression] ];
+
+trait_definition = ["implof", expression, { ",", expression }, [","]],  "@{", { statement_assign }, "}";
+
+variant_definition = variant_definition_body, ["tagof", expression], ["sizeof", expression];
+variant_definition_body = ("@@@(" | "@@(" | "@("), ((variant_parameter_definition, "|") | (variant_parameter_definition, { "|", variant_parameter_definition }, ["|"])), ")"
+                        | expression, "||", expression, {"||", expression} 
+                        ;
+variant_parameter_definition = identifier, ["of", expression], [ "=", expression ];
+statement = statement_assign
+          | statement_block
+          | "if", expression, substatement, [ "else", substatement ]
+          | "while", expression, [",", expression], substatement
+          | "loop", [expression], substatement
+          | "for", expression, ["in", expression], ")", substatement
+          | "match", expression, "{", statement_match_body, "}"
+          | "cont", ";"
+          | "brk", ";"
+          | "ret", [ expression ], ";"
+          | "defer", statement
+          | "deinit", expression, ";"
+          | funccall, ";"
+          | funccall, "!!", [statement], ";"
+          | funccall, "??", [statement], ";"
+          | funccall, "defer", [statement], ";"
+          ;
+
+statement_block = "{", { statement }, "}";
+
+substatement = ":", statement
+             | statement_block;
+
+pre_unary_compute_operator = "-" | "!" | "++" | "--";
+post_unary_compute_operator = "++" | "--";
+binary_compute_operator = "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "and" | "or" | "xor" | "<<" | ">>" | "<<<" | ">>>";
+
+statement_match_body = statement_match_case, { statement_match_case };
+expression_match_body = expression_match_case, { expression_match_case };
+statement_match_case = expression, { ",", expression }, [","], "=>", statement;
+expression_match_case = expression, { ",", expression }, [","], "=>", expression;
