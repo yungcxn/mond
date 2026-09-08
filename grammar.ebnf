@@ -20,7 +20,7 @@ identifier = ( helper_alph|"_" , {helper_alph|helper_digit|"_"} ) - ? reserved k
 file = {"$import", "(", expression, ")", ";" }
      | {statement_assign};
 
-statement_assign = ["pub"], ["inl"], ["mut"], [expression], identifier, { ",", identifier }, [","], ["=", expression], ";";
+statement_assign = ["pub"], ["inl"], ["mut" | "stcval"], [expression], identifier, { ",", identifier }, [","], ["=", expression], ";";
 
 (* externally defined as this is the only intersection between expr and stmt *)
 funccall = expression, "(", [ expression, { ",", expression }, [","] ], ")";
@@ -55,9 +55,9 @@ expression = value_int | value_float | value_string | value_character | identifi
            | expression, "??", [expression]
            (* TODO if und so *)
            | "if", expression, ":", expression, [ "else", expression ]
-           | "while", expression, [",", expression], ":", expression
+           | "while", expression, [",", statement], ":", expression
            | "for", expression, ["in", expression], ":", expression
-           | "loop", [expression], ":", expression
+           | "loop", expression, [":", expression]
            | "match", expression, "{", expression_match_body, "}"
            (* what is always a type *)
            | "*", expression
@@ -67,7 +67,7 @@ expression = value_int | value_float | value_string | value_character | identifi
            | "i8" | "i16" | "i32" | "i64" | "i128"
            | "f16" | "f32" | "f64" 
            | "bool"
-           | "type" | "trait" | "variant" | "fun" | "stcfun" 
+           | "type" | "trait" | "variant" | "fun" | "stcfun" | "stcval"
            | "(", [ expression, { ",", expression }, [","] ], ")", "->", "(", (expression), ")"    (* function type *)
            (* definitions *)
            | type_definition
@@ -78,7 +78,7 @@ expression = value_int | value_float | value_string | value_character | identifi
 
 function_definition = function_definition_header, ( substatement | type_definition | trait_definition | variant_definition );
 function_definition_header = "(", [ function_parameter_definition, { ",", function_parameter_definition }, [","], ] , ")", [ "->", expression ];
-function_parameter_definition = ["mut"], ((expression, identifier) | expression), [ "=", expression ], [ "where", expression, ["else", expression] ];
+function_parameter_definition = ((expression, identifier) | expression), [ "=", expression ], [ "where", expression, ["else", expression] ];
 
 type_definition = type_definition_body, ["sizeof", expression], [trait_definition];
 type_definition_body = ("@@@(" | "@@(" | "@("), ((type_parameter_definition, ",") | (type_parameter_definition, { ",", type_parameter_definition }, [","],)), ")";
@@ -94,7 +94,7 @@ variant_parameter_definition = identifier, ["of", expression], [ "=", expression
 statement = statement_assign
           | statement_block
           | "if", expression, substatement, [ "else", substatement ]
-          | "while", expression, [",", expression], substatement
+          | "while", expression, [",", statement], substatement
           | "loop", [expression], substatement
           | "for", expression, ["in", expression], ")", substatement
           | "match", expression, "{", statement_match_body, "}"

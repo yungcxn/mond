@@ -13,8 +13,19 @@ pub const Token = struct {
         none,
 
         // keywords, must be of form kw_...
+        kw_as,
+        kw_oftype,
+        kw_none,
+        kw_implof,
+        kw_err,
         kw_ret,
+        kw_typeof,
+        kw_sizeof,
+        kw_where,
+        kw_pub,
+        kw_inlfun,
         kw_fun,
+        kw_stcfun,
         kw_in,
         kw_u8,
         kw_u16,
@@ -24,7 +35,6 @@ pub const Token = struct {
         kw_i16,
         kw_i32,
         kw_i64,
-        kw_f8,
         kw_f16,
         kw_f32,
         kw_f64,
@@ -42,8 +52,8 @@ pub const Token = struct {
         kw_cont,
         kw_defer,
         kw_type,
-        kw_enum,
-        kw_iface,
+        kw_variant,
+        kw_trait,
         kw_deinit,
 
         // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
@@ -87,6 +97,8 @@ pub const Token = struct {
         @"xpct_<=",
         @"xpct_>=",
         @"xpct_<-", // for unwrap/<<<-cast
+        @"xpct_@(",
+        @"xpct_@{",
 
         @"xpct_->", // for func ret type
         @"xpct_=>", // for `expr_match`
@@ -101,6 +113,9 @@ pub const Token = struct {
         @"xpct_..=", // for `expr_genseq`
         @"xpct_!<-", // for err unwrap
         @"xpct_?<-", // for opt unwrap
+        @"xpct_@@(",
+
+        @"xpct_@@@(",
 
         // everything below this needs a textspan //
 
@@ -139,6 +154,7 @@ pub const Token = struct {
             xpcts(1),
             xpcts(2),
             xpcts(3),
+            xpcts(4),
         };
 
         const kw_tbl: []const struct { []const u8, Token.Kind } = keywords();
@@ -306,7 +322,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 var longest_valid_punct: ?Token.Kind = null;
                 var longest_punctc: u32 = 0;
 
-                inline for (1..4) |i| {
+                inline for (1..5) |i| {
                     if (self.cursor >= self.src_bytes.len) break;
 
                     if (Token.Kind.xpct_from_str(self.src_bytes[cursor0..self.cursor])) |found_punct| {

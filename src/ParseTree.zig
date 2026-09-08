@@ -8,260 +8,111 @@ pub const Node = struct {
     args: @Vector(2, u32),
 
     pub const Kind = enum(u8) {
-        //     none,
+        none,
 
-        //     func_def,
-        //     type_def,
-        //     enum_def, // TODO
-        //     iface_def, // TODO
+        stmt_assign_fun,
+        stmt_assign_fun_pub,
 
-        //     tuple__type_identifier_optexpr,
-        //     tupleelem__type_identifier,
-        //     tupleelem__type_identifier_expr,
+        expr_fun_def,
 
-        //     tuple__identifier_optexpr,
-        //     tupleelem__identifier_expr,
-        //     // tupleelem_identifier => just an identifier
+        subexpr_fun_def_header,
+        subexpr_fun_def_param_tuple,
+        subexpr_fun_def_param,
 
-        //     tuple__expr, // for function calls and match cases
+        expr_capture,
 
-        //     match_case,
+        expr_array,
+        expr_array_empty,
 
-        //     match_block,
-        //     methods_block,
+        expr_typeof,
+        expr_sizeof,
 
-        //     // statements
-        //     stmt_exec_block,
+        expr_type_array,
 
-        //     stmt_mut_untyped_assign,
-        //     stmt_mut_typed_assign,
-        //     stmt_untyped_assign,
-        //     stmt_typed_assign,
-        //     stmt_funccall,
+        expr_neg_num,
+        expr_neg_logic,
 
-        //     stmt_ret,
-        //     stmt_if,
-        //     stmt_if_else,
-        //     stmt_match,
-        //     stmt_for,
-        //     stmt_for_ext,
-        //     stmt_while,
-        //     stmt_while_ext,
-        //     stmt_loop,
-        //     stmt_loop_ext,
-        //     stmt_brk,
-        //     stmt_cont,
-        //     stmt_defer,
-        //     stmt_deinit,
+        expr_inc_prefix,
+        expr_dec_prefix,
 
-        //     // expressions that express a type
+        expr_gen_upperbound_incl,
+        expr_gen_upperbound_excl,
 
-        //     expr_type_builtin_u8,
-        //     expr_type_builtin_u16,
-        //     expr_type_builtin_u32,
-        //     expr_type_builtin_u64,
-        //     expr_type_builtin_i8,
-        //     expr_type_builtin_i16,
-        //     expr_type_builtin_i32,
-        //     expr_type_builtin_i64,
-        //     expr_type_builtin_f8,
-        //     expr_type_builtin_f16,
-        //     expr_type_builtin_f32,
-        //     expr_type_builtin_f64,
-        //     expr_type_builtin_bool,
-        //     expr_type_pointer,
-        //     expr_type_constpointer,
-        //     expr_type_varref, // TODO ^
-        //     expr_type_array,
+        expr_none,
+        expr_err,
+        expr_deinit,
+        expr_cont,
+        expr_brk,
+        expr_ret,
 
-        //     // real expressions with (possible) value
-        //     expr_funccall,
-        //     expr_paren,
-        //     expr_indexed,
-        //     expr_member,
-        //     expr_dereference,
-        //     expr_genseq_inc,
-        //     expr_genseq_exc,
-        //     expr_genseq_from,
-        //     expr_aliasarrow,
-        //     expr_errarrow,
-        //     expr_optarrow,
-        //     expr_errunwrap,
-        //     expr_optunwrap,
-        //     expr_subinterfaces, // TODO <<<
-        //     expr_if_else,
-        //     expr_match,
-        //     expr_for,
-        //     expr_for_ext,
-        //     expr_while,
-        //     expr_while_ext,
-        //     expr_loop,
-        //     expr_loop_ext,
+        expr_if, // lhs: expr (condition), rhs: expr (body)
+        expr_if_else, // lhs: expr_if, rhs: expr (body)
+        expr_while, // lhs: expr (condition), rhs: expr (body)
+        expr_while_with_repeat_stmt, // lhs: expr_while, rhs: stmt (repeat statement)
+        expr_for, // lhs: expr (seq), rhs: expr (body)
+        expr_for_in, // lhs: expr_for, rhs: expr (iterator var)
+        expr_loop, // lhs: expr (optional repeat statement), rhs: expr (body)
+        expr_match, // lhs: expr (match value), rhs: subexpr_match_body (match body)
 
-        //     expr_defer,
-        //     expr_deinit,
-        //     expr_return,
-        //     expr_brk,
-        //     expr_cont,
+        subexpr_match_body,
+        subexpr_match_case,
 
-        //     // these accept any valued expression on both sides, unlike those above, that still
-        //     //   logically be "unary/binary"
+        expr_ampersand,
 
-        //     expr_unary_neg,
-        //     expr_unary_logical_neg,
+        expr_typeptr,
+        expr_typeu8,
+        expr_typeu16,
+        expr_typeu32,
+        expr_typeu64,
+        expr_typei8,
+        expr_typei16,
+        expr_typei32,
+        expr_typei64,
+        expr_typef16,
+        expr_typef32,
+        expr_typef64,
+        expr_typebool,
+        expr_typetype,
+        expr_typetrait,
+        expr_typevariant,
+        expr_typeinlfun,
+        expr_typefun,
+        expr_typestcfun,
 
-        //     expr_binary_logical_or,
-        //     expr_binary_logical_xor,
-        //     expr_binary_logical_and,
-        //     expr_binary_bitwise_or,
-        //     expr_binary_bitwise_xor,
-        //     expr_binary_bitwise_and,
-        //     expr_binary_eq,
-        //     expr_binary_neq,
-        //     expr_binary_less,
-        //     expr_binary_greater,
-        //     expr_binary_less_eq,
-        //     expr_binary_greater_eq,
-        //     expr_binary_add,
-        //     expr_binary_sub,
-        //     expr_binary_mul,
-        //     expr_binary_div,
-        //     expr_binary_mod,
-        //     expr_binary_pow,
+        expr_type,
+        expr_variant,
+        expr_fun,
 
-        //     // leave nodes with first arg pointing into respective data_* buf //
+        expr_fun_call, // lhs: expr (function), rhs: subexpr_fun_call_param_tuple (params)
+        subexpr_fun_call_param_tuple, // array of expr
 
-        //     expr_identifier,
-        //     expr_string,
-        //     expr_int,
-        //     expr_float,
-        //     expr_char,
-        //     expr_bool,
+        expr_array_index, // lhs: expr (array), rhs: expr (index)
+        expr_member, // lhs: expr (struct), rhs: expr (member)
+        expr_dereference, // lhs: expr (pointer)
+        expr_inc_postfix, // lhs: expr (variable)
+        expr_dec_postfix, // lhs: expr (variable)
+
+        expr_gen_lowerbound,
+        expr_gen_incl,
+        expr_gen_excl,
+
+        expr_oftype, // lhs: expr (value), rhs: expr (type)
+        expr_as, // lhs: expr (value), rhs: expr (type)
+        expr_labelarrow,
+
+        subexpr_destructure, // expr_identifier[] (used by arrows and assignment)
+
+        expr_identifier,
+        expr_string,
+        expr_int,
+        expr_float,
+        expr_char,
+        expr_bool,
     };
 
-    // pub const assignable_expressions = blk: { // TODO
-    //     var t: [256]bool = @splat(false);
-    //     t[@intFromEnum(Node.Kind.expr_identifier)] = true;
-    //     t[@intFromEnum(Node.Kind.expr_member)] = true;
-    //     t[@intFromEnum(Node.Kind.expr_dereference)] = true;
-    //     break :blk t;
-    // };
-
-    // pub const statementable_expressions = blk: { // TODO
-    //     var t: [256]bool = @splat(false);
-    //     t[@intFromEnum(Node.Kind.expr_funccall)] = true;
-    //     t[@intFromEnum(Node.Kind.expr_defer)] = true;
-    //     t[@intFromEnum(Node.Kind.expr_errunwrap)] = true;
-    //     t[@intFromEnum(Node.Kind.expr_optunwrap)] = true;
-    //     break :blk t;
-    // };
-
-    // pub const extrachilded_nodekinds = blk: { // TODO
-    //     var t: [256]bool = @splat(false);
-    //     t[@intFromEnum(Node.Kind.func_def)] = true;
-    //     t[@intFromEnum(Node.Kind.stmt_exec_block)] = true;
-    //     t[@intFromEnum(Node.Kind.stmt_if_else)] = true;
-    //     t[@intFromEnum(Node.Kind.stmt_mut_typed_assign)] = true;
-    //     t[@intFromEnum(Node.Kind.stmt_typed_assign)] = true;
-    //     t[@intFromEnum(Node.Kind.match_block)] = true;
-    //     t[@intFromEnum(Node.Kind.stmt_for_ext)] = true;
-    //     t[@intFromEnum(Node.Kind.stmt_while_ext)] = true;
-    //     break :blk t;
-    // };
-
-    // pub const nonchilded_nodekinds = blk: {
-    //     var t: [256]bool = @splat(false);
-    //     t[@intFromEnum(Node.Kind.expr_identifier)] = true;
-    //     t[@intFromEnum(Node.Kind.expr_string)] = true;
-    //     t[@intFromEnum(Node.Kind.expr_int)] = true;
-    //     t[@intFromEnum(Node.Kind.expr_float)] = true;
-    //     t[@intFromEnum(Node.Kind.expr_char)] = true;
-    //     t[@intFromEnum(Node.Kind.expr_bool)] = true;
-    //     break :blk t;
-    // };
-
-    // pub const tok_to_typeexpr_start = blk: { // TODO
-    //     var t: [256]bool = @splat(false);
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_u8)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_u16)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_u32)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_u64)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_i8)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_i16)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_i32)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_i64)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_f8)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_f16)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_f32)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_f64)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_bool)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = true;
-    //     break :blk t;
-    // };
-
-    // pub const tok_to_expr_start = blk: { // TODO
-    //     var t: [256]bool = undefined;
-    //     for (0..256) |i| {
-    //         t[i] = tok_to_typeexpr_start[i] or (tok_to_expr_unary[i] != .none) or (tok_to_expr_data[i] != .none);
-    //     }
-
-    //     t[@intFromEnum(Lexer.Token.Kind.@"pct_(")] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_if)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_match)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_for)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_while)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_loop)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_deinit)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_ret)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_brk)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_cont)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_..=")] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_..<")] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_true)] = true;
-    //     t[@intFromEnum(Lexer.Token.Kind.kw_false)] = true;
-    //     break :blk t;
-    // };
-
-    // pub const tok_to_expr_unary = blk: {
-    //     var t: [256]Node.Kind = @splat(.none);
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .expr_unary_neg;
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_!")] = .expr_unary_logical_neg;
-    //     break :blk t;
-    // };
-
-    // pub const tok_to_tagged_expr_binary = blk: {
-    //     var t: [256]packed struct { nt: Node.Kind, prec: u8 } = @splat(.{ .nt = .none, .prec = 0 });
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = .{ .nt = .expr_binary_logical_or, .prec = 3 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_^^")] = .{ .nt = .expr_binary_logical_xor, .prec = 3 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&&")] = .{ .nt = .expr_binary_logical_and, .prec = 4 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_|")] = .{ .nt = .expr_binary_bitwise_or, .prec = 5 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_^")] = .{ .nt = .expr_binary_bitwise_xor, .prec = 6 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = .{ .nt = .expr_binary_bitwise_and, .prec = 7 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_==")] = .{ .nt = .expr_binary_eq, .prec = 8 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_!=")] = .{ .nt = .expr_binary_neq, .prec = 8 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_<")] = .{ .nt = .expr_binary_less, .prec = 9 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_>")] = .{ .nt = .expr_binary_greater, .prec = 9 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_<=")] = .{ .nt = .expr_binary_less_eq, .prec = 9 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_>=")] = .{ .nt = .expr_binary_greater_eq, .prec = 9 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_+")] = .{ .nt = .expr_binary_add, .prec = 10 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .{ .nt = .expr_binary_sub, .prec = 10 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = .{ .nt = .expr_binary_mul, .prec = 11 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .nt = .expr_binary_div, .prec = 11 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .nt = .expr_binary_mod, .prec = 11 };
-    //     t[@intFromEnum(Lexer.Token.Kind.@"xpct_**")] = .{ .nt = .expr_binary_pow, .prec = 12 };
-
-    //     break :blk t;
-    // };
-
-    pub const tok_to_expr_data = blk: {
-        var t: [256]Node.Kind = @splat(.none);
-        t[@intFromEnum(Lexer.Token.Kind.identifier)] = .expr_identifier;
-        t[@intFromEnum(Lexer.Token.Kind.val_string)] = .expr_string;
-        t[@intFromEnum(Lexer.Token.Kind.val_int)] = .expr_int;
-        t[@intFromEnum(Lexer.Token.Kind.val_float)] = .expr_float;
-        t[@intFromEnum(Lexer.Token.Kind.val_char)] = .expr_char;
+    const nk_childc = blk: {
+        var t: [256]enum(u8) { none, oneortwo, many } = @splat(.oneortwo);
+        t[@intFromEnum(Node.Kind.none)] = .none;
         break :blk t;
     };
 };
@@ -297,15 +148,23 @@ pub inline fn set_node_arg1(self: *@This(), target_node: u32, val: u32) void {
 pub inline fn push_extra_childrefs(
     self: *@This(),
     parent_idx: u32,
-    childrefs: []const u32,
+    childrefs: anytype,
 ) void {
     const args_ptr = self.ast_nodes.field_ptr(.args, parent_idx) orelse unreachable;
-    if (args_ptr.*[1] == 0) {
-        args_ptr.*[0] = self.extra_childrefs.head;
-    }
+    args_ptr.*[0] = self.extra_childrefs.head;
 
-    self.extra_childrefs.append(childrefs);
-    args_ptr.*[1] += @intCast(childrefs.len);
+    const child_t = @typeInfo(@TypeOf(childrefs)).pointer.child;
+    const child_ti = @typeInfo(child_t);
+    if (child_ti == .@"struct") {
+        const n = child_ti.@"struct".fields.len;
+        comptime if (@sizeOf(child_t) != n * @sizeOf(u32)) @compileError("unexpected size for " ++ @typeName(child_t));
+        const arr_ptr: *const [n]u32 = @ptrCast(childrefs);
+        self.extra_childrefs.append(arr_ptr);
+        args_ptr.*[1] += @intCast(n);
+    } else {
+        self.extra_childrefs.append(childrefs);
+        args_ptr.*[1] += @intCast(childrefs.len);
+    }
 }
 
 // -> `u32`: idx where node was pushed into
@@ -360,7 +219,7 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
         return;
     };
 
-    const is_leaf = Node.nonchilded_nodekinds[@intFromEnum(node.nk)];
+    const is_leaf = Node.nk_childc[@intFromEnum(node.nk)] == .none;
 
     if (!is_first) {
         wr(io, if (is_leaf) COL_LEAF else COL_KIND);
@@ -387,7 +246,7 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
     const ext = if (is_first) "" else if (is_last) "    " else "\xe2\x94\x82   "; // "│   "
     const new_prefix = std.fmt.bufPrint(&prefix_buf, "{s}{s}", .{ prefix, ext }) catch prefix;
 
-    if (Node.extrachilded_nodekinds[@intFromEnum(node.nk)]) {
+    if (Node.nk_childc[@intFromEnum(node.nk)] == .many) {
         const start = node.args[0];
         const count = node.args[1];
 
