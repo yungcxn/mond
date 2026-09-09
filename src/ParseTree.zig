@@ -98,9 +98,38 @@ pub const Node = struct {
 
         expr_oftype, // lhs: expr (value), rhs: expr (type)
         expr_as, // lhs: expr (value), rhs: expr (type)
-        expr_labelarrow,
+        expr_labelarrow, // lhs: expr (what-to-label), rhs: expr OR subexpr_destructure (label)
+        expr_optarrow, // see above
+        expr_errarrow, // see above
 
         subexpr_destructure, // expr_identifier[] (used by arrows and assignment)
+
+        expr_errhandle,
+        expr_opthandle,
+
+        expr_defer,
+        expr_defer_with_deinit,
+
+        expr_binary_logic_or,
+        expr_binary_logic_xor,
+        expr_binary_logic_and,
+        expr_binary_num_or,
+        expr_binary_num_xor,
+        expr_binary_num_and,
+        expr_binary_eq,
+        expr_binary_neq,
+        expr_binary_less,
+        expr_binary_greater,
+        expr_binary_less_eq,
+        expr_binary_greater_eq,
+        expr_binary_add,
+        expr_binary_sub,
+        expr_binary_mul,
+        expr_binary_div,
+        expr_binary_mod,
+        expr_binary_shift_left,
+        expr_binary_shift_right,
+        expr_binary_pow,
 
         expr_identifier,
         expr_string,

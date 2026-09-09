@@ -142,7 +142,7 @@ pub fn eval_subexpr_match_case(p: *Parser) anyerror!u32 {
 
 pub fn eval_subexpr_fun_call_param_tuple(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.subexpr_fun_call_param_tuple);
-    try p.eat_assert_tok(.@"xpct_(");
+    try p.eat_assert_tok(.@"pct_(");
 
     if (!try p.peek_eq_tok(.@"pct_)")) {
         var params: FixedStack(64) = .{};
@@ -163,4 +163,35 @@ pub fn eval_subexpr_fun_call_param_tuple(p: *Parser) anyerror!u32 {
         p.tok_cursor += 1;
         return parent;
     }
+}
+
+// assumes in expression "<identifier_expr>, <identifier_expr>, ..." first <identifier_expr> is consumed
+pub fn ee_eval_subexpr_destructure(p: *Parser, early_identifier0: u32) anyerror!u32 {
+    const parent = p.tree.push_node(.subexpr_destructure);
+
+    // , identifier , identifier [,]
+    var identifiers: FixedStack(64) = .{};
+    try identifiers.push(early_identifier0);
+    outer: while (true) {
+        switch (try p.pop_tok()) {
+            .@"pct_," => {
+                switch (try p.pop_tok()) {
+                    .identifier => {
+                        const id = try expr_rules.eval_expr_identifier(p);
+                        try identifiers.push(id);
+                    },
+                    else => {
+                        p.tok_cursor -= 1;
+                        break :outer;
+                    },
+                }
+            },
+            else => {
+                p.tok_cursor -= 1;
+                break :outer;
+            },
+        }
+    }
+    p.tree.push_extra_childrefs(parent, identifiers.view());
+    return parent;
 }

@@ -107,7 +107,7 @@ pub const post_expression = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_<-")] = &expr_rules.eval_expr_labelarrow;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_?<-")] = &expr_rules.eval_expr_optarrow;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_!<-")] = &expr_rules.eval_expr_errarrow;
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_!!")] = &expr_rules.eval_expr_errorhandle;
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_!!")] = &expr_rules.eval_expr_errhandle;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_??")] = &expr_rules.eval_expr_opthandle;
 
     t[@intFromEnum(Lexer.Token.Kind.kw_defer)] = &expr_rules.eval_expr_defer;
@@ -115,33 +115,36 @@ pub const post_expression = blk: {
 };
 
 pub const binary_compute_expression = blk: {
-    var t: [256]?struct { e: ParseTree.Node.Kind, prec: u8 } = @splat(null);
-    t[@intFromEnum(Lexer.Token.Kind.kw_or)] = .{ .e = .expr_binary_logical_or, .prec = 3 };
-    t[@intFromEnum(Lexer.Token.Kind.kw_xor)] = .{ .e = .expr_binary_logical_xor, .prec = 3 };
+    var t: [256]?struct { f: *const fn (parser: *Parser, lhs: u32) anyerror!u32, prec: u8 } = @splat(null);
+    t[@intFromEnum(Lexer.Token.Kind.kw_or)] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_logic_or), .prec = 3 };
+    t[@intFromEnum(Lexer.Token.Kind.kw_xor)] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_logic_xor), .prec = 3 };
 
-    t[@intFromEnum(Lexer.Token.Kind.kw_and)] = .{ .e = .expr_binary_logical_and, .prec = 4 };
+    t[@intFromEnum(Lexer.Token.Kind.kw_and)] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_logic_and), .prec = 4 };
 
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_|")] = .{ .f = &expr_rules.eval_expr_binary_bitwise_or, .prec = 5 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_|")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_num_or), .prec = 5 };
 
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_^")] = .{ .f = &expr_rules.eval_expr_binary_bitwise_xor, .prec = 6 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_^")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_num_xor), .prec = 6 };
 
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = .{ .f = &expr_rules.eval_expr_binary_bitwise_and, .prec = 7 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_num_and), .prec = 7 };
 
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_==")] = .{ .f = &expr_rules.eval_expr_binary_eq, .prec = 8 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_!=")] = .{ .f = &expr_rules.eval_expr_binary_neq, .prec = 8 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_==")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_eq), .prec = 8 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_!=")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_neq), .prec = 8 };
 
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<")] = .{ .f = &expr_rules.eval_expr_binary_less, .prec = 9 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>")] = .{ .f = &expr_rules.eval_expr_binary_greater, .prec = 9 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<=")] = .{ .f = &expr_rules.eval_expr_binary_less_eq, .prec = 9 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>=")] = .{ .f = &expr_rules.eval_expr_binary_greater_eq, .prec = 9 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_less), .prec = 9 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_greater), .prec = 9 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<=")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_less_eq), .prec = 9 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>=")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_greater_eq), .prec = 9 };
 
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_+")] = .{ .f = &expr_rules.eval_expr_binary_add, .prec = 10 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .{ .f = &expr_rules.eval_expr_binary_sub, .prec = 10 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_+")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_add), .prec = 10 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_sub), .prec = 10 };
 
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = .{ .f = &expr_rules.eval_expr_binary_mul, .prec = 11 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .f = &expr_rules.eval_expr_binary_div, .prec = 11 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .f = &expr_rules.eval_expr_binary_mod, .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_mul), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_div), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_mod), .prec = 11 };
 
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_**")] = .{ .f = &expr_rules.eval_expr_binary_pow, .prec = 12 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<<")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_shift_left), .prec = 12 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>>")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_shift_right), .prec = 12 };
+
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_**")] = .{ .f = &expr_rules.templ_binary_expr(.expr_binary_pow), .prec = 13 };
     break :blk t;
 };

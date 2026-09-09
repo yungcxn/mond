@@ -13,6 +13,9 @@ pub const Token = struct {
         none,
 
         // keywords, must be of form kw_...
+        kw_and,
+        kw_xor,
+        kw_or,
         kw_as,
         kw_oftype,
         kw_none,
@@ -83,19 +86,15 @@ pub const Token = struct {
         @"xpct_>",
 
         @"xpct_==",
-        @"xpct_+=",
-        @"xpct_-=",
-        @"xpct_*=",
-        @"xpct_/=",
         @"xpct_++",
         @"xpct_--",
         @"xpct_**",
         @"xpct_||",
-        @"xpct_^^",
-        @"xpct_&&",
         @"xpct_!=",
         @"xpct_<=",
         @"xpct_>=",
+        @"xpct_>>",
+        @"xpct_<<",
         @"xpct_<-", // for unwrap/<<<-cast
         @"xpct_@(",
         @"xpct_@{",
@@ -107,8 +106,6 @@ pub const Token = struct {
         @"xpct_!!", // for err unwrap expression
         @"xpct_..",
 
-        @"xpct_&&=",
-        @"xpct_<<<", // for subinterfacing
         @"xpct_..<", // for `expr_genseq`
         @"xpct_..=", // for `expr_genseq`
         @"xpct_!<-", // for err unwrap

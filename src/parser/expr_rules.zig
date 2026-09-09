@@ -1,5 +1,6 @@
 const Parser = @import("../Parser.zig");
 const Lexer = @import("../Lexer.zig");
+const ParseTree = @import("../ParseTree.zig");
 const FixedStack = @import("../ds/fixedstack.zig").FixedStack;
 const lookahead = @import("lookahead.zig");
 const stmt_rules = @import("stmt_rules.zig");
@@ -10,14 +11,24 @@ pub const FunctionDefinition = struct {
     substatement: u32,
 };
 
-pub fn eval_expr(p: *Parser, prec: u8) anyerror!u32 {
-    const parent = try lookahead.pre_expression[@intFromEnum(try p.pop_tok())].?(p);
-    return try known_eval_expr(p, prec, parent);
+// *** rule templates *** //
+
+pub fn templ_binary_expr(kind: ParseTree.Node.Kind) fn (parser: *Parser, lhs: u32) anyerror!u32 {
+    return struct {
+        pub fn eval(p: *Parser, lhs: u32) anyerror!u32 {
+            const parent = p.tree.push_node(kind);
+            p.tree.set_node_arg0(parent, lhs);
+            const rhs = try eval_expr(p, 0);
+            p.tree.set_node_arg1(parent, rhs);
+            return parent;
+        }
+    }.eval;
 }
 
-// lookahead was already evaluated and passed as `parent_in`
-inline fn known_eval_expr(p: *Parser, prec: u8, parent_in: u32) anyerror!u32 {
-    var parent = parent_in;
+// *** rule generators end *** //
+
+pub fn eval_expr(p: *Parser, prec: u8) anyerror!u32 {
+    var parent = try lookahead.pre_expression[@intFromEnum(try p.pop_tok())].?(p);
     while (lookahead.post_expression[@intFromEnum(try p.pop_tok())]) |post_expr_f| {
         const lhs = parent;
         parent = try post_expr_f(p, lhs);
@@ -512,11 +523,12 @@ pub fn eval_expr_as(p: *Parser, lhs: u32) anyerror!u32 {
 
 pub fn eval_expr_labelarrow(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.expr_labelarrow);
-    var rhs = try safeeval_expr_identifier(p);
+    try p.eat_assert_tok(.identifier);
+    var rhs = try eval_expr_identifier(p);
 
     if (try p.peek_eq_tok(.@"pct_,")) {
-        p.tok_cursor += 1;
-        rhs = subexpr_rules.ee_eval_subexpr_destructure(p, rhs); // TODO NEXT
+        // cursor should be right at first comma
+        rhs = try subexpr_rules.ee_eval_subexpr_destructure(p, rhs);
     }
 
     p.tree.set_node_arg0(parent, lhs);
@@ -524,27 +536,100 @@ pub fn eval_expr_labelarrow(p: *Parser, lhs: u32) anyerror!u32 {
     return parent;
 }
 
-pub fn safeeval_expr_identifier(p: *Parser) anyerror!u32 {
-    if (!try p.pop_tok(.identifier)) return error.IdentifierExpected;
-    return p.tree.push_data_node(.expr_identifier, p.tok_cursor - 1);
+pub fn eval_expr_optarrow(p: *Parser, lhs: u32) anyerror!u32 {
+    const parent = p.tree.push_node(.expr_optarrow);
+    try p.eat_assert_tok(.identifier);
+    var rhs = try eval_expr_identifier(p);
+
+    if (try p.peek_eq_tok(.@"pct_,")) {
+        // cursor should be right at first comma
+        rhs = try subexpr_rules.ee_eval_subexpr_destructure(p, rhs);
+    }
+
+    p.tree.set_node_arg0(parent, lhs);
+    p.tree.set_node_arg1(parent, rhs);
+    return parent;
+}
+
+pub fn eval_expr_errarrow(p: *Parser, lhs: u32) anyerror!u32 {
+    const parent = p.tree.push_node(.expr_errarrow);
+    try p.eat_assert_tok(.identifier);
+    var rhs = try eval_expr_identifier(p);
+
+    if (try p.peek_eq_tok(.@"pct_,")) {
+        // cursor should be right at first comma
+        rhs = try subexpr_rules.ee_eval_subexpr_destructure(p, rhs);
+    }
+
+    p.tree.set_node_arg0(parent, lhs);
+    p.tree.set_node_arg1(parent, rhs);
+    return parent;
+}
+
+pub fn eval_expr_errhandle(p: *Parser, lhs: u32) anyerror!u32 {
+    const parent = p.tree.push_node(.expr_errhandle);
+    p.tree.set_node_arg0(parent, lhs);
+
+    if (lookahead.pre_expression[@intFromEnum(try p.pop_tok())]) |expr_f| {
+        const child_expr = try expr_f(p);
+        p.tree.set_node_arg1(parent, child_expr);
+    } else {
+        p.tok_cursor -= 1;
+        p.tree.set_node_arg0(parent, 0xFFFFFFFF);
+    }
+
+    return parent;
+}
+
+pub fn eval_expr_opthandle(p: *Parser, lhs: u32) anyerror!u32 {
+    const parent = p.tree.push_node(.expr_opthandle);
+    p.tree.set_node_arg0(parent, lhs);
+
+    if (lookahead.pre_expression[@intFromEnum(try p.pop_tok())]) |expr_f| {
+        const child_expr = try expr_f(p);
+        p.tree.set_node_arg1(parent, child_expr);
+    } else {
+        p.tok_cursor -= 1;
+        p.tree.set_node_arg0(parent, 0xFFFFFFFF);
+    }
+
+    return parent;
+}
+
+pub fn eval_expr_defer(p: *Parser, lhs: u32) anyerror!u32 {
+    if (try p.peek_eq_tok(.kw_deinit)) {
+        p.tok_cursor += 1;
+        if (lookahead.pre_expression[@intFromEnum(try p.pop_tok())] == null) {
+            const parent = p.tree.push_node(.expr_defer_with_deinit);
+            p.tree.set_node_arg0(parent, lhs);
+            return parent;
+        } else {
+            p.tok_cursor -= 2;
+        }
+    }
+    const parent = p.tree.push_node(.expr_defer);
+    p.tree.set_node_arg0(parent, lhs);
+    const rhs = try eval_expr(p, 0);
+    p.tree.set_node_arg1(parent, rhs);
+    return parent;
 }
 
 pub fn eval_expr_identifier(p: *Parser) anyerror!u32 {
-    return p.tree.push_data_node(.expr_identifier, p.tok_cursor);
+    return p.tree.push_data_node(.expr_identifier, p.tok_cursor - 1);
 }
 
 pub fn eval_expr_int(p: *Parser) anyerror!u32 {
-    return p.tree.push_data_node(.expr_identifier, p.tok_cursor);
+    return p.tree.push_data_node(.expr_identifier, p.tok_cursor - 1);
 }
 
 pub fn eval_expr_float(p: *Parser) anyerror!u32 {
-    return p.tree.push_data_node(.expr_float, p.tok_cursor);
+    return p.tree.push_data_node(.expr_float, p.tok_cursor - 1);
 }
 
 pub fn eval_expr_string(p: *Parser) anyerror!u32 {
-    return p.tree.push_data_node(.expr_string, p.tok_cursor);
+    return p.tree.push_data_node(.expr_string, p.tok_cursor - 1);
 }
 
 pub fn eval_expr_char(p: *Parser) anyerror!u32 {
-    return p.tree.push_data_node(.expr_char, p.tok_cursor);
+    return p.tree.push_data_node(.expr_char, p.tok_cursor - 1);
 }
