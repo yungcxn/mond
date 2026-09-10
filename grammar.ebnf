@@ -82,7 +82,7 @@ function_parameter_definition = ((expression, identifier) | expression), [ "=", 
 
 type_definition = type_definition_body, ["sizeof", expression], [trait_definition];
 type_definition_body = ("@@@(" | "@@(" | "@("), ((type_parameter_definition, ",") | (type_parameter_definition, { ",", type_parameter_definition }, [","],)), ")";
-type_parameter_definition = ["prv"], ["mut"], ((expression, identifier) | expression), [ "=", expression ], [ "where", expression, ["else", expression] ];
+type_parameter_definition = ["mut"], ((expression, identifier) | expression), [ "=", expression ], [ "where", expression, ["else", expression] ];
 
 trait_definition = ["implof", expression, { ",", expression }, [","]],  "@{", { statement_assign }, "}";
 

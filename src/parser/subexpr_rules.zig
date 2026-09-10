@@ -18,6 +18,20 @@ pub const FunctionDefinitionParameter = struct {
     where_else_value: u32,
 };
 
+pub const TypeParameter = struct {
+    param_type: u32,
+    name: u32,
+    default_value: u32,
+    where_predicate: u32,
+    where_else_value: u32,
+};
+
+pub const VariantParameter = struct {
+    name: u32,
+    of_type: u32,
+    tag_value: u32,
+};
+
 pub fn ee_eval_subexpr_fun_def_header(p: *Parser, early_expr0_in_tuple: u32) anyerror!u32 {
     const parent = p.tree.push_node(.subexpr_fun_def_header);
     var def: FunctionHeader = undefined;
@@ -193,5 +207,83 @@ pub fn ee_eval_subexpr_destructure(p: *Parser, early_identifier0: u32) anyerror!
         }
     }
     p.tree.push_extra_childrefs(parent, identifiers.view());
+    return parent;
+}
+
+pub fn ee_eval_subexpr_type_param(p: *Parser, early: ?struct { is_mut: bool, expr0: u32 }) anyerror!u32 {
+    const is_mut, const expr0 = if (early) |e| .{ e.is_mut, e.expr0 } else blk: {
+        const m = try p.peek_eq_tok(.kw_mut);
+        if (m) p.tok_cursor += 1;
+        break :blk .{ m, try expr_rules.eval_expr(p, 0) };
+    };
+
+    const parent = p.tree.push_node(if (is_mut) .subexpr_type_param_mut else .subexpr_type_param);
+    var def: TypeParameter = undefined;
+
+    const next_tok = try p.peek_tok();
+    if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where) {
+        def.param_type = expr0;
+        def.name = try expr_rules.eval_expr_identifier(p);
+    } else {
+        def.param_type = expr0;
+        def.name = 0xFFFFFFFF;
+    }
+
+    if (try p.peek_eq_tok(.@"xpct_=")) {
+        p.tok_cursor += 1;
+        def.default_value = try expr_rules.eval_expr(p, 0);
+    } else {
+        def.default_value = 0xFFFFFFFF;
+    }
+
+    if (try p.peek_eq_tok(.kw_where)) {
+        p.tok_cursor += 1;
+        def.where_predicate = try expr_rules.eval_expr(p, 0);
+        if (try p.peek_eq_tok(.kw_else)) {
+            p.tok_cursor += 1;
+            def.where_else_value = try expr_rules.eval_expr(p, 0);
+        } else {
+            def.where_else_value = 0xFFFFFFFF;
+        }
+    } else {
+        def.where_predicate = 0xFFFFFFFF;
+        def.where_else_value = 0xFFFFFFFF;
+    }
+
+    p.tree.push_extra_childrefs(parent, &def);
+
+    return parent;
+}
+
+// variant_parameter_definition = identifier, ["of", expression], [ "=", expression ];
+//
+// `early_identifier0` folds ee_eval_variant_param / ee_eval_variant_param_fresh:
+// pass null for a "fresh" param (identifier not yet consumed), or the
+// already-consumed leading identifier for the first param in a tuple.
+pub fn ee_eval_subexpr_variant_param(p: *Parser, early_identifier0: ?u32) anyerror!u32 {
+    const name = early_identifier0 orelse blk: {
+        try p.eat_assert_tok(.identifier);
+        break :blk try expr_rules.eval_expr_identifier(p);
+    };
+
+    const parent = p.tree.push_node(.subexpr_variant_param);
+    var def: VariantParameter = undefined;
+    def.name = name;
+
+    if (try p.peek_eq_tok(.kw_of)) {
+        p.tok_cursor += 1;
+        def.of_type = try expr_rules.eval_expr(p, 0);
+    } else {
+        def.of_type = 0xFFFFFFFF;
+    }
+
+    if (try p.peek_eq_tok(.@"xpct_=")) {
+        p.tok_cursor += 1;
+        def.tag_value = try expr_rules.eval_expr(p, 0);
+    } else {
+        def.tag_value = 0xFFFFFFFF;
+    }
+
+    p.tree.push_extra_childrefs(parent, &def);
     return parent;
 }

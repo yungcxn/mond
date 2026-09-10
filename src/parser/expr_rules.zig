@@ -11,6 +11,23 @@ pub const FunctionDefinition = struct {
     substatement: u32,
 };
 
+pub const TypeDefinition = struct {
+    parameter_tuple: u32,
+    sizeof_expr: u32,
+    trait_def: u32,
+};
+
+pub const VariantDefinition = struct {
+    parameter_tuple: u32,
+    tagof_expr: u32,
+    sizeof_expr: u32,
+};
+
+pub const TraitDefinition = struct {
+    implof_tuple: u32,
+    body: u32,
+};
+
 // *** rule templates *** //
 
 pub fn templ_binary_expr(kind: ParseTree.Node.Kind) fn (parser: *Parser, lhs: u32) anyerror!u32 {
@@ -423,20 +440,225 @@ pub fn eval_expr_typestcfun(p: *Parser) anyerror!u32 {
     return p.tree.push_node(.expr_typestcfun);
 }
 
-pub fn eval_expr_type_or_variant(p: *Parser) anyerror!u32 { // TODO
-    p.tok_cursor -= 1; // go back to count how much of '@' are in the scanned token
+fn eval_type_def_tail(p: *Parser, kind: ParseTree.Node.Kind, parameter_tuple: u32) anyerror!u32 {
+    var def: TypeDefinition = undefined;
+    def.parameter_tuple = parameter_tuple;
 
-    const parent = p.tree.push_node(.none);
-    const child_expr = try eval_expr(p, 0);
-    p.tree.set_node_arg0(parent, child_expr);
+    if (try p.peek_eq_tok(.kw_sizeof)) {
+        p.tok_cursor += 1;
+        def.sizeof_expr = try eval_expr(p, 0);
+    } else {
+        def.sizeof_expr = 0xFFFFFFFF;
+    }
+
+    if (try p.peek_eq_tok(.kw_implof) or try p.peek_eq_tok(.@"xpct_@{")) {
+        def.trait_def = try eval_expr_trait(p);
+    } else {
+        def.trait_def = 0xFFFFFFFF;
+    }
+
+    const parent = p.tree.push_node(kind);
+    p.tree.push_extra_childrefs(parent, &def);
     return parent;
 }
 
-pub fn eval_expr_trait(p: *Parser) anyerror!u32 { // TODO
+fn eval_variant_def_tail(p: *Parser, kind: ParseTree.Node.Kind, parameter_tuple: u32) anyerror!u32 {
+    var def: VariantDefinition = undefined;
+    def.parameter_tuple = parameter_tuple;
+
+    if (try p.peek_eq_tok(.kw_tagof)) {
+        p.tok_cursor += 1;
+        def.tagof_expr = try eval_expr(p, 0);
+    } else {
+        def.tagof_expr = 0xFFFFFFFF;
+    }
+
+    if (try p.peek_eq_tok(.kw_sizeof)) {
+        p.tok_cursor += 1;
+        def.sizeof_expr = try eval_expr(p, 0);
+    } else {
+        def.sizeof_expr = 0xFFFFFFFF;
+    }
+
+    const parent = p.tree.push_node(kind);
+    p.tree.push_extra_childrefs(parent, &def);
+    return parent;
+}
+
+pub fn eval_expr_type_or_variant(p: *Parser) anyerror!u32 {
+    p.tok_cursor -= 1;
+    const open_tok = try p.pop_tok();
+
+    if (try p.peek_eq_tok(.@"pct_)")) return error.EmptyTypeOrVariantDef;
+
+    const is_mut0 = try p.peek_eq_tok(.kw_mut);
+    if (is_mut0) p.tok_cursor += 1;
+    const early_expr0 = try eval_expr(p, 0);
+
+    var name: u32 = 0xFFFFFFFF;
+    var of_type: u32 = 0xFFFFFFFF;
+    var default_value: u32 = 0xFFFFFFFF;
+    var where_predicate: u32 = 0xFFFFFFFF;
+    var where_else_value: u32 = 0xFFFFFFFF;
+
+    var kind: ?enum { type_def, variant_def } = null;
+
+    if (try p.peek_eq_tok(.kw_of)) {
+        p.tok_cursor += 1;
+        kind = .variant_def;
+        of_type = try eval_expr(p, 0);
+    } else {
+        const t = try p.peek_tok();
+        if (t != .@"pct_," and t != .@"xpct_|" and t != .@"pct_)" and
+            t != .@"xpct_=" and t != .kw_where)
+        {
+            try p.eat_assert_tok(.identifier);
+            name = try eval_expr_identifier(p);
+            kind = .type_def;
+        }
+    }
+
+    if (try p.peek_eq_tok(.@"xpct_=")) {
+        p.tok_cursor += 1;
+        default_value = try eval_expr(p, 0);
+    }
+
+    if (kind != .variant_def) {
+        // "where" only exists on the type side; if we already know we're
+        // building a variant (saw "of"), skip this check entirely.
+        if (try p.peek_eq_tok(.kw_where)) {
+            p.tok_cursor += 1;
+            kind = .type_def;
+            where_predicate = try eval_expr(p, 0);
+            if (try p.peek_eq_tok(.kw_else)) {
+                p.tok_cursor += 1;
+                where_else_value = try eval_expr(p, 0);
+            }
+        }
+    }
+
+    if (kind == null) {
+        // bare `early_expr0` with no tail at all - only the separator can tell us
+        kind = switch (try p.peek_tok()) {
+            .@"pct_," => .type_def,
+            .@"xpct_|" => .variant_def,
+            // grammar requires a trailing "," or "|" even for a single element
+            else => return error.IllegalTypeOrVariantDef,
+        };
+    }
+
+    if (kind.? == .variant_def and is_mut0) return error.IllegalMutOnVariantParam;
+
+    switch (kind.?) {
+        .type_def => {
+            const type_kind: ParseTree.Node.Kind = switch (open_tok) {
+                .@"xpct_@(" => .expr_type_def,
+                .@"xpct_@@(" => .expr_type_def_packed,
+                .@"xpct_@@@(" => return error.IllegalUnionsizedTypeDef,
+                else => unreachable,
+            };
+
+            var params: FixedStack(64) = .{};
+            {
+                const param = p.tree.push_node(if (is_mut0) .subexpr_type_param_mut else .subexpr_type_param);
+                var def: subexpr_rules.TypeParameter = .{
+                    .param_type = early_expr0,
+                    .name = name,
+                    .default_value = default_value,
+                    .where_predicate = where_predicate,
+                    .where_else_value = where_else_value,
+                };
+                p.tree.push_extra_childrefs(param, &def);
+                try params.push(param);
+            }
+            while (try p.peek_eq_tok(.@"pct_,")) {
+                p.tok_cursor += 1;
+                if (try p.peek_eq_tok(.@"pct_)")) break;
+                try params.push(try subexpr_rules.ee_eval_subexpr_type_param(p, null));
+            }
+            try p.eat_assert_tok(.@"pct_)");
+            const param_tuple = p.tree.push_node(.subexpr_type_param_tuple);
+            p.tree.push_extra_childrefs(param_tuple, params.view());
+            return try eval_type_def_tail(p, type_kind, param_tuple);
+        },
+        .variant_def => {
+            const variant_kind: ParseTree.Node.Kind = switch (open_tok) {
+                .@"xpct_@(" => .expr_variant_def,
+                .@"xpct_@@(" => .expr_variant_def_packed,
+                .@"xpct_@@@(" => .expr_variant_def_unionsized,
+                else => unreachable,
+            };
+
+            var params: FixedStack(64) = .{};
+            {
+                const first = p.tree.push_node(.subexpr_variant_param);
+                var def: subexpr_rules.VariantParameter = .{
+                    .name = early_expr0,
+                    .of_type = of_type,
+                    .tag_value = default_value,
+                };
+                p.tree.push_extra_childrefs(first, &def);
+                try params.push(first);
+            }
+            while (try p.peek_eq_tok(.@"xpct_|")) {
+                p.tok_cursor += 1;
+                if (try p.peek_eq_tok(.@"pct_)")) break;
+                try params.push(try subexpr_rules.ee_eval_subexpr_variant_param(p, null));
+            }
+            try p.eat_assert_tok(.@"pct_)");
+            const param_tuple = p.tree.push_node(.subexpr_variant_param_tuple);
+            p.tree.push_extra_childrefs(param_tuple, params.view());
+            return try eval_variant_def_tail(p, variant_kind, param_tuple);
+        },
+    }
+}
+
+pub fn eval_expr_trait(p: *Parser) anyerror!u32 {
     p.tok_cursor -= 1; // to know if 'implof' or '@{' was scanned
-    const parent = p.tree.push_node(.none);
-    const child_expr = try eval_expr(p, 0);
-    p.tree.set_node_arg0(parent, child_expr);
+    var def: TraitDefinition = undefined;
+
+    if (try p.peek_eq_tok(.kw_implof)) {
+        p.tok_cursor += 1;
+        var impls: FixedStack(64) = .{};
+        while (true) {
+            try impls.push(try eval_expr(p, 0));
+            switch (try p.peek_tok()) {
+                .@"xpct_@{" => break,
+                .@"pct_," => {
+                    p.tok_cursor += 1;
+                    if (try p.peek_eq_tok(.@"xpct_@{")) break;
+                },
+                else => return error.IllegalImplofList,
+            }
+        }
+        const implof_tuple = p.tree.push_node(.subexpr_trait_implof_tuple);
+        p.tree.push_extra_childrefs(implof_tuple, impls.view());
+        def.implof_tuple = implof_tuple;
+    } else {
+        def.implof_tuple = 0xFFFFFFFF;
+    }
+
+    try p.eat_assert_tok(.@"xpct_@{");
+    var members: FixedStack(4096) = .{};
+    while (!try p.peek_eq_tok(.@"pct_}")) {
+        try members.push(try stmt_rules.eval_stmt_assign(p));
+    }
+    p.tok_cursor += 1; // consume "}"
+
+    const body = p.tree.push_node(.subexpr_trait_body);
+    p.tree.push_extra_childrefs(body, members.view());
+    def.body = body;
+
+    const parent = p.tree.push_node(.expr_trait_def);
+    p.tree.push_extra_childrefs(parent, &def);
+    return parent;
+}
+
+pub fn eval_expr_unify_variants(p: *Parser, lhs: u32) anyerror!u32 {
+    const parent = p.tree.push_node(.expr_unify_variants);
+    const type_expr = try eval_expr(p, 0);
+    p.tree.set_node_arg0(parent, lhs);
+    p.tree.set_node_arg1(parent, type_expr);
     return parent;
 }
 

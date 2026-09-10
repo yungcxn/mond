@@ -13,6 +13,11 @@ pub fn eval_stmt(p: *Parser) anyerror!u32 {
     return node_idx;
 }
 
+pub fn eval_stmt_assign(p: *Parser) anyerror!u32 {
+    const node_idx = p.tree.push_node(.none);
+    return node_idx;
+}
+
 fn eval_substmt(p: *Parser) anyerror!u32 {
     const node_idx = p.tree.push_node(.none);
     return node_idx;

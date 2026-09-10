@@ -13,6 +13,8 @@ pub const Token = struct {
         none,
 
         // keywords, must be of form kw_...
+        kw_tagof,
+        kw_of,
         kw_and,
         kw_xor,
         kw_or,

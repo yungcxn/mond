@@ -79,9 +79,24 @@ pub const Node = struct {
         expr_typefun,
         expr_typestcfun,
 
-        expr_type,
-        expr_variant,
-        expr_fun,
+        expr_type_def,
+        expr_type_def_packed,
+        expr_variant_def,
+        expr_variant_def_packed,
+        expr_variant_def_unionsized,
+        expr_trait_def,
+
+        subexpr_type_param_tuple,
+        subexpr_type_param,
+        subexpr_type_param_mut,
+
+        subexpr_variant_param_tuple,
+        subexpr_variant_param,
+
+        subexpr_trait_implof_tuple,
+        subexpr_trait_body,
+
+        expr_unify_variants, // lhs: expr (type/variant), rhs: expr (type/variant)
 
         expr_fun_call, // lhs: expr (function), rhs: subexpr_fun_call_param_tuple (params)
         subexpr_fun_call_param_tuple, // array of expr

@@ -89,6 +89,8 @@ pub const pre_expression = blk: {
 
 pub const post_expression = blk: {
     var t: [256]?*const fn (parser: *Parser, lhs: u32) anyerror!u32 = @splat(null);
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = &expr_rules.eval_expr_unify_variants;
+
     t[@intFromEnum(Lexer.Token.Kind.@"pct_(")] = &expr_rules.eval_expr_fun_call;
     t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = &expr_rules.eval_expr_array_index;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_.")] = &expr_rules.eval_expr_member;
