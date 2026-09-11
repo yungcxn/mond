@@ -8,10 +8,57 @@ pub const Node = struct {
     args: @Vector(2, u32),
 
     pub const Kind = enum(u8) {
+
+        // This just builds a rule based on the names of `Kind` but makes sure that this rule
+        //   can be realised. It could be that between two partially matching names could have non-
+        //   matching enum values inbetween. Therefore this is checked at comptime.
+        pub fn seg_table_by_prefix(comptime prefix: []const u8) [2]u32 {
+            return comptime blk: {
+                var scan_start: u32 = 0xFFFFFFFF;
+                var scan_end: u32 = 0xFFFFFFFF;
+                for (@typeInfo(Kind).@"enum".fields, 0..) |f, i| {
+                    if (std.mem.startsWith(u8, f.name, prefix)) {
+                        if (scan_start == null) scan_start = i;
+                        scan_end = i;
+
+                        if (i - scan_start > 1) {
+                            @compileError("stmt_assign kinds must be contiguous in the enum");
+                        } else {}
+                    }
+                }
+                break :blk .{ scan_start, scan_end };
+            };
+        }
+
+        pub fn is_stmt_assign(self: Kind) bool {
+            const scan_region: [2]u32 = seg_table_by_prefix("stmt_assign");
+            return @intFromEnum(self) >= scan_region[0] and @intFromEnum(self) <= scan_region[1];
+        }
+
         none,
 
-        stmt_assign_fun,
-        stmt_assign_fun_pub,
+        // *** statement nodes ***
+
+        stmt_block,
+        stmt_if,
+        stmt_if_else,
+        stmt_while,
+        stmt_while_with_repeat_stmt,
+        stmt_for,
+        stmt_for_in,
+        stmt_loop,
+        stmt_match,
+
+        substmt_match_body,
+        substmt_match_case,
+
+        stmt_cont,
+        stmt_brk,
+        stmt_ret,
+        stmt_defer,
+        stmt_deinit,
+
+        // *** expression nodes ***
 
         expr_fun_def,
 
@@ -154,7 +201,7 @@ pub const Node = struct {
         expr_bool,
     };
 
-    const nk_childc = blk: {
+    const nk_childc = blk: { // TODO
         var t: [256]enum(u8) { none, oneortwo, many } = @splat(.oneortwo);
         t[@intFromEnum(Node.Kind.none)] = .none;
         break :blk t;

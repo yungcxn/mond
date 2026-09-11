@@ -1,0 +1,213 @@
+######################################################## backing store
+
+type NodeId = u32;
+type LitId  = u32;
+type SpanId = u32;
+
+NodeId NIL        = 0xFFFF_FFFF;   # "no child here"
+SpanId SYNTH_SPAN = 0xFFFF_FFFF;   # "made up, no real source location"
+
+# what a node IS. no payloads -> storable, matchable, comparable with ==
+variant NodeKind = @(
+    # leaves (0 children)
+    Lit   |   # data -> LitId
+    Ident |   # data -> symbol id
+    # narrow: fixed, <= 2 children, kept inline in the two slots
+    Unary  |  # 1 child;  data -> UnOp
+    Binary |  # 2 children; data -> BinOp
+    # wide: variadic or > 2 children, kept in the overflow array
+    Call  |   # child0 = callee, rest = args
+    Block |   # children = statements
+    List  |   # children = elements
+    If    |   # children = cond, then, else
+    Match |   # child0 = scrutinee, rest = arms
+) tagof u16;
+
+variant BinOp = @(Add | Sub | Mul | Div) tagof u16;
+variant UnOp  = @(Neg | Not | Deref)      tagof u16;
+
+# THE key rule: the kind alone tells you the layout. no per-node flag needed.
+fun is_wide = (NodeKind k) -> bool {
+    ret !(k == NodeKind.Lit   || k == NodeKind.Ident
+       || k == NodeKind.Unary || k == NodeKind.Binary);
+}
+
+# the packed green node. no span in here on purpose (see note at bottom):
+# identical subtrees must be byte-identical so we can share them.
+type Node = @@(
+    NodeKind kind,
+    u32      x,     # narrow: child0        | wide: overflow start
+    u32      y,     # narrow: child1        | wide: child count
+    u32      data,  # LitId / symbol / BinOp / UnOp, depending on kind
+);
+
+type Slice = @(u32 off, u32 cnt);
+
+# the arena. everything is addressed by index, so subtrees are cheap to share.
+# ($Vec / $Map assumed to be comptime growable buffers — this all runs in the ct-interpreter)
+type Ast = @(
+    mut $Vec(Node)        nodes,      # every node, indexed by NodeId
+    mut $Vec(NodeId)      overflow,   # child lists of wide nodes, packed end-to-end
+    mut $Map(u64, NodeId) interner,   # structural hash -> node, for dedup / sharing
+    mut $Vec(i64)         lits,       # literal values behind Lit nodes
+);
+
+######################################################## the friendly handle
+
+# this is what `expr { ... }` produces and what users pass around.
+# copying it is cheap; nodes it points at never change, so it has value semantics.
+type atree = @(
+    *Ast   store,   # shared, immutable nodes
+    NodeId id,      # which node we point at
+    mut u16 level,  # quasiquote depth, for nested expr{}/$/< >  (see bottom)
+    SpanId span,    # where this came from, or SYNTH_SPAN if generated
+) @{
+
+    fun is_nil = () -> bool: ret $.id == NIL;
+
+    # wrap a child id into a handle
+    fun sub = (NodeId id) -> atree:
+        ret atree(store = $.store, id = id, level = $.level, span = SYNTH_SPAN);
+
+    # ---- n-children navigation: identical for narrow AND wide nodes ----
+
+    fun child_count = () -> u32 {
+        n = $.store.nodes[$.id];
+        if is_wide(n.kind): ret n.y;                         # wide: count is right there
+        ret (if n.x != NIL: 1 else 0)                        # narrow: count filled slots
+          + (if n.y != NIL: 1 else 0);
+    }
+
+    fun child = (u32 i) -> atree {
+        n = $.store.nodes[$.id];
+        mut NodeId id = NIL;
+        if is_wide(n.kind) {
+            if i < n.y: id = $.store.overflow[n.x + i];      # reach into overflow
+        } else {
+            if i == 0: id = n.x;                             # or just read a slot
+            if i == 1: id = n.y;
+        }
+        ret $.sub(id);
+    }
+
+    fun children = ()          -> Children: ret Children(host = $, i = 0);
+    fun slice    = (u32 from)  -> Children: ret Children(host = $, i = from);
+
+    # ---- named accessors: users think in meaning, never in slots ----
+
+    fun kind = () -> NodeKind: ret $.store.nodes[$.id].kind;
+    fun op   = () -> BinOp:    ret $.store.nodes[$.id].data as BinOp;
+
+    fun lhs = () -> atree: ret $.child(0);   # Binary
+    fun rhs = () -> atree: ret $.child(1);
+
+    fun callee = () -> atree:    ret $.child(0);   # Call
+    fun args   = () -> Children: ret $.slice(1);
+
+    fun cond = () -> atree: ret $.child(0);        # If
+    fun then = () -> atree: ret $.child(1);
+    fun els  = () -> atree: ret if $.child_count() > 2: $.child(2) else $.sub(NIL);
+
+    # ---- functional edits: always return a NEW tree, sharing the rest ----
+
+    # walk the whole tree, children first, apply f, rebuild only what changed
+    fun rewrite = (fn(atree)->atree f) -> atree {
+        mut kids    = $Vec(NodeId).new();
+        mut changed = false;
+        for kid in $.children() {
+            nk = kid.rewrite(f);
+            kids.push(nk.id);
+            if nk.id != kid.id: changed = true;
+        }
+        n     = $.store.nodes[$.id];
+        rebNode = if changed
+                  : $.sub(with_children($.store, n.kind, n.data, kids.view()))
+                  else $;
+        ret f(rebNode);                # only touched nodes get new ids; rest is shared
+    }
+
+    # ((1+2)+3)+4  ->  [1,2,3,4]  for one operator. real shape stays intact underneath.
+    fun flatten = (BinOp want) -> $Vec(atree) {
+        mut out = $Vec(atree).new();
+        $.flatten_into(want, &out);
+        ret out;
+    }
+    fun flatten_into = (BinOp want, *$Vec(atree) out) {
+        if $.kind() == NodeKind.Binary && $.op() == want {
+            $.lhs().flatten_into(want, out);
+            $.rhs().flatten_into(want, out);
+        } else {
+            out.push($);
+        }
+    }
+
+    # interned store -> equality is just an id compare
+    fun eq = (atree other) -> bool: ret $.id == other.id;
+
+    fun to_source = () -> &u8;   # unparse back to readable code (great for debugging)
+}
+
+# the children view. one clean sequence over slots + overflow, no seams.
+type Children = @(atree host, mut u32 i) implof Iterable(atree) @{
+    fun has_next = () ret $.i < $.host.child_count();
+    fun next     = () ret $.host.child($.i defer $.i += 1);   # your defer trick
+}
+
+######################################################## building nodes
+
+# dedup: identical (kind, data, children) -> same NodeId. this is what makes
+# sharing + fast equality work. wide children get read back out of overflow to hash.
+fun with_children = (mut *Ast s, NodeKind k, u32 data, []NodeId kids) -> NodeId {
+    mut u32 x = NIL;
+    mut u32 y = NIL;
+    if is_wide(k) {
+        sl = push_overflow(s, kids);      # all children go side by side
+        x = sl.off; y = sl.cnt;
+    } else {
+        if kids.len > 0: x = kids[0];     # up to two live inline
+        if kids.len > 1: y = kids[1];
+    }
+    ret intern(s, Node(kind = k, x = x, y = y, data = data), kids);
+}
+
+fun push_overflow = (mut *Ast s, []NodeId kids) -> Slice {
+    off = s.overflow.len;
+    for k in kids: s.overflow.push(k);
+    ret Slice(off = off, cnt = kids.len);
+}
+
+fun intern = (mut *Ast s, Node n, []NodeId kids) -> NodeId {
+    h = hash_node(n, kids);                       # folds in kind, data, child ids
+    if s.interner.get(h) ?<- existing: ret existing;   # already have this exact tree
+    id = s.nodes.push(n);
+    s.interner.set(h, id);
+    ret id;
+    # (if this was a wide node and we hit a dup, you can truncate the overflow
+    #  push we just made — nice-to-have, not required.)
+}
+
+# same nodes whether you write expr{} or call a builder -> fully interchangeable
+fun mk     = (*Ast s, NodeId id) -> atree: ret atree(store = s, id = id, level = 0, span = SYNTH_SPAN);
+fun lit    = (mut *Ast s, i64 v)             -> atree: ret mk(s, with_children(s, NodeKind.Lit,   push_lit(s, v), []));
+fun ident  = (mut *Ast s, u32 sym)           -> atree: ret mk(s, with_children(s, NodeKind.Ident, sym,           []));
+fun binary = (mut *Ast s, BinOp op, atree a, atree b) -> atree:
+    ret mk(s, with_children(s, NodeKind.Binary, op as u32, [a.id, b.id]));
+fun call   = (mut *Ast s, atree callee, []atree args) -> atree {
+    mut kids = $Vec(NodeId).new();
+    kids.push(callee.id);
+    for a in args: kids.push(a.id);
+    ret mk(s, with_children(s, NodeKind.Call, 0, kids.view()));   # any number of args -> wide
+}
+fun if_ = (mut *Ast s, atree c, atree t, atree e) -> atree:
+    ret mk(s, with_children(s, NodeKind.If, 0, [c.id, t.id, e.id]));
+
+######################################################## splice vs eval
+
+# surface syntax lowers to these. the difference stays crisp:
+#   $e     -> splice_tree(hole, e)     paste e's TREE in, still code (lazy)
+#   $e...  -> splice_seq(slot, es)     paste a LIST of trees into a wide slot
+#   <e>    -> embed(s, eval(e))        run e NOW, paste the resulting VALUE as a literal
+fun eval        = (atree e) -> i64;                       # hands e to the ct-interpreter
+fun embed       = (mut *Ast s, i64 v) -> atree: ret lit(s, v);
+fun splice_tree = (atree hole, atree e) -> atree;
+fun splice_seq  = (atree slot, []atree es) -> atree;

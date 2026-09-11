@@ -101,7 +101,7 @@ statement = statement_assign
           | "cont", ";"
           | "brk", ";"
           | "ret", [ expression ], ";"
-          | "defer", statement
+          | "defer", substatement
           | "deinit", expression, ";"
           | funccall, ";"
           | funccall, "!!", [statement], ";"

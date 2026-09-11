@@ -401,4 +401,24 @@ fun $main = () {
     # valopt = if valopt ?<- x: x else ret valopt;
     
     # TODO (100 as u32) operator
+
+
+    ######################################################## now metaprogramming
+
+    # lazily saved and not truly evaluated
+    atree mylazyexpr = expr {
+        1 + 2 + 3 + 4
+    };
+
+    mut u32 x = 0;
+    
+    # evaluate now:
+    x = <mylazyexpr>;
+
+    # or inline evaluate as `mylazyexpr` stored static data
+    x = <expr { 1 + 2 + 3 + 4 }>; 
+
+
+
+
 }

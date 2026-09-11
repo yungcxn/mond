@@ -6,6 +6,10 @@ const lookahead = @import("lookahead.zig");
 const stmt_rules = @import("stmt_rules.zig");
 const subexpr_rules = @import("subexpr_rules.zig");
 
+// might seem repetitive for now, but makes extensions easy (FOR NOW)
+
+// TODO: bake these structs into a parse table with the node
+
 pub const FunctionDefinition = struct {
     function_header: u32,
     substatement: u32,
@@ -440,51 +444,6 @@ pub fn eval_expr_typestcfun(p: *Parser) anyerror!u32 {
     return p.tree.push_node(.expr_typestcfun);
 }
 
-fn eval_type_def_tail(p: *Parser, kind: ParseTree.Node.Kind, parameter_tuple: u32) anyerror!u32 {
-    var def: TypeDefinition = undefined;
-    def.parameter_tuple = parameter_tuple;
-
-    if (try p.peek_eq_tok(.kw_sizeof)) {
-        p.tok_cursor += 1;
-        def.sizeof_expr = try eval_expr(p, 0);
-    } else {
-        def.sizeof_expr = 0xFFFFFFFF;
-    }
-
-    if (try p.peek_eq_tok(.kw_implof) or try p.peek_eq_tok(.@"xpct_@{")) {
-        def.trait_def = try eval_expr_trait(p);
-    } else {
-        def.trait_def = 0xFFFFFFFF;
-    }
-
-    const parent = p.tree.push_node(kind);
-    p.tree.push_extra_childrefs(parent, &def);
-    return parent;
-}
-
-fn eval_variant_def_tail(p: *Parser, kind: ParseTree.Node.Kind, parameter_tuple: u32) anyerror!u32 {
-    var def: VariantDefinition = undefined;
-    def.parameter_tuple = parameter_tuple;
-
-    if (try p.peek_eq_tok(.kw_tagof)) {
-        p.tok_cursor += 1;
-        def.tagof_expr = try eval_expr(p, 0);
-    } else {
-        def.tagof_expr = 0xFFFFFFFF;
-    }
-
-    if (try p.peek_eq_tok(.kw_sizeof)) {
-        p.tok_cursor += 1;
-        def.sizeof_expr = try eval_expr(p, 0);
-    } else {
-        def.sizeof_expr = 0xFFFFFFFF;
-    }
-
-    const parent = p.tree.push_node(kind);
-    p.tree.push_extra_childrefs(parent, &def);
-    return parent;
-}
-
 pub fn eval_expr_type_or_variant(p: *Parser) anyerror!u32 {
     p.tok_cursor -= 1;
     const open_tok = try p.pop_tok();
@@ -561,14 +520,14 @@ pub fn eval_expr_type_or_variant(p: *Parser) anyerror!u32 {
             var params: FixedStack(64) = .{};
             {
                 const param = p.tree.push_node(if (is_mut0) .subexpr_type_param_mut else .subexpr_type_param);
-                var def: subexpr_rules.TypeParameter = .{
+                var param_def: subexpr_rules.TypeParameter = .{
                     .param_type = early_expr0,
                     .name = name,
                     .default_value = default_value,
                     .where_predicate = where_predicate,
                     .where_else_value = where_else_value,
                 };
-                p.tree.push_extra_childrefs(param, &def);
+                p.tree.push_extra_childrefs(param, &param_def);
                 try params.push(param);
             }
             while (try p.peek_eq_tok(.@"pct_,")) {
@@ -579,7 +538,27 @@ pub fn eval_expr_type_or_variant(p: *Parser) anyerror!u32 {
             try p.eat_assert_tok(.@"pct_)");
             const param_tuple = p.tree.push_node(.subexpr_type_param_tuple);
             p.tree.push_extra_childrefs(param_tuple, params.view());
-            return try eval_type_def_tail(p, type_kind, param_tuple);
+
+            // Inlined from eval_type_def_tail
+            const parent = p.tree.push_node(type_kind);
+            var type_def: TypeDefinition = undefined;
+            type_def.parameter_tuple = param_tuple;
+
+            if (try p.peek_eq_tok(.kw_sizeof)) {
+                p.tok_cursor += 1;
+                type_def.sizeof_expr = try eval_expr(p, 0);
+            } else {
+                type_def.sizeof_expr = 0xFFFFFFFF;
+            }
+
+            if (try p.peek_eq_tok(.kw_implof) or try p.peek_eq_tok(.@"xpct_@{")) {
+                type_def.trait_def = try eval_expr_trait(p);
+            } else {
+                type_def.trait_def = 0xFFFFFFFF;
+            }
+
+            p.tree.push_extra_childrefs(parent, &type_def);
+            return parent;
         },
         .variant_def => {
             const variant_kind: ParseTree.Node.Kind = switch (open_tok) {
@@ -592,12 +571,12 @@ pub fn eval_expr_type_or_variant(p: *Parser) anyerror!u32 {
             var params: FixedStack(64) = .{};
             {
                 const first = p.tree.push_node(.subexpr_variant_param);
-                var def: subexpr_rules.VariantParameter = .{
+                var param_def: subexpr_rules.VariantParameter = .{
                     .name = early_expr0,
                     .of_type = of_type,
                     .tag_value = default_value,
                 };
-                p.tree.push_extra_childrefs(first, &def);
+                p.tree.push_extra_childrefs(first, &param_def);
                 try params.push(first);
             }
             while (try p.peek_eq_tok(.@"xpct_|")) {
@@ -608,7 +587,28 @@ pub fn eval_expr_type_or_variant(p: *Parser) anyerror!u32 {
             try p.eat_assert_tok(.@"pct_)");
             const param_tuple = p.tree.push_node(.subexpr_variant_param_tuple);
             p.tree.push_extra_childrefs(param_tuple, params.view());
-            return try eval_variant_def_tail(p, variant_kind, param_tuple);
+
+            // Inlined from eval_variant_def_tail
+            const parent = p.tree.push_node(variant_kind);
+            var variant_def: VariantDefinition = undefined;
+            variant_def.parameter_tuple = param_tuple;
+
+            if (try p.peek_eq_tok(.kw_tagof)) {
+                p.tok_cursor += 1;
+                variant_def.tagof_expr = try eval_expr(p, 0);
+            } else {
+                variant_def.tagof_expr = 0xFFFFFFFF;
+            }
+
+            if (try p.peek_eq_tok(.kw_sizeof)) {
+                p.tok_cursor += 1;
+                variant_def.sizeof_expr = try eval_expr(p, 0);
+            } else {
+                variant_def.sizeof_expr = 0xFFFFFFFF;
+            }
+
+            p.tree.push_extra_childrefs(parent, &variant_def);
+            return parent;
         },
     }
 }
@@ -641,7 +641,7 @@ pub fn eval_expr_trait(p: *Parser) anyerror!u32 {
     try p.eat_assert_tok(.@"xpct_@{");
     var members: FixedStack(4096) = .{};
     while (!try p.peek_eq_tok(.@"pct_}")) {
-        try members.push(try stmt_rules.eval_stmt_assign(p));
+        try members.push(try stmt_rules.eval_assign_stmt(p));
     }
     p.tok_cursor += 1; // consume "}"
 

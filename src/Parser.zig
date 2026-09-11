@@ -63,9 +63,8 @@ pub fn build_ast(self: *@This()) !void {
     _ = self.tree.push_node(.none);
 
     while (self.tok_cursor < self.tokens.len()) {
-        const is_pub = try self.peek_eq_tok(.kw_pub);
-        if (is_pub) self.tok_cursor += 1;
-        self.global_store.push(try lookahead.assignment[@intFromEnum(try self.pop_tok())](self, is_pub));
+        const node_parent = try @import("parser/stmt_rules.zig").eval_assign_stmt(self);
+        self.global_store.push(node_parent);
     }
 }
 

@@ -5,6 +5,9 @@ const lookahead = @import("lookahead.zig");
 const stmt_rules = @import("stmt_rules.zig");
 const expr_rules = @import("expr_rules.zig");
 
+// TODO: the subexprs can vanish away, they are not needed and should be constructed not through the
+// "parse" behaviour for ast nodes in the code, but through building anode structs at compiletime.
+
 pub const FunctionHeader = struct {
     argument_tuple: u32,
     return_type: u32,
@@ -122,10 +125,8 @@ pub fn ee_eval_subexpr_fun_def_param(p: *Parser, early_expr0: u32) anyerror!u32 
 
 pub fn eval_subexpr_match_body(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.subexpr_match_body);
-    var match_cases: FixedStack(64) = .{};
-
     try p.eat_assert_tok(.@"pct_{");
-
+    var match_cases: FixedStack(64) = .{};
     while (true) {
         try match_cases.push(try eval_subexpr_match_case(p));
         switch (try p.peek_tok()) {
@@ -258,8 +259,6 @@ pub fn ee_eval_subexpr_type_param(p: *Parser, early: ?struct { is_mut: bool, exp
 // variant_parameter_definition = identifier, ["of", expression], [ "=", expression ];
 //
 // `early_identifier0` folds ee_eval_variant_param / ee_eval_variant_param_fresh:
-// pass null for a "fresh" param (identifier not yet consumed), or the
-// already-consumed leading identifier for the first param in a tuple.
 pub fn ee_eval_subexpr_variant_param(p: *Parser, early_identifier0: ?u32) anyerror!u32 {
     const name = early_identifier0 orelse blk: {
         try p.eat_assert_tok(.identifier);
