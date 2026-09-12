@@ -54,16 +54,11 @@ pub inline fn peek_eq_tok(self: *@This(), comptime tok: Lexer.Token.Kind) !bool 
     return (try self.peek_tok()) == tok;
 }
 
-// used for the lookahead tables
-pub inline fn invalid_token(_: *@This()) anyerror!u32 {
-    return error.InvalidToken;
-}
-
 pub fn build_ast(self: *@This()) !void {
     _ = self.tree.push_node(.none);
 
     while (self.tok_cursor < self.tokens.len()) {
-        const node_parent = try @import("parser/stmt_rules.zig").eval_assign_stmt(self);
+        const node_parent = try @import("parser/eval.zig").any(self, 0); // TODO forbid
         self.global_store.push(node_parent);
     }
 }

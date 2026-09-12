@@ -39,7 +39,7 @@ fun add_lambda5  = (u32 a, u32 b) {
     ret a + b;
 }
 
-# "void" does not exist, it's always induced
+# "unit" type is always induced
 fun my_void_func = () {
     print("Hello, world!");
 }
@@ -417,8 +417,5 @@ fun $main = () {
 
     # or inline evaluate as `mylazyexpr` stored static data
     x = <expr { 1 + 2 + 3 + 4 }>; 
-
-
-
 
 }

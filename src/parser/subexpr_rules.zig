@@ -2,8 +2,9 @@ const Parser = @import("../Parser.zig");
 const Lexer = @import("../Lexer.zig");
 const FixedStack = @import("../ds/fixedstack.zig").FixedStack;
 const lookahead = @import("lookahead.zig");
-const stmt_rules = @import("stmt_rules.zig");
-const expr_rules = @import("expr_rules.zig");
+const eval = @import("eval.zig");
+
+// TODO NEXT: refactor this ASAP!
 
 // TODO: the subexprs can vanish away, they are not needed and should be constructed not through the
 // "parse" behaviour for ast nodes in the code, but through building anode structs at compiletime.
@@ -36,13 +37,13 @@ pub const VariantParameter = struct {
 };
 
 pub fn ee_eval_subexpr_fun_def_header(p: *Parser, early_expr0_in_tuple: u32) anyerror!u32 {
-    const parent = p.tree.push_node(.subexpr_fun_def_header);
+    const parent = p.tree.push_node(.partial__fun_header);
     var def: FunctionHeader = undefined;
     def.argument_tuple = try ee_eval_subexpr_fun_def_param_tuple(p, early_expr0_in_tuple);
 
     if (try p.peek_eq_tok(.@"xpct_->")) {
         p.tok_cursor += 1;
-        def.return_type = try expr_rules.eval_expr(p, 0);
+        def.return_type = try eval.any(p, 0);
     } else {
         def.return_type = 0xFFFFFFFF;
     }
@@ -53,7 +54,7 @@ pub fn ee_eval_subexpr_fun_def_header(p: *Parser, early_expr0_in_tuple: u32) any
 }
 
 pub fn ee_eval_subexpr_fun_def_param_tuple(p: *Parser, early_expr0: u32) anyerror!u32 {
-    const parent = p.tree.push_node(.subexpr_fun_def_param_tuple);
+    const parent = p.tree.push_node(.partial__fun_param_tuple);
 
     if (!try p.peek_eq_tok(.@"pct_)")) {
         var params: FixedStack(64) = .{};
@@ -61,7 +62,7 @@ pub fn ee_eval_subexpr_fun_def_param_tuple(p: *Parser, early_expr0: u32) anyerro
             if (params.cursor == 0) {
                 try params.push(try ee_eval_subexpr_fun_def_param(p, early_expr0));
             } else {
-                try params.push(try ee_eval_subexpr_fun_def_param(p, try expr_rules.eval_expr(p, 0)));
+                try params.push(try ee_eval_subexpr_fun_def_param(p, try eval.any(p, 0)));
             }
             switch (try p.peek_tok()) {
                 .@"pct_)" => break,
@@ -81,7 +82,7 @@ pub fn ee_eval_subexpr_fun_def_param_tuple(p: *Parser, early_expr0: u32) anyerro
 }
 
 pub fn ee_eval_subexpr_fun_def_param(p: *Parser, early_expr0: u32) anyerror!u32 {
-    const parent = p.tree.push_node(.subexpr_fun_def_param);
+    const parent = p.tree.push_node(.partial__fun_param);
     var def: FunctionDefinitionParameter = undefined;
     // here, we could encounter <expr> <expr> or <expr>
     // + they are followed by , OR ) OR = OR where
@@ -90,7 +91,7 @@ pub fn ee_eval_subexpr_fun_def_param(p: *Parser, early_expr0: u32) anyerror!u32 
     const a = early_expr0;
     const next_tok = try p.peek_tok();
     if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where) {
-        const b = try expr_rules.eval_expr_identifier(p);
+        const b = try eval.identifier(p);
         def.param_type = a;
         def.name = b;
     } else {
@@ -100,17 +101,17 @@ pub fn ee_eval_subexpr_fun_def_param(p: *Parser, early_expr0: u32) anyerror!u32 
 
     if (try p.peek_eq_tok(.@"xpct_=")) {
         p.tok_cursor += 1;
-        def.default_value = try expr_rules.eval_expr(p, 0);
+        def.default_value = try eval.any(p, 0);
     } else {
         def.default_value = 0xFFFFFFFF;
     }
 
     if (try p.peek_eq_tok(.kw_where)) {
         p.tok_cursor += 1;
-        def.where_predicate = try expr_rules.eval_expr(p, 0);
+        def.where_predicate = try eval.any(p, 0);
         if (try p.peek_eq_tok(.kw_else)) {
             p.tok_cursor += 1;
-            def.where_else_value = try expr_rules.eval_expr(p, 0);
+            def.where_else_value = try eval.any(p, 0);
         } else {
             def.where_else_value = 0xFFFFFFFF;
         }
@@ -124,7 +125,7 @@ pub fn ee_eval_subexpr_fun_def_param(p: *Parser, early_expr0: u32) anyerror!u32 
 }
 
 pub fn eval_subexpr_match_body(p: *Parser) anyerror!u32 {
-    const parent = p.tree.push_node(.subexpr_match_body);
+    const parent = p.tree.push_node(.partial__match_body);
     try p.eat_assert_tok(.@"pct_{");
     var match_cases: FixedStack(64) = .{};
     while (true) {
@@ -143,26 +144,26 @@ pub fn eval_subexpr_match_body(p: *Parser) anyerror!u32 {
 }
 
 pub fn eval_subexpr_match_case(p: *Parser) anyerror!u32 {
-    const parent = p.tree.push_node(.subexpr_match_case);
-    const pattern_expr = try expr_rules.eval_expr(p, 0);
+    const parent = p.tree.push_node(.partial__match_case);
+    const pattern_expr = try eval.any(p, 0);
     p.tree.set_node_arg0(parent, pattern_expr);
     p.tree.set_node_arg1(parent, 0xFFFFFFFF);
     if (try p.peek_eq_tok(.@"xpct_=>")) {
         p.tok_cursor += 1;
-        const body_expr = try expr_rules.eval_expr(p, 0);
+        const body_expr = try eval.any(p, 0);
         p.tree.set_node_arg1(parent, body_expr);
     }
     return parent;
 }
 
 pub fn eval_subexpr_fun_call_param_tuple(p: *Parser) anyerror!u32 {
-    const parent = p.tree.push_node(.subexpr_fun_call_param_tuple);
+    const parent = p.tree.push_node(.partial__fun_call_param_tuple);
     try p.eat_assert_tok(.@"pct_(");
 
     if (!try p.peek_eq_tok(.@"pct_)")) {
         var params: FixedStack(64) = .{};
         while (true) {
-            try params.push(try expr_rules.eval_expr(p, 0));
+            try params.push(try eval.any(p, 0));
             switch (try p.peek_tok()) {
                 .@"pct_)" => break,
                 .@"pct_," => {
@@ -182,7 +183,7 @@ pub fn eval_subexpr_fun_call_param_tuple(p: *Parser) anyerror!u32 {
 
 // assumes in expression "<identifier_expr>, <identifier_expr>, ..." first <identifier_expr> is consumed
 pub fn ee_eval_subexpr_destructure(p: *Parser, early_identifier0: u32) anyerror!u32 {
-    const parent = p.tree.push_node(.subexpr_destructure);
+    const parent = p.tree.push_node(.partial__destructure);
 
     // , identifier , identifier [,]
     var identifiers: FixedStack(64) = .{};
@@ -192,7 +193,7 @@ pub fn ee_eval_subexpr_destructure(p: *Parser, early_identifier0: u32) anyerror!
             .@"pct_," => {
                 switch (try p.pop_tok()) {
                     .identifier => {
-                        const id = try expr_rules.eval_expr_identifier(p);
+                        const id = try eval.identifier(p);
                         try identifiers.push(id);
                     },
                     else => {
@@ -215,16 +216,16 @@ pub fn ee_eval_subexpr_type_param(p: *Parser, early: ?struct { is_mut: bool, exp
     const is_mut, const expr0 = if (early) |e| .{ e.is_mut, e.expr0 } else blk: {
         const m = try p.peek_eq_tok(.kw_mut);
         if (m) p.tok_cursor += 1;
-        break :blk .{ m, try expr_rules.eval_expr(p, 0) };
+        break :blk .{ m, try eval.any(p, 0) };
     };
 
-    const parent = p.tree.push_node(if (is_mut) .subexpr_type_param_mut else .subexpr_type_param);
+    const parent = p.tree.push_node(if (is_mut) .partial__type_param_mut else .partial__type_param);
     var def: TypeParameter = undefined;
 
     const next_tok = try p.peek_tok();
     if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where) {
         def.param_type = expr0;
-        def.name = try expr_rules.eval_expr_identifier(p);
+        def.name = try eval.identifier(p);
     } else {
         def.param_type = expr0;
         def.name = 0xFFFFFFFF;
@@ -232,17 +233,17 @@ pub fn ee_eval_subexpr_type_param(p: *Parser, early: ?struct { is_mut: bool, exp
 
     if (try p.peek_eq_tok(.@"xpct_=")) {
         p.tok_cursor += 1;
-        def.default_value = try expr_rules.eval_expr(p, 0);
+        def.default_value = try eval.any(p, 0);
     } else {
         def.default_value = 0xFFFFFFFF;
     }
 
     if (try p.peek_eq_tok(.kw_where)) {
         p.tok_cursor += 1;
-        def.where_predicate = try expr_rules.eval_expr(p, 0);
+        def.where_predicate = try eval.any(p, 0);
         if (try p.peek_eq_tok(.kw_else)) {
             p.tok_cursor += 1;
-            def.where_else_value = try expr_rules.eval_expr(p, 0);
+            def.where_else_value = try eval.any(p, 0);
         } else {
             def.where_else_value = 0xFFFFFFFF;
         }
@@ -262,23 +263,23 @@ pub fn ee_eval_subexpr_type_param(p: *Parser, early: ?struct { is_mut: bool, exp
 pub fn ee_eval_subexpr_variant_param(p: *Parser, early_identifier0: ?u32) anyerror!u32 {
     const name = early_identifier0 orelse blk: {
         try p.eat_assert_tok(.identifier);
-        break :blk try expr_rules.eval_expr_identifier(p);
+        break :blk try eval.identifier(p);
     };
 
-    const parent = p.tree.push_node(.subexpr_variant_param);
+    const parent = p.tree.push_node(.partial__variant_param);
     var def: VariantParameter = undefined;
     def.name = name;
 
     if (try p.peek_eq_tok(.kw_of)) {
         p.tok_cursor += 1;
-        def.of_type = try expr_rules.eval_expr(p, 0);
+        def.of_type = try eval.any(p, 0);
     } else {
         def.of_type = 0xFFFFFFFF;
     }
 
     if (try p.peek_eq_tok(.@"xpct_=")) {
         p.tok_cursor += 1;
-        def.tag_value = try expr_rules.eval_expr(p, 0);
+        def.tag_value = try eval.any(p, 0);
     } else {
         def.tag_value = 0xFFFFFFFF;
     }

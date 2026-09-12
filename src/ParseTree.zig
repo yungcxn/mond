@@ -22,7 +22,7 @@ pub const Node = struct {
                         scan_end = i;
 
                         if (i - scan_start > 1) {
-                            @compileError("stmt_assign kinds must be contiguous in the enum");
+                            @compileError("kinds must be contiguous in the enum");
                         } else {}
                     }
                 }
@@ -30,175 +30,156 @@ pub const Node = struct {
             };
         }
 
-        pub fn is_stmt_assign(self: Kind) bool {
-            const scan_region: [2]u32 = seg_table_by_prefix("stmt_assign");
+        pub fn is_assign(self: Kind) bool {
+            const scan_region: [2]u32 = seg_table_by_prefix("assign");
             return @intFromEnum(self) >= scan_region[0] and @intFromEnum(self) <= scan_region[1];
         }
 
+        NO_KIND,
+
+        block,
+        def_fun,
+
+        partial__fun_header,
+        partial__fun_param_tuple,
+        partial__fun_param,
+
+        capture,
+
+        array,
+        array_empty,
+
+        typeof,
+        sizeof,
+
+        type_array,
+
+        neg_num,
+        neg_logic,
+
+        inc_prefix,
+        dec_prefix,
+
+        gen_upperbound_incl,
+        gen_upperbound_excl,
+
         none,
+        err,
+        deinit,
+        cont,
+        brk,
+        ret,
 
-        // *** statement nodes ***
+        if_then, // lhs: expr (condition), rhs: expr (body)
+        if_else, // lhs: expr_if, rhs: expr (body)
+        @"while", // lhs: expr (condition), rhs: expr (body)
+        while_with_repeat_stmt, // lhs: expr_while, rhs: stmt (repeat statement)
+        for_seq, // lhs: expr (seq), rhs: expr (body)
+        for_in_seq, // lhs: expr_for, rhs: expr (iterator var)
+        loop, // lhs: expr (optional repeat statement), rhs: expr (body)
+        match, // lhs: expr (match value), rhs: subexpr_match_body (match body)
 
-        stmt_block,
-        stmt_if,
-        stmt_if_else,
-        stmt_while,
-        stmt_while_with_repeat_stmt,
-        stmt_for,
-        stmt_for_in,
-        stmt_loop,
-        stmt_match,
+        partial__match_body,
+        partial__match_case,
 
-        substmt_match_body,
-        substmt_match_case,
+        // note: can be type
+        type_ptrmut,
 
-        stmt_cont,
-        stmt_brk,
-        stmt_ret,
-        stmt_defer,
-        stmt_deinit,
+        type_ptr,
+        type_u8,
+        type_u16,
+        type_u32,
+        type_u64,
+        type_i8,
+        type_i16,
+        type_i32,
+        type_i64,
+        type_f16,
+        type_f32,
+        type_f64,
+        type_bool,
+        type_type,
+        type_trait,
+        type_variant,
+        type_inlfun,
+        type_fun,
+        type_stcfun,
 
-        // *** expression nodes ***
+        def_type,
+        def_type_packed,
+        def_variant,
+        def_variant_packed,
+        def_variant_unionsized,
+        def_trait,
 
-        expr_fun_def,
+        partial__type_param_tuple,
+        partial__type_param,
+        partial__type_param_mut,
 
-        subexpr_fun_def_header,
-        subexpr_fun_def_param_tuple,
-        subexpr_fun_def_param,
+        partial__variant_param_tuple,
+        partial__variant_param,
 
-        expr_capture,
+        partial__trait_implof_tuple,
+        partial__trait_body,
 
-        expr_array,
-        expr_array_empty,
+        unify_variants, // lhs: expr (type/variant), rhs: expr (type/variant)
 
-        expr_typeof,
-        expr_sizeof,
+        fun_call, // lhs: expr (function), rhs: subexpr_fun_call_param_tuple (params)
+        partial__fun_call_param_tuple, // array of expr
 
-        expr_type_array,
+        array_index, // lhs: expr (array), rhs: expr (index)
+        member, // lhs: expr (struct), rhs: expr (member)
+        dereference, // lhs: expr (pointer)
+        address_of, // lhs: expr
+        inc_postfix, // lhs: expr (variable)
+        dec_postfix, // lhs: expr (variable)
 
-        expr_neg_num,
-        expr_neg_logic,
+        gen_lowerbound,
+        gen_incl,
+        gen_excl,
 
-        expr_inc_prefix,
-        expr_dec_prefix,
+        oftype, // lhs: expr (value), rhs: expr (type)
+        as, // lhs: expr (value), rhs: expr (type)
+        labelarrow, // lhs: expr (what-to-label), rhs: expr OR subexpr_destructure (label)
+        optarrow, // see above
+        errarrow, // see above
 
-        expr_gen_upperbound_incl,
-        expr_gen_upperbound_excl,
+        partial__destructure, // expr_identifier[] (used by arrows and assignment)
 
-        expr_none,
-        expr_err,
-        expr_deinit,
-        expr_cont,
-        expr_brk,
-        expr_ret,
+        // note: these are !! and ??
+        errhandle,
+        opthandle,
 
-        expr_if, // lhs: expr (condition), rhs: expr (body)
-        expr_if_else, // lhs: expr_if, rhs: expr (body)
-        expr_while, // lhs: expr (condition), rhs: expr (body)
-        expr_while_with_repeat_stmt, // lhs: expr_while, rhs: stmt (repeat statement)
-        expr_for, // lhs: expr (seq), rhs: expr (body)
-        expr_for_in, // lhs: expr_for, rhs: expr (iterator var)
-        expr_loop, // lhs: expr (optional repeat statement), rhs: expr (body)
-        expr_match, // lhs: expr (match value), rhs: subexpr_match_body (match body)
+        @"defer",
+        defer_with_deinit,
 
-        subexpr_match_body,
-        subexpr_match_case,
+        binary_logic_or,
+        binary_logic_xor,
+        binary_logic_and,
+        binary_num_or,
+        binary_num_xor,
+        binary_num_and,
+        binary_eq,
+        binary_neq,
+        binary_less,
+        binary_greater,
+        binary_less_eq,
+        binary_greater_eq,
+        binary_add,
+        binary_sub,
+        binary_mul,
+        binary_div,
+        binary_mod,
+        binary_shift_left,
+        binary_shift_right,
+        binary_pow,
 
-        expr_ampersand,
-
-        expr_typeptr,
-        expr_typeu8,
-        expr_typeu16,
-        expr_typeu32,
-        expr_typeu64,
-        expr_typei8,
-        expr_typei16,
-        expr_typei32,
-        expr_typei64,
-        expr_typef16,
-        expr_typef32,
-        expr_typef64,
-        expr_typebool,
-        expr_typetype,
-        expr_typetrait,
-        expr_typevariant,
-        expr_typeinlfun,
-        expr_typefun,
-        expr_typestcfun,
-
-        expr_type_def,
-        expr_type_def_packed,
-        expr_variant_def,
-        expr_variant_def_packed,
-        expr_variant_def_unionsized,
-        expr_trait_def,
-
-        subexpr_type_param_tuple,
-        subexpr_type_param,
-        subexpr_type_param_mut,
-
-        subexpr_variant_param_tuple,
-        subexpr_variant_param,
-
-        subexpr_trait_implof_tuple,
-        subexpr_trait_body,
-
-        expr_unify_variants, // lhs: expr (type/variant), rhs: expr (type/variant)
-
-        expr_fun_call, // lhs: expr (function), rhs: subexpr_fun_call_param_tuple (params)
-        subexpr_fun_call_param_tuple, // array of expr
-
-        expr_array_index, // lhs: expr (array), rhs: expr (index)
-        expr_member, // lhs: expr (struct), rhs: expr (member)
-        expr_dereference, // lhs: expr (pointer)
-        expr_inc_postfix, // lhs: expr (variable)
-        expr_dec_postfix, // lhs: expr (variable)
-
-        expr_gen_lowerbound,
-        expr_gen_incl,
-        expr_gen_excl,
-
-        expr_oftype, // lhs: expr (value), rhs: expr (type)
-        expr_as, // lhs: expr (value), rhs: expr (type)
-        expr_labelarrow, // lhs: expr (what-to-label), rhs: expr OR subexpr_destructure (label)
-        expr_optarrow, // see above
-        expr_errarrow, // see above
-
-        subexpr_destructure, // expr_identifier[] (used by arrows and assignment)
-
-        expr_errhandle,
-        expr_opthandle,
-
-        expr_defer,
-        expr_defer_with_deinit,
-
-        expr_binary_logic_or,
-        expr_binary_logic_xor,
-        expr_binary_logic_and,
-        expr_binary_num_or,
-        expr_binary_num_xor,
-        expr_binary_num_and,
-        expr_binary_eq,
-        expr_binary_neq,
-        expr_binary_less,
-        expr_binary_greater,
-        expr_binary_less_eq,
-        expr_binary_greater_eq,
-        expr_binary_add,
-        expr_binary_sub,
-        expr_binary_mul,
-        expr_binary_div,
-        expr_binary_mod,
-        expr_binary_shift_left,
-        expr_binary_shift_right,
-        expr_binary_pow,
-
-        expr_identifier,
-        expr_string,
-        expr_int,
-        expr_float,
-        expr_char,
-        expr_bool,
+        identifier,
+        string,
+        int,
+        float,
+        char,
+        boolean,
     };
 
     const nk_childc = blk: { // TODO
