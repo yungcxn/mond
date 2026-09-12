@@ -6,7 +6,7 @@ const eval = @import("eval.zig");
 
 // TODO NEXT: refactor this ASAP!
 
-// TODO: the subexprs can vanish away, they are not needed and should be constructed not through the
+// TODO: this can vanish, the evaluators are not needed and should be constructed not through the
 // "parse" behaviour for ast nodes in the code, but through building anode structs at compiletime.
 
 pub const FunctionHeader = struct {
@@ -36,10 +36,11 @@ pub const VariantParameter = struct {
     tag_value: u32,
 };
 
-pub fn ee_eval_subexpr_fun_def_header(p: *Parser, early_expr0_in_tuple: u32) anyerror!u32 {
+// ee refers to early eval'd => we have a part of this node already evaluated.
+pub fn ee_fun_header(p: *Parser, early_node0_in_tuple: u32) anyerror!u32 {
     const parent = p.tree.push_node(.partial__fun_header);
     var def: FunctionHeader = undefined;
-    def.argument_tuple = try ee_eval_subexpr_fun_def_param_tuple(p, early_expr0_in_tuple);
+    def.argument_tuple = try ee_fun_param_tuple(p, early_node0_in_tuple);
 
     if (try p.peek_eq_tok(.@"xpct_->")) {
         p.tok_cursor += 1;
@@ -53,16 +54,16 @@ pub fn ee_eval_subexpr_fun_def_header(p: *Parser, early_expr0_in_tuple: u32) any
     return parent;
 }
 
-pub fn ee_eval_subexpr_fun_def_param_tuple(p: *Parser, early_expr0: u32) anyerror!u32 {
+pub fn ee_fun_param_tuple(p: *Parser, early_expr0: u32) anyerror!u32 {
     const parent = p.tree.push_node(.partial__fun_param_tuple);
 
     if (!try p.peek_eq_tok(.@"pct_)")) {
         var params: FixedStack(64) = .{};
         while (true) {
             if (params.cursor == 0) {
-                try params.push(try ee_eval_subexpr_fun_def_param(p, early_expr0));
+                try params.push(try ee_fun_param(p, early_expr0));
             } else {
-                try params.push(try ee_eval_subexpr_fun_def_param(p, try eval.any(p, 0)));
+                try params.push(try ee_fun_param(p, try eval.any(p, 0)));
             }
             switch (try p.peek_tok()) {
                 .@"pct_)" => break,
@@ -81,7 +82,7 @@ pub fn ee_eval_subexpr_fun_def_param_tuple(p: *Parser, early_expr0: u32) anyerro
     }
 }
 
-pub fn ee_eval_subexpr_fun_def_param(p: *Parser, early_expr0: u32) anyerror!u32 {
+pub fn ee_fun_param(p: *Parser, early_expr0: u32) anyerror!u32 {
     const parent = p.tree.push_node(.partial__fun_param);
     var def: FunctionDefinitionParameter = undefined;
     // here, we could encounter <expr> <expr> or <expr>
@@ -124,12 +125,12 @@ pub fn ee_eval_subexpr_fun_def_param(p: *Parser, early_expr0: u32) anyerror!u32 
     return parent;
 }
 
-pub fn eval_subexpr_match_body(p: *Parser) anyerror!u32 {
+pub fn match_body(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.partial__match_body);
     try p.eat_assert_tok(.@"pct_{");
     var match_cases: FixedStack(64) = .{};
     while (true) {
-        try match_cases.push(try eval_subexpr_match_case(p));
+        try match_cases.push(try match_case(p));
         switch (try p.peek_tok()) {
             .@"pct_," => {
                 p.tok_cursor += 1;
@@ -143,20 +144,20 @@ pub fn eval_subexpr_match_body(p: *Parser) anyerror!u32 {
     return parent;
 }
 
-pub fn eval_subexpr_match_case(p: *Parser) anyerror!u32 {
+pub fn match_case(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.partial__match_case);
-    const pattern_expr = try eval.any(p, 0);
-    p.tree.set_node_arg0(parent, pattern_expr);
+    const pattern = try eval.any(p, 0);
+    p.tree.set_node_arg0(parent, pattern);
     p.tree.set_node_arg1(parent, 0xFFFFFFFF);
     if (try p.peek_eq_tok(.@"xpct_=>")) {
         p.tok_cursor += 1;
-        const body_expr = try eval.any(p, 0);
-        p.tree.set_node_arg1(parent, body_expr);
+        const body = try eval.any(p, 0);
+        p.tree.set_node_arg1(parent, body);
     }
     return parent;
 }
 
-pub fn eval_subexpr_fun_call_param_tuple(p: *Parser) anyerror!u32 {
+pub fn fun_call_param_tuple(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.partial__fun_call_param_tuple);
     try p.eat_assert_tok(.@"pct_(");
 
@@ -182,7 +183,7 @@ pub fn eval_subexpr_fun_call_param_tuple(p: *Parser) anyerror!u32 {
 }
 
 // assumes in expression "<identifier_expr>, <identifier_expr>, ..." first <identifier_expr> is consumed
-pub fn ee_eval_subexpr_destructure(p: *Parser, early_identifier0: u32) anyerror!u32 {
+pub fn destructure(p: *Parser, early_identifier0: u32) anyerror!u32 {
     const parent = p.tree.push_node(.partial__destructure);
 
     // , identifier , identifier [,]
@@ -212,8 +213,8 @@ pub fn ee_eval_subexpr_destructure(p: *Parser, early_identifier0: u32) anyerror!
     return parent;
 }
 
-pub fn ee_eval_subexpr_type_param(p: *Parser, early: ?struct { is_mut: bool, expr0: u32 }) anyerror!u32 {
-    const is_mut, const expr0 = if (early) |e| .{ e.is_mut, e.expr0 } else blk: {
+pub fn type_param(p: *Parser, early: ?struct { is_mut: bool, node0: u32 }) anyerror!u32 {
+    const is_mut, const expr0 = if (early) |e| .{ e.is_mut, e.node0 } else blk: {
         const m = try p.peek_eq_tok(.kw_mut);
         if (m) p.tok_cursor += 1;
         break :blk .{ m, try eval.any(p, 0) };
@@ -257,10 +258,7 @@ pub fn ee_eval_subexpr_type_param(p: *Parser, early: ?struct { is_mut: bool, exp
     return parent;
 }
 
-// variant_parameter_definition = identifier, ["of", expression], [ "=", expression ];
-//
-// `early_identifier0` folds ee_eval_variant_param / ee_eval_variant_param_fresh:
-pub fn ee_eval_subexpr_variant_param(p: *Parser, early_identifier0: ?u32) anyerror!u32 {
+pub fn variant_param(p: *Parser, early_identifier0: ?u32) anyerror!u32 {
     const name = early_identifier0 orelse blk: {
         try p.eat_assert_tok(.identifier);
         break :blk try eval.identifier(p);

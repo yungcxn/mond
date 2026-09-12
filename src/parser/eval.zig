@@ -3,7 +3,7 @@ const Lexer = @import("../Lexer.zig");
 const ParseTree = @import("../ParseTree.zig");
 const FixedStack = @import("../ds/fixedstack.zig").FixedStack;
 const lookahead = @import("lookahead.zig");
-const subexpr_rules = @import("subexpr_rules.zig");
+const partial = @import("partial.zig");
 
 // might seem repetitive for now, but makes extensions easy (FOR NOW)
 
@@ -83,7 +83,7 @@ pub fn paren(p: *Parser) anyerror!u32 {
         switch (try p.peek_tok()) {
             .@"xpct_->", .@"pct_:", .@"pct_{" => {
                 // `parent` was an expression in a "()", but it's actually a function parameter tuple
-                parent = try subexpr_rules.ee_eval_subexpr_fun_def_header(p, parent);
+                parent = try partial.ee_fun_header(p, parent);
                 parent = try ee_def_fun(p, parent);
             },
             else => {
@@ -95,7 +95,7 @@ pub fn paren(p: *Parser) anyerror!u32 {
         }
     } else {
         // guaranteed to be a `subexpr_fun_param_def_tuple`, and `paren` is early
-        parent = try subexpr_rules.ee_eval_subexpr_fun_def_header(p, parent);
+        parent = try partial.ee_fun_header(p, parent);
         parent = try ee_def_fun(p, parent);
     }
     return parent;
@@ -387,7 +387,7 @@ pub fn match(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.match);
     const to_match = try any(p, 0);
     p.tree.set_node_arg0(parent, to_match);
-    const match_body = try subexpr_rules.eval_subexpr_match_body(p);
+    const match_body = try partial.match_body(p);
     p.tree.set_node_arg1(parent, match_body);
     return parent;
 }
@@ -554,7 +554,7 @@ pub fn type_or_variant(p: *Parser) anyerror!u32 {
             var params: FixedStack(64) = .{};
             {
                 const param = p.tree.push_node(if (is_mut0) .partial__type_param_mut else .partial__type_param);
-                var param_def: subexpr_rules.TypeParameter = .{
+                var param_def: partial.TypeParameter = .{
                     .param_type = early_node0,
                     .name = name,
                     .default_value = default_value,
@@ -567,7 +567,7 @@ pub fn type_or_variant(p: *Parser) anyerror!u32 {
             while (try p.peek_eq_tok(.@"pct_,")) {
                 p.tok_cursor += 1;
                 if (try p.peek_eq_tok(.@"pct_)")) break;
-                try params.push(try subexpr_rules.ee_eval_subexpr_type_param(p, null));
+                try params.push(try partial.type_param(p, null));
             }
             try p.eat_assert_tok(.@"pct_)");
             const param_tuple = p.tree.push_node(.partial__type_param_tuple);
@@ -605,7 +605,7 @@ pub fn type_or_variant(p: *Parser) anyerror!u32 {
             var params: FixedStack(64) = .{};
             {
                 const first = p.tree.push_node(.partial__variant_param);
-                var param_def: subexpr_rules.VariantParameter = .{
+                var param_def: partial.VariantParameter = .{
                     .name = early_node0,
                     .of_type = of_type,
                     .tag_value = default_value,
@@ -616,7 +616,7 @@ pub fn type_or_variant(p: *Parser) anyerror!u32 {
             while (try p.peek_eq_tok(.@"xpct_|")) {
                 p.tok_cursor += 1;
                 if (try p.peek_eq_tok(.@"pct_)")) break;
-                try params.push(try subexpr_rules.ee_eval_subexpr_variant_param(p, null));
+                try params.push(try partial.variant_param(p, null));
             }
             try p.eat_assert_tok(.@"pct_)");
             const param_tuple = p.tree.push_node(.partial__variant_param_tuple);
@@ -697,7 +697,7 @@ pub fn unify_variants(p: *Parser, lhs: u32) anyerror!u32 {
 
 pub fn fun_call(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.fun_call);
-    const param_tuple = try subexpr_rules.eval_subexpr_fun_call_param_tuple(p);
+    const param_tuple = try partial.fun_call_param_tuple(p);
     p.tree.set_node_arg0(parent, lhs);
     p.tree.set_node_arg1(parent, param_tuple);
     return parent;
@@ -789,7 +789,7 @@ pub fn labelarrow(p: *Parser, lhs: u32) anyerror!u32 {
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         // cursor should be right at first comma
-        rhs = try subexpr_rules.ee_eval_subexpr_destructure(p, rhs);
+        rhs = try partial.destructure(p, rhs);
     }
 
     p.tree.set_node_arg0(parent, lhs);
@@ -804,7 +804,7 @@ pub fn optarrow(p: *Parser, lhs: u32) anyerror!u32 {
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         // cursor should be right at first comma
-        rhs = try subexpr_rules.ee_eval_subexpr_destructure(p, rhs);
+        rhs = try partial.destructure(p, rhs);
     }
 
     p.tree.set_node_arg0(parent, lhs);
@@ -819,7 +819,7 @@ pub fn errarrow(p: *Parser, lhs: u32) anyerror!u32 {
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         // cursor should be right at first comma
-        rhs = try subexpr_rules.ee_eval_subexpr_destructure(p, rhs);
+        rhs = try partial.destructure(p, rhs);
     }
 
     p.tree.set_node_arg0(parent, lhs);
