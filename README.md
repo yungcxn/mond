@@ -8,7 +8,7 @@ w.i.p.
 
 1. Ideally, features should be used by intuition rather than introducing "cool toy semantics" that are unsatisfying to use for experienced users of other common programming languages. 
 2. Expressiveness is something I miss all the time. Short notations are nice.
-3. FP does a lot of things good, especially metaprogramming.
+3. FP does a lot of things well, especially metaprogramming.
 
 ## Roadmap:
 
