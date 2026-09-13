@@ -75,7 +75,7 @@ pub const Node = struct {
         @"while", // lhs: expr (condition), rhs: expr (body)
         while_with_repeat_stmt, // lhs: expr_while, rhs: stmt (repeat statement)
         for_seq, // lhs: expr (seq), rhs: expr (body)
-        for_in_seq, // lhs: expr_for, rhs: expr (iterator var)
+        for_var_in_seq, // lhs: expr_for, rhs: expr (iterator var)
         loop, // lhs: expr (optional repeat statement), rhs: expr (body)
         match, // lhs: expr (match value), rhs: subexpr_match_body (match body)
 

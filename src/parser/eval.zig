@@ -5,23 +5,137 @@ const FixedStack = @import("../ds/fixedstack.zig").FixedStack;
 const lookahead = @import("lookahead.zig");
 const partial = @import("partial.zig");
 
+// TODO NEXT: assign, '{ }, <>, "code"
 // might seem repetitive for now, but makes extensions easy (FOR NOW)
-
 // TODO: bake these structs into a parse table with the node
 
-pub const FunctionDefinition = struct {
-    function_header: u32,
+pub const UnaryNode = struct {
+    subnode: u32,
+};
+
+pub const BinaryComputation = struct {
+    lhs: u32,
+    rhs: u32,
+};
+
+pub const DeferInlined = struct {
+    value: u32,
+    defered: u32,
+};
+
+pub const ErrorHandle = struct {
+    value: u32,
+    fallback: u32,
+};
+
+pub const OptionalHandle = struct {
+    value: u32,
+    fallback: u32,
+};
+
+pub const Arrow = struct {
+    value: u32,
+    label: u32,
+};
+
+pub const As = struct {
+    value: u32,
+    type: u32,
+};
+
+pub const OfType = struct {
+    value: u32,
+    type: u32,
+};
+
+pub const GeneratorExclusive = struct {
+    lower: u32,
+    upper: u32,
+};
+
+pub const GeneratorInclusive = struct {
+    lower: u32,
+    upper: u32,
+};
+
+pub const Member = struct {
+    parent: u32,
+    member: u32,
+};
+
+pub const ArrayIndex = struct {
+    indexable: u32,
+    index: u32,
+};
+
+pub const FunctionCall = struct {
+    callable: u32,
+    fun_param_tuple: u32,
+};
+
+pub const UnifyVariants = struct {
+    left_type: u32,
+    right_type: u32,
+};
+
+pub const Match = struct {
+    matched: u32,
+    match_body: u32,
+};
+
+pub const Loop = struct {
+    repeated: u32,
     body: u32,
 };
 
+pub const ForSeq = struct {
+    seq: u32,
+    body: u32,
+};
+
+pub const ForVarInSeq = struct {
+    for_seq: u32,
+    variable: u32,
+};
+
+pub const While = struct {
+    cond: u32,
+    body: u32,
+};
+
+pub const WhileWithRepeatStmt = struct {
+    @"while": u32,
+    repeated: u32,
+};
+
+pub const IfThen = struct {
+    cond: u32,
+    then: u32,
+};
+
+pub const IfElse = struct {
+    if_then: u32,
+    @"else": u32,
+};
+
+pub const ArrayType = struct {
+    length: u32,
+    type: u32,
+};
+
+pub const FunctionDefinition = struct {
+    fun_header: u32,
+    unit: u32,
+};
+
 pub const TypeDefinition = struct {
-    parameter_tuple: u32,
+    param_tuple: u32,
     sizeof: u32,
-    trait_def: u32,
+    def_trait: u32,
 };
 
 pub const VariantDefinition = struct {
-    parameter_tuple: u32,
+    param_tuple: u32,
     tagof: u32,
     sizeof: u32,
 };
@@ -33,13 +147,16 @@ pub const TraitDefinition = struct {
 
 // *** rule templates *** //
 
-pub fn templ_binary(kind: ParseTree.Node.Kind) fn (parser: *Parser, lhs: u32) anyerror!u32 {
+pub fn templ_binary(kind: ParseTree.Node.Kind, prec: u8) fn (parser: *Parser, lhs: u32) anyerror!u32 {
     return struct {
         pub fn eval(p: *Parser, lhs: u32) anyerror!u32 {
             const parent = p.tree.push_node(kind);
-            p.tree.set_node_arg0(parent, lhs);
-            const rhs = try any(p, 0);
-            p.tree.set_node_arg1(parent, rhs);
+            const def: BinaryComputation = .{
+                .lhs = lhs,
+                .rhs = try any(p, prec + 1),
+            };
+            p.tree.set_node_arg0(parent, def.lhs);
+            p.tree.set_node_arg1(parent, def.rhs);
             return parent;
         }
     }.eval;
@@ -49,6 +166,7 @@ pub fn templ_binary(kind: ParseTree.Node.Kind) fn (parser: *Parser, lhs: u32) an
 
 pub fn any(p: *Parser, prec: u8) anyerror!u32 {
     var parent = try lookahead.pre[@intFromEnum(try p.pop_tok())].?(p);
+
     while (lookahead.post[@intFromEnum(try p.pop_tok())]) |post_f| {
         const lhs = parent;
         parent = try post_f(p, lhs);
@@ -64,7 +182,6 @@ pub fn any(p: *Parser, prec: u8) anyerror!u32 {
 
         const lhs = parent;
         parent = try precd_bin.f(p, lhs);
-        p.tree.set_node_arg0(parent, lhs);
     } else {
         p.tok_cursor -= 1;
     }
@@ -78,47 +195,51 @@ pub fn paren(p: *Parser) anyerror!u32 {
     var parent: u32 = 0xFFFFFFFF;
     if (!try p.peek_eq_tok(.@"pct_)")) {
         parent = try any(p, 0);
-        // it was '(' behind, then expr, then ')', if after it's `->` or `:` or `{`, it's a func!
-        try p.eat_assert_tok(.@"pct_)");
         switch (try p.peek_tok()) {
-            .@"xpct_->", .@"pct_:", .@"pct_{" => {
-                // `parent` was an expression in a "()", but it's actually a function parameter tuple
+            .@"pct_,", .@"xpct_=", .kw_where, .identifier => {
                 parent = try partial.ee_fun_header(p, parent);
                 parent = try ee_def_fun(p, parent);
             },
-            else => {
-                // `parent` just needs to be in a capture expression
-                const child = parent;
-                parent = p.tree.push_node(.capture);
-                p.tree.set_node_arg0(parent, child);
+            .@"pct_)" => {
+                p.tok_cursor += 1;
+                switch (try p.peek_tok()) {
+                    .@"xpct_->", .@"pct_:", .@"pct_{" => {
+                        p.tok_cursor -= 1;
+                        parent = try partial.ee_fun_header(p, parent);
+                        parent = try ee_def_fun(p, parent);
+                    },
+                    else => {
+                        const paren_def: UnaryNode = .{ .subnode = parent };
+                        parent = p.tree.push_node(.capture);
+                        p.tree.set_node_arg0(parent, paren_def.subnode);
+                    },
+                }
             },
+            else => return error.IllegalParenSyntax,
         }
     } else {
-        // guaranteed to be a `subexpr_fun_param_def_tuple`, and `paren` is early
-        parent = try partial.ee_fun_header(p, parent);
+        parent = try partial.ee_fun_header(p, null);
         parent = try ee_def_fun(p, parent);
     }
     return parent;
 }
 
-// `argument_tuple` was already parsed (either by ee_eval_subexpr_fun_param_def_tuple
-// in paren's early-tuple path, or the closing ')' was already consumed there too)
 fn ee_def_fun(p: *Parser, early_function_header: u32) anyerror!u32 {
     const parent = p.tree.push_node(.def_fun);
     var def: FunctionDefinition = undefined;
-    def.function_header = early_function_header;
+    def.fun_header = early_function_header;
 
     switch (try p.peek_tok()) {
         .@"pct_:" => {
             p.tok_cursor += 1;
             if (try p.peek_eq_tok(.@"pct_{")) return error.IllegalBlockAfterColon;
-            def.body = try any(p, 0);
+            def.unit = try any(p, 0);
         },
         .@"pct_{" => {
-            def.body = try any(p, 0);
+            def.unit = try any(p, 0);
         },
         else => {
-            def.body = 0xFFFFFFFF;
+            def.unit = 0xFFFFFFFF;
         },
     }
 
@@ -143,30 +264,33 @@ pub fn bracket(p: *Parser) anyerror!u32 {
                     if (try p.peek_eq_tok(.@"pct_]")) break;
                     try p.eat_assert_tok(.@"pct_,");
                 }
+                p.tok_cursor += 1;
                 parent = p.tree.push_node(.array);
                 p.tree.push_extra_childrefs(parent, children.view());
             },
             .@"pct_]" => { // no comma -> type
                 p.tok_cursor += 1;
-                const lhs = parent;
+                const def: ArrayType = .{
+                    .length = parent,
+                    .type = try any(p, 0),
+                };
                 parent = p.tree.push_node(.type_array);
-                const rhs = try any(p, 0);
-                p.tree.set_node_arg0(parent, lhs);
-                p.tree.set_node_arg1(parent, rhs);
+                p.tree.set_node_arg0(parent, def.length);
+                p.tree.set_node_arg1(parent, def.type);
             },
             else => return error.IllegalArraySeparatorTerminator,
         }
     } else {
-        // is after this an expression? (see lookahead) -> type, else array
-        p.tok_cursor += 1;
-        if (lookahead.pre[@intFromEnum(try p.pop_tok())]) |f| {
-            const lhs = parent;
+        p.tok_cursor += 1; // consume "]"
+        if (lookahead.pre[@intFromEnum(try p.peek_tok())] != null) {
+            const def: ArrayType = .{
+                .length = 0xFFFFFFFF,
+                .type = try any(p, 0),
+            };
             parent = p.tree.push_node(.type_array);
-            const rhs = try f(p); // consume the expression
-            p.tree.set_node_arg0(parent, lhs);
-            p.tree.set_node_arg1(parent, rhs);
+            p.tree.set_node_arg0(parent, def.length);
+            p.tree.set_node_arg1(parent, def.type);
         } else {
-            p.tok_cursor -= 1;
             parent = p.tree.push_node(.array);
             p.tree.set_node_arg0(parent, 0xFFFFFFFF);
         }
@@ -176,69 +300,71 @@ pub fn bracket(p: *Parser) anyerror!u32 {
 
 pub fn typeof(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.typeof);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, child);
+    const def: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn sizeof(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.sizeof);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, child);
+    const def: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn neg_num(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.neg_num);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, child);
+    const def: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn neg_logic(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.neg_logic);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, child);
+    const def: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn inc_prefix(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.inc_prefix);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, child);
+    const def: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn dec_prefix(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.dec_prefix);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, child);
+    const def: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn gen_upperbound_incl(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.gen_upperbound_incl);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, child);
+    const def: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn gen_upperbound_excl(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.gen_upperbound_excl);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, child);
+    const def: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn true_(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.boolean);
-    p.tree.set_node_arg0(parent, 1);
+    const def: UnaryNode = .{ .subnode = 1 };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn false_(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.boolean);
-    p.tree.set_node_arg0(parent, 0);
+    const def: UnaryNode = .{ .subnode = 0 };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
@@ -252,8 +378,8 @@ pub fn err(p: *Parser) anyerror!u32 {
 
 pub fn deinit(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.deinit);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, child);
+    const def: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
@@ -267,38 +393,42 @@ pub fn brk(p: *Parser) anyerror!u32 {
 
 pub fn ret(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.ret);
-    if (lookahead.pre[@intFromEnum(try p.pop_tok())]) |f| {
-        const child = try f(p);
-        p.tree.set_node_arg0(parent, child);
+    var def: UnaryNode = undefined;
+    if (lookahead.pre[@intFromEnum(try p.peek_tok())] != null) {
+        def.subnode = try any(p, 0);
     } else {
-        p.tok_cursor -= 1;
-        p.tree.set_node_arg0(parent, 0xFFFFFFFF);
+        def.subnode = 0xFFFFFFFF;
     }
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn if_(p: *Parser) anyerror!u32 {
     var parent = p.tree.push_node(.if_then);
+    var def: IfThen = undefined;
 
-    const if_cond = try any(p, 0);
-    p.tree.set_node_arg0(parent, if_cond);
+    def.cond = try any(p, 0);
+
     switch (try p.peek_tok()) {
         .@"pct_:" => p.tok_cursor += 1,
         .@"pct_{" => {},
         else => return error.IllegalIfFormat,
     }
 
-    const if_body = try any(p, 0);
-    p.tree.set_node_arg1(parent, if_body);
+    def.then = try any(p, 0);
+
+    p.tree.set_node_arg0(parent, def.cond);
+    p.tree.set_node_arg1(parent, def.then);
 
     if (try p.peek_eq_tok(.kw_else)) {
         p.tok_cursor += 1;
-        const else_body = try any(p, 0);
-        const if_parent = parent;
+        var else_def: IfElse = undefined;
+        else_def.@"else" = try any(p, 0);
+        else_def.if_then = parent;
 
         parent = p.tree.push_node(.if_else);
-        p.tree.set_node_arg0(parent, if_parent);
-        p.tree.set_node_arg1(parent, else_body);
+        p.tree.set_node_arg0(parent, else_def.if_then);
+        p.tree.set_node_arg1(parent, else_def.@"else");
     }
 
     return parent;
@@ -308,15 +438,20 @@ pub fn while_(p: *Parser) anyerror!u32 {
     const while_node = p.tree.push_node(.@"while");
     var parent = while_node;
 
-    const while_cond = try any(p, 0);
-    p.tree.set_node_arg0(while_node, while_cond);
+    var def: While = undefined;
+    var def_with_repeat: WhileWithRepeatStmt = undefined;
+
+    def.cond = try any(p, 0);
+
+    p.tree.set_node_arg0(while_node, def.cond);
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         p.tok_cursor += 1;
-        const while_repeat = try any(p, 0);
+        def_with_repeat.@"while" = while_node;
+        def_with_repeat.repeated = try any(p, 0);
         parent = p.tree.push_node(.while_with_repeat_stmt);
-        p.tree.set_node_arg0(parent, while_node);
-        p.tree.set_node_arg1(parent, while_repeat);
+        p.tree.set_node_arg0(parent, def_with_repeat.@"while");
+        p.tree.set_node_arg1(parent, def_with_repeat.repeated);
     }
 
     switch (try p.peek_tok()) {
@@ -325,8 +460,8 @@ pub fn while_(p: *Parser) anyerror!u32 {
         else => return error.IllegalWhileFormat,
     }
 
-    const while_body = try any(p, 0);
-    p.tree.set_node_arg1(while_node, while_body);
+    def.body = try any(p, 0);
+    p.tree.set_node_arg1(while_node, def.body);
 
     return parent;
 }
@@ -335,18 +470,22 @@ pub fn for_(p: *Parser) anyerror!u32 {
     const for_node = p.tree.push_node(.for_seq);
     var parent = for_node;
 
-    var for_seq = try any(p, 0);
+    var def: ForSeq = undefined;
+    var def_var_extension: ForVarInSeq = undefined;
+
+    def.seq = try any(p, 0);
 
     if (try p.peek_eq_tok(.kw_in)) {
         p.tok_cursor += 1;
-        const for_var = for_seq;
-        for_seq = try any(p, 0);
-        p.tree.set_node_arg0(for_node, for_seq);
-        parent = p.tree.push_node(.for_in_seq);
-        p.tree.set_node_arg0(parent, for_node);
-        p.tree.set_node_arg1(parent, for_var);
+        def_var_extension.for_seq = for_node;
+        def_var_extension.variable = def.seq;
+        def.seq = try any(p, 0);
+        p.tree.set_node_arg0(for_node, def.seq);
+        parent = p.tree.push_node(.for_var_in_seq);
+        p.tree.set_node_arg0(parent, def_var_extension.for_seq);
+        p.tree.set_node_arg1(parent, def_var_extension.variable);
     } else {
-        p.tree.set_node_arg0(for_node, for_seq);
+        p.tree.set_node_arg0(for_node, def.seq);
     }
 
     switch (try p.peek_tok()) {
@@ -355,54 +494,59 @@ pub fn for_(p: *Parser) anyerror!u32 {
         else => return error.IllegalForFormat,
     }
 
-    const for_body = try any(p, 0);
-    p.tree.set_node_arg1(for_node, for_body);
+    def.body = try any(p, 0);
+    p.tree.set_node_arg1(for_node, def.body);
 
     return parent;
 }
 
 pub fn loop(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.loop);
-    const node0 = try any(p, 0);
+    var def: Loop = undefined;
+    def.body = try any(p, 0);
 
     switch (try p.peek_tok()) {
         .@"pct_:" => p.tok_cursor += 1,
         .@"pct_{" => {},
-        else => {
+        else => { // we just had one node here -> no repeat!
+            def.repeated = 0xFFFFFFFF;
             p.tree.set_node_arg0(parent, 0xFFFFFFFF);
-            p.tree.set_node_arg1(parent, node0);
+            p.tree.set_node_arg1(parent, def.body);
             return parent;
         },
     }
 
-    p.tok_cursor += 1;
-    const node1 = try any(p, 0);
-    p.tree.set_node_arg0(parent, node0);
-    p.tree.set_node_arg1(parent, node1);
+    def.repeated = def.body;
+    def.body = try any(p, 0);
+    p.tree.set_node_arg0(parent, def.repeated);
+    p.tree.set_node_arg1(parent, def.body);
 
     return parent;
 }
 
 pub fn match(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.match);
-    const to_match = try any(p, 0);
-    p.tree.set_node_arg0(parent, to_match);
-    const match_body = try partial.match_body(p);
-    p.tree.set_node_arg1(parent, match_body);
+    var def: Match = undefined;
+
+    def.matched = try any(p, 0);
+    def.match_body = try partial.match_body(p);
+
+    p.tree.set_node_arg0(parent, def.matched);
+    p.tree.set_node_arg1(parent, def.match_body);
     return parent;
 }
 
 pub fn type_ptr(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.type_ptr);
-    const child_expr = try any(p, 0);
-    p.tree.set_node_arg0(parent, child_expr);
+    const child: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, child.subnode);
     return parent;
 }
 
 pub fn type_ptrmut(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.type_ptrmut);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, child);
+    const child: UnaryNode = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, child.subnode);
     return parent;
 }
 
@@ -488,11 +632,11 @@ pub fn type_or_variant(p: *Parser) anyerror!u32 {
     if (is_mut0) p.tok_cursor += 1;
     const early_node0 = try any(p, 0);
 
-    var name: u32 = 0xFFFFFFFF;
-    var of_type: u32 = 0xFFFFFFFF;
-    var default_value: u32 = 0xFFFFFFFF;
-    var where_predicate: u32 = 0xFFFFFFFF;
-    var where_else_value: u32 = 0xFFFFFFFF;
+    var name: u32 = 0xFFFFFFFF; // shared
+    var of_type: u32 = 0xFFFFFFFF; // only for variant
+    var default_value: u32 = 0xFFFFFFFF; // only for type
+    var where_predicate: u32 = 0xFFFFFFFF; // only for type
+    var where_else_value: u32 = 0xFFFFFFFF; // only for type
 
     var kind: ?enum { type, variant } = null;
 
@@ -555,8 +699,8 @@ pub fn type_or_variant(p: *Parser) anyerror!u32 {
             {
                 const param = p.tree.push_node(if (is_mut0) .partial__type_param_mut else .partial__type_param);
                 var param_def: partial.TypeParameter = .{
-                    .param_type = early_node0,
-                    .name = name,
+                    .type = early_node0,
+                    .identifier = name,
                     .default_value = default_value,
                     .where_predicate = where_predicate,
                     .where_else_value = where_else_value,
@@ -575,7 +719,7 @@ pub fn type_or_variant(p: *Parser) anyerror!u32 {
 
             const parent = p.tree.push_node(type_kind);
             var type_def: TypeDefinition = undefined;
-            type_def.parameter_tuple = param_tuple;
+            type_def.param_tuple = param_tuple;
 
             if (try p.peek_eq_tok(.kw_sizeof)) {
                 p.tok_cursor += 1;
@@ -586,9 +730,9 @@ pub fn type_or_variant(p: *Parser) anyerror!u32 {
 
             if (try p.peek_eq_tok(.kw_implof) or try p.peek_eq_tok(.@"xpct_@{")) {
                 p.tok_cursor += 1;
-                type_def.trait_def = try trait(p);
+                type_def.def_trait = try trait(p);
             } else {
-                type_def.trait_def = 0xFFFFFFFF;
+                type_def.def_trait = 0xFFFFFFFF;
             }
 
             p.tree.push_extra_childrefs(parent, &type_def);
@@ -624,7 +768,7 @@ pub fn type_or_variant(p: *Parser) anyerror!u32 {
 
             const parent = p.tree.push_node(variant_kind);
             var variant_def: VariantDefinition = undefined;
-            variant_def.parameter_tuple = param_tuple;
+            variant_def.param_tuple = param_tuple;
 
             if (try p.peek_eq_tok(.kw_tagof)) {
                 p.tok_cursor += 1;
@@ -689,184 +833,242 @@ pub fn trait(p: *Parser) anyerror!u32 {
 
 pub fn unify_variants(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.unify_variants);
-    const childtype = try any(p, 0);
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, childtype);
+    const def: UnifyVariants = .{
+        .left_type = lhs,
+        .right_type = try any(p, 0),
+    };
+
+    p.tree.set_node_arg0(parent, def.left_type);
+    p.tree.set_node_arg1(parent, def.right_type);
     return parent;
 }
 
 pub fn fun_call(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.fun_call);
-    const param_tuple = try partial.fun_call_param_tuple(p);
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, param_tuple);
+    const def: FunctionCall = .{
+        .callable = lhs,
+        .fun_param_tuple = try partial.fun_call_param_tuple(p),
+    };
+    p.tree.set_node_arg0(parent, def.callable);
+    p.tree.set_node_arg1(parent, def.fun_param_tuple);
     return parent;
 }
 
 pub fn array_index(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.array_index);
-    const child = try any(p, 0);
+    const def: ArrayIndex = .{
+        .indexable = lhs,
+        .index = try any(p, 0),
+    };
     try p.eat_assert_tok(.@"pct_]");
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, child);
+    p.tree.set_node_arg0(parent, def.indexable);
+    p.tree.set_node_arg1(parent, def.index);
     return parent;
 }
 
 pub fn member(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.member);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, child);
+    const def: Member = .{
+        .parent = lhs,
+        .member = try any(p, 0),
+    };
+    p.tree.set_node_arg0(parent, def.parent);
+    p.tree.set_node_arg1(parent, def.member);
     return parent;
 }
 
 pub fn dereference(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.dereference);
-    p.tree.set_node_arg0(parent, lhs);
+    const def: UnaryNode = .{
+        .subnode = lhs,
+    };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn address_of(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.address_of);
-    p.tree.set_node_arg0(parent, lhs);
+    const def: UnaryNode = .{
+        .subnode = lhs,
+    };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn inc_postfix(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.inc_postfix);
-    p.tree.set_node_arg0(parent, lhs);
+    const def: UnaryNode = .{
+        .subnode = lhs,
+    };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn dec_postfix(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.dec_postfix);
-    p.tree.set_node_arg0(parent, lhs);
+    const def: UnaryNode = .{
+        .subnode = lhs,
+    };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn gen_lowerbound(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.gen_lowerbound);
-    p.tree.set_node_arg0(parent, lhs);
+    const def: UnaryNode = .{
+        .subnode = lhs,
+    };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
 }
 
 pub fn gen_incl(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.gen_incl);
-    const upper = try any(p, 0);
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, upper);
+    const def: GeneratorInclusive = .{
+        .lower = lhs,
+        .upper = try any(p, 0),
+    };
+    p.tree.set_node_arg0(parent, def.lower);
+    p.tree.set_node_arg1(parent, def.upper);
     return parent;
 }
 
 pub fn gen_excl(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.gen_excl);
-    const upper = try any(p, 0);
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, upper);
+    const def: GeneratorExclusive = .{
+        .lower = lhs,
+        .upper = try any(p, 0),
+    };
+    p.tree.set_node_arg0(parent, def.lower);
+    p.tree.set_node_arg1(parent, def.upper);
     return parent;
 }
 
 pub fn oftype(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.oftype);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, child);
+    const def: OfType = .{
+        .value = lhs,
+        .type = try any(p, 0),
+    };
+    p.tree.set_node_arg0(parent, def.value);
+    p.tree.set_node_arg1(parent, def.type);
     return parent;
 }
 
 pub fn as(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.as);
-    const child = try any(p, 0);
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, child);
+    const def: As = .{
+        .value = lhs,
+        .type = try any(p, 0),
+    };
+    p.tree.set_node_arg0(parent, def.value);
+    p.tree.set_node_arg1(parent, def.type);
     return parent;
 }
 
 pub fn labelarrow(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.labelarrow);
+    var def: Arrow = undefined;
+    def.value = lhs;
+
     try p.eat_assert_tok(.identifier);
-    var rhs = try any(p, 0);
+    def.label = try identifier(p);
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         // cursor should be right at first comma
-        rhs = try partial.destructure(p, rhs);
+        def.label = try partial.destructure(p, def.label);
     }
 
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, rhs);
+    p.tree.set_node_arg0(parent, def.value);
+    p.tree.set_node_arg1(parent, def.label);
     return parent;
 }
 
 pub fn optarrow(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.optarrow);
+    var def: Arrow = undefined;
+    def.value = lhs;
+
     try p.eat_assert_tok(.identifier);
-    var rhs = try any(p, 0);
+    def.label = try identifier(p);
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         // cursor should be right at first comma
-        rhs = try partial.destructure(p, rhs);
+        def.label = try partial.destructure(p, def.label);
     }
 
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, rhs);
+    p.tree.set_node_arg0(parent, def.value);
+    p.tree.set_node_arg1(parent, def.label);
     return parent;
 }
 
 pub fn errarrow(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.errarrow);
+    var def: Arrow = undefined;
+    def.value = lhs;
+
     try p.eat_assert_tok(.identifier);
-    var rhs = try any(p, 0);
+    def.label = try identifier(p);
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         // cursor should be right at first comma
-        rhs = try partial.destructure(p, rhs);
+        def.label = try partial.destructure(p, def.label);
     }
 
-    p.tree.set_node_arg0(parent, lhs);
-    p.tree.set_node_arg1(parent, rhs);
+    p.tree.set_node_arg0(parent, def.value);
+    p.tree.set_node_arg1(parent, def.label);
     return parent;
 }
 
 pub fn errhandle(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.errhandle);
-    p.tree.set_node_arg0(parent, lhs);
-
-    if (lookahead.pre[@intFromEnum(try p.pop_tok())]) |f| {
-        const child = try f(p);
-        p.tree.set_node_arg1(parent, child);
+    var def: ErrorHandle = undefined;
+    def.value = lhs;
+    if (lookahead.pre[@intFromEnum(try p.peek_tok())] != null) {
+        def.fallback = try any(p, 0);
     } else {
-        p.tok_cursor -= 1;
-        p.tree.set_node_arg0(parent, 0xFFFFFFFF);
+        def.fallback = 0xFFFFFFFF;
     }
-
+    p.tree.set_node_arg0(parent, def.value);
+    p.tree.set_node_arg1(parent, def.fallback);
     return parent;
 }
 
 pub fn opthandle(p: *Parser, lhs: u32) anyerror!u32 {
     const parent = p.tree.push_node(.opthandle);
-    p.tree.set_node_arg0(parent, lhs);
+    var def: OptionalHandle = undefined;
+    def.value = lhs;
 
-    if (lookahead.pre[@intFromEnum(try p.pop_tok())]) |f| {
-        const child = try f(p);
-        p.tree.set_node_arg1(parent, child);
+    if (lookahead.pre[@intFromEnum(try p.peek_tok())] != null) {
+        def.fallback = try any(p, 0);
     } else {
-        p.tok_cursor -= 1;
-        p.tree.set_node_arg0(parent, 0xFFFFFFFF);
+        def.fallback = 0xFFFFFFFF;
     }
 
+    p.tree.set_node_arg0(parent, def.value);
+    p.tree.set_node_arg1(parent, def.fallback);
     return parent;
 }
 
-pub fn defer_(p: *Parser, lhs: u32) anyerror!u32 {
+pub fn defer_(p: *Parser) anyerror!u32 {
+    const parent = p.tree.push_node(.@"defer");
+    const def: UnaryNode = .{
+        .subnode = try any(p, 0),
+    };
+    p.tree.set_node_arg0(parent, def.subnode);
+    return parent;
+}
+
+pub fn defer_inlined(p: *Parser, lhs: u32) anyerror!u32 {
     if (try p.peek_eq_tok(.kw_deinit)) {
         p.tok_cursor += 1;
-        if (lookahead.pre[@intFromEnum(try p.pop_tok())] == null) {
+        if (lookahead.pre[@intFromEnum(try p.peek_tok())] == null) {
             const parent = p.tree.push_node(.defer_with_deinit);
             p.tree.set_node_arg0(parent, lhs);
             return parent;
-        } else {
-            p.tok_cursor -= 2;
         }
+
+        p.tok_cursor -= 1;
     }
     const parent = p.tree.push_node(.@"defer");
     p.tree.set_node_arg0(parent, lhs);
@@ -880,7 +1082,7 @@ pub fn identifier(p: *Parser) anyerror!u32 {
 }
 
 pub fn int(p: *Parser) anyerror!u32 {
-    return p.tree.push_data_node(.identifier, p.tok_cursor - 1);
+    return p.tree.push_data_node(.int, p.tok_cursor - 1);
 }
 
 pub fn float(p: *Parser) anyerror!u32 {

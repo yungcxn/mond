@@ -4,27 +4,25 @@ const FixedStack = @import("../ds/fixedstack.zig").FixedStack;
 const lookahead = @import("lookahead.zig");
 const eval = @import("eval.zig");
 
-// TODO NEXT: refactor this ASAP!
-
 // TODO: this can vanish, the evaluators are not needed and should be constructed not through the
 // "parse" behaviour for ast nodes in the code, but through building anode structs at compiletime.
 
 pub const FunctionHeader = struct {
-    argument_tuple: u32,
+    param_tuple: u32,
     return_type: u32,
 };
 
 pub const FunctionDefinitionParameter = struct {
-    param_type: u32,
-    name: u32,
+    type: u32,
+    identifier: u32,
     default_value: u32,
     where_predicate: u32,
     where_else_value: u32,
 };
 
 pub const TypeParameter = struct {
-    param_type: u32,
-    name: u32,
+    type: u32,
+    identifier: u32,
     default_value: u32,
     where_predicate: u32,
     where_else_value: u32,
@@ -37,10 +35,10 @@ pub const VariantParameter = struct {
 };
 
 // ee refers to early eval'd => we have a part of this node already evaluated.
-pub fn ee_fun_header(p: *Parser, early_node0_in_tuple: u32) anyerror!u32 {
+pub fn ee_fun_header(p: *Parser, early_node0_in_tuple: ?u32) anyerror!u32 {
     const parent = p.tree.push_node(.partial__fun_header);
     var def: FunctionHeader = undefined;
-    def.argument_tuple = try ee_fun_param_tuple(p, early_node0_in_tuple);
+    def.param_tuple = try ee_fun_param_tuple(p, early_node0_in_tuple);
 
     if (try p.peek_eq_tok(.@"xpct_->")) {
         p.tok_cursor += 1;
@@ -49,55 +47,49 @@ pub fn ee_fun_header(p: *Parser, early_node0_in_tuple: u32) anyerror!u32 {
         def.return_type = 0xFFFFFFFF;
     }
 
-    p.tree.set_node_arg0(parent, def.argument_tuple);
+    p.tree.set_node_arg0(parent, def.param_tuple);
     p.tree.set_node_arg1(parent, def.return_type);
     return parent;
 }
 
-pub fn ee_fun_param_tuple(p: *Parser, early_expr0: u32) anyerror!u32 {
+pub fn ee_fun_param_tuple(p: *Parser, early_node0: ?u32) anyerror!u32 {
     const parent = p.tree.push_node(.partial__fun_param_tuple);
 
-    if (!try p.peek_eq_tok(.@"pct_)")) {
-        var params: FixedStack(64) = .{};
-        while (true) {
-            if (params.cursor == 0) {
-                try params.push(try ee_fun_param(p, early_expr0));
-            } else {
-                try params.push(try ee_fun_param(p, try eval.any(p, 0)));
-            }
-            switch (try p.peek_tok()) {
-                .@"pct_)" => break,
-                .@"pct_," => {
-                    p.tok_cursor += 1;
-                    if (try p.peek_eq_tok(.@"pct_)")) break;
-                },
-                else => return error.IllegalFunParamDef,
-            }
-        }
-        p.tree.push_extra_childrefs(parent, params.view());
-        return parent;
-    } else {
+    if (early_node0 == null and try p.peek_eq_tok(.@"pct_)")) {
         p.tok_cursor += 1;
         return parent;
     }
+
+    var params: FixedStack(64) = .{};
+    try params.push(try ee_fun_param(p, early_node0.?));
+    while (try p.peek_eq_tok(.@"pct_,")) {
+        p.tok_cursor += 1;
+        if (try p.peek_eq_tok(.@"pct_)")) break;
+        try params.push(try ee_fun_param(p, try eval.any(p, 0)));
+    }
+    try p.eat_assert_tok(.@"pct_)");
+
+    p.tree.push_extra_childrefs(parent, params.view());
+    return parent;
 }
 
-pub fn ee_fun_param(p: *Parser, early_expr0: u32) anyerror!u32 {
+pub fn ee_fun_param(p: *Parser, early_node0: u32) anyerror!u32 {
     const parent = p.tree.push_node(.partial__fun_param);
     var def: FunctionDefinitionParameter = undefined;
     // here, we could encounter <expr> <expr> or <expr>
     // + they are followed by , OR ) OR = OR where
 
     // first expr is safe:
-    const a = early_expr0;
+    const a = early_node0;
     const next_tok = try p.peek_tok();
     if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where) {
+        try p.eat_assert_tok(.identifier);
         const b = try eval.identifier(p);
-        def.param_type = a;
-        def.name = b;
+        def.type = a;
+        def.identifier = b;
     } else {
-        def.param_type = a;
-        def.name = 0xFFFFFFFF;
+        def.type = a;
+        def.identifier = 0xFFFFFFFF;
     }
 
     if (try p.peek_eq_tok(.@"xpct_=")) {
@@ -128,7 +120,7 @@ pub fn ee_fun_param(p: *Parser, early_expr0: u32) anyerror!u32 {
 pub fn match_body(p: *Parser) anyerror!u32 {
     const parent = p.tree.push_node(.partial__match_body);
     try p.eat_assert_tok(.@"pct_{");
-    var match_cases: FixedStack(64) = .{};
+    var match_cases: FixedStack(512) = .{};
     while (true) {
         try match_cases.push(try match_case(p));
         switch (try p.peek_tok()) {
@@ -140,6 +132,7 @@ pub fn match_body(p: *Parser) anyerror!u32 {
             else => return error.IllegalMatchCase,
         }
     }
+    p.tok_cursor += 1;
     p.tree.push_extra_childrefs(parent, match_cases.view());
     return parent;
 }
@@ -175,6 +168,7 @@ pub fn fun_call_param_tuple(p: *Parser) anyerror!u32 {
             }
         }
         p.tree.push_extra_childrefs(parent, params.view());
+        try p.eat_assert_tok(.@"pct_)");
         return parent;
     } else {
         p.tok_cursor += 1;
@@ -214,7 +208,7 @@ pub fn destructure(p: *Parser, early_identifier0: u32) anyerror!u32 {
 }
 
 pub fn type_param(p: *Parser, early: ?struct { is_mut: bool, node0: u32 }) anyerror!u32 {
-    const is_mut, const expr0 = if (early) |e| .{ e.is_mut, e.node0 } else blk: {
+    const is_mut, const node0 = if (early) |e| .{ e.is_mut, e.node0 } else blk: {
         const m = try p.peek_eq_tok(.kw_mut);
         if (m) p.tok_cursor += 1;
         break :blk .{ m, try eval.any(p, 0) };
@@ -225,11 +219,12 @@ pub fn type_param(p: *Parser, early: ?struct { is_mut: bool, node0: u32 }) anyer
 
     const next_tok = try p.peek_tok();
     if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where) {
-        def.param_type = expr0;
-        def.name = try eval.identifier(p);
+        def.type = node0;
+        try p.eat_assert_tok(.identifier);
+        def.identifier = try eval.identifier(p);
     } else {
-        def.param_type = expr0;
-        def.name = 0xFFFFFFFF;
+        def.type = node0;
+        def.identifier = 0xFFFFFFFF;
     }
 
     if (try p.peek_eq_tok(.@"xpct_=")) {

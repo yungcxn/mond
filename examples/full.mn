@@ -199,7 +199,7 @@ variant Command = @(
 # 1) simple enum values: @(A | B | C)
 variant Direction = @(North | South | East | West);
 fun describe_dir = (Direction d) -> &u8 {
-    ret match (d) {
+    ret match d {
         Direction.North => "up",
         Direction.South => "down",
         Direction.East  => "right",
@@ -212,7 +212,7 @@ fun describe_dir = (Direction d) -> &u8 {
 # 2) explicitly tagged enum values: @(A = 0x01 | B = 0x02 | C = 0x03)
 variant HttpStatus = @(Ok = 200 | NotFound = 404 | ServerError = 500) tagof u32;
 fun describe_status = (HttpStatus s) -> &u8 {
-    ret match (s) {
+    ret match s {
         HttpStatus.Ok          => "OK",
         HttpStatus.NotFound    => "Not Found",
         HttpStatus.ServerError => "Server Error",
@@ -228,7 +228,7 @@ variant Shape = @(
 );
 fun area = (Shape s) -> f32 {
     # matches tags, could also use stcmatch(typeof s), would be better
-    ret match (s) {
+    ret match s {
         Shape.Circle <- r    => 3.14159 * r * r,
         Shape.Square <- side => side * side,
         Shape.Rect   <- dims => dims.w * dims.h,
