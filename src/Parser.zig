@@ -5,12 +5,13 @@ const Lexer = @import("Lexer.zig");
 const ParseTree = @import("ParseTree.zig");
 const Parser = @This();
 const lookahead = @import("parser/lookahead.zig");
+const NodeId = ParseTree.NodeId;
 
 tokens: SoD(Lexer.Token),
 src_bytes: []const u8,
 alloc: std.mem.Allocator,
 tok_cursor: u32 = 0,
-global_store: DynBuf(u32),
+global_store: DynBuf(NodeId),
 tree: ParseTree,
 
 pub fn init(

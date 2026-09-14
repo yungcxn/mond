@@ -3,194 +3,154 @@ const SoD = @import("ds/dynbuf.zig").SoD;
 const DynBuf = @import("ds/dynbuf.zig").DynBuf;
 const Lexer = @import("Lexer.zig");
 
+pub const NodeId = u32;
+
 pub const Node = struct {
     nk: Kind,
     args: @Vector(2, u32),
 
-    pub const Kind = enum(u8) {
-
-        // This just builds a rule based on the names of `Kind` but makes sure that this rule
-        //   can be realised. It could be that between two partially matching names could have non-
-        //   matching enum values inbetween. Therefore this is checked at comptime.
-        pub fn seg_table_by_prefix(comptime prefix: []const u8) [2]u32 {
-            return comptime blk: {
-                var scan_start: u32 = 0xFFFFFFFF;
-                var scan_end: u32 = 0xFFFFFFFF;
-                for (@typeInfo(Kind).@"enum".fields, 0..) |f, i| {
-                    if (std.mem.startsWith(u8, f.name, prefix)) {
-                        if (scan_start == null) scan_start = i;
-                        scan_end = i;
-
-                        if (i - scan_start > 1) {
-                            @compileError("kinds must be contiguous in the enum");
-                        } else {}
-                    }
-                }
-                break :blk .{ scan_start, scan_end };
-            };
-        }
-
-        pub fn is_assign(self: Kind) bool {
-            const scan_region: [2]u32 = seg_table_by_prefix("assign");
-            return @intFromEnum(self) >= scan_region[0] and @intFromEnum(self) <= scan_region[1];
-        }
-
-        NO_KIND,
-
-        block,
-        def_fun,
-
-        partial__fun_header,
-        partial__fun_param_tuple,
-        partial__fun_param,
-
-        capture,
-
-        array,
-        array_empty,
-
-        typeof,
-        sizeof,
-
-        type_array,
-
-        neg_num,
-        neg_logic,
-
-        inc_prefix,
-        dec_prefix,
-
-        gen_upperbound_incl,
-        gen_upperbound_excl,
-
-        none,
-        err,
-        deinit,
-        cont,
-        brk,
-        ret,
-
-        if_then, // lhs: expr (condition), rhs: expr (body)
-        if_else, // lhs: expr_if, rhs: expr (body)
-        @"while", // lhs: expr (condition), rhs: expr (body)
-        while_with_repeat_stmt, // lhs: expr_while, rhs: stmt (repeat statement)
-        for_seq, // lhs: expr (seq), rhs: expr (body)
-        for_var_in_seq, // lhs: expr_for, rhs: expr (iterator var)
-        loop, // lhs: expr (optional repeat statement), rhs: expr (body)
-        match, // lhs: expr (match value), rhs: subexpr_match_body (match body)
-
-        partial__match_body,
-        partial__match_case,
-
-        // note: can be type
-        type_ptrmut,
-
-        type_ptr,
-        type_u8,
-        type_u16,
-        type_u32,
-        type_u64,
-        type_i8,
-        type_i16,
-        type_i32,
-        type_i64,
-        type_f16,
-        type_f32,
-        type_f64,
-        type_bool,
-        type_type,
-        type_trait,
-        type_variant,
-        type_inlfun,
-        type_fun,
-        type_stcfun,
-
-        def_type,
-        def_type_packed,
-        def_variant,
-        def_variant_packed,
-        def_variant_unionsized,
-        def_trait,
-
-        partial__type_param_tuple,
-        partial__type_param,
-        partial__type_param_mut,
-
-        partial__variant_param_tuple,
-        partial__variant_param,
-
-        partial__trait_implof_tuple,
-        partial__trait_body,
-
-        unify_variants, // lhs: expr (type/variant), rhs: expr (type/variant)
-
-        fun_call, // lhs: expr (function), rhs: subexpr_fun_call_param_tuple (params)
-        partial__fun_call_param_tuple, // array of expr
-
-        array_index, // lhs: expr (array), rhs: expr (index)
-        member, // lhs: expr (struct), rhs: expr (member)
-        dereference, // lhs: expr (pointer)
-        address_of, // lhs: expr
-        inc_postfix, // lhs: expr (variable)
-        dec_postfix, // lhs: expr (variable)
-
-        gen_lowerbound,
-        gen_incl,
-        gen_excl,
-
-        oftype, // lhs: expr (value), rhs: expr (type)
-        as, // lhs: expr (value), rhs: expr (type)
-        labelarrow, // lhs: expr (what-to-label), rhs: expr OR subexpr_destructure (label)
-        optarrow, // see above
-        errarrow, // see above
-
-        partial__destructure, // expr_identifier[] (used by arrows and assignment)
-
-        // note: these are !! and ??
-        errhandle,
-        opthandle,
-
-        @"defer",
-        defer_with_deinit,
-
-        binary_logic_or,
-        binary_logic_xor,
-        binary_logic_and,
-        binary_num_or,
-        binary_num_xor,
-        binary_num_and,
-        binary_eq,
-        binary_neq,
-        binary_less,
-        binary_greater,
-        binary_less_eq,
-        binary_greater_eq,
-        binary_add,
-        binary_sub,
-        binary_mul,
-        binary_div,
-        binary_mod,
-        binary_shift_left,
-        binary_shift_right,
-        binary_pow,
-
-        identifier,
-        string,
-        int,
-        float,
-        char,
-        boolean,
+    const DefTable = .{
+        .{ "CodeBlock", "block", []NodeId },
+        .{ "FunctionDefinition", "def_fun", struct { fun_header: NodeId, unit: NodeId } },
+        .{ "PartialExpression_FunctionDefinitionHeader", "partial__fun_header", struct { param_tuple: NodeId, return_type: NodeId } },
+        .{ "PartialExpression_FunctionDefinitionParameterTuple", "partial__fun_param_tuple", []NodeId },
+        .{ "PartialExpression_FunctionDefinitionParameter", "partial__fun_param", struct { type: NodeId, identifier: NodeId, default_value: NodeId, where_predicate: NodeId, where_else_value: NodeId } },
+        .{ "Capture", "capture", struct { subnode: NodeId } },
+        .{ "Array", "array", []NodeId },
+        .{ "ArrayEmpty", "array_empty", [0]NodeId },
+        .{ "TypeOf", "typeof", struct { subnode: NodeId } },
+        .{ "SizeOf", "sizeof", struct { subnode: NodeId } },
+        .{ "TypeArray", "type_array", struct { length: NodeId, type: NodeId } },
+        .{ "NegateNumerical", "neg_num", struct { subnode: NodeId } },
+        .{ "NegateLogical", "neg_logic", struct { subnode: NodeId } },
+        .{ "IncrementPrefix", "inc_prefix", struct { subnode: NodeId } },
+        .{ "DecrementPrefix", "dec_prefix", struct { subnode: NodeId } },
+        .{ "GenUpperboundIncl", "gen_upperbound_incl", struct { subnode: NodeId } },
+        .{ "GenUpperboundExcl", "gen_upperbound_excl", struct { subnode: NodeId } },
+        .{ "None", "none", [0]NodeId },
+        .{ "Error", "err", [0]NodeId },
+        .{ "Deinit", "deinit", struct { subnode: NodeId } },
+        .{ "Continue", "cont", [0]NodeId },
+        .{ "Break", "brk", [0]NodeId },
+        .{ "Return", "ret", struct { opt_subnode: NodeId } },
+        .{ "IfThen", "if_then", struct { cond: NodeId, then: NodeId } },
+        .{ "IfElse", "if_else", struct { if_then: NodeId, @"else": NodeId } },
+        .{ "While", "while", struct { cond: NodeId, body: NodeId } },
+        .{ "WhileWithRepeatStmt", "while_with_repeat_stmt", struct { @"while": NodeId, repeated: NodeId } },
+        .{ "ForSeq", "for_seq", struct { seq: NodeId, body: NodeId } },
+        .{ "ForVarInSeq", "for_var_in_seq", struct { for_seq: NodeId, variable: NodeId } },
+        .{ "Loop", "loop", struct { opt_repeated: NodeId, body: NodeId } },
+        .{ "Match", "match", struct { matched: NodeId, match_body: NodeId } },
+        .{ "PartialExpression_MatchBody", "partial__match_body", []NodeId },
+        .{ "PartialExpression_MatchCase", "partial__match_case", struct { pattern: NodeId, body: NodeId } },
+        .{ "TypePointerMutable", "type_ptrmut", struct { subnode: NodeId } },
+        .{ "TypePointer", "type_ptr", struct { subnode: NodeId } },
+        .{ "TypeUnsignedInteger8", "type_u8", [0]NodeId },
+        .{ "TypeUnsignedInteger16", "type_u16", [0]NodeId },
+        .{ "TypeUnsignedInteger32", "type_u32", [0]NodeId },
+        .{ "TypeUnsignedInteger64", "type_u64", [0]NodeId },
+        .{ "TypeSignedInteger8", "type_i8", [0]NodeId },
+        .{ "TypeSignedInteger16", "type_i16", [0]NodeId },
+        .{ "TypeSignedInteger32", "type_i32", [0]NodeId },
+        .{ "TypeSignedInteger64", "type_i64", [0]NodeId },
+        .{ "TypeFloat16", "type_f16", [0]NodeId },
+        .{ "TypeFloat32", "type_f32", [0]NodeId },
+        .{ "TypeFloat64", "type_f64", [0]NodeId },
+        .{ "TypeBool", "type_bool", [0]NodeId },
+        .{ "TypeType", "type_type", [0]NodeId },
+        .{ "TypeTrait", "type_trait", [0]NodeId },
+        .{ "TypeVariant", "type_variant", [0]NodeId },
+        .{ "TypeInlinedFunction", "type_inlfun", [0]NodeId },
+        .{ "TypeFunction", "type_fun", [0]NodeId },
+        .{ "TypeStaticFunction", "type_stcfun", [0]NodeId },
+        .{ "TypeDefinition", "def_type", struct { param_tuple: NodeId, sizeof: NodeId, def_trait: NodeId } },
+        .{ "TypeDefinitionPacked", "def_type_packed", struct { param_tuple: NodeId, sizeof: NodeId, def_trait: NodeId } },
+        .{ "TypeVariant", "def_variant", struct { param_tuple: NodeId, tagof: NodeId, sizeof: NodeId } },
+        .{ "TypeVariantPacked", "def_variant_packed", struct { param_tuple: NodeId, tagof: NodeId, sizeof: NodeId } },
+        .{ "TypeVariantUnionsized", "def_variant_unionsized", struct { param_tuple: NodeId, tagof: NodeId, sizeof: NodeId } },
+        .{ "TypeTrait", "def_trait", struct { implof_tuple: NodeId, body: NodeId } },
+        .{ "PartialExpression_TypeDefinitionParameterTuple", "partial__type_param_tuple", []NodeId },
+        .{ "PartialExpression_TypeDefinitionParameter", "partial__type_param", struct { type: NodeId, identifier: NodeId, default_value: NodeId, where_predicate: NodeId, where_else_value: NodeId } },
+        .{ "PartialExpression_TypeDefinitionParameterMutable", "partial__type_param_mut", struct { type: NodeId, identifier: NodeId, default_value: NodeId, where_predicate: NodeId, where_else_value: NodeId } },
+        .{ "PartialExpression_VariantDefinitionParameterTuple", "partial__variant_param_tuple", []NodeId },
+        .{ "PartialExpression_VariantDefinitionParameter", "partial__variant_param", struct { name: NodeId, of_type: NodeId, tag_value: NodeId } },
+        .{ "PartialExpression_TraitDefinitionImplementationTuple", "partial__trait_implof_tuple", []NodeId },
+        .{ "PartialExpression_TraitDefinitionBody", "partial__trait_body", []NodeId },
+        .{ "UnifyVariants", "unify_variants", struct { left_type: NodeId, right_type: NodeId } },
+        .{ "FunctionCall", "fun_call", struct { callable: NodeId, fun_param_tuple: NodeId } },
+        .{ "PartialExpression_FunctionCallParameterTuple", "partial__fun_call_param_tuple", []NodeId },
+        .{ "ArrayIndexing", "array_index", struct { indexable: NodeId, index: NodeId } },
+        .{ "MemberAccess", "member", struct { parent: NodeId, member: NodeId } },
+        .{ "Dereference", "dereference", struct { subnode: NodeId } },
+        .{ "AddressOf", "address_of", struct { subnode: NodeId } },
+        .{ "IncrementPostfix", "inc_postfix", struct { subnode: NodeId } },
+        .{ "DecrementPostfix", "dec_postfix", struct { subnode: NodeId } },
+        .{ "GenerateLowerBound", "gen_lowerbound", struct { subnode: NodeId } },
+        .{ "GenerateUpperBound", "gen_upperbound", struct { subnode: NodeId } },
+        .{ "GenerateInclusive", "gen_incl", struct { lower: NodeId, upper: NodeId } },
+        .{ "GenerateExclusive", "gen_excl", struct { lower: NodeId, upper: NodeId } },
+        .{ "OfType", "oftype", struct { value: NodeId, type: NodeId } },
+        .{ "As", "as", struct { value: NodeId, type: NodeId } },
+        .{ "LabelArrow", "labelarrow", struct { value: NodeId, label: NodeId } },
+        .{ "OptionalArrow", "optarrow", struct { value: NodeId, label: NodeId } },
+        .{ "ErrorArrow", "errarrow", struct { value: NodeId, label: NodeId } },
+        .{ "PartialExpression_Destructure", "partial__destructure", []NodeId },
+        .{ "ErrorHandle", "errhandle", struct { value: NodeId, fallback: NodeId } },
+        .{ "OptionalHandle", "opthandle", struct { value: NodeId, fallback: NodeId } },
+        .{ "Defer", "defer", struct { left_opt_node: NodeId, defered: NodeId } },
+        .{ "DeferWithDeinit", "defer_with_deinit", struct { subnode: NodeId } },
+        .{ "BinaryLogicalOr", "binary_logic_or", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryLogicalXor", "binary_logic_xor", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryLogicalAnd", "binary_logic_and", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryNumericalOr", "binary_num_or", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryNumericalXor", "binary_num_xor", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryNumericalAnd", "binary_num_and", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryEquals", "binary_eq", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryNotEquals", "binary_neq", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryLess", "binary_less", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryGreater", "binary_greater", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryLessOrEqual", "binary_less_eq", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryGreaterOrEqual", "binary_greater_eq", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryAdd", "binary_add", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinarySubtract", "binary_sub", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryMultiply", "binary_mul", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryDivide", "binary_div", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryModulus", "binary_mod", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryShiftLeft", "binary_shift_left", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryShiftRight", "binary_shift_right", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryPower", "binary_pow", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "Identifier", "identifier", .references_token },
+        .{ "StringValue", "string", .references_token },
+        .{ "IntegerValue", "int", .references_token },
+        .{ "FloatingPointValue", "float", .references_token },
+        .{ "CharacterValue", "char", .references_token },
+        .{ "BooleanValue", "boolean", .valued },
     };
 
-    const nk_childc = blk: { // TODO
-        var t: [256]enum(u8) { none, oneortwo, many } = @splat(.oneortwo);
-        t[@intFromEnum(Node.Kind.none)] = .none;
+    pub const Kind = blk: {
+        var field_names: [DefTable.len][]const u8 = undefined;
+        var field_values: [DefTable.len]u8 = undefined;
+
+        for (DefTable, 0..) |def, i| {
+            field_names[i] = def[1];
+            field_values[i] = i;
+        }
+
+        break :blk @Enum(u8, .exhaustive, &field_names, &field_values);
+    };
+
+    pub fn LayoutStruct(comptime nk: Kind) type {
+        return DefTable[@intFromEnum(nk)][2];
+    }
+
+    const nk_childc = blk: { // TODO NEXT!
+        const t: [256]enum(u8) { none, oneortwo, many } = @splat(.oneortwo);
         break :blk t;
     };
 };
 
 ast_nodes: SoD(Node),
-extra_childrefs: DynBuf(u32), // children of node i must be contiguous here
+extra_childrefs: DynBuf(NodeId), // children of node i must be contiguous here
 span_store: []const Lexer.TextSpan,
 
 pub fn init(alloc: std.mem.Allocator, span_store: []const Lexer.TextSpan) @This() {
@@ -206,12 +166,12 @@ pub fn deinit(self: *@This()) void {
     self.extra_childrefs.deinit();
 }
 
-pub inline fn set_node_arg0(self: *@This(), target_node: u32, val: u32) void {
+pub inline fn set_node_arg0(self: *@This(), target_node: NodeId, val: u32) void {
     const args_ptr = self.ast_nodes.field_ptr(.args, target_node) orelse unreachable;
     args_ptr.*[0] = val;
 }
 
-pub inline fn set_node_arg1(self: *@This(), target_node: u32, val: u32) void {
+pub inline fn set_node_arg1(self: *@This(), target_node: NodeId, val: u32) void {
     const args_ptr = self.ast_nodes.field_ptr(.args, target_node) orelse unreachable;
     args_ptr.*[1] = val;
 }
@@ -219,7 +179,7 @@ pub inline fn set_node_arg1(self: *@This(), target_node: u32, val: u32) void {
 // fully registers a new children to a parent node with "n" (>2) children
 pub inline fn push_extra_childrefs(
     self: *@This(),
-    parent_idx: u32,
+    parent_idx: NodeId,
     childrefs: anytype,
 ) void {
     const args_ptr = self.ast_nodes.field_ptr(.args, parent_idx) orelse unreachable;
@@ -239,13 +199,13 @@ pub inline fn push_extra_childrefs(
     }
 }
 
-// -> `u32`: idx where node was pushed into
-pub inline fn push_node(self: *@This(), nodekind: Node.Kind) u32 {
+// -> `NodeId`: idx where node was pushed into
+pub inline fn push_node(self: *@This(), nodekind: Node.Kind) NodeId {
     self.ast_nodes.push(.{ .nk = nodekind, .args = .{ 0, 0 } });
     return self.ast_nodes.len() - 1;
 }
 
-pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, span_idx: u32) u32 {
+pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, span_idx: u32) NodeId {
     const new_node_idx = self.push_node(nodekind);
     self.set_node_arg0(new_node_idx, span_idx);
 
@@ -291,7 +251,7 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
         return;
     };
 
-    const is_leaf = Node.nk_childc[@intFromEnum(node.nk)] == .none;
+    const is_leaf = true; // TODO!!!
 
     if (!is_first) {
         wr(io, if (is_leaf) COL_LEAF else COL_KIND);
@@ -318,7 +278,7 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
     const ext = if (is_first) "" else if (is_last) "    " else "\xe2\x94\x82   "; // "│   "
     const new_prefix = std.fmt.bufPrint(&prefix_buf, "{s}{s}", .{ prefix, ext }) catch prefix;
 
-    if (Node.nk_childc[@intFromEnum(node.nk)] == .many) {
+    if (true) { // TODO!!!!!
         const start = node.args[0];
         const count = node.args[1];
 
@@ -335,7 +295,7 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
         return;
     }
 
-    var children: [2]u32 = undefined;
+    var children: [2]NodeId = undefined;
     var childc: usize = 0;
     const a = node.args[0];
     const b = node.args[1];
@@ -353,7 +313,7 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
     }
 }
 
-pub fn debug_print_tree(self: *@This(), io: std.Io, src_bytes: []const u8, func_ids: []const u32) !void {
+pub fn debug_print_tree(self: *@This(), io: std.Io, src_bytes: []const u8, func_ids: []const NodeId) !void {
     wr(io, COL_DIM);
     wr(io, "[DEBUG PARSER AST DUMP]\n");
     wr(io, COL_RESET);

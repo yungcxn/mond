@@ -2,11 +2,11 @@ const Parser = @import("../Parser.zig");
 const Lexer = @import("../Lexer.zig");
 const ParseTree = @import("../ParseTree.zig");
 const FixedStack = @import("../ds/fixedstack.zig").FixedStack;
-
+const NodeId = ParseTree.NodeId;
 const eval = @import("eval.zig");
 
 pub const pre = blk: {
-    var t: [256]?*const fn (parser: *Parser) anyerror!u32 = @splat(null);
+    var t: [256]?*const fn (parser: *Parser) anyerror!NodeId = @splat(null);
     t[@intFromEnum(Lexer.Token.Kind.@"pct_(")] = &eval.paren;
     t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = &eval.bracket;
     t[@intFromEnum(Lexer.Token.Kind.kw_typeof)] = &eval.typeof;
@@ -90,7 +90,7 @@ pub const post = blk: {
 
 pub const binary_compute = blk: {
     var t: [256]?struct {
-        f: *const fn (parser: *Parser, lhs: u32) anyerror!u32,
+        f: *const fn (parser: *Parser, lhs: NodeId) anyerror!NodeId,
         prec: u8,
     } = @splat(null);
 

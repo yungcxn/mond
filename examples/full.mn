@@ -1,4 +1,4 @@
-$import("somelib")
+<include "some_file.mn">
 
 # TODOs tuples?
 
@@ -8,7 +8,6 @@ $import("somelib")
 # - a  trait definition
 # - a  variant definition
 # - global constants
-# - $import
 
 # classical func signature
 fun add_i32 = (i32 a, i32 b) -> i32 {
@@ -406,8 +405,8 @@ fun $main = () {
     ######################################################## now metaprogramming
 
     # lazily saved and not truly evaluated
-    atree mylazyexpr = expr {
-        1 + 2 + 3 + 4
+    code mylazyexpr = quote {
+        1 + 2 + 3 + 4;
     };
 
     mut u32 x = 0;
@@ -416,6 +415,6 @@ fun $main = () {
     x = <mylazyexpr>;
 
     # or inline evaluate as `mylazyexpr` stored static data
-    x = <expr { 1 + 2 + 3 + 4 }>; 
+    x = <quote { 1 + 2 + 3 + 4 }>; 
 
 }
