@@ -37,13 +37,13 @@ fun sub_from_templ = my_templ(i32, false);
 
 ### TYPE DEFINITIONS AND USING THEM ###
 # basic
-type Person = @([10]u8 name, mut i32 age = 18, mut &u8 address);
+type Person = *([10]u8 name, mut i32 age = 18, mut &u8 address);
 
 # no c-alignment
-type Packed = @@(u8 a, u16 b, u32 c);
+type Packed = **(u8 a, u16 b, u32 c);
 
 # static functions returning types expose abstract types
-stcfun Vec2D = (type T): @(T x, T y);
+stcfun Vec2D = (type T): *(T x, T y);
 
 # using them
 Person alice = Person(name = "Alice", age = 20, address = "123 Main St");
@@ -57,7 +57,13 @@ deinit bob;
 # copy struct through (with)
 peter        = bob with (name = "peter");
 
-
+# match struct 
+fun weird_person_search = (Person p): match p {
+    Person(name = "Alice", age = 42, address = _) => print("Found Alice, age 42"),
+    Person(name = i, age = 42, address = _) => print("Found %s, age 42", i),
+    Person(name = i, age = j, address = "Main St") => print("Found %s, living on Main St", i),
+    _ => print("Found someone else"),
+};
 
 
 
@@ -69,7 +75,7 @@ peter        = bob with (name = "peter");
 ### TYPES AND TRAITS ###
 
 # type with trait definition
-type AddablePointI32 = @(i32 x, i32 y) @{
+type AddablePointI32 = *(i32 x, i32 y) !{
     fun add = (AddablePointI32 other) {
         self.x += other.x;
         self.y += other.y;
@@ -77,17 +83,17 @@ type AddablePointI32 = @(i32 x, i32 y) @{
 };
 
 # just a trait
-trait Addable = @{
+trait Addable = !{
     fun add = ((typeof self) other);
 };
 
 # abstract traits through static functions
-stcfun SubtractableT = (type T): @{
+stcfun SubtractableT = (type T): !{
     fun sub = (T other);
 };
 
 # using them
-type AddableVec2D = @(i32 x, i32 y) implof Addable, SubtractableT(AddableVec2D) @{
+type AddableVec2D = *(i32 x, i32 y) implof Addable, SubtractableT(AddableVec2D) !{
     fun add = (AddableVec2D other) {
         self.x += other.x;
         self.y += other.y;
@@ -100,7 +106,7 @@ type AddableVec2D = @(i32 x, i32 y) implof Addable, SubtractableT(AddableVec2D) 
 };
 
 # real example, `Iterable` is a builtin
-type ByteStream = @(*u8 buf, u32 cursor) implof Iterable(u8) @{
+type ByteStream = *(*u8 buf, u32 cursor) implof Iterable(u8) !{
     init = (*u8 in_buf): ret ByteStream(buf = in_buf, cursor = 0);
     deinit = () {} # could be left out
 
@@ -112,7 +118,7 @@ type ByteStream = @(*u8 buf, u32 cursor) implof Iterable(u8) @{
 }
 
 # real example with static function:
-stcfun Stream = (type Child): @(*Child buf, u32 cursor) implof Iterable(Child) @{
+stcfun Stream = (type Child): *(*Child buf, u32 cursor) implof Iterable(Child) !{
     init = (*Child in_buf): ret Stream(buf = in_buf, cursor = 0);
     deinit = () {} # could be left out
 
@@ -137,49 +143,49 @@ stcfun Int32Stream = Stream(i32);
 ### VARIANTS !!! ###
 
 # A) enumvariant - values, no subtypes - tag is u8
-variant Direction = @(North | South | East | West); 
+variant Direction = +(North, South, East, West); 
 
 # B) tagged homogenic unionvariant
-variant Register = @@(
-    AsLower(i16)                    = 0x00 |
-    AsInt(i32)                      = 0x01 |
-    AsFloat(f32)                    = 0x02 |
-    AsBytes(u8 a, u8 b, u8 c, u8 d) = 0x03 |
+variant Register = ++(
+    AsLower(i16)                    = 0x00,
+    AsInt(i32)                      = 0x01,
+    AsFloat(f32)                    = 0x02,
+    AsBytes(u8 a, u8 b, u8 c, u8 d) = 0x03,
 ) tagof u8;
 
 # C) tagged heterogenic abstract variant
-variant Event = @(
-    Click(i32 x, i32 y) = 0x01 |
-    Key(u8)             = 0x02 |
-    Close               = 0x00 |
+variant Event = +(
+    Click(i32 x, i32 y) = 0x01,
+    Key(u8)             = 0x02,
+    Close               = 0x00,
 ) tagof u8;
 
 # D) not tagged homogenic unionvariant
-variant AnyFixed32 = @@(                                  # could also be @, as that implies here @@
-    AsInt   of i32 |
-    AsFloat of f32 |
-    AsBits  of [4]u8 |
+variant AnyFixed32 = ++(                                  # could also be +, as that implies here ++
+    AsInt(i32),
+    AsFloat(f32),
+    AsBits([4]u8),
 ) tagof none assertsize u32;
 
 # E) not tagged heterogenic abstract variant
-variant AnyPrintable = @(
-    AsInt  of i32 |
-    AsText of &u8 |
-    AsFlag of bool |
+variant AnyPrintable = +(
+    AsInt(i32),
+    AsText(&u8),
+    AsFlag(bool),
 ) tagof none;
 
 # F) self-tagged variant
-variant Opt8 = @(Some(u8) | None = 0xFF) tagof self assertsize u8;
+variant Opt8 = +(Some(u8), None = 0xFF) tagof self assertsize u8;
 
-variant CommonCode = @(
-    Ok  = 0x0 |
-    OOM = 0x1 |
-    EOF = 0x2 |
-    Undefined(u8) |
+variant CommonCode = +(
+    Ok  = 0x0,
+    OOM = 0x1,
+    EOF = 0x2,
+    Undefined(u8),
 ) tagof self;
 
 # the other builtin for any type
-stcfun Opt = (type T): @@(Some(T) | None) tagof u8;
+stcfun Opt = (type T): ++(Some(T), None) tagof u8;
 
 # use A): 
 Direction dir = Direction.North;                            # Direction.North is a value, not a type
@@ -191,29 +197,29 @@ Register.AsFloat asflo = 4.2 as Register.AsFloat;                  # cast into R
 
 # use C):
 fun handle_event = (Event e): stcmatch e {
-    Event.Click -> x, y => print("Click at (%d, %d)", x, y);
-    Event.Key -> key => print("Key pressed: %d", key);
+    Event.Click(x, y) => print("Click at (%d, %d)", x, y);
+    Event.Key(key) => print("Key pressed: %d", key);
     Event.Close => print("Close");
 };
 
 # use D):
 fun handle_anyfixed = (AnyFixed32 a): stcmatch a {             # static match due to no discriminant
-    AnyFixed32.AsInt -> i => print("Int: %d", i);
-    AnyFixed32.AsFloat -> f => print("Float: %f", f);
-    AnyFixed32.AsBits -> bits => print("Bits...");
-    AnyFixed32 -> non_specified => print("Non-specific: %d", non_specific);  # homogenic -> storable
+    AnyFixed32.AsInt(i) => print("Int: %d", i);
+    AnyFixed32.AsFloat(f) => print("Float: %f", f);
+    AnyFixed32.AsBits(bits) => print("Bits...");
+    AnyFixed32 non_specified => print("Non-specific: %d", non_specific);  # homogenic -> storable
 };
 
 # use E):
 fun handle_anyprintable = (AnyPrintable a): stcmatch a {       # static match due to no discriminant
-    AnyPrintable.AsInt -> i => print("Int: %d", i);
-    AnyPrintable.AsText -> text => print("Text: %s", text);
-    AnyPrintable.AsFlag -> flag => print("Flag: %d", flag);
+    AnyPrintable.AsInt(i) => print("Int: %d", i);
+    AnyPrintable.AsText(text) => print("Text: %s", text);
+    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
 };
 
 # use F):
 fun handle_opt8 = (Opt8 o): match o {
-    Opt8.Some -> val => print("Some: %d", val);
+    Opt8.Some(val) => print("Some: %d", val);
     Opt8.None => print("None");
 };
 
@@ -249,8 +255,8 @@ fun safe_div2 = (f32 a, f32 b) -> f32 {
 
 # static where for compile-time checks:
 fun specific_printable = (AnyPrintable a stcwhere a != AnyPrintable.AsInt): stcmatch a {
-    AnyPrintable.AsText <- text => print("Text: %s", text);
-    AnyPrintable.AsFlag <- flag => print("Flag: %d", flag);
+    AnyPrintable.AsText(text) => print("Text: %s", text);
+    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
     # AnyPrintable.AsInt is not possible 
 };
 
@@ -360,7 +366,7 @@ main = () {
     match y {
         0 => print("y is zero"),
         1 => print("y is one"),
-        2, 3, 4 -> i => print("y is %d", i),
+        2, 3, 4 => print("y is %d", i),
         _ => print("y is something else"),
     };
 
@@ -368,7 +374,7 @@ main = () {
     bool z = match y {
         0 => true,
         1 => false,
-        2, 3, 4 -> i => if i == 3: true else: false,
+        2, 3, 4 => if y == 3: true else: false,
         _ => false,
     };
 
@@ -484,9 +490,8 @@ main = () {
     } else {
         print("opt8 vari was None");
     };
-    # match arrow
     match code {
-        CommonCode.Undefined -> undefined_code => print("Undefined code: %d", undefined_code);
+        CommonCode.Undefined(undefined_code) => print("Undefined code: %d", undefined_code);
         _ => print("Code is defined");
     };
 
@@ -502,8 +507,8 @@ main = () {
     i32 myint = 42;
     f32 myfloat = myint as f32;
 
-    trait Bark = @{ fun bark = (); };
-    type Dog = @(mut &u8 name) implof Bark @{ fun bark = (): print("%s: Woof!", self.name); };
+    trait Bark = !{ fun bark = (); };
+    type Dog = *(mut &u8 name) implof Bark !{ fun bark = (): print("%s: Woof!", self.name); };
 
     Dog my_dog = Dog(name = "Fido");
     if (typeof my_dog) == Dog: print("this is printed");

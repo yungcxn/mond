@@ -11,8 +11,8 @@ const Node = @import("../ParseTree.zig").Node;
 
 // ee refers to early eval'd => we have a part of this node already evaluated.
 pub fn ee_fun_header(p: *Parser, early_node0_in_tuple: ?NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.partial__fun_header);
-    var def: Node.LayoutStruct(.partial__fun_header) = undefined;
+    const parent = p.tree.push_node(.partial__fun_def_header);
+    var def: Node.LayoutStruct(.partial__fun_def_header) = undefined;
     def.param_tuple = try ee_fun_param_tuple(p, early_node0_in_tuple);
 
     if (try p.peek_eq_tok(.@"xpct_->")) {
@@ -28,7 +28,7 @@ pub fn ee_fun_header(p: *Parser, early_node0_in_tuple: ?NodeId) anyerror!NodeId 
 }
 
 pub fn ee_fun_param_tuple(p: *Parser, early_node0: ?NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.partial__fun_param_tuple);
+    const parent = p.tree.push_node(.partial__fun_def_param_tuple);
 
     if (early_node0 == null and try p.peek_eq_tok(.@"pct_)")) {
         p.tok_cursor += 1;
@@ -49,8 +49,8 @@ pub fn ee_fun_param_tuple(p: *Parser, early_node0: ?NodeId) anyerror!NodeId {
 }
 
 pub fn ee_fun_param(p: *Parser, early_node0: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.partial__fun_param);
-    var def: Node.LayoutStruct(.partial__fun_param) = undefined;
+    const parent = p.tree.push_node(.partial__fun_def_param);
+    var def: Node.LayoutStruct(.partial__fun_def_param) = undefined;
     // here, we could encounter <expr> <expr> or <expr>
     // + they are followed by , OR ) OR = OR where
 
@@ -135,12 +135,35 @@ pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
     if (!try p.peek_eq_tok(.@"pct_)")) {
         var params: FixedStack(64) = .{};
         while (true) {
-            try params.push(try eval.any(p, 0));
+            const expr_i = try eval.any(p, 0);
             switch (try p.peek_tok()) {
-                .@"pct_)" => break,
+                .@"pct_)" => {
+                    try params.push(expr_i);
+                    break;
+                },
                 .@"pct_," => {
+                    try params.push(expr_i);
                     p.tok_cursor += 1;
                     if (try p.peek_eq_tok(.@"pct_)")) break;
+                },
+                .@"xpct_=" => {
+                    p.tok_cursor += 1;
+                    const assigned_pair: Node.LayoutStruct(.partial__fun_call_assigned_param) = .{
+                        .identifier = expr_i,
+                        .value = try eval.any(p, 0),
+                    };
+                    const assigned_pair_node = p.tree.push_node(.partial__fun_call_assigned_param);
+                    p.tree.push_extra_childrefs(assigned_pair_node, &assigned_pair);
+                    try params.push(assigned_pair_node);
+
+                    switch (try p.peek_tok()) {
+                        .@"pct_)" => break,
+                        .@"pct_," => {
+                            p.tok_cursor += 1;
+                            if (try p.peek_eq_tok(.@"pct_)")) break;
+                        },
+                        else => return error.IllegalFunCallParam,
+                    }
                 },
                 else => return error.IllegalFunCallParam,
             }
@@ -185,21 +208,19 @@ pub fn destructure(p: *Parser, early_identifier0: NodeId) anyerror!NodeId {
     return parent;
 }
 
-pub fn type_param(p: *Parser, early: ?struct { is_mut: bool, node0: NodeId }) anyerror!NodeId {
-    const is_mut, const node0 = if (early) |e| .{ e.is_mut, e.node0 } else blk: {
-        const m = try p.peek_eq_tok(.kw_mut);
-        if (m) p.tok_cursor += 1;
-        break :blk .{ m, try eval.any(p, 0) };
-    };
+pub fn type_param(p: *Parser) anyerror!NodeId {
+    const m = try p.peek_eq_tok(.kw_mut);
+    if (m) p.tok_cursor += 1;
+    const is_mut = m;
+    const node0 = try eval.any(p, 0);
 
-    const parent = p.tree.push_node(if (is_mut) .partial__type_param_mut else .partial__type_param);
-    var def: Node.LayoutStruct(.partial__type_param) = undefined;
+    const parent = p.tree.push_node(if (is_mut) .partial__type_def_param_mut else .partial__type_def_param);
+    var def: Node.LayoutStruct(.partial__type_def_param) = undefined;
 
     const next_tok = try p.peek_tok();
     if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where) {
         def.type = node0;
-        try p.eat_assert_tok(.identifier);
-        def.identifier = try eval.identifier(p);
+        def.identifier = try eval.any(p, 0);
     } else {
         def.type = node0;
         def.identifier = 0xFFFFFFFF;
@@ -231,29 +252,11 @@ pub fn type_param(p: *Parser, early: ?struct { is_mut: bool, node0: NodeId }) an
     return parent;
 }
 
-pub fn variant_param(p: *Parser, early_identifier0: ?NodeId) anyerror!NodeId {
-    const name = early_identifier0 orelse blk: {
-        try p.eat_assert_tok(.identifier);
-        break :blk try eval.identifier(p);
-    };
+pub fn variant_param(p: *Parser) anyerror!NodeId {
+    const parent = p.tree.push_node(.partial__variant_def_param);
+    var def: Node.LayoutStruct(.partial__variant_def_param) = undefined;
 
-    const parent = p.tree.push_node(.partial__variant_param);
-    var def: Node.LayoutStruct(.partial__variant_param) = undefined;
-    def.name = name;
-
-    if (try p.peek_eq_tok(.kw_of)) {
-        p.tok_cursor += 1;
-        def.of_type = try eval.any(p, 0);
-    } else {
-        def.of_type = 0xFFFFFFFF;
-    }
-
-    if (try p.peek_eq_tok(.@"xpct_=")) {
-        p.tok_cursor += 1;
-        def.tag_value = try eval.any(p, 0);
-    } else {
-        def.tag_value = 0xFFFFFFFF;
-    }
+    // TODO!!!
 
     p.tree.push_extra_childrefs(parent, &def);
     return parent;

@@ -13,16 +13,19 @@ pub const Token = struct {
         none,
 
         // keywords, must be of form kw_...
+        kw_assertsize,
+        kw_with,
+        kw_do,
+        kw_main,
+        kw_init,
+        kw_self,
         kw_tagof,
-        kw_of,
         kw_and,
         kw_xor,
         kw_or,
         kw_as,
         kw_oftype,
-        kw_none,
         kw_implof,
-        kw_err,
         kw_ret,
         kw_typeof,
         kw_sizeof,
@@ -98,8 +101,9 @@ pub const Token = struct {
         @"xpct_>>",
         @"xpct_<<",
         @"xpct_<-", // for unwrap/<<<-cast
-        @"xpct_@(",
-        @"xpct_@{",
+        @"xpct_*(",
+        @"xpct_+(",
+        @"xpct_!{",
 
         @"xpct_->", // for func ret type
         @"xpct_=>", // for `expr_match`
@@ -113,9 +117,8 @@ pub const Token = struct {
         @"xpct_..=", // for `expr_genseq`
         @"xpct_!<-", // for err unwrap
         @"xpct_?<-", // for opt unwrap
-        @"xpct_@@(",
-
-        @"xpct_@@@(",
+        @"xpct_++(",
+        @"xpct_**(",
 
         // everything below this needs a textspan //
 

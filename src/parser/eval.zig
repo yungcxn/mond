@@ -61,7 +61,7 @@ pub fn paren(p: *Parser) anyerror!NodeId {
     if (!try p.peek_eq_tok(.@"pct_)")) {
         parent = try any(p, 0);
         switch (try p.peek_tok()) {
-            .@"pct_,", .@"xpct_=", .kw_where, .identifier => {
+            .@"pct_,", .@"xpct_=", .kw_where, .identifier, .kw_self, .kw_main, .kw_deinit, .kw_init => {
                 parent = try partial.ee_fun_header(p, parent);
                 parent = try ee_def_fun(p, parent);
             },
@@ -230,18 +230,22 @@ pub fn false_(p: *Parser) anyerror!NodeId {
     return parent;
 }
 
-pub fn none(p: *Parser) anyerror!NodeId {
-    return p.tree.push_node(.none);
-}
-
-pub fn err(p: *Parser) anyerror!NodeId {
-    return p.tree.push_node(.err);
+pub fn do(p: *Parser) anyerror!NodeId {
+    const parent = p.tree.push_node(.do);
+    const def: Node.LayoutStruct(.do) = .{ .subnode = try any(p, 0) };
+    p.tree.set_node_arg0(parent, def.subnode);
+    return parent;
 }
 
 pub fn deinit(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.deinit);
-    const def: Node.LayoutStruct(.deinit) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, def.subnode);
+    if (lookahead.pre[@intFromEnum(try p.peek_tok())] != null) {
+        const parent = p.tree.push_node(.deinit);
+        const def: Node.LayoutStruct(.deinit) = .{ .subnode = try any(p, 0) };
+        p.tree.set_node_arg0(parent, def.subnode);
+        return parent;
+    }
+
+    const parent = p.tree.push_node(.identifier_deinit);
     return parent;
 }
 
@@ -284,6 +288,11 @@ pub fn if_(p: *Parser) anyerror!NodeId {
 
     if (try p.peek_eq_tok(.kw_else)) {
         p.tok_cursor += 1;
+        switch (try p.peek_tok()) {
+            .@"pct_:" => p.tok_cursor += 1,
+            .@"pct_{" => {},
+            else => return error.IllegalIfFormat,
+        }
         var else_def: Node.LayoutStruct(.if_else) = undefined;
         else_def.@"else" = try any(p, 0);
         else_def.if_then = parent;
@@ -483,172 +492,84 @@ pub fn type_stcfun(p: *Parser) anyerror!NodeId {
     return p.tree.push_node(.type_stcfun);
 }
 
-pub fn type_or_variant(p: *Parser) anyerror!NodeId {
+pub fn type_(p: *Parser) anyerror!NodeId {
     p.tok_cursor -= 1;
-    const open_tok = try p.pop_tok();
+    const parent = switch (try p.pop_tok()) {
+        .@"xpct_*(" => p.tree.push_node(.def_type),
+        .@"xpct_**(" => p.tree.push_node(.def_type_packed),
+        else => return error.IllegalTypeStart,
+    };
 
-    if (try p.peek_eq_tok(.@"pct_)")) return error.EmptyTypeOrVariantDef;
+    var def: Node.LayoutStruct(.def_type) = undefined;
 
-    const is_mut0 = try p.peek_eq_tok(.kw_mut);
-    if (is_mut0) p.tok_cursor += 1;
-    const early_node0 = try any(p, 0);
+    var params: FixedStack(64) = .{};
+    while (!try p.peek_eq_tok(.@"pct_)")) try params.push(try partial.type_param(p));
+    if (params.cursor == 0) return error.IllegalTypeParamList;
 
-    var name: NodeId = 0xFFFFFFFF; // shared
-    var of_type: NodeId = 0xFFFFFFFF; // only for variant
-    var default_value: NodeId = 0xFFFFFFFF; // only for type
-    var where_predicate: NodeId = 0xFFFFFFFF; // only for type
-    var where_else_value: NodeId = 0xFFFFFFFF; // only for type
+    def.param_tuple = p.tree.push_node(.partial__type_def_param_tuple);
+    p.tree.push_extra_childrefs(def.param_tuple, params.view());
 
-    var kind: ?enum { type, variant } = null;
-
-    if (try p.peek_eq_tok(.kw_of)) {
+    if (try p.peek_eq_tok(.kw_assertsize)) {
         p.tok_cursor += 1;
-        kind = .variant;
-        of_type = try any(p, 0);
+        def.assertsize = try any(p, 0);
     } else {
-        const t = try p.peek_tok();
-        if (t != .@"pct_," and t != .@"xpct_|" and t != .@"pct_)" and
-            t != .@"xpct_=" and t != .kw_where)
-        {
-            try p.eat_assert_tok(.identifier);
-            name = try identifier(p);
-            kind = .type;
-        }
+        def.assertsize = 0xFFFFFFFF;
     }
 
-    if (try p.peek_eq_tok(.@"xpct_=")) {
-        p.tok_cursor += 1;
-        default_value = try any(p, 0);
-    }
-
-    if (kind != .variant) {
-        // "where" only exists on the type side; if we already know we're
-        // building a variant (saw "of"), skip this check entirely.
-        if (try p.peek_eq_tok(.kw_where)) {
+    switch (try p.peek_tok()) {
+        .kw_implof, .@"xpct_!{" => {
             p.tok_cursor += 1;
-            kind = .type;
-            where_predicate = try any(p, 0);
-            if (try p.peek_eq_tok(.kw_else)) {
-                p.tok_cursor += 1;
-                where_else_value = try any(p, 0);
-            }
-        }
-    }
-
-    if (kind == null) {
-        // bare `early_node0` with no tail at all - only the separator can tell us
-        kind = switch (try p.peek_tok()) {
-            .@"pct_," => .type,
-            .@"xpct_|" => .variant,
-            // grammar requires a trailing "," or "|" even for a single element
-            else => return error.IllegalTypeOrVariantDef,
-        };
-    }
-
-    if (kind.? == .variant and is_mut0) return error.IllegalMutOnVariantParam;
-
-    switch (kind.?) {
-        .type => {
-            const type_kind: Node.Kind = switch (open_tok) {
-                .@"xpct_@(" => .def_type,
-                .@"xpct_@@(" => .def_type_packed,
-                .@"xpct_@@@(" => return error.IllegalUnionsizedTypeDef,
-                else => unreachable,
-            };
-
-            var params: FixedStack(64) = .{};
-            {
-                const param = p.tree.push_node(if (is_mut0) .partial__type_param_mut else .partial__type_param);
-                var param_def: Node.LayoutStruct(.partial__type_param) = .{
-                    .type = early_node0,
-                    .identifier = name,
-                    .default_value = default_value,
-                    .where_predicate = where_predicate,
-                    .where_else_value = where_else_value,
-                };
-                p.tree.push_extra_childrefs(param, &param_def);
-                try params.push(param);
-            }
-            while (try p.peek_eq_tok(.@"pct_,")) {
-                p.tok_cursor += 1;
-                if (try p.peek_eq_tok(.@"pct_)")) break;
-                try params.push(try partial.type_param(p, null));
-            }
-            try p.eat_assert_tok(.@"pct_)");
-            const param_tuple = p.tree.push_node(.partial__type_param_tuple);
-            p.tree.push_extra_childrefs(param_tuple, params.view());
-
-            const parent = p.tree.push_node(type_kind);
-            var type_def: Node.LayoutStruct(.def_type) = undefined;
-            type_def.param_tuple = param_tuple;
-
-            if (try p.peek_eq_tok(.kw_sizeof)) {
-                p.tok_cursor += 1;
-                type_def.sizeof = try any(p, 0);
-            } else {
-                type_def.sizeof = 0xFFFFFFFF;
-            }
-
-            if (try p.peek_eq_tok(.kw_implof) or try p.peek_eq_tok(.@"xpct_@{")) {
-                p.tok_cursor += 1;
-                type_def.def_trait = try trait(p);
-            } else {
-                type_def.def_trait = 0xFFFFFFFF;
-            }
-
-            p.tree.push_extra_childrefs(parent, &type_def);
-            return parent;
+            def.def_trait = try trait(p);
         },
-        .variant => {
-            const variant_kind: Node.Kind = switch (open_tok) {
-                .@"xpct_@(" => .def_variant,
-                .@"xpct_@@(" => .def_variant_packed,
-                .@"xpct_@@@(" => .def_variant_unionsized,
-                else => unreachable,
-            };
-
-            var params: FixedStack(64) = .{};
-            {
-                const first = p.tree.push_node(.partial__variant_param);
-                var param_def: Node.LayoutStruct(.partial__variant_param) = .{
-                    .name = early_node0,
-                    .of_type = of_type,
-                    .tag_value = default_value,
-                };
-                p.tree.push_extra_childrefs(first, &param_def);
-                try params.push(first);
-            }
-            while (try p.peek_eq_tok(.@"xpct_|")) {
-                p.tok_cursor += 1;
-                if (try p.peek_eq_tok(.@"pct_)")) break;
-                try params.push(try partial.variant_param(p, null));
-            }
-            try p.eat_assert_tok(.@"pct_)");
-            const param_tuple = p.tree.push_node(.partial__variant_param_tuple);
-            p.tree.push_extra_childrefs(param_tuple, params.view());
-
-            const parent = p.tree.push_node(variant_kind);
-            var variant_def: Node.LayoutStruct(.def_variant) = undefined;
-            variant_def.param_tuple = param_tuple;
-
-            if (try p.peek_eq_tok(.kw_tagof)) {
-                p.tok_cursor += 1;
-                variant_def.tagof = try any(p, 0);
-            } else {
-                variant_def.tagof = 0xFFFFFFFF;
-            }
-
-            if (try p.peek_eq_tok(.kw_sizeof)) {
-                p.tok_cursor += 1;
-                variant_def.sizeof = try any(p, 0);
-            } else {
-                variant_def.sizeof = 0xFFFFFFFF;
-            }
-
-            p.tree.push_extra_childrefs(parent, &variant_def);
-            return parent;
-        },
+        else => def.def_trait = 0xFFFFFFFF,
     }
+
+    p.tree.push_extra_childrefs(parent, &def);
+    return parent;
+}
+
+pub fn variant(p: *Parser) anyerror!NodeId {
+    p.tok_cursor -= 1;
+
+    const parent = switch (try p.pop_tok()) {
+        .@"xpct_+(" => p.tree.push_node(.def_variant),
+        .@"xpct_++(" => p.tree.push_node(.def_variant_unionsized),
+        else => return error.IllegalVariantStart,
+    };
+
+    var def: Node.LayoutStruct(.def_variant) = undefined;
+
+    var params: FixedStack(64) = .{};
+    while (!try p.peek_eq_tok(.@"pct_)")) try params.push(try partial.variant_param(p));
+    if (params.cursor == 0) return error.IllegalVariantParamList;
+
+    def.param_tuple = p.tree.push_node(.partial__variant_def_param_tuple);
+    p.tree.push_extra_childrefs(def.param_tuple, params.view());
+
+    if (try p.peek_eq_tok(.kw_tagof)) {
+        p.tok_cursor += 1;
+        def.tagof = try any(p, 0);
+    } else {
+        def.tagof = 0xFFFFFFFF;
+    }
+
+    if (try p.peek_eq_tok(.kw_assertsize)) {
+        p.tok_cursor += 1;
+        def.assertsize = try any(p, 0);
+    } else {
+        def.assertsize = 0xFFFFFFFF;
+    }
+
+    switch (try p.peek_tok()) {
+        .kw_implof, .@"xpct_!{" => {
+            p.tok_cursor += 1;
+            def.def_trait = try trait(p);
+        },
+        else => def.def_trait = 0xFFFFFFFF,
+    }
+
+    p.tree.push_extra_childrefs(parent, &def);
+    return parent;
 }
 
 pub fn trait(p: *Parser) anyerror!NodeId {
@@ -661,29 +582,29 @@ pub fn trait(p: *Parser) anyerror!NodeId {
         while (true) {
             try impls.push(try any(p, 0));
             switch (try p.peek_tok()) {
-                .@"xpct_@{" => break,
+                .@"xpct_!{" => break,
                 .@"pct_," => {
                     p.tok_cursor += 1;
-                    if (try p.peek_eq_tok(.@"xpct_@{")) break;
+                    if (try p.peek_eq_tok(.@"xpct_!{")) break;
                 },
                 else => return error.IllegalImplofList,
             }
         }
-        const implof_tuple = p.tree.push_node(.partial__trait_implof_tuple);
+        const implof_tuple = p.tree.push_node(.partial__trait_def_implof_tuple);
         p.tree.push_extra_childrefs(implof_tuple, impls.view());
         def.implof_tuple = implof_tuple;
     } else {
         def.implof_tuple = 0xFFFFFFFF;
     }
 
-    try p.eat_assert_tok(.@"xpct_@{");
+    try p.eat_assert_tok(.@"xpct_!{");
     var members: FixedStack(4096) = .{};
     while (!try p.peek_eq_tok(.@"pct_}")) {
         try members.push(try any(p, 0));
     }
     p.tok_cursor += 1; // consume "}"
 
-    const body = p.tree.push_node(.partial__trait_body);
+    const body = p.tree.push_node(.partial__trait_def_body);
     p.tree.push_extra_childrefs(body, members.view());
     def.body = body;
 
@@ -863,41 +784,9 @@ pub fn optarrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
     return parent;
 }
 
-pub fn errarrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.errarrow);
-    var def: Node.LayoutStruct(.errarrow) = undefined;
-    def.value = lhs;
-
-    try p.eat_assert_tok(.identifier);
-    def.label = try identifier(p);
-
-    if (try p.peek_eq_tok(.@"pct_,")) {
-        // cursor should be right at first comma
-        def.label = try partial.destructure(p, def.label);
-    }
-
-    p.tree.set_node_arg0(parent, def.value);
-    p.tree.set_node_arg1(parent, def.label);
-    return parent;
-}
-
-pub fn errhandle(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.errhandle);
-    var def: Node.LayoutStruct(.errhandle) = undefined;
-    def.value = lhs;
-    if (lookahead.pre[@intFromEnum(try p.peek_tok())] != null) {
-        def.fallback = try any(p, 0);
-    } else {
-        def.fallback = 0xFFFFFFFF;
-    }
-    p.tree.set_node_arg0(parent, def.value);
-    p.tree.set_node_arg1(parent, def.fallback);
-    return parent;
-}
-
-pub fn opthandle(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.opthandle);
-    var def: Node.LayoutStruct(.opthandle) = undefined;
+pub fn selftag_unwrap(p: *Parser, lhs: NodeId) anyerror!NodeId {
+    const parent = p.tree.push_node(.selftag_unwrap);
+    var def: Node.LayoutStruct(.selftag_unwrap) = undefined;
     def.value = lhs;
 
     if (lookahead.pre[@intFromEnum(try p.peek_tok())] != null) {
@@ -922,25 +811,37 @@ pub fn defer_(p: *Parser) anyerror!NodeId {
     return parent;
 }
 
-pub fn defer_inlined(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    if (try p.peek_eq_tok(.kw_deinit)) {
-        p.tok_cursor += 1;
-        if (lookahead.pre[@intFromEnum(try p.peek_tok())] == null) {
-            const parent = p.tree.push_node(.defer_with_deinit);
-            const def: Node.LayoutStruct(.defer_with_deinit) = .{
-                .subnode = lhs,
-            };
-            p.tree.set_node_arg0(parent, def.subnode);
-            return parent;
-        }
-
-        p.tok_cursor -= 1;
-    }
-    const parent = p.tree.push_node(.@"defer");
-    p.tree.set_node_arg0(parent, lhs);
-    const rhs = try any(p, 0);
-    p.tree.set_node_arg1(parent, rhs);
+pub fn inlined_defer_deinit(p: *Parser, lhs: NodeId) anyerror!NodeId {
+    try p.eat_assert_tok(.kw_deinit);
+    const parent = p.tree.push_node(.inlined_defer_deinit);
+    const def: Node.LayoutStruct(.inlined_defer_deinit) = .{
+        .subnode = lhs,
+    };
+    p.tree.set_node_arg0(parent, def.subnode);
     return parent;
+}
+
+pub fn with(p: *Parser, lhs: NodeId) anyerror!NodeId {
+    const parent = p.tree.push_node(.with);
+    const def: Node.LayoutStruct(.with) = .{
+        .value = lhs,
+        .fun_call_param_tuple = try partial.fun_call_param_tuple(p),
+    };
+    p.tree.set_node_arg0(parent, def.value);
+    p.tree.set_node_arg1(parent, def.fun_call_param_tuple);
+    return parent;
+}
+
+pub fn identifier_self(p: *Parser) anyerror!NodeId {
+    return p.tree.push_node(.identifier_self);
+}
+
+pub fn identifier_init(p: *Parser) anyerror!NodeId {
+    return p.tree.push_node(.identifier_init);
+}
+
+pub fn identifier_main(p: *Parser) anyerror!NodeId {
+    return p.tree.push_node(.identifier_main);
 }
 
 pub fn identifier(p: *Parser) anyerror!NodeId {
