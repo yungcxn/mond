@@ -19,7 +19,7 @@ fun my_void_func = () -> () {
 };
 
 # static functions allow a second param-tuple (not mandatory)
-stcfun my_templ = (type T, bool add_or_sub) -> (T a, T b) -> T {
+stcfun my_templ = (type T, bool add_or_sub): (T a, T b) -> T {
     ret stcif add_or_sub: a + b else: a - b;
 };
 
@@ -43,7 +43,7 @@ type Person = @([10]u8 name, mut i32 age = 18, mut &u8 address);
 type Packed = @@(u8 a, u16 b, u32 c);
 
 # static functions returning types expose abstract types
-stcfun Vec2D = (type T) -> @(T x, T y);
+stcfun Vec2D = (type T): @(T x, T y);
 
 # using them
 Person alice = Person(name = "Alice", age = 20, address = "123 Main St");
@@ -112,7 +112,7 @@ type ByteStream = @(*u8 buf, u32 cursor) implof Iterable(u8) @{
 }
 
 # real example with static function:
-stcfun Stream = (type Child) -> @(*Child buf, u32 cursor) implof Iterable(Child) @{
+stcfun Stream = (type Child): @(*Child buf, u32 cursor) implof Iterable(Child) @{
     init = (*Child in_buf): ret Stream(buf = in_buf, cursor = 0);
     deinit = () {} # could be left out
 
@@ -179,7 +179,7 @@ variant CommonCode = @(
 ) tagof self;
 
 # the other builtin for any type
-stcfun Opt = (type T) -> @@(Some(T) | None) tagof u8;
+stcfun Opt = (type T): @@(Some(T) | None) tagof u8;
 
 # use A): 
 Direction dir = Direction.North;                            # Direction.North is a value, not a type
@@ -191,29 +191,29 @@ Register.AsFloat asflo = 4.2 as Register.AsFloat;                  # cast into R
 
 # use C):
 fun handle_event = (Event e): stcmatch e {
-    Event.Click <- x, y => print("Click at (%d, %d)", x, y);
-    Event.Key <- key => print("Key pressed: %d", key);
+    Event.Click -> x, y => print("Click at (%d, %d)", x, y);
+    Event.Key -> key => print("Key pressed: %d", key);
     Event.Close => print("Close");
 };
 
 # use D):
 fun handle_anyfixed = (AnyFixed32 a): stcmatch a {             # static match due to no discriminant
-    AnyFixed32.AsInt <- i => print("Int: %d", i);
-    AnyFixed32.AsFloat <- f => print("Float: %f", f);
-    AnyFixed32.AsBits <- bits => print("Bits...");
-    AnyFixed32 <- non_specified => print("Non-specific: %d", non_specific);  # homogenic -> storable
+    AnyFixed32.AsInt -> i => print("Int: %d", i);
+    AnyFixed32.AsFloat -> f => print("Float: %f", f);
+    AnyFixed32.AsBits -> bits => print("Bits...");
+    AnyFixed32 -> non_specified => print("Non-specific: %d", non_specific);  # homogenic -> storable
 };
 
 # use E):
 fun handle_anyprintable = (AnyPrintable a): stcmatch a {       # static match due to no discriminant
-    AnyPrintable.AsInt <- i => print("Int: %d", i);
-    AnyPrintable.AsText <- text => print("Text: %s", text);
-    AnyPrintable.AsFlag <- flag => print("Flag: %d", flag);
+    AnyPrintable.AsInt -> i => print("Int: %d", i);
+    AnyPrintable.AsText -> text => print("Text: %s", text);
+    AnyPrintable.AsFlag -> flag => print("Flag: %d", flag);
 };
 
 # use F):
 fun handle_opt8 = (Opt8 o): match o {
-    Opt8.Some <- val => print("Some: %d", val);
+    Opt8.Some -> val => print("Some: %d", val);
     Opt8.None => print("None");
 };
 
@@ -349,56 +349,168 @@ main = () {
     } else 42;
 
     # same as:
-    myvar = if 2 + 3 == 5: do print("2 + 3 == 5") else: 42;                 # do for unit -> runit
+    myvar = if 2 + 3 == 5: do print("2 + 3 == 5") else: 42;                   # do for unit -> runit
 
     # stcif: condition is static, evaluated at compile-time only true compiles
     i32 myvar = stcif 1 == 1: 42 else: "illegal never-compiled value";
 
 
     # match unassigned
+    i32 y = 42;
+    match y {
+        0 => print("y is zero"),
+        1 => print("y is one"),
+        2, 3, 4 -> i => print("y is %d", i),
+        _ => print("y is something else"),
+    };
 
     # match assigned
+    bool z = match y {
+        0 => true,
+        1 => false,
+        2, 3, 4 -> i => if i == 3: true else: false,
+        _ => false,
+    };
 
     # stcmatch
+    bool w = stcmatch 5 {
+        4 => "never compiled",
+        5 => true,
+        6 => "never compiled",
+    };
 
 
     # while unassigned, also with repeat statement
+    i32 j = 0;
+    while j < 50 {
+        print("j is %d", j);
+        j++;
+    };
 
-    # while assigned
+    j = 0;
+    while j < 50, j++: {
+        print("j is %d", j);
+    }
 
-    # stcwhile
+    # while assigned - produces array
+    j = 0;
+    []i32 arr = while j < 50: j++;
+
+    # stcwhile - allows emitting length info -> no predefinition needed
+    stc i32 jjj = 0;
+    []i32 arr2 = stcwhile jjj < 50: jjj++;                    # ran in compile time to calculate len
 
 
     # for unassigned, also with iterator var
+    []u32 arr3 = [1, 2, 3, 4, 5];
+    for arr3 {                                                                   # or: 1..=5 / 1..<6
+        print("arr3 element is %d", $it);
+    }
+
+    for i in arr3 {
+        print("arr3 element is %d", i);
+    }
 
     # for assigned
+    [arr3.len]i32 arr4;
+    arr4 = for arr3: i * 2;
 
-    # stcfor
-
+    # stcfor - allows emitting length info -> no predefinition needed
+    []i32 arr5 = stcfor 0..=50: $it * 2;                            # iterated length must be static
 
     # loop unassigned, also with repeat statement
+    i32 k = 0;
+    loop {
+        if k >= 50 {
+            break;
+        }
+        print("k is %d", k);
+        k = k + 1;
+    }
+
+    k = 0;
+    loop k = k + 1 {
+        if k >= 50 {
+            break;
+        }
+        print("k is %d", k);
+    }
 
     # loop assigned
+    k = 0;
+    [10]i32 arr6 = loop k = k + 1: k;
 
-    # stcloop
+    # stcloop - allows emitting length info -> no predefinition needed
+    stc i32 sss = 0;
+    []i32 arr7 = stcloop sss = sss + 1: sss;                                       # ran in comptime
 
 
     # defer, defer deinit
+    can = Person(name = "Can", age = 30, address = "789 Oak St");
+    defer can.some_method();
+    deinit can;
+
+    efe = Person(name = "Efe", age = 25, address = "321 Pine St") defer deinit;
 
 
     # brk, cont, ret
+    if 5 == 4 {
+        ret 1;                    # compiled logically, but never reached and probably optimized out
+    }
+
+    while true {
+        if 5 == 4 {
+            cont;                 # compiled logically, but never reached and probably optimized out
+        } else {
+            brk;
+        }
+    }
 
 
-    # self-tagged variant unwrap
+    # self-tagged variant unwrap with ??
+    opt8 vari = 42;                                                     # auto cast to Opt8.Some(42)
+    u8 safe1 = vari ?? 0x0;                                          # ?? casts left hand to payload
+    u8 safe2 = vari ?? ret 1;
+
+    CommonCode code = CommonCode.EOF;
+    u8 undefined_code = code ?? ret 2;
 
 
-    # arrows
+    # simple label arrow
+    if (calc_something() <- solution) == 42 or solution == 43: do print("alright!");
+    # unwrap arrow
+    if vari ?<- nonnone_var {
+        print("Unwrapped value is %d", vari);
+    } else {
+        print("opt8 vari was None");
+    };
+    # match arrow
+    match code {
+        CommonCode.Undefined -> undefined_code => print("Undefined code: %d", undefined_code);
+        _ => print("Code is defined");
+    };
+
 
 
     # generator expressions
-
+    for i in 1..=10: print("#%d: from 1 to inclusively 10", i);
+    for i in 1..<10: print("#%d: from 1 to inclusively 9", i);
+    for i in ..=10: print("#%d:  from 0 to inclusively 10", i);
+    for i in 1..: print("#%d: from 1 onwards until someone breaks!", i);
 
     # type conversion and checking
+    i32 myint = 42;
+    f32 myfloat = myint as f32;
+
+    trait Bark = @{ fun bark = (); };
+    type Dog = @(mut &u8 name) implof Bark @{ fun bark = (): print("%s: Woof!", self.name); };
+
+    Dog my_dog = Dog(name = "Fido");
+    if (typeof my_dog) == Dog: print("this is printed");
+    if (typeof my_dog) == Bark: print("NEVER printed");
+
+    if my_dog oftype Dog: print("this is printed");
+    if my_dog oftype Bark: print("this is printed");
 };
 
 
