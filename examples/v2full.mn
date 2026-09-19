@@ -1,0 +1,417 @@
+
+
+### FUNCTION DEFINITIONS ###
+# complete function definition
+fun add_i32 = (i32 a, i32 b) -> i32 { ret a + b; };
+
+# induced return type
+fun add_i32_induced = (i32 a, i32 b) { ret a + b; };
+
+# with inserted names
+fun add_i32_ins = (i32, i32) { ret $0 + $1; };
+
+# without code block
+fun add_i32_short = (i32, i32): ret $0 + $1;
+
+# "unit" (no return type) is better to induce
+fun my_void_func = () -> () {
+    print("Hi!");
+};
+
+# static functions allow a second param-tuple (not mandatory)
+stcfun my_templ = (type T, bool add_or_sub) -> (T a, T b) -> T {
+    ret stcif add_or_sub: a + b else: a - b;
+};
+
+# realize template with alias
+fun sub_from_templ = my_templ(i32, false);
+
+
+
+
+
+
+
+
+
+
+### TYPE DEFINITIONS AND USING THEM ###
+# basic
+type Person = @([10]u8 name, mut i32 age = 18, mut &u8 address);
+
+# no c-alignment
+type Packed = @@(u8 a, u16 b, u32 c);
+
+# static functions returning types expose abstract types
+stcfun Vec2D = (type T) -> @(T x, T y);
+
+# using them
+Person alice = Person(name = "Alice", age = 20, address = "123 Main St");
+
+# induced type
+bob          = Person(name = "Bob", address = "456 Elm St");
+
+# if Person has a deinit:
+deinit bob;
+
+# copy struct through (with)
+peter        = bob with (name = "peter");
+
+
+
+
+
+
+
+
+
+
+### TYPES AND TRAITS ###
+
+# type with trait definition
+type AddablePointI32 = @(i32 x, i32 y) @{
+    fun add = (AddablePointI32 other) {
+        self.x += other.x;
+        self.y += other.y;
+    };
+};
+
+# just a trait
+trait Addable = @{
+    fun add = ((typeof self) other);
+};
+
+# abstract traits through static functions
+stcfun SubtractableT = (type T): @{
+    fun sub = (T other);
+};
+
+# using them
+type AddableVec2D = @(i32 x, i32 y) implof Addable, SubtractableT(AddableVec2D) @{
+    fun add = (AddableVec2D other) {
+        self.x += other.x;
+        self.y += other.y;
+    };
+
+    fun sub = (AddableVec2D other) {
+        self.x -= other.x;
+        self.y -= other.y;
+    };
+};
+
+# real example, `Iterable` is a builtin
+type ByteStream = @(*u8 buf, u32 cursor) implof Iterable(u8) @{
+    init = (*u8 in_buf): ret ByteStream(buf = in_buf, cursor = 0);
+    deinit = () {} # could be left out
+
+    # for Iterable(u8)
+    fun next = () -> u8: ret self.buf[self.cursor++];
+    fun has_next = () -> bool: ret self.cursor < self.buf.len;
+
+    pub fun pop = () -> Opt8: ret if self.cursor >= self.buf.len: Opt8.None else: self.buf[self.cursor++];
+}
+
+# real example with static function:
+stcfun Stream = (type Child) -> @(*Child buf, u32 cursor) implof Iterable(Child) @{
+    init = (*Child in_buf): ret Stream(buf = in_buf, cursor = 0);
+    deinit = () {} # could be left out
+
+    fun next = () -> Child: ret self.buf[self.cursor++];
+    fun has_next = () -> bool: ret self.cursor < self.buf.len;
+
+    pub fun pop = () -> Opt(Child): ret if self.cursor >= self.buf.len: none else: self.buf[self.cursor++];
+};
+
+# realize
+stcfun Int32Stream = Stream(i32);
+
+
+
+
+
+
+
+
+
+
+### VARIANTS !!! ###
+
+# A) enumvariant - values, no subtypes - tag is u8
+variant Direction = @(North | South | East | West); 
+
+# B) tagged homogenic unionvariant
+variant Register = @@(
+    AsLower(i16)                    = 0x00 |
+    AsInt(i32)                      = 0x01 |
+    AsFloat(f32)                    = 0x02 |
+    AsBytes(u8 a, u8 b, u8 c, u8 d) = 0x03 |
+) tagof u8;
+
+# C) tagged heterogenic abstract variant
+variant Event = @(
+    Click(i32 x, i32 y) = 0x01 |
+    Key(u8)             = 0x02 |
+    Close               = 0x00 |
+) tagof u8;
+
+# D) not tagged homogenic unionvariant
+variant AnyFixed32 = @@(                                  # could also be @, as that implies here @@
+    AsInt   of i32 |
+    AsFloat of f32 |
+    AsBits  of [4]u8 |
+) tagof none assertsize u32;
+
+# E) not tagged heterogenic abstract variant
+variant AnyPrintable = @(
+    AsInt  of i32 |
+    AsText of &u8 |
+    AsFlag of bool |
+) tagof none;
+
+# F) self-tagged variant
+variant Opt8 = @(Some(u8) | None = 0xFF) tagof self assertsize u8;
+
+variant CommonCode = @(
+    Ok  = 0x0 |
+    OOM = 0x1 |
+    EOF = 0x2 |
+    Undefined(u8) |
+) tagof self;
+
+# the other builtin for any type
+stcfun Opt = (type T) -> @@(Some(T) | None) tagof u8;
+
+# use A): 
+Direction dir = Direction.North;                            # Direction.North is a value, not a type
+
+# use B):
+Register reg = Register.AsInt(42);
+Register.AsLower lower = reg as Register.AsLower;                                     # replaces tag
+Register.AsFloat asflo = 4.2 as Register.AsFloat;                  # cast into Register.AsFloat(4.2)
+
+# use C):
+fun handle_event = (Event e): stcmatch e {
+    Event.Click <- x, y => print("Click at (%d, %d)", x, y);
+    Event.Key <- key => print("Key pressed: %d", key);
+    Event.Close => print("Close");
+};
+
+# use D):
+fun handle_anyfixed = (AnyFixed32 a): stcmatch a {             # static match due to no discriminant
+    AnyFixed32.AsInt <- i => print("Int: %d", i);
+    AnyFixed32.AsFloat <- f => print("Float: %f", f);
+    AnyFixed32.AsBits <- bits => print("Bits...");
+    AnyFixed32 <- non_specified => print("Non-specific: %d", non_specific);  # homogenic -> storable
+};
+
+# use E):
+fun handle_anyprintable = (AnyPrintable a): stcmatch a {       # static match due to no discriminant
+    AnyPrintable.AsInt <- i => print("Int: %d", i);
+    AnyPrintable.AsText <- text => print("Text: %s", text);
+    AnyPrintable.AsFlag <- flag => print("Flag: %d", flag);
+};
+
+# use F):
+fun handle_opt8 = (Opt8 o): match o {
+    Opt8.Some <- val => print("Some: %d", val);
+    Opt8.None => print("None");
+};
+
+# use F): self-tagged variants
+fun handle_code = (CommonCode c): match c {
+    CommonCode.Ok => print("Ok");
+    CommonCode.OOM => print("Out of memory");
+    CommonCode.EOF => print("End of file");
+    CommonCode.Undefined <- undefined_val => print("Undefined code: %d", undefined_val);
+};
+
+
+
+
+
+
+
+
+
+
+### WHERE, WHERE-ELSE, MIGHTY OVERLOADING ###
+
+# where-else function:
+fun safe_div = (f32 a, f32 b where b != 0.0 else ret 0x7FC00000) -> f32 {
+    ret a / b;
+}
+
+# same as:
+fun safe_div2 = (f32 a, f32 b) -> f32 {
+    if ! b != 0.0: ret 0x7FC00000;
+    ret a / b;
+}
+
+# static where for compile-time checks:
+fun specific_printable = (AnyPrintable a stcwhere a != AnyPrintable.AsInt): stcmatch a {
+    AnyPrintable.AsText <- text => print("Text: %s", text);
+    AnyPrintable.AsFlag <- flag => print("Flag: %d", flag);
+    # AnyPrintable.AsInt is not possible 
+};
+
+# classic overloading:
+fun add = (i32 a, i32 b) -> i32 { ret a + b; };
+fun add = (f32 a, f32 b) -> f32 { ret a + b; };
+
+# true overloading through different array lengths --- function is copy-heavy, shouldve used *[]u8
+fun recv_sum = ([]u8 arr)  -> u32: ret recv_sum(arr as [arr.len-1]u8) + arr[arr.len-1];
+fun recv_sum = ([1]u8 arr) -> u32: ret arr[0];
+fun recv_sum = ([0]u8 arr) -> u32: ret 0;
+
+# mighty overloading with "where"
+fun safe_div_ovl = (f32 a where a == 1, f32 b where b == 1): ret 1;
+fun safe_div_ovl = (f32 a where a == 1, f32 b): ret b;
+fun safe_div_ovl = (f32 a, f32 b where b == 1): ret a;
+fun safe_div_ovl = (f32 a, f32 b where b != 0.0): ret a / b;
+fun safe_div_ovl = (f32 a, f32 b): ret 0x7FC00000;
+
+# same as:
+fun safe_div_ovl2 = (f32 a, f32 b) -> f32 {
+    if a == 1 && b == 1: ret 1;
+    if a == 1: ret b;
+    if b == 1: ret a;
+    if b != 0.0: ret a / b;
+    ret 0x7FC00000;
+};
+
+
+
+
+
+
+
+
+
+
+### POINTERS AND ARRAYS ###
+# pointers and pointers-to-immutables
+fun test = () {
+    u32 storage = 42;
+    u32 other_storage = 99;
+
+    *u32 myptr = storage.&;
+    # myptr = other_storage; is illegal as `myptr` is not a mutable variable
+    myptr.* = 43;                                                                    # storage == 43
+
+    mut &u32 immut_ptr = storage.&;
+    # immut_ptr.* = 44; is illegal
+    immut_ptr = other_storage.&;                             # immut_ptr points to other_storage now
+};
+
+# arrays and strings
+fun test2 = () {
+    [4]u8 arr = [1, 2, 3, 4];
+    arr[0] = 42;
+
+    []u8 induced_len = [5, 6, 7, 8, 9];                                       # induced_len.len == 5
+
+    []u8 str = "Hello, world!";                                                      # str.len == 13
+    &u8 str2 = "Hello, world!";                                                      # with \0
+    # *u8 str3 = "Hello, world!"; is illegal, as string literals are immutable
+};
+
+
+
+
+
+
+
+
+
+
+### CONTROL FLOW AND SUGARS ###
+main = () {
+    # no statements exist in this languages -> from if to loop everything is an expression.
+
+    # if-else unassigned
+    if 2 + 3 == 5 {
+        print("2 + 3 == 5");
+    } else: if 2 + 3 == 6 {
+        print("2 + 3 == 6");
+    } else {
+        print("2 + 3 != 5 and 2 + 3 != 6");
+    };
+
+
+    # if-else assigned
+    i32 result = if 2 + 3 == 5: 42 else: if 2 + 3 == 6: 43 else: 44;
+
+    # if-else with "runit" code execution
+    mut i32 myvar = 0;                                       # initialization, mandatory before such
+
+    myvar = if 2 + 3 == 5 {
+        print("2 + 3 == 5");
+    } else 42;
+
+    # same as:
+    myvar = if 2 + 3 == 5: do print("2 + 3 == 5") else: 42;                 # do for unit -> runit
+
+    # stcif: condition is static, evaluated at compile-time only true compiles
+    i32 myvar = stcif 1 == 1: 42 else: "illegal never-compiled value";
+
+
+    # match unassigned
+
+    # match assigned
+
+    # stcmatch
+
+
+    # while unassigned, also with repeat statement
+
+    # while assigned
+
+    # stcwhile
+
+
+    # for unassigned, also with iterator var
+
+    # for assigned
+
+    # stcfor
+
+
+    # loop unassigned, also with repeat statement
+
+    # loop assigned
+
+    # stcloop
+
+
+    # defer, defer deinit
+
+
+    # brk, cont, ret
+
+
+    # self-tagged variant unwrap
+
+
+    # arrows
+
+
+    # generator expressions
+
+
+    # type conversion and checking
+};
+
+
+
+
+
+
+
+
+
+
+### METAPROGRAMMING ###
+# quote {}, refl, include, <> and manipulation of `ast` type
+fun meta_test = () {
+
+};

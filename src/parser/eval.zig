@@ -7,7 +7,7 @@ const partial = @import("partial.zig");
 const NodeId = ParseTree.NodeId;
 const Node = ParseTree.Node;
 
-// TODO NEXT: assign, quote { }, <>, "code"
+// TODO NEXT: assign, quote { }, <>, refl, include, code
 // might seem repetitive for now, but makes extensions easy (FOR NOW)
 
 // *** rule templates *** //

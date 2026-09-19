@@ -1,6 +1,7 @@
 <include "some_file.mn">
 
-# TODOs tuples?
+# TODO remove $, optionals and errors also need planning.
+# add "tagof self"
 
 # globally the following is allowed:
 # - a  function definition
@@ -21,7 +22,7 @@ fun add_i32_alt0 = (i32 a, i32 b) {
 
 # automatic names
 fun add_i32_alt1 = (i32, i32) {
-    ret $0 + $1;
+    ret a + b;
 }
 
 # non-code-block'd single line function
@@ -73,12 +74,10 @@ peter        = bob with (name = "peter", age = bob.age + 1);
 # type definition with a belonging trait definition
 stcfun AddablePointTempl = (type A, type B): ret @(A x, B y) @{
     fun add = (AddablePointTempl other) {
-        $.x += other.x;
-        $.y += other.y;
+        self.x += other.x;
+        self.y += other.y;
     }
 }
-
-# $Trait(AddablePoint) will provide its trait
 
 trait AddablePoint = @{
     fun add = (Point other);
@@ -90,26 +89,26 @@ stcfun Addable = (type T): ret @{
 
 type AddablePoint2D = @(i32 x, i32 y) implof Addable(AddablePoint2D) @{
     fun add = (AddablePoint2D other) {
-        $.x += other.x;
-        $.y += other.y;
+        self.x += other.x;
+        self.y += other.y;
     }
 }
 
 type ByteStream = @(*u8 buf, priv u32 cursor) implof Iterable(u8) @{
-    fun $init = (*u8 in_buf) -> ByteStream: ret ByteStream(buf = in_buf, cursor = 0);
-    fun $deinit = () {} # could be left out
-    fun next = () ret $.buf[$.cursor defer $.cursor += 1];
-    fun has_next = () ret $.cursor < $.buf.len;
-    pub fun pop = () -> opt_u8: ret if ($.cursor >= $.buf.len) none else $.buf[$.cursor++];
+    init = (*u8 in_buf) -> ByteStream: ret ByteStream(buf = in_buf, cursor = 0);
+    deinit = () {} # could be left out
+    fun next = () ret self.buf[self.cursor defer self.cursor += 1];
+    fun has_next = () ret self.cursor < self.buf.len;
+    pub fun pop = () -> opt_u8: ret if (self.cursor >= self.buf.len) none else self.buf[self.cursor++];
 }
 
 # now abstracted:
 stcfun Stream = (type ChildType): ret @(*ChildType buf, priv u32 cursor) implof Iterable(ChildType) @{
-    fun $init = (*ChildType in_buf) -> ByteStream: ret ByteStream(buf = in_buf, cursor = 0);
-    fun $deinit = () {} # could be left out
-    fun next = () ret $.buf[$.cursor defer $.cursor += 1];
-    fun has_next = () ret $.cursor < $.buf.len;
-    pub fun pop = () -> $OptAuto(ChildType): ret if ($.cursor >= $.buf.len) none else $.buf[$.cursor++];
+    init = (*ChildType in_buf) -> ByteStream: ret ByteStream(buf = in_buf, cursor = 0);
+    deinit = () {} # could be left out
+    fun next = () ret self.buf[self.cursor defer self.cursor += 1];
+    fun has_next = () ret self.cursor < self.buf.len;
+    pub fun pop = () -> $OptAuto(ChildType): ret if (self.cursor >= self.buf.len) none else self.buf[self.cursor++];
 }
 
 # type alias from stc fun returning a type
@@ -142,21 +141,21 @@ variant Message = @(                    # or with @@@ to have all members be equ
 # or "tagof none", which would mean all variant members should need a "payload type" as type is not prefixed by a tag
 # could be used to group types just by some name, not through structural data.
 # - to understand, each type looks like this:
-#   Message.quit:   @(u8 $tag = 0x0)
-#   Message.move:   @(u8 $tag = 0x1, Point(u8, u8))
-#   Message.write:  @(u8 $tag = 0x2, &u8)
-#   Message.Resize: @(u8 $tag = 0x3, @(u32 w, u32 h))
+#   Message.quit:   @(u8 tag = 0x0)
+#   Message.move:   @(u8 tag = 0x1, Point(u8, u8))
+#   Message.write:  @(u8 tag = 0x2, &u8)
+#   Message.Resize: @(u8 tag = 0x3, @(u32 w, u32 h))
 
 # now with trait definition alltogether:
 variant Command = @(
     Print of @(&u8 text) @{
-        fun print_with_newline = () println($.text);
+        fun print_with_newline = () println(self.text);
     } |
     Exit of @(u8 code) @{
-        fun exit = () os.exit($.code);
+        fun exit = () os.exit(self.code);
     } = 0x99 |
     Sleep of @(u32 ms) @{
-        fun sleep = () os.sleep($.ms);
+        fun sleep = () os.sleep(self.ms);
     } |
 );
 
@@ -337,7 +336,7 @@ buf8 = make_fixed_buf(u8, 8)(0);
 # compile error: "static where violated: N > 0", caught before codegen, zero runtime cost
 # buf0 = make_fixed_buf(u8, 0)(0);
 
-fun $main = () {
+main = () {
     [2]u8 my_str0 = ['h', 'i'];      type: [2]u8
     [2]u8 my_str1 = "hi";  # h i     type: [2]u8
     []u8  my_str2 = "hi";  # h i     type: [2]u8
@@ -360,14 +359,14 @@ fun $main = () {
     # mut c = 0;
     # for i in 0..<10: c[i] = i;
 
-    mut [100]u32 d = $splat(0);
+    mut [100]u32 d;
     d = loop some_var += 5: some_generator(some_var) !! brk;     # may overflow tho
     # same as:
     # ...
     # mut u32 hidden_i = 0;
     # loop some_var += 5: d[hidden_i++] = some_generator(some_var) !! brk;
         
-    mut [100]u32 e = $splat(0);
+    mut [100]u32 e;
     e = while true: some_var += 5: some_generator(some_var) !! brk;     # may overflow tho
     # same as: see above
 
@@ -417,4 +416,11 @@ fun $main = () {
     # or inline evaluate as `mylazyexpr` stored static data
     x = <quote { 1 + 2 + 3 + 4 }>; 
 
+}
+
+# a test wrt metaprogramming: write an interface that enables displaying a type's fields
+trait Displayable = @{
+    fun display = () {
+        stc code refl_t = refl (typeof self); 
+    }
 }

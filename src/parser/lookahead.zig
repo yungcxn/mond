@@ -17,6 +17,9 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_--")] = &eval.dec_prefix;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_..=")] = &eval.gen_upperbound_incl;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_..<")] = &eval.gen_upperbound_excl;
+    t[@intFromEnum(Lexer.Token.Kind.kw_self)] = &eval.self;
+    t[@intFromEnum(Lexer.Token.Kind.kw_init)] = &eval.init;
+    t[@intFromEnum(Lexer.Token.Kind.kw_main)] = &eval.main;
     t[@intFromEnum(Lexer.Token.Kind.kw_true)] = &eval.true_;
     t[@intFromEnum(Lexer.Token.Kind.kw_false)] = &eval.false_;
     t[@intFromEnum(Lexer.Token.Kind.kw_none)] = &eval.none;
