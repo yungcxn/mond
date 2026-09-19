@@ -258,10 +258,10 @@ fun specific_printable = (AnyPrintable a stcwhere a != AnyPrintable.AsInt): stcm
 fun add = (i32 a, i32 b) -> i32 { ret a + b; };
 fun add = (f32 a, f32 b) -> f32 { ret a + b; };
 
-# true overloading through different array lengths --- function is copy-heavy, shouldve used *[]u8
-fun recv_sum = ([]u8 arr)  -> u32: ret recv_sum(arr as [arr.len-1]u8) + arr[arr.len-1];
-fun recv_sum = ([1]u8 arr) -> u32: ret arr[0];
-fun recv_sum = ([0]u8 arr) -> u32: ret 0;
+# true overloading through different array lengths --- pointer allow here 0-copy + free type cast
+fun recv_sum = (&[]u8 arr)  -> u32: ret recv_sum(arr as &[arr.len-1]u8) + arr.*[arr.len-1];
+fun recv_sum = (&[1]u8 arr) -> u32: ret arr.*[0];
+fun recv_sum = (&[0]u8 arr) -> u32: ret 0;
 
 # mighty overloading with "where"
 fun safe_div_ovl = (f32 a where a == 1, f32 b where b == 1): ret 1;
