@@ -17,7 +17,7 @@ pub const Node = struct {
         .{ "PartialExpression_FunctionDefinitionParameter", "partial__fun_def_param", struct { type: NodeId, identifier: NodeId, default_value: NodeId, where_predicate: NodeId, where_else_value: NodeId } },
         .{ "Capture", "capture", struct { subnode: NodeId } },
         .{ "Array", "array", []NodeId },
-        .{ "ArrayEmpty", "array_empty", [0]NodeId },
+        .{ "ArrayEmpty", "array_empty", .leaf },
         .{ "TypeOf", "typeof", struct { subnode: NodeId } },
         .{ "SizeOf", "sizeof", struct { subnode: NodeId } },
         .{ "TypeArray", "type_array", struct { length: NodeId, type: NodeId } },
@@ -27,11 +27,11 @@ pub const Node = struct {
         .{ "DecrementPrefix", "dec_prefix", struct { subnode: NodeId } },
         .{ "GenUpperboundIncl", "gen_upperbound_incl", struct { subnode: NodeId } },
         .{ "GenUpperboundExcl", "gen_upperbound_excl", struct { subnode: NodeId } },
-        .{ "None", "none", [0]NodeId },
+        .{ "None", "none", .leaf },
         .{ "Do", "do", struct { subnode: NodeId } },
         .{ "Deinit", "deinit", struct { subnode: NodeId } },
-        .{ "Continue", "cont", [0]NodeId },
-        .{ "Break", "brk", [0]NodeId },
+        .{ "Continue", "cont", .leaf },
+        .{ "Break", "brk", .leaf },
         .{ "Return", "ret", struct { opt_subnode: NodeId } },
         .{ "IfThen", "if_then", struct { cond: NodeId, then: NodeId } },
         .{ "IfElse", "if_else", struct { if_then: NodeId, @"else": NodeId } },
@@ -43,26 +43,28 @@ pub const Node = struct {
         .{ "Match", "match", struct { matched: NodeId, match_body: NodeId } },
         .{ "PartialExpression_MatchBody", "partial__match_body", []NodeId },
         .{ "PartialExpression_MatchCase", "partial__match_case", struct { pattern: NodeId, body: NodeId } },
+        .{ "PartialExpression_MatchCasePatternOr", "partial__match_case_pattern_or", []NodeId },
+        .{ "PartialExpression_MatchCasePatternTypeCast", "partial__match_case_pattern_typecast", struct { type: NodeId, casted_var: NodeId } },
         .{ "TypePointerMutable", "type_ptrmut", struct { subnode: NodeId } },
         .{ "TypePointer", "type_ptr", struct { subnode: NodeId } },
-        .{ "TypeUnsignedInteger8", "type_u8", [0]NodeId },
-        .{ "TypeUnsignedInteger16", "type_u16", [0]NodeId },
-        .{ "TypeUnsignedInteger32", "type_u32", [0]NodeId },
-        .{ "TypeUnsignedInteger64", "type_u64", [0]NodeId },
-        .{ "TypeSignedInteger8", "type_i8", [0]NodeId },
-        .{ "TypeSignedInteger16", "type_i16", [0]NodeId },
-        .{ "TypeSignedInteger32", "type_i32", [0]NodeId },
-        .{ "TypeSignedInteger64", "type_i64", [0]NodeId },
-        .{ "TypeFloat16", "type_f16", [0]NodeId },
-        .{ "TypeFloat32", "type_f32", [0]NodeId },
-        .{ "TypeFloat64", "type_f64", [0]NodeId },
-        .{ "TypeBool", "type_bool", [0]NodeId },
-        .{ "TypeType", "type_type", [0]NodeId },
-        .{ "TypeTrait", "type_trait", [0]NodeId },
-        .{ "TypeVariant", "type_variant", [0]NodeId },
-        .{ "TypeInlinedFunction", "type_inlfun", [0]NodeId },
-        .{ "TypeFunction", "type_fun", [0]NodeId },
-        .{ "TypeStaticFunction", "type_stcfun", [0]NodeId },
+        .{ "TypeUnsignedInteger8", "type_u8", .leaf },
+        .{ "TypeUnsignedInteger16", "type_u16", .leaf },
+        .{ "TypeUnsignedInteger32", "type_u32", .leaf },
+        .{ "TypeUnsignedInteger64", "type_u64", .leaf },
+        .{ "TypeSignedInteger8", "type_i8", .leaf },
+        .{ "TypeSignedInteger16", "type_i16", .leaf },
+        .{ "TypeSignedInteger32", "type_i32", .leaf },
+        .{ "TypeSignedInteger64", "type_i64", .leaf },
+        .{ "TypeFloat16", "type_f16", .leaf },
+        .{ "TypeFloat32", "type_f32", .leaf },
+        .{ "TypeFloat64", "type_f64", .leaf },
+        .{ "TypeBool", "type_bool", .leaf },
+        .{ "TypeType", "type_type", .leaf },
+        .{ "TypeTrait", "type_trait", .leaf },
+        .{ "TypeVariant", "type_variant", .leaf },
+        .{ "TypeInlinedFunction", "type_inlfun", .leaf },
+        .{ "TypeFunction", "type_fun", .leaf },
+        .{ "TypeStaticFunction", "type_stcfun", .leaf },
         .{ "TypeDefinition", "def_type", struct { param_tuple: NodeId, assertsize: NodeId, def_trait: NodeId } },
         .{ "TypeDefinitionPacked", "def_type_packed", struct { param_tuple: NodeId, assertsize: NodeId, def_trait: NodeId } },
         .{ "TypeVariant", "def_variant", struct { param_tuple: NodeId, tagof: NodeId, assertsize: NodeId, def_trait: NodeId } },
@@ -72,7 +74,7 @@ pub const Node = struct {
         .{ "PartialExpression_TypeDefinitionParameter", "partial__type_def_param", struct { type: NodeId, identifier: NodeId, default_value: NodeId, where_predicate: NodeId, where_else_value: NodeId } },
         .{ "PartialExpression_TypeDefinitionParameterMutable", "partial__type_def_param_mut", struct { type: NodeId, identifier: NodeId, default_value: NodeId, where_predicate: NodeId, where_else_value: NodeId } },
         .{ "PartialExpression_VariantDefinitionParameterTuple", "partial__variant_def_param_tuple", []NodeId },
-        .{ "PartialExpression_VariantDefinitionParameter", "partial__variant_def_param", struct { name: NodeId, of_type: NodeId, tag_value: NodeId } },
+        .{ "PartialExpression_VariantDefinitionParameter", "partial__variant_def_param", struct { name: NodeId, opt_def_type: NodeId, opt_tag_value: NodeId } },
         .{ "PartialExpression_TraitDefinitionImplementationTuple", "partial__trait_def_implof_tuple", []NodeId },
         .{ "PartialExpression_TraitDefinitionBody", "partial__trait_def_body", []NodeId },
         .{ "UnifyVariants", "unify_variants", struct { left_type: NodeId, right_type: NodeId } },
@@ -118,16 +120,17 @@ pub const Node = struct {
         .{ "BinaryShiftLeft", "binary_shift_left", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryShiftRight", "binary_shift_right", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryPower", "binary_pow", struct { lhs: NodeId, rhs: NodeId } },
-        .{ "IdentifierSelf", "identifier_self", .none },
-        .{ "IdentifierInit", "identifier_init", .none },
-        .{ "IdentifierDeinit", "identifier_deinit", .none },
-        .{ "IdentifierMain", "identifier_main", .none },
+        .{ "IdentifierSelf", "identifier_self", .leaf },
+        .{ "IdentifierInit", "identifier_init", .leaf },
+        .{ "IdentifierDeinit", "identifier_deinit", .leaf },
+        .{ "IdentifierMain", "identifier_main", .leaf },
         .{ "Identifier", "identifier", .references_token },
         .{ "StringValue", "string", .references_token },
         .{ "IntegerValue", "int", .references_token },
         .{ "FloatingPointValue", "float", .references_token },
         .{ "CharacterValue", "char", .references_token },
-        .{ "BooleanValue", "boolean", .valued },
+        .{ "BooleanTrue", "boolean_true", .leaf },
+        .{ "BooleanFalse", "boolean_false", .leaf },
     };
 
     pub const Kind = blk: {
@@ -146,8 +149,28 @@ pub const Node = struct {
         return DefTable[@intFromEnum(nk)][2];
     }
 
-    const nk_childc = blk: { // TODO NEXT!
-        const t: [256]enum(u8) { none, oneortwo, many } = @splat(.oneortwo);
+    const nk_childc = blk: {
+        var t: [256]enum(u8) { none, one, two, many } = undefined;
+        for (DefTable, 0..) |def, i| {
+            const layout = def[2];
+            if (@TypeOf(layout) == type and @typeInfo(layout) == .@"struct") {
+                const n = @typeInfo(layout).@"struct".fields.len;
+                t[i] = switch (n) {
+                    0 => .none,
+                    1 => .one,
+                    2 => .two,
+                    else => .many,
+                };
+            } else if (@TypeOf(layout) == type and layout == []NodeId) {
+                t[i] = .many;
+            } else if (@TypeOf(layout) == @EnumLiteral() and layout == .leaf) {
+                t[i] = .none;
+            } else if (@TypeOf(layout) == @EnumLiteral() and layout == .references_token) {
+                t[i] = .one;
+            } else {
+                @compileError("unexpected layout type for " ++ def[1]);
+            }
+        }
         break :blk t;
     };
 };
@@ -169,36 +192,40 @@ pub fn deinit(self: *@This()) void {
     self.extra_childrefs.deinit();
 }
 
-pub inline fn set_node_arg0(self: *@This(), target_node: NodeId, val: u32) void {
-    const args_ptr = self.ast_nodes.field_ptr(.args, target_node) orelse unreachable;
-    args_ptr.*[0] = val;
-}
-
-pub inline fn set_node_arg1(self: *@This(), target_node: NodeId, val: u32) void {
-    const args_ptr = self.ast_nodes.field_ptr(.args, target_node) orelse unreachable;
-    args_ptr.*[1] = val;
-}
-
-// fully registers a new children to a parent node with "n" (>2) children
-pub inline fn push_extra_childrefs(
+// more than 2 children are passed as pointers to be copied into `extra_childrefs` (which is contiguous)
+pub inline fn set_children(
     self: *@This(),
     parent_idx: NodeId,
     childrefs: anytype,
 ) void {
     const args_ptr = self.ast_nodes.field_ptr(.args, parent_idx) orelse unreachable;
-    args_ptr.*[0] = self.extra_childrefs.head;
+    const ti = @typeInfo(@TypeOf(childrefs));
 
-    const child_t = @typeInfo(@TypeOf(childrefs)).pointer.child;
-    const child_ti = @typeInfo(child_t);
-    if (child_ti == .@"struct") {
-        const n = child_ti.@"struct".fields.len;
-        comptime if (@sizeOf(child_t) != n * @sizeOf(u32)) @compileError("unexpected size for " ++ @typeName(child_t));
-        const arr_ptr: *const [n]u32 = @ptrCast(childrefs);
-        self.extra_childrefs.append(arr_ptr);
-        args_ptr.*[1] += @intCast(n);
+    if (@TypeOf(childrefs) == NodeId or @TypeOf(childrefs) == comptime_int or @TypeOf(childrefs) == u32) {
+        args_ptr.*[0] = childrefs;
+    } else if (ti == .@"struct" and ti.@"struct".fields.len == 1) {
+        args_ptr.*[0] = @field(childrefs, ti.@"struct".fields[0].name);
+    } else if (ti == .@"struct" and ti.@"struct".fields.len == 2) {
+        args_ptr.*[0] = @field(childrefs, ti.@"struct".fields[0].name);
+        args_ptr.*[1] = @field(childrefs, ti.@"struct".fields[1].name);
     } else {
-        self.extra_childrefs.append(childrefs);
-        args_ptr.*[1] += @intCast(childrefs.len);
+        const ChildT = ti.pointer.child;
+        const child_ti = @typeInfo(ChildT);
+
+        if (child_ti == .@"struct") {
+            const n = child_ti.@"struct".fields.len;
+            comptime if (@sizeOf(ChildT) != n * @sizeOf(u32)) @compileError("unexpected size for " ++ @typeName(ChildT));
+            const arr_ptr: *const [n]u32 = @ptrCast(childrefs);
+            self.extra_childrefs.append(arr_ptr);
+
+            args_ptr.*[0] = self.extra_childrefs.head;
+            args_ptr.*[1] += @intCast(n);
+        } else {
+            self.extra_childrefs.append(childrefs);
+
+            args_ptr.*[0] = self.extra_childrefs.head;
+            args_ptr.*[1] += @intCast(childrefs.len);
+        }
     }
 }
 
@@ -210,7 +237,7 @@ pub inline fn push_node(self: *@This(), nodekind: Node.Kind) NodeId {
 
 pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, span_idx: u32) NodeId {
     const new_node_idx = self.push_node(nodekind);
-    self.set_node_arg0(new_node_idx, span_idx);
+    self.set_children(new_node_idx, span_idx);
 
     return new_node_idx;
 }
@@ -254,7 +281,7 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
         return;
     };
 
-    const is_leaf = true; // TODO!!!
+    const is_leaf = Node.nk_childc[@intFromEnum(node.nk)] == .none;
 
     if (!is_first) {
         wr(io, if (is_leaf) COL_LEAF else COL_KIND);
@@ -281,7 +308,7 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
     const ext = if (is_first) "" else if (is_last) "    " else "\xe2\x94\x82   "; // "│   "
     const new_prefix = std.fmt.bufPrint(&prefix_buf, "{s}{s}", .{ prefix, ext }) catch prefix;
 
-    if (true) { // TODO!!!!!
+    if (Node.nk_childc[@intFromEnum(node.nk)] == .many) {
         const start = node.args[0];
         const count = node.args[1];
 

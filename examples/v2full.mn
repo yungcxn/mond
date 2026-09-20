@@ -231,7 +231,12 @@ fun handle_code = (CommonCode c): match c {
     CommonCode.Undefined <- undefined_val => print("Undefined code: %d", undefined_val);
 };
 
-
+# some more complex example
+variant FamilyMember = +(
+    Parent(&u8 name, mut i32 age where age >= 18 else age = 18) = 0x01,
+    Child(&u8 name, mut i32 age, mut bool is_student = false) = 0x02,
+    Pet(mut [10]u8 name, &u8 species) = 0x03,
+) tagof u8;
 
 
 

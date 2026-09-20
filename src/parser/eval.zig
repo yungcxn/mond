@@ -7,7 +7,7 @@ const partial = @import("partial.zig");
 const NodeId = ParseTree.NodeId;
 const Node = ParseTree.Node;
 
-// TODO NEXT: assign, quote { }, <>, refl, include, code
+// TODO NEXT: quote { }, <>, refl, include, code
 // might seem repetitive for now, but makes extensions easy (FOR NOW)
 
 // *** rule templates *** //
@@ -20,8 +20,7 @@ pub fn templ_binary(kind: Node.Kind, prec: u8) fn (parser: *Parser, lhs: NodeId)
                 .lhs = lhs,
                 .rhs = try any(p, prec + 1),
             };
-            p.tree.set_node_arg0(parent, def.lhs);
-            p.tree.set_node_arg1(parent, def.rhs);
+            p.tree.set_children(parent, def);
             return parent;
         }
     }.eval;
@@ -76,7 +75,7 @@ pub fn paren(p: *Parser) anyerror!NodeId {
                     else => {
                         const paren_def: Node.LayoutStruct(.capture) = .{ .subnode = parent };
                         parent = p.tree.push_node(.capture);
-                        p.tree.set_node_arg0(parent, paren_def.subnode);
+                        p.tree.set_children(parent, paren_def);
                     },
                 }
             },
@@ -108,7 +107,7 @@ fn ee_def_fun(p: *Parser, early_function_header: NodeId) anyerror!NodeId {
         },
     }
 
-    p.tree.push_extra_childrefs(parent, &def);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -131,7 +130,7 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
                 }
                 p.tok_cursor += 1;
                 parent = p.tree.push_node(.array);
-                p.tree.push_extra_childrefs(parent, children.view());
+                p.tree.set_children(parent, children.view());
             },
             .@"pct_]" => { // no comma -> type
                 p.tok_cursor += 1;
@@ -140,8 +139,7 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
                     .type = try any(p, 0),
                 };
                 parent = p.tree.push_node(.type_array);
-                p.tree.set_node_arg0(parent, def.length);
-                p.tree.set_node_arg1(parent, def.type);
+                p.tree.set_children(parent, def);
             },
             else => return error.IllegalArraySeparatorTerminator,
         }
@@ -153,8 +151,7 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
                 .type = try any(p, 0),
             };
             parent = p.tree.push_node(.type_array);
-            p.tree.set_node_arg0(parent, def.length);
-            p.tree.set_node_arg1(parent, def.type);
+            p.tree.set_children(parent, def);
         } else {
             parent = p.tree.push_node(.array_empty);
         }
@@ -165,75 +162,71 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
 pub fn typeof(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.typeof);
     const def: Node.LayoutStruct(.typeof) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn sizeof(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.sizeof);
     const def: Node.LayoutStruct(.sizeof) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn neg_num(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.neg_num);
     const def: Node.LayoutStruct(.neg_num) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn neg_logic(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.neg_logic);
     const def: Node.LayoutStruct(.neg_logic) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn inc_prefix(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.inc_prefix);
     const def: Node.LayoutStruct(.inc_prefix) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn dec_prefix(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.dec_prefix);
     const def: Node.LayoutStruct(.dec_prefix) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn gen_upperbound_incl(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.gen_upperbound_incl);
     const def: Node.LayoutStruct(.gen_upperbound_incl) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn gen_upperbound_excl(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.gen_upperbound_excl);
     const def: Node.LayoutStruct(.gen_upperbound_excl) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn true_(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.boolean);
-    p.tree.set_node_arg0(parent, 1);
-    return parent;
+    return p.tree.push_node(.boolean_true);
 }
 
 pub fn false_(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.boolean);
-    p.tree.set_node_arg0(parent, 0);
-    return parent;
+    return p.tree.push_node(.boolean_false);
 }
 
 pub fn do(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.do);
     const def: Node.LayoutStruct(.do) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -241,7 +234,7 @@ pub fn deinit(p: *Parser) anyerror!NodeId {
     if (lookahead.pre[@intFromEnum(try p.peek_tok())] != null) {
         const parent = p.tree.push_node(.deinit);
         const def: Node.LayoutStruct(.deinit) = .{ .subnode = try any(p, 0) };
-        p.tree.set_node_arg0(parent, def.subnode);
+        p.tree.set_children(parent, def);
         return parent;
     }
 
@@ -265,7 +258,7 @@ pub fn ret(p: *Parser) anyerror!NodeId {
     } else {
         def.opt_subnode = 0xFFFFFFFF;
     }
-    p.tree.set_node_arg0(parent, def.opt_subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -283,8 +276,7 @@ pub fn if_(p: *Parser) anyerror!NodeId {
 
     def.then = try any(p, 0);
 
-    p.tree.set_node_arg0(parent, def.cond);
-    p.tree.set_node_arg1(parent, def.then);
+    p.tree.set_children(parent, def);
 
     if (try p.peek_eq_tok(.kw_else)) {
         p.tok_cursor += 1;
@@ -298,8 +290,7 @@ pub fn if_(p: *Parser) anyerror!NodeId {
         else_def.if_then = parent;
 
         parent = p.tree.push_node(.if_else);
-        p.tree.set_node_arg0(parent, else_def.if_then);
-        p.tree.set_node_arg1(parent, else_def.@"else");
+        p.tree.set_children(parent, else_def);
     }
 
     return parent;
@@ -314,15 +305,14 @@ pub fn while_(p: *Parser) anyerror!NodeId {
 
     def.cond = try any(p, 0);
 
-    p.tree.set_node_arg0(while_node, def.cond);
+    p.tree.set_children(while_node, def);
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         p.tok_cursor += 1;
         def_with_repeat.@"while" = while_node;
         def_with_repeat.repeated = try any(p, 0);
         parent = p.tree.push_node(.while_with_repeat_stmt);
-        p.tree.set_node_arg0(parent, def_with_repeat.@"while");
-        p.tree.set_node_arg1(parent, def_with_repeat.repeated);
+        p.tree.set_children(parent, def_with_repeat);
     }
 
     switch (try p.peek_tok()) {
@@ -332,7 +322,7 @@ pub fn while_(p: *Parser) anyerror!NodeId {
     }
 
     def.body = try any(p, 0);
-    p.tree.set_node_arg1(while_node, def.body);
+    p.tree.set_children(while_node, def);
 
     return parent;
 }
@@ -350,12 +340,11 @@ pub fn for_(p: *Parser) anyerror!NodeId {
         def_var_extension.for_seq = for_node;
         def_var_extension.variable = def.seq;
         def.seq = try any(p, 0);
-        p.tree.set_node_arg0(for_node, def.seq);
+        p.tree.set_children(for_node, def);
         parent = p.tree.push_node(.for_var_in_seq);
-        p.tree.set_node_arg0(parent, def_var_extension.for_seq);
-        p.tree.set_node_arg1(parent, def_var_extension.variable);
+        p.tree.set_children(parent, def_var_extension);
     } else {
-        p.tree.set_node_arg0(for_node, def.seq);
+        p.tree.set_children(for_node, def);
     }
 
     switch (try p.peek_tok()) {
@@ -365,7 +354,7 @@ pub fn for_(p: *Parser) anyerror!NodeId {
     }
 
     def.body = try any(p, 0);
-    p.tree.set_node_arg1(for_node, def.body);
+    p.tree.set_children(for_node, def);
 
     return parent;
 }
@@ -380,16 +369,14 @@ pub fn loop(p: *Parser) anyerror!NodeId {
         .@"pct_{" => {},
         else => { // we just had one node here -> no repeat!
             def.opt_repeated = 0xFFFFFFFF;
-            p.tree.set_node_arg0(parent, 0xFFFFFFFF);
-            p.tree.set_node_arg1(parent, def.body);
+            p.tree.set_children(parent, def);
             return parent;
         },
     }
 
     def.opt_repeated = def.body;
     def.body = try any(p, 0);
-    p.tree.set_node_arg0(parent, def.opt_repeated);
-    p.tree.set_node_arg1(parent, def.body);
+    p.tree.set_children(parent, def);
 
     return parent;
 }
@@ -401,22 +388,21 @@ pub fn match(p: *Parser) anyerror!NodeId {
     def.matched = try any(p, 0);
     def.match_body = try partial.match_body(p);
 
-    p.tree.set_node_arg0(parent, def.matched);
-    p.tree.set_node_arg1(parent, def.match_body);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn type_ptr(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.type_ptr);
-    const child: Node.LayoutStruct(.type_ptr) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, child.subnode);
+    const def: Node.LayoutStruct(.type_ptr) = .{ .subnode = try any(p, 0) };
+    p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn type_ptrmut(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.type_ptrmut);
-    const child: Node.LayoutStruct(.type_ptrmut) = .{ .subnode = try any(p, 0) };
-    p.tree.set_node_arg0(parent, child.subnode);
+    const def: Node.LayoutStruct(.type_ptrmut) = .{ .subnode = try any(p, 0) };
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -507,7 +493,7 @@ pub fn type_(p: *Parser) anyerror!NodeId {
     if (params.cursor == 0) return error.IllegalTypeParamList;
 
     def.param_tuple = p.tree.push_node(.partial__type_def_param_tuple);
-    p.tree.push_extra_childrefs(def.param_tuple, params.view());
+    p.tree.set_children(def.param_tuple, params.view());
 
     if (try p.peek_eq_tok(.kw_assertsize)) {
         p.tok_cursor += 1;
@@ -524,7 +510,7 @@ pub fn type_(p: *Parser) anyerror!NodeId {
         else => def.def_trait = 0xFFFFFFFF,
     }
 
-    p.tree.push_extra_childrefs(parent, &def);
+    p.tree.set_children(parent, &def);
     return parent;
 }
 
@@ -544,7 +530,7 @@ pub fn variant(p: *Parser) anyerror!NodeId {
     if (params.cursor == 0) return error.IllegalVariantParamList;
 
     def.param_tuple = p.tree.push_node(.partial__variant_def_param_tuple);
-    p.tree.push_extra_childrefs(def.param_tuple, params.view());
+    p.tree.set_children(def.param_tuple, params.view());
 
     if (try p.peek_eq_tok(.kw_tagof)) {
         p.tok_cursor += 1;
@@ -568,7 +554,7 @@ pub fn variant(p: *Parser) anyerror!NodeId {
         else => def.def_trait = 0xFFFFFFFF,
     }
 
-    p.tree.push_extra_childrefs(parent, &def);
+    p.tree.set_children(parent, &def);
     return parent;
 }
 
@@ -591,7 +577,7 @@ pub fn trait(p: *Parser) anyerror!NodeId {
             }
         }
         const implof_tuple = p.tree.push_node(.partial__trait_def_implof_tuple);
-        p.tree.push_extra_childrefs(implof_tuple, impls.view());
+        p.tree.set_children(implof_tuple, impls.view());
         def.implof_tuple = implof_tuple;
     } else {
         def.implof_tuple = 0xFFFFFFFF;
@@ -605,11 +591,11 @@ pub fn trait(p: *Parser) anyerror!NodeId {
     p.tok_cursor += 1; // consume "}"
 
     const body = p.tree.push_node(.partial__trait_def_body);
-    p.tree.push_extra_childrefs(body, members.view());
+    p.tree.set_children(body, members.view());
     def.body = body;
 
     const parent = p.tree.push_node(.def_trait);
-    p.tree.push_extra_childrefs(parent, &def);
+    p.tree.set_children(parent, &def);
     return parent;
 }
 
@@ -620,8 +606,7 @@ pub fn unify_variants(p: *Parser, lhs: NodeId) anyerror!NodeId {
         .right_type = try any(p, 0),
     };
 
-    p.tree.set_node_arg0(parent, def.left_type);
-    p.tree.set_node_arg1(parent, def.right_type);
+    p.tree.set_children(parent, &def);
     return parent;
 }
 
@@ -631,8 +616,7 @@ pub fn fun_call(p: *Parser, lhs: NodeId) anyerror!NodeId {
         .callable = lhs,
         .fun_param_tuple = try partial.fun_call_param_tuple(p),
     };
-    p.tree.set_node_arg0(parent, def.callable);
-    p.tree.set_node_arg1(parent, def.fun_param_tuple);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -643,8 +627,7 @@ pub fn array_index(p: *Parser, lhs: NodeId) anyerror!NodeId {
         .index = try any(p, 0),
     };
     try p.eat_assert_tok(.@"pct_]");
-    p.tree.set_node_arg0(parent, def.indexable);
-    p.tree.set_node_arg1(parent, def.index);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -654,8 +637,7 @@ pub fn member(p: *Parser, lhs: NodeId) anyerror!NodeId {
         .parent = lhs,
         .member = try any(p, 0),
     };
-    p.tree.set_node_arg0(parent, def.parent);
-    p.tree.set_node_arg1(parent, def.member);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -664,7 +646,7 @@ pub fn dereference(p: *Parser, lhs: NodeId) anyerror!NodeId {
     const def: Node.LayoutStruct(.dereference) = .{
         .subnode = lhs,
     };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -673,7 +655,7 @@ pub fn address_of(p: *Parser, lhs: NodeId) anyerror!NodeId {
     const def: Node.LayoutStruct(.address_of) = .{
         .subnode = lhs,
     };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -682,7 +664,7 @@ pub fn inc_postfix(p: *Parser, lhs: NodeId) anyerror!NodeId {
     const def: Node.LayoutStruct(.inc_postfix) = .{
         .subnode = lhs,
     };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -691,7 +673,7 @@ pub fn dec_postfix(p: *Parser, lhs: NodeId) anyerror!NodeId {
     const def: Node.LayoutStruct(.dec_postfix) = .{
         .subnode = lhs,
     };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -700,7 +682,7 @@ pub fn gen_lowerbound(p: *Parser, lhs: NodeId) anyerror!NodeId {
     const def: Node.LayoutStruct(.gen_lowerbound) = .{
         .subnode = lhs,
     };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -710,8 +692,7 @@ pub fn gen_incl(p: *Parser, lhs: NodeId) anyerror!NodeId {
         .lower = lhs,
         .upper = try any(p, 0),
     };
-    p.tree.set_node_arg0(parent, def.lower);
-    p.tree.set_node_arg1(parent, def.upper);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -721,8 +702,7 @@ pub fn gen_excl(p: *Parser, lhs: NodeId) anyerror!NodeId {
         .lower = lhs,
         .upper = try any(p, 0),
     };
-    p.tree.set_node_arg0(parent, def.lower);
-    p.tree.set_node_arg1(parent, def.upper);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -732,8 +712,7 @@ pub fn oftype(p: *Parser, lhs: NodeId) anyerror!NodeId {
         .value = lhs,
         .type = try any(p, 0),
     };
-    p.tree.set_node_arg0(parent, def.value);
-    p.tree.set_node_arg1(parent, def.type);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -743,8 +722,7 @@ pub fn as(p: *Parser, lhs: NodeId) anyerror!NodeId {
         .value = lhs,
         .type = try any(p, 0),
     };
-    p.tree.set_node_arg0(parent, def.value);
-    p.tree.set_node_arg1(parent, def.type);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -761,8 +739,7 @@ pub fn labelarrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
         def.label = try partial.destructure(p, def.label);
     }
 
-    p.tree.set_node_arg0(parent, def.value);
-    p.tree.set_node_arg1(parent, def.label);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -779,8 +756,7 @@ pub fn optarrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
         def.label = try partial.destructure(p, def.label);
     }
 
-    p.tree.set_node_arg0(parent, def.value);
-    p.tree.set_node_arg1(parent, def.label);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -795,8 +771,7 @@ pub fn selftag_unwrap(p: *Parser, lhs: NodeId) anyerror!NodeId {
         def.fallback = 0xFFFFFFFF;
     }
 
-    p.tree.set_node_arg0(parent, def.value);
-    p.tree.set_node_arg1(parent, def.fallback);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -806,8 +781,7 @@ pub fn defer_(p: *Parser) anyerror!NodeId {
         .left_opt_node = 0xFFFFFFFF,
         .defered = try any(p, 0),
     };
-    p.tree.set_node_arg0(parent, def.left_opt_node);
-    p.tree.set_node_arg1(parent, def.defered);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -817,7 +791,7 @@ pub fn inlined_defer_deinit(p: *Parser, lhs: NodeId) anyerror!NodeId {
     const def: Node.LayoutStruct(.inlined_defer_deinit) = .{
         .subnode = lhs,
     };
-    p.tree.set_node_arg0(parent, def.subnode);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -827,8 +801,7 @@ pub fn with(p: *Parser, lhs: NodeId) anyerror!NodeId {
         .value = lhs,
         .fun_call_param_tuple = try partial.fun_call_param_tuple(p),
     };
-    p.tree.set_node_arg0(parent, def.value);
-    p.tree.set_node_arg1(parent, def.fun_call_param_tuple);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -862,4 +835,9 @@ pub fn string(p: *Parser) anyerror!NodeId {
 
 pub fn char(p: *Parser) anyerror!NodeId {
     return p.tree.push_data_node(.char, p.tok_cursor - 1);
+}
+
+pub fn assign(p: *Parser) anyerror!NodeId {
+    return p.tree.push_node(.none);
+    // TODO NEXT!
 }

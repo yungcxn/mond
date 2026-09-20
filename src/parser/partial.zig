@@ -22,8 +22,7 @@ pub fn ee_fun_header(p: *Parser, early_node0_in_tuple: ?NodeId) anyerror!NodeId 
         def.return_type = 0xFFFFFFFF;
     }
 
-    p.tree.set_node_arg0(parent, def.param_tuple);
-    p.tree.set_node_arg1(parent, def.return_type);
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -44,7 +43,7 @@ pub fn ee_fun_param_tuple(p: *Parser, early_node0: ?NodeId) anyerror!NodeId {
     }
     try p.eat_assert_tok(.@"pct_)");
 
-    p.tree.push_extra_childrefs(parent, params.view());
+    p.tree.set_children(parent, params.view());
     return parent;
 }
 
@@ -88,7 +87,7 @@ pub fn ee_fun_param(p: *Parser, early_node0: NodeId) anyerror!NodeId {
         def.where_else_value = 0xFFFFFFFF;
     }
 
-    p.tree.push_extra_childrefs(parent, &def);
+    p.tree.set_children(parent, &def);
     return parent;
 }
 
@@ -108,23 +107,54 @@ pub fn match_body(p: *Parser) anyerror!NodeId {
         }
     }
     p.tok_cursor += 1;
-    p.tree.push_extra_childrefs(parent, match_cases.view());
+    p.tree.set_children(parent, match_cases.view());
     return parent;
 }
 
+// <pattern> => <body> (',' | '}')
+// patterns: <node> | <node>, <identifier> | <node>, {'|', <node>}, ['|']
+// could be aswell: partial__match_case_pattern_or and partial__match_case_pattern_typecast
 pub fn match_case(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__match_case);
-    var def: Node.LayoutStruct(.partial__match_case) = .{
-        .pattern = try eval.any(p, 0),
-        .body = 0xFFFFFFFF,
-    };
+    var def: Node.LayoutStruct(.partial__match_case) = undefined;
 
-    if (try p.peek_eq_tok(.@"xpct_=>")) {
-        p.tok_cursor += 1;
-        def.body = try eval.any(p, 0);
+    def.pattern = try eval.any(p, 0);
+    switch (try p.peek_tok()) {
+        .identifier => {
+            p.tok_cursor += 1;
+            const typecast_node = p.tree.push_node(.partial__match_case_pattern_typecast);
+            const typecast_def = Node.LayoutStruct(.partial__match_case_pattern_typecast){
+                .type = def.pattern,
+                .casted_var = try eval.identifier(p),
+            };
+            p.tree.set_children(typecast_node, typecast_def);
+            def.pattern = typecast_node;
+        },
+        .@"xpct_|" => {
+            p.tok_cursor += 1;
+            var or_patterns: FixedStack(64) = .{};
+            try or_patterns.push(def.pattern);
+            while (true) {
+                const next_pattern = try eval.any(p, 0);
+                try or_patterns.push(next_pattern);
+                if (try p.peek_eq_tok(.@"xpct_|")) {
+                    p.tok_cursor += 1;
+                    if (try p.peek_eq_tok(.@"xpct_=>")) break;
+                } else {
+                    return error.IllegalMatchCasePattern;
+                }
+            }
+            const or_node = p.tree.push_node(.partial__match_case_pattern_or);
+            p.tree.set_children(or_node, or_patterns.view());
+            def.pattern = or_node;
+        },
+        else => {},
     }
-    p.tree.set_node_arg0(parent, def.pattern);
-    p.tree.set_node_arg1(parent, def.body);
+
+    try p.eat_assert_tok(.@"xpct_=>");
+    def.body = try eval.any(p, 0);
+
+    p.tree.set_children(parent, def);
     return parent;
 }
 
@@ -148,12 +178,12 @@ pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
                 },
                 .@"xpct_=" => {
                     p.tok_cursor += 1;
+                    const assigned_pair_node = p.tree.push_node(.partial__fun_call_assigned_param);
                     const assigned_pair: Node.LayoutStruct(.partial__fun_call_assigned_param) = .{
                         .identifier = expr_i,
                         .value = try eval.any(p, 0),
                     };
-                    const assigned_pair_node = p.tree.push_node(.partial__fun_call_assigned_param);
-                    p.tree.push_extra_childrefs(assigned_pair_node, &assigned_pair);
+                    p.tree.set_children(assigned_pair_node, assigned_pair);
                     try params.push(assigned_pair_node);
 
                     switch (try p.peek_tok()) {
@@ -168,7 +198,7 @@ pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
                 else => return error.IllegalFunCallParam,
             }
         }
-        p.tree.push_extra_childrefs(parent, params.view());
+        p.tree.set_children(parent, params.view());
         try p.eat_assert_tok(.@"pct_)");
         return parent;
     } else {
@@ -204,7 +234,7 @@ pub fn destructure(p: *Parser, early_identifier0: NodeId) anyerror!NodeId {
             },
         }
     }
-    p.tree.push_extra_childrefs(parent, identifiers.view());
+    p.tree.set_children(parent, identifiers.view());
     return parent;
 }
 
@@ -247,7 +277,7 @@ pub fn type_param(p: *Parser) anyerror!NodeId {
         def.where_else_value = 0xFFFFFFFF;
     }
 
-    p.tree.push_extra_childrefs(parent, &def);
+    p.tree.set_children(parent, &def);
 
     return parent;
 }
@@ -256,8 +286,23 @@ pub fn variant_param(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__variant_def_param);
     var def: Node.LayoutStruct(.partial__variant_def_param) = undefined;
 
-    // TODO!!!
+    try p.eat_assert_tok(.identifier);
+    def.name = try eval.identifier(p);
 
-    p.tree.push_extra_childrefs(parent, &def);
+    if (try p.peek_eq_tok(.@"pct_(")) {
+        p.tok_cursor += 1;
+        def.opt_def_type = try eval.type_(p);
+    } else {
+        def.opt_def_type = 0xFFFFFFFF;
+    }
+
+    if (try p.peek_eq_tok(.@"xpct_=")) {
+        p.tok_cursor += 1;
+        def.opt_tag_value = try eval.any(p, 0);
+    } else {
+        def.opt_tag_value = 0xFFFFFFFF;
+    }
+
+    p.tree.set_children(parent, &def);
     return parent;
 }
