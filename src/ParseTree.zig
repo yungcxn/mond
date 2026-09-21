@@ -95,7 +95,7 @@ pub const Node = struct {
         .{ "OfType", "oftype", struct { value: NodeId, type: NodeId } },
         .{ "As", "as", struct { value: NodeId, type: NodeId } },
         .{ "LabelArrow", "labelarrow", struct { value: NodeId, label: NodeId } },
-        .{ "OptionalArrow", "optarrow", struct { value: NodeId, label: NodeId } },
+        .{ "SelfTagArrow", "selftag_arrow", struct { value: NodeId, label: NodeId } },
         .{ "PartialExpression_Destructure", "partial__destructure", []NodeId },
         .{ "SelfTagUnwrap", "selftag_unwrap", struct { value: NodeId, fallback: NodeId } },
         .{ "Defer", "defer", struct { left_opt_node: NodeId, defered: NodeId } },

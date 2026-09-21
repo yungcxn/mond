@@ -72,7 +72,6 @@ pub const Token = struct {
         @"pct_{",
         @"pct_}",
         @"pct_,",
-        @"pct_~",
         @"pct_:",
         @"pct_;",
 
@@ -100,7 +99,7 @@ pub const Token = struct {
         @"xpct_>=",
         @"xpct_>>",
         @"xpct_<<",
-        @"xpct_<-", // for unwrap/<<<-cast
+        @"xpct_<-",
         @"xpct_*(",
         @"xpct_+(",
         @"xpct_!{",
@@ -109,14 +108,12 @@ pub const Token = struct {
         @"xpct_=>", // for `expr_match`
         @"xpct_.*",
         @"xpct_.&",
-        @"xpct_??", // for opt unwrap expression
-        @"xpct_!!", // for err unwrap expression
+        @"xpct_??", // for selftag unwrap expression
         @"xpct_..",
 
         @"xpct_..<", // for `expr_genseq`
         @"xpct_..=", // for `expr_genseq`
-        @"xpct_!<-", // for err unwrap
-        @"xpct_?<-", // for opt unwrap
+        @"xpct_?<-", // for selftag arrow
         @"xpct_++(",
         @"xpct_**(",
 
@@ -157,7 +154,6 @@ pub const Token = struct {
             xpcts(1),
             xpcts(2),
             xpcts(3),
-            xpcts(4),
         };
 
         const kw_tbl: []const struct { []const u8, Token.Kind } = keywords();
@@ -256,16 +252,27 @@ inline fn gen_next_tok(self: *@This()) !bool {
             },
             '0'...'9' => { // val_int or val_float
                 const cursor0 = self.cursor - 1;
-                var has_dot = false;
+                var last_dot_at: ?u32 = null;
                 while (self.peek_srcbyte()) |c| : (self.cursor += 1) switch (c) {
                     '.' => {
-                        if (has_dot) return error.LexingError_2DotsInNumeric;
-                        has_dot = true;
+                        if (last_dot_at) |ld| {
+                            if (self.cursor == ld + 1) {
+                                // detected '..' which could be a punctuator
+                                // -> go one back, cursor is on first dot, then push int and resume
+                                self.cursor -= 1;
+                                self.push_tok(.val_int, cursor0);
+                                return true;
+                            } else {
+                                self.push_tok(.val_float, cursor0);
+                                return true;
+                            }
+                        }
+                        last_dot_at = self.cursor;
                     },
                     '0'...'9' => continue,
                     else => break,
                 };
-                self.push_tok(if (has_dot) .val_float else .val_int, cursor0);
+                self.push_tok(if (last_dot_at != null) .val_float else .val_int, cursor0);
             },
             '\'' => { // val_char
                 const cursor0 = self.cursor;
@@ -317,28 +324,23 @@ inline fn gen_next_tok(self: *@This()) !bool {
             '{' => self.push_tok(.@"pct_{", self.cursor - 1),
             '}' => self.push_tok(.@"pct_}", self.cursor - 1),
             ',' => self.push_tok(.@"pct_,", self.cursor - 1),
-            '~' => self.push_tok(.@"pct_~", self.cursor - 1),
             ':' => self.push_tok(.@"pct_:", self.cursor - 1),
             ';' => self.push_tok(.@"pct_;", self.cursor - 1),
 
-            else => { // unclear punctuators (@"pct_...")
+            else => { // unclear punctuators (@"xpct_...")
                 const cursor0 = self.cursor - 1;
-                var longest_valid_punct: ?Token.Kind = null;
-                var longest_punctc: u32 = 0;
+                const max_len: u32 = @min(3, @as(u32, @intCast(self.src_bytes.len - cursor0)));
 
-                inline for (1..5) |i| {
-                    if (self.cursor >= self.src_bytes.len) break;
+                var len = max_len;
+                const found: ?Token.Kind = while (len >= 1) : (len -= 1) {
+                    if (Token.Kind.xpct_from_str(self.src_bytes[cursor0 .. cursor0 + len])) |k| {
+                        break k;
+                    }
+                    if (len == 1) break null;
+                } else null;
 
-                    if (Token.Kind.xpct_from_str(self.src_bytes[cursor0..self.cursor])) |found_punct| {
-                        longest_valid_punct = found_punct;
-                        longest_punctc = i;
-                    } else break;
-
-                    self.cursor += 1;
-                }
-
-                if (longest_valid_punct) |punct| {
-                    self.cursor = cursor0 + longest_punctc;
+                if (found) |punct| {
+                    self.cursor = cursor0 + len;
                     self.push_tok(punct, cursor0);
                 } else return error.LexingError_InvalidPunctuator;
             },

@@ -84,7 +84,7 @@ pub const post = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_oftype)] = &eval.oftype;
     t[@intFromEnum(Lexer.Token.Kind.kw_as)] = &eval.as;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_<-")] = &eval.labelarrow;
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_?<-")] = &eval.optarrow;
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_?<-")] = &eval.selftag_arrow;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_??")] = &eval.selftag_unwrap;
     t[@intFromEnum(Lexer.Token.Kind.kw_defer)] = &eval.inlined_defer_deinit;
     t[@intFromEnum(Lexer.Token.Kind.kw_with)] = &eval.with;
@@ -116,7 +116,6 @@ pub const binary_compute = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = .{ .f = &eval.templ_binary(.binary_mul, 11), .prec = 11 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .f = &eval.templ_binary(.binary_div, 11), .prec = 11 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .f = &eval.templ_binary(.binary_mod, 11), .prec = 11 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_**")] = .{ .f = &eval.templ_binary(.binary_pow, 12), .prec = 12 };
 
     break :blk t;
 };

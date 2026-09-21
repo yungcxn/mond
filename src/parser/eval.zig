@@ -768,9 +768,9 @@ pub fn labelarrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
     return parent;
 }
 
-pub fn optarrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.optarrow);
-    var def: Node.LayoutStruct(.optarrow) = undefined;
+pub fn selftag_arrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
+    const parent = p.tree.push_node(.selftag_arrow);
+    var def: Node.LayoutStruct(.selftag_arrow) = undefined;
     def.value = lhs;
 
     try p.eat_assert_tok(.identifier);
