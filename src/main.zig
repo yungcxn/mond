@@ -21,20 +21,25 @@ pub fn main(init: std.process.Init) void {
     const io = init.io;
     const alloc = init.gpa;
 
-    const in_f = std.Io.Dir.cwd().openFile(io, "./examples/parsetest.mn", .{}) catch @panic("File not found");
+    const in_f = std.Io.Dir.cwd().openFile(
+        io,
+        "./examples/v2full.mn",
+        .{},
+    ) catch @panic("File not found");
     const in_bytes = alloc_file_bytes(alloc, io, in_f);
     defer alloc.free(in_bytes);
 
-    var lexer: Lexer = .{
-        .src_bytes = in_bytes,
-        .tokens = .init(alloc, 10000),
-    };
+    var lexer = Lexer{ .src_bytes = in_bytes, .tokens = .init(alloc, 10000) };
     defer lexer.tokens.deinit();
     lexer.gen_tokens() catch |e| return lexer.handle_err(io, e);
 
-    var parser: Parser = .init(alloc, lexer.tokens, in_bytes, lexer.tokens.sliced_field(.span));
+    var parser = Parser.init(alloc, lexer.tokens, in_bytes, lexer.tokens.sliced_field(.span));
     defer parser.deinit();
     parser.build_ast() catch |e| parser.handle_err(io, e);
 
-    if (debug) parser.tree.debug_print_tree(io, in_bytes, parser.global_store.sliced()) catch |e| @panic(@errorName(e));
+    if (debug) parser.tree.debug_print_tree(
+        io,
+        in_bytes,
+        parser.global_store.sliced(),
+    ) catch |e| @panic(@errorName(e));
 }

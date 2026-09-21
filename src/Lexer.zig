@@ -319,6 +319,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
             ',' => self.push_tok(.@"pct_,", self.cursor - 1),
             '~' => self.push_tok(.@"pct_~", self.cursor - 1),
             ':' => self.push_tok(.@"pct_:", self.cursor - 1),
+            ';' => self.push_tok(.@"pct_;", self.cursor - 1),
 
             else => { // unclear punctuators (@"pct_...")
                 const cursor0 = self.cursor - 1;

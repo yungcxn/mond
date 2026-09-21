@@ -7,6 +7,7 @@ const eval = @import("eval.zig");
 
 pub const pre = blk: {
     var t: [256]?*const fn (parser: *Parser) anyerror!NodeId = @splat(null);
+    t[@intFromEnum(Lexer.Token.Kind.@"pct_{")] = &eval.block;
     t[@intFromEnum(Lexer.Token.Kind.@"pct_(")] = &eval.paren;
     t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = &eval.bracket;
     t[@intFromEnum(Lexer.Token.Kind.kw_typeof)] = &eval.typeof;

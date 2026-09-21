@@ -59,7 +59,7 @@ pub fn build_ast(self: *@This()) !void {
     _ = self.tree.push_node(.none);
 
     while (self.tok_cursor < self.tokens.len()) {
-        const node_parent = try @import("parser/eval.zig").any(self, 0); // TODO forbid
+        const node_parent = try @import("parser/eval.zig").any(self, .enforce_assign, 0);
         self.global_store.push(node_parent);
     }
 }
