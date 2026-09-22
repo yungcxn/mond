@@ -131,6 +131,11 @@ pub const Node = struct {
         .{ "CharacterValue", "char", .references_token },
         .{ "BooleanTrue", "boolean_true", .leaf },
         .{ "BooleanFalse", "boolean_false", .leaf },
+        .{ "AssignmentPublicMutable", "assign_pub_mut", struct { opt_type: NodeId, assignee: NodeId, assigned: NodeId } },
+        .{ "AssignmentPublic", "assign_pub", struct { opt_type: NodeId, assignee: NodeId, assigned: NodeId } },
+        .{ "AssignmentMutable", "assign_mut", struct { opt_type: NodeId, assignee: NodeId, assigned: NodeId } },
+        .{ "Assignment", "assign", struct { opt_type: NodeId, assignee: NodeId, assigned: NodeId } },
+        .{ "PartialExpression_MultipleAssignedValues", "partial__assign_multival", []NodeId },
     };
 
     pub const Kind = blk: {

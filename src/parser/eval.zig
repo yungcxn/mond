@@ -30,7 +30,7 @@ pub fn templ_binary(kind: Node.Kind, prec: u8) fn (parser: *Parser, lhs: NodeId)
 
 pub fn any(
     p: *Parser,
-    comptime assign_mode: enum { no_assign, allow_assign, enforce_assign },
+    comptime assign_mode: enum { forbid_assign, allow_assign, enforce_assign },
     prec: u8,
 ) anyerror!NodeId {
     if (assign_mode == .enforce_assign) return assign(p);
@@ -45,7 +45,7 @@ pub fn any(
         }
     }
 
-    var parent = (lookup_f orelse return error.NoRuleFound)(p);
+    var parent = try (lookup_f orelse return error.NoRuleFound)(p);
 
     while (lookahead.post[@intFromEnum(try p.pop_tok())]) |post_f| {
         const lhs = parent;
@@ -72,7 +72,10 @@ pub fn any(
 pub fn block(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.block);
     var children: FixedStack(4096) = .{};
-    while (!try p.peek_eq_tok(.@"pct_}")) try children.push(try any(p, .enforce_assign, 0));
+    while (!try p.peek_eq_tok(.@"pct_}")) {
+        try children.push(try any(p, .enforce_assign, 0));
+        try p.eat_assert_tok(.@"pct_;");
+    }
     p.tok_cursor += 1;
     p.tree.set_children(parent, children.view());
     return parent;
@@ -863,6 +866,45 @@ pub fn char(p: *Parser) anyerror!NodeId {
 }
 
 pub fn assign(p: *Parser) anyerror!NodeId {
-    return p.tree.push_node(.none);
-    // TODO NEXT!
+    const is_pub = try p.peek_eq_tok(.kw_pub);
+    if (is_pub) p.tok_cursor += 1;
+
+    const is_mut = try p.peek_eq_tok(.kw_mut);
+    if (is_mut) p.tok_cursor += 1;
+
+    const parent = if (is_pub and is_mut)
+        p.tree.push_node(.assign_pub_mut)
+    else if (is_pub)
+        p.tree.push_node(.assign_pub)
+    else if (is_mut)
+        p.tree.push_node(.assign_mut)
+    else
+        p.tree.push_node(.assign);
+
+    var def: Node.LayoutStruct(.assign) = undefined;
+
+    def.opt_type = try any(p, .forbid_assign, 0);
+
+    if (try p.peek_eq_tok(.@"xpct_=")) {
+        def.assignee = def.opt_type;
+        def.opt_type = 0xFFFFFFFF;
+        p.tok_cursor += 1;
+    } else {
+        try p.eat_assert_tok(.identifier);
+        def.assignee = try identifier(p);
+
+        if (try p.peek_eq_tok(.@"pct_,")) {
+            // cursor should be right at first comma
+            def.assignee = try partial.destructure(p, def.assignee);
+        }
+    }
+
+    def.assigned = try any(p, .forbid_assign, 0);
+    if (try p.peek_eq_tok(.@"pct_,")) {
+        // cursor should be right at first comma
+        def.assigned = try partial.assign_multival(p, def.assigned);
+    }
+
+    p.tree.set_children(parent, &def);
+    return parent;
 }

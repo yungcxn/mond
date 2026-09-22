@@ -17,7 +17,7 @@ pub fn ee_fun_header(p: *Parser, early_node0_in_tuple: ?NodeId) anyerror!NodeId 
 
     if (try p.peek_eq_tok(.@"xpct_->")) {
         p.tok_cursor += 1;
-        def.return_type = try eval.any(p, .forbid_assign, p, 0);
+        def.return_type = try eval.any(p, .forbid_assign, 0);
     } else {
         def.return_type = 0xFFFFFFFF;
     }
@@ -39,7 +39,7 @@ pub fn ee_fun_param_tuple(p: *Parser, early_node0: ?NodeId) anyerror!NodeId {
     while (try p.peek_eq_tok(.@"pct_,")) {
         p.tok_cursor += 1;
         if (try p.peek_eq_tok(.@"pct_)")) break;
-        try params.push(try ee_fun_param(p, try eval.any(p, .forbid_assign, p, 0)));
+        try params.push(try ee_fun_param(p, try eval.any(p, .forbid_assign, 0)));
     }
     try p.eat_assert_tok(.@"pct_)");
 
@@ -68,17 +68,17 @@ pub fn ee_fun_param(p: *Parser, early_node0: NodeId) anyerror!NodeId {
 
     if (try p.peek_eq_tok(.@"xpct_=")) {
         p.tok_cursor += 1;
-        def.default_value = try eval.any(p, .forbid_assign, p, 0);
+        def.default_value = try eval.any(p, .forbid_assign, 0);
     } else {
         def.default_value = 0xFFFFFFFF;
     }
 
     if (try p.peek_eq_tok(.kw_where)) {
         p.tok_cursor += 1;
-        def.where_predicate = try eval.any(p, .forbid_assign, p, 0);
+        def.where_predicate = try eval.any(p, .forbid_assign, 0);
         if (try p.peek_eq_tok(.kw_else)) {
             p.tok_cursor += 1;
-            def.where_else_value = try eval.any(p, .forbid_assign, p, 0);
+            def.where_else_value = try eval.any(p, .forbid_assign, 0);
         } else {
             def.where_else_value = 0xFFFFFFFF;
         }
@@ -118,7 +118,7 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__match_case);
     var def: Node.LayoutStruct(.partial__match_case) = undefined;
 
-    def.pattern = try eval.any(p, .forbid_assign, p, 0);
+    def.pattern = try eval.any(p, .forbid_assign, 0);
     switch (try p.peek_tok()) {
         .identifier => {
             p.tok_cursor += 1;
@@ -135,8 +135,7 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
             var or_patterns: FixedStack(64) = .{};
             try or_patterns.push(def.pattern);
             while (true) {
-                const next_pattern = try eval.any(p, .forbid_assign, p, 0);
-                try or_patterns.push(next_pattern);
+                try or_patterns.push(try eval.any(p, .forbid_assign, 0));
                 if (try p.peek_eq_tok(.@"xpct_|")) {
                     p.tok_cursor += 1;
                     if (try p.peek_eq_tok(.@"xpct_=>")) break;
@@ -165,7 +164,7 @@ pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
     if (!try p.peek_eq_tok(.@"pct_)")) {
         var params: FixedStack(64) = .{};
         while (true) {
-            const expr_i = try eval.any(p, .forbid_assign, p, 0);
+            const expr_i = try eval.any(p, .forbid_assign, 0);
             switch (try p.peek_tok()) {
                 .@"pct_)" => {
                     try params.push(expr_i);
@@ -181,7 +180,7 @@ pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
                     const assigned_pair_node = p.tree.push_node(.partial__fun_call_assigned_param);
                     const assigned_pair: Node.LayoutStruct(.partial__fun_call_assigned_param) = .{
                         .identifier = expr_i,
-                        .value = try eval.any(p, .forbid_assign, p, 0),
+                        .value = try eval.any(p, .forbid_assign, 0),
                     };
                     p.tree.set_children(assigned_pair_node, assigned_pair);
                     try params.push(assigned_pair_node);
@@ -238,11 +237,32 @@ pub fn destructure(p: *Parser, early_identifier0: NodeId) anyerror!NodeId {
     return parent;
 }
 
+pub fn assign_multival(p: *Parser, early_value0: NodeId) anyerror!NodeId {
+    const parent = p.tree.push_node(.partial__assign_multival);
+
+    // , value , value [NO TRAILING COMMA ALLOWED - TODO]
+    var values: FixedStack(64) = .{};
+    try values.push(early_value0);
+    outer: while (true) {
+        switch (try p.pop_tok()) {
+            .@"pct_," => {
+                try values.push(try eval.any(p, .forbid_assign, 0));
+            },
+            else => {
+                p.tok_cursor -= 1;
+                break :outer;
+            },
+        }
+    }
+    p.tree.set_children(parent, values.view());
+    return parent;
+}
+
 pub fn type_param(p: *Parser) anyerror!NodeId {
     const m = try p.peek_eq_tok(.kw_mut);
     if (m) p.tok_cursor += 1;
     const is_mut = m;
-    const node0 = try eval.any(p, .forbid_assign, p, 0);
+    const node0 = try eval.any(p, .forbid_assign, 0);
 
     const parent = p.tree.push_node(if (is_mut) .partial__type_def_param_mut else .partial__type_def_param);
     var def: Node.LayoutStruct(.partial__type_def_param) = undefined;
@@ -250,7 +270,7 @@ pub fn type_param(p: *Parser) anyerror!NodeId {
     const next_tok = try p.peek_tok();
     if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where) {
         def.type = node0;
-        def.identifier = try eval.any(p, .forbid_assign, p, 0);
+        def.identifier = try eval.any(p, .forbid_assign, 0);
     } else {
         def.type = node0;
         def.identifier = 0xFFFFFFFF;
@@ -258,17 +278,17 @@ pub fn type_param(p: *Parser) anyerror!NodeId {
 
     if (try p.peek_eq_tok(.@"xpct_=")) {
         p.tok_cursor += 1;
-        def.default_value = try eval.any(p, .forbid_assign, p, 0);
+        def.default_value = try eval.any(p, .forbid_assign, 0);
     } else {
         def.default_value = 0xFFFFFFFF;
     }
 
     if (try p.peek_eq_tok(.kw_where)) {
         p.tok_cursor += 1;
-        def.where_predicate = try eval.any(p, .forbid_assign, p, 0);
+        def.where_predicate = try eval.any(p, .forbid_assign, 0);
         if (try p.peek_eq_tok(.kw_else)) {
             p.tok_cursor += 1;
-            def.where_else_value = try eval.any(p, .forbid_assign, p, 0);
+            def.where_else_value = try eval.any(p, .forbid_assign, 0);
         } else {
             def.where_else_value = 0xFFFFFFFF;
         }
@@ -298,7 +318,7 @@ pub fn variant_param(p: *Parser) anyerror!NodeId {
 
     if (try p.peek_eq_tok(.@"xpct_=")) {
         p.tok_cursor += 1;
-        def.opt_tag_value = try eval.any(p, .forbid_assign, p, 0);
+        def.opt_tag_value = try eval.any(p, .forbid_assign, 0);
     } else {
         def.opt_tag_value = 0xFFFFFFFF;
     }
