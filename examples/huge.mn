@@ -86,11 +86,21 @@ i32 $dollar          = 5;
 # immutable by default
 i32 answer = 42;
 
-# induced type
-induced = 1337;
+# untyped assign declares when the name is not visible yet, the type is induced from the value
+# untyped int literals are u32, negated ones i32, untyped float literals are f32
+induced       = 1337;
+induced_neg   = -1337;
+induced_float = 2.5;
+
+# untyped int literals that do not fit into 32 bit are upcast to u64, negated ones to i64
+huge_lit      = 5000000000;
+huge_neg      = -5000000000;
 
 # mutable
 mut i32 counter = 0;
+
+# `counter` is visible now, so an untyped assign is a plain assignment
+counter = 5;
 
 # public (exported from this module)
 pub i32 exported_answer = 42;
@@ -114,6 +124,9 @@ mut i32 xx, yy, zz = 1, 2, 3;
 
 # untyped destructuring with a modifier in front
 mut aa, bb = 5, 6;
+
+# mixed: `aa` exists and is assigned, `cc` is new and takes the shared type of aa
+aa, cc = 7, 8;
 
 # static values can size arrays
 [MAX_USERS]u32 user_ids;
@@ -467,6 +480,7 @@ fun type_tour = () {
     # pointers to types
     *Person carl_ptr = carl.&;
     carl_ptr.*.age = 50;
+    carl_ptr.age += 1;                                                       # auto-deref like zig
 
     # deinit explicitly
     deinit bob;
@@ -879,8 +893,16 @@ fun if_tour = (i32 x) {
         print("x == 5");
     } else 42;
 
-    # same thing with `do`, which turns anything into unit
+    # a plain unit call as a branch needs `do` to become runit
     myvar = if x == 5: do print("x == 5") else: 42;
+
+    # brk / ret / cont and nested if / match are runit on their own, no `do` needed
+    i32 checked = if x >= 0: x else: ret;
+    i32 picked = match x {
+        0 => 100,
+        1 => if x > 0: ret else: 7,
+        _ => x,
+    };
 
     # stcif: only the true branch is compiled
     i32 static_val = stcif 1 == 1: 42 else: "illegal never-compiled value";
@@ -918,8 +940,8 @@ fun while_tour = () {
 
     # infinite
     while true {
-        if j > 1000: brk;
-        j *= 2;
+        i32 next = if j > 1000: brk else: j * 2;
+        j = next;
     }
 };
 
@@ -1102,15 +1124,14 @@ fun unwrap_tour = () -> u8 {
     # simple label arrow: names a value in the middle of an expression
     if (calc_something() <- solution) == 42 or solution == 43: do print("alright!");
 
-    # label arrow with destructuring
-    divmod(17, 5) <- q, r;
-    print("17 = 5 * %d + %d", q, r);
+    # label arrow with destructuring, binders live only in their own expression and below it
+    if (divmod(17, 5) <- q, r).rem == 2: print("17 = 5 * %d + %d", q, r);
 
     # unwrap arrow: true when the self-tagged value holds a payload
     if vari ?<- nonnone_var {
         print("Unwrapped value is %d", nonnone_var);
     } else {
-        print("opt8 vari was None");
+        print("opt8 vari was None");                         # nonnone_var is hidden in here
     };
 
     while find_byte("abcabc".&, 'c') ?<- pos: brk;
@@ -1155,6 +1176,8 @@ fun array_tour = () {
     [4]*u8 ptrs;
     &[4]u8 arr_ptr = arr.&;
     u8 via_ptr = arr_ptr.*[2];
+    u8 via_auto = arr_ptr[2];
+    u64 len_auto = arr_ptr.len;
 
     # strings
     []u8 str = "Hello, world!";                                               # str.len == 13
@@ -1443,9 +1466,9 @@ stcfun TreeMap = (type K where K oftype Comparable(K), type V): *(mut Opt(*Node(
     pub fun get = (K key) -> Opt(V) {
         mut cur = self.root;
         while cur ?<- node {
-            i32 c = node.*.key.cmp(key);
-            if c == 0: ret Opt(V).Some(node.*.value);
-            cur = if c < 0: node.*.right else: node.*.left;
+            i32 c = node.key.cmp(key);
+            if c == 0: ret Opt(V).Some(node.value);
+            cur = if c < 0: node.right else: node.left;
         }
         ret Opt(V).None;
     };
