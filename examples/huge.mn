@@ -1,0 +1,1541 @@
+# NOTE: AI GENERATED TEST:
+# ============================================================================================== #
+#                                    MOND - FULL SHOWCASE                                     #
+# ============================================================================================== #
+#
+# This file tries to touch every construct the mond parser currently understands:
+#
+#   0.  lexical elements (comments, identifiers, every literal form)
+#   1.  variables, modifiers (pub / mut / stc), destructuring, multi-assignment
+#   2.  operators (binary precedence ladder, unary, compound assignment, pointers, casts)
+#   3.  functions (every definition form, defaults, named args, where / where-else / stcwhere,
+#       overloading, lambdas, currying, inlfun, stcfun with two parameter tuples, function types)
+#   4.  types (plain, packed, mutable fields, defaults, where-else fields, assertsize, generics,
+#       init / deinit, methods, `with` copies)
+#   5.  traits (plain, generic, trait-implementing traits, implof lists)
+#   6.  variants (enum-like, tagged unions, untagged unions, self-tagged, unification with ||)
+#   7.  pattern matching (literals, or-patterns with `,` and `|`, ranges, payload destructuring,
+#       struct patterns, type-cast patterns, label arrows, nested matches, stcmatch)
+#   8.  control flow as expressions (if, while, for, loop + all their static `stc...` twins)
+#   9.  defer, deinit, `defer deinit`, do, brk, cont, ret
+#   10. self-tagged unwrapping (??, ?? fallback, ?? ret, ?<-) and label arrows (<-)
+#   11. arrays, strings and generator sequences
+#   12. a few "real" programs gluing everything together (stack vm, tokenizer, ring buffer, ...)
+#
+# Everything in mond is an expression, statements are separated by `;` (optional after `}`).
+# ============================================================================================== #
+
+
+
+
+# ============================================================================================== #
+### 0. LEXICAL ELEMENTS ###
+# ============================================================================================== #
+
+# a comment runs until the end of the line
+# identifiers may start with a letter, `_` or `$` and continue with letters, digits and `_`
+
+# --- integers ---
+u32 dec_int      = 1234567890;
+u32 hex_int      = 0xDEADBEEF;
+u32 hex_under    = 0xDEAD_BEEF;
+u32 hex_lower    = 0xcafe_babe;
+u8  bin_int      = 0b1010_0101;
+u16 oct_int      = 0o777;
+u8  zero         = 0;
+u64 big          = 0xFFFF_FFFF_FFFF_FFFF;
+
+# --- floating point ---
+f32 pi           = 3.14159;
+f64 tiny         = 0.000001;
+f32 neg_float    = -2.5;
+f16 half         = 0.5;
+
+# --- characters ---
+u8 char_a        = 'a';
+u8 char_space    = ' ';
+u8 char_newline  = '\n';
+u8 char_tab      = '\t';
+u8 char_bslash   = '\\';
+u8 char_null     = '\0';
+
+# --- strings ---
+&u8 plain_str    = "hello mond";
+&u8 escaped_str  = "tab:\t newline:\n quote:\" backslash:\\ done";
+&u8 empty_str    = "";
+[]u8 slice_str   = "strings are u8 arrays";
+
+# --- booleans ---
+bool yes         = true;
+bool no          = false;
+
+# --- funny but legal identifiers ---
+i32 _underscored     = 1;
+i32 __double         = 2;
+i32 camelCaseName    = 3;
+i32 snake_case_name2 = 4;
+i32 $dollar          = 5;
+
+
+
+
+# ============================================================================================== #
+### 1. VARIABLES, MODIFIERS, DESTRUCTURING ###
+# ============================================================================================== #
+
+# immutable by default
+i32 answer = 42;
+
+# induced type
+induced = 1337;
+
+# mutable
+mut i32 counter = 0;
+
+# public (exported from this module)
+pub i32 exported_answer = 42;
+
+# static (compile-time known)
+stc u32 BUFFER_SIZE = 256;
+stc u32 MAX_USERS   = 128;
+
+# modifiers stack
+pub mut i32 shared_counter = 0;
+pub stc u32 VERSION        = 2;
+pub stc type Byte          = u8;
+
+# declaration without value
+mut u64 later_initialized;
+[BUFFER_SIZE]u8 global_buffer;
+
+# destructuring declaration + multiple assigned values
+i32 left, right = 10, 20;
+mut i32 xx, yy, zz = 1, 2, 3;
+
+# untyped destructuring with a modifier in front
+mut aa, bb = 5, 6;
+
+# static values can size arrays
+[MAX_USERS]u32 user_ids;
+[BUFFER_SIZE * 2]u8 double_buffer;
+
+
+
+
+# ============================================================================================== #
+### 2. OPERATORS ###
+# ============================================================================================== #
+
+fun operator_tour = () {
+    mut i32 a = 7;
+    mut i32 b = 3;
+
+    # arithmetic
+    i32 sum  = a + b;
+    i32 diff = a - b;
+    i32 prod = a * b;
+    i32 quot = a / b;
+    i32 rem  = a % b;
+
+    # precedence: * before + before << before < before == before & before ^ before | before and ...
+    i32 prec1 = a + b * 2;                                                         # a + (b * 2)
+    i32 prec2 = (a + b) * 2;
+    i32 prec3 = a - b - 1;                                                    # left associative
+    i32 prec4 = 1 << 2 + 3;                                                        # 1 << (2 + 3)
+    bool prec5 = a + 1 < b * 4;
+    bool prec6 = a < b == b < a;
+
+    # bitwise
+    u32 band = 0xF0 & 0x3C;
+    u32 bor  = 0xF0 | 0x0F;
+    u32 bxor = 0xFF ^ 0x0F;
+    u32 shl  = 1 << 8;
+    u32 shr  = 0x100 >> 4;
+    u32 mix  = 1 | 2 ^ 3 & 4;                                                # 1 | (2 ^ (3 & 4))
+
+    # comparison
+    bool c_eq  = a == b;
+    bool c_neq = a != b;
+    bool c_lt  = a < b;
+    bool c_gt  = a > b;
+    bool c_le  = a <= b;
+    bool c_ge  = a >= b;
+
+    # logical
+    bool l_and  = c_lt and c_gt;
+    bool l_and2 = c_lt && c_gt;
+    bool l_or   = c_lt or c_gt;
+    bool l_xor  = c_lt xor c_gt;
+    bool l_not  = !c_lt;
+    bool l_mix  = c_lt or c_gt and c_eq xor c_neq;              # or < xor < and in binding power
+    bool l_notc = ! a == b;                                            # (!a) == b, unary binds tight
+
+    # unary
+    i32 negated   = -a;
+    i32 neg_twice = - -a;
+    i32 neg_expr  = -(a + b);
+
+    # prefix / postfix increment + decrement
+    ++a;
+    --b;
+    a++;
+    b--;
+    i32 post_used = a++ + b--;
+
+    # compound assignment
+    a += 10;
+    a -= 2;
+    a *= 3;
+    a /= 2;
+    a %= 7;
+    a += b * 2 - 1;
+
+    # pointers: `.&` takes an address, `.*` dereferences, `*T` is mutable pointee, `&T` immutable
+    mut i32 target = 5;
+    *i32 mptr = target.&;
+    &i32 iptr = target.&;
+    mptr.* = 6;
+    mptr.* += 1;
+    i32 read_back = iptr.*;
+
+    # pointer to pointer (a space is needed, `**` is its own token)
+    * *i32 pptr = mptr.&;
+    pptr.*.* = 99;
+    *&i32 ptr_to_immut_ptr = iptr.&;
+
+    # casting and type introspection
+    f32 as_float  = a as f32;
+    i64 widened   = (a as i64) * 1000000;
+    u8  truncated = 0x1FF as u8;
+    bool is_i32   = a oftype i32;
+    bool same_t   = (typeof a) == i32;
+    bool same_t2  = typeof a == typeof b;
+    u64 sz        = sizeof i32;
+    u64 sz_arr    = sizeof [16]u8;
+    u64 sz_expr   = sizeof a + sizeof b;
+};
+
+
+
+
+# ============================================================================================== #
+### 3. FUNCTIONS ###
+# ============================================================================================== #
+
+# full definition
+fun add_i32 = (i32 a, i32 b) -> i32 { ret a + b; };
+
+# induced return type
+fun add_induced = (i32 a, i32 b) { ret a + b; };
+
+# unnamed parameters are reachable through $0, $1, ...
+fun add_unnamed = (i32, i32) { ret $0 + $1; };
+
+# short form: `:` followed by exactly one expression
+fun add_short = (i32 a, i32 b): ret a + b;
+
+# short form with return type
+fun mul_short = (i32 a, i32 b) -> i32: ret a * b;
+
+# no parameters
+fun forty_two = () -> i32: ret 42;
+
+# unit return explicitly
+fun say_hi = () -> () {
+    print("Hi!");
+};
+
+# unit return induced, empty body
+fun do_nothing = () {};
+
+# declaration only (the body lives elsewhere, e.g. extern / trait requirement)
+fun extern_puts = (&u8 str) -> i32;
+fun extern_exit = (i32 code);
+
+# parameter defaults and named arguments at call site
+fun greet = (&u8 name = "stranger", u32 times = 1, bool shout = false) {
+    for 0..<times {
+        if shout: print("HELLO %s!", name) else: print("hello %s", name);
+    }
+};
+
+fun call_greet = () {
+    greet();
+    greet("Can");
+    greet("Can", 3);
+    greet(name = "Efe", shout = true);
+    greet(times = 2, name = "Bob",);                                  # trailing comma is fine
+};
+
+# unnamed + defaulted parameter
+fun scaled = (f32 value, f32 = 2.0): ret value * $1;
+
+# where-else: predicate per parameter, else-branch handles the violation
+fun safe_div = (f32 a, f32 b where b != 0.0 else ret 0x7FC00000) -> f32 {
+    ret a / b;
+};
+
+# where-else with an early return value
+fun clamp_percent = (i32 p where p >= 0 and p <= 100 else ret 50) -> i32: ret p;
+
+# where on an unnamed parameter
+fun positive_only = (i32 where $0 > 0) -> i32: ret $0;
+
+# stcwhere: checked at compile time
+fun small_type_only = (type T stcwhere sizeof T <= 8) -> u64: ret sizeof T;
+
+# "mighty overloading": the most specific where-clause wins
+fun fib = (u32 n where n == 0): ret 0;
+fun fib = (u32 n where n == 1): ret 1;
+fun fib = (u32 n) -> u32: ret fib(n - 1) + fib(n - 2);
+
+# classic overloading by type
+fun absolute = (i32 x) -> i32: ret if x < 0: -x else: x;
+fun absolute = (f32 x) -> f32: ret if x < 0.0: -x else: x;
+
+# overloading by array length through pointers (0-copy)
+fun arr_sum = (&[]u32 arr)  -> u32: ret arr_sum(arr as &[arr.len-1]u32) + arr.*[arr.len-1];
+fun arr_sum = (&[1]u32 arr) -> u32: ret arr.*[0];
+fun arr_sum = (&[0]u32 arr) -> u32: ret 0;
+
+# recursion
+fun factorial = (u64 n) -> u64: ret if n <= 1: 1 else: n * factorial(n - 1);
+
+# inlined functions
+inlfun square = (i32 x) -> i32: ret x * x;
+inlfun lerp   = (f32 a, f32 b, f32 t): ret a + (b - a) * t;
+
+# function types: a declaration yields a function type
+type BinOp    = (i32, i32) -> i32;
+type Callback = (&u8 msg) -> ();
+type Pred     = (i32) -> bool;
+type IntFn    = (i32) -> i32;
+
+# higher order functions
+fun apply = (BinOp op, i32 a, i32 b) -> i32: ret op(a, b);
+fun apply_n = ((i32) -> i32 f, i32 n, i32 x) -> i32 {
+    mut i32 acc = x;
+    for 0..<n: acc = f(acc);
+    ret acc;
+};
+fun count_if = (&[]i32 arr, Pred p) -> u32 {
+    mut u32 n = 0;
+    for v in arr.*: if p(v): n++;
+    ret n;
+};
+
+# lambdas are just unnamed functions
+fun lambda_tour = () {
+    i32 r1 = apply((i32 a, i32 b): a + b, 3, 4);
+    i32 r2 = apply((i32 a, i32 b) -> i32 { ret a * b; }, 3, 4);
+    i32 r3 = apply(add_i32, 3, 4);
+    i32 r4 = apply_n((i32 x): x * 2, 10, 1);
+    u32 r5 = count_if([1, 2, 3, 4, 5, 6].&, (i32 x): x % 2 == 0);
+
+    # local functions
+    fun local_helper = (i32 x): ret x + 1;
+    i32 r6 = local_helper(41);
+
+    # immediately invoked
+    i32 r7 = ((i32 x): x * 3)(14);
+};
+
+# currying: a function returning a function
+fun make_adder = (i32 n): (i32 x): x + n;
+# `-> (` always means unit, so function-typed returns go through an alias
+fun make_multiplier = (i32 n) -> IntFn { ret (i32 x): x * n; };
+
+fun currying_tour = () {
+    add5 = make_adder(5);
+    i32 fifteen = add5(10);
+    i32 direct  = make_adder(1)(2);
+    i32 chained = make_multiplier(3)(make_adder(1)(1));
+};
+
+# static functions: parameters must be compile-time known; a second tuple is allowed
+stcfun my_templ = (type T, bool add_or_sub): (T a, T b) -> T {
+    ret stcif add_or_sub: a + b else: a - b;
+};
+
+# realizing templates
+fun add_from_templ = my_templ(i32, true);
+fun sub_from_templ = my_templ(i32, false);
+fun fadd_from_templ = my_templ(f64, true);
+
+# static function with a constrained type parameter
+stcfun max_of = (type T where T oftype Comparable(T)): (T a, T b) -> T: ret if a.cmp(b) > 0: a else: b;
+
+# static function computing a value at compile time
+stcfun pow2 = (u32 n) -> u32: ret 1 << n;
+stc u32 KIB = pow2(10);
+
+
+
+
+# ============================================================================================== #
+### 4. TYPES ###
+# ============================================================================================== #
+
+# basic struct-like type, fields immutable unless `mut`, defaults allowed
+type Person = *([16]u8 name, mut i32 age = 18, mut &u8 address);
+
+# packed, no c-alignment
+type Packed = **(u8 a, u16 b, u32 c);
+
+# tuple-like type with unnamed fields
+type Pair = *(i32, i32);
+
+# field constraints with where-else
+type Temperature = *(mut f32 kelvin where kelvin >= 0.0 else kelvin = 0.0);
+type Percent     = *(mut u8 value = 0 where value <= 100 else value = 100);
+
+# size assertion (checked at compile time)
+type Rgba = *(u8 r, u8 g, u8 b, u8 a = 255) assertsize 4;
+type Header = **(u8 magic, u8 version, u16 flags, u32 length) assertsize sizeof u64;
+
+# nested types and arrays of types
+type Vec2 = *(mut f32 x = 0.0, mut f32 y = 0.0);
+type Line = *(Vec2 from, Vec2 to);
+type Polygon = *([8]Vec2 points, u8 count);
+type Tree = *(i32 value, mut *Tree left, mut *Tree right);
+
+# generic types through static functions
+stcfun Vec2T  = (type T): *(mut T x, mut T y);
+stcfun Matrix = (type T, u32 ROWS, u32 COLS): *([ROWS][COLS]T cells);
+stcfun Slice  = (type T): *(*T ptr, u64 len);
+
+type Vec2i   = Vec2T(i32);
+type Mat4    = Matrix(f32, 4, 4);
+type ByteBuf = Slice(u8);
+
+# types with methods (anonymous trait body)
+type Counter = *(mut u32 count = 0, u32 step = 1) !{
+    init = (u32 step): ret Counter(step = step);
+    deinit = () {}
+
+    fun tick = () { self.count += self.step; };
+    fun reset = () { self.count = 0; };
+    pub fun value = () -> u32: ret self.count;
+    fun is_over = (u32 limit) -> bool: ret self.count > limit;
+};
+
+# size assertion AND methods
+type Color = *(u8 r, u8 g, u8 b) assertsize 3 !{
+    fun brightness = () -> u32: ret (self.r as u32 + self.g as u32 + self.b as u32) / 3;
+    fun inverted = (): ret self with (r = 255 - self.r, g = 255 - self.g, b = 255 - self.b);
+};
+
+fun type_tour = () {
+    # construction with named fields
+    Person alice = Person(name = "Alice", age = 20, address = "123 Main St");
+
+    # induced type, `age` falls back to its default
+    bob = Person(name = "Bob", address = "456 Elm St");
+
+    # positional construction
+    Pair p = Pair(1, 2);
+    i32 first = p.$0;
+    Vec2 origin = Vec2();
+    Vec2 unit_x = Vec2(x = 1.0);
+    Line diag = Line(from = origin, to = Vec2(x = 1.0, y = 1.0));
+
+    # mutating a mutable field
+    mut Person carl = Person(name = "Carl", address = "789 Oak St");
+    carl.age += 1;
+    carl.address = "1 New Rd";
+
+    # copying with changes
+    peter = bob with (name = "Peter");
+    older_peter = peter with (age = 99) with (address = "Retirement Home");
+
+    # methods
+    mut Counter c = Counter.init(2);
+    c.tick();
+    c.tick();
+    u32 v = c.value();
+    if c.is_over(3): c.reset();
+
+    Color teal = Color(r = 0, g = 128, b = 128);
+    Color not_teal = teal.inverted();
+
+    # generic types
+    Vec2i gp = Vec2i(x = 3, y = 4);
+    Vec2T(f64) fp = Vec2T(f64)(x = 0.5, y = 0.25);
+    Mat4 identity;
+    identity.cells[0][0] = 1.0;
+
+    # pointers to types
+    *Person carl_ptr = carl.&;
+    carl_ptr.*.age = 50;
+
+    # deinit explicitly
+    deinit bob;
+};
+
+
+
+
+# ============================================================================================== #
+### 5. TRAITS ###
+# ============================================================================================== #
+
+# plain trait, members are declarations or default implementations
+trait Addable = !{
+    fun add = ((typeof self) other);
+};
+
+trait Describable = !{
+    fun name = () -> &u8;
+    fun describe = () -> &u8: ret self.name();                        # default implementation
+};
+
+trait Bark = !{ fun bark = (); };
+
+# generic traits through static functions
+stcfun SubtractableT = (type T): !{
+    fun sub = (T other);
+};
+
+stcfun Comparable = (type T): !{
+    fun cmp = (T other) -> i32;
+    fun lt = (T other) -> bool: ret self.cmp(other) < 0;
+    fun eq = (T other) -> bool: ret self.cmp(other) == 0;
+};
+
+stcfun Iterable = (type T): !{
+    fun next = () -> T;
+    fun has_next = () -> bool;
+};
+
+# a trait that builds on other traits
+trait Numeric = implof Addable, SubtractableT(i32) !{
+    fun zero = () -> typeof self;
+};
+
+# using traits: implof list followed by the implementation body
+type AddableVec2D = *(mut i32 x, mut i32 y) implof Addable, SubtractableT(AddableVec2D) !{
+    fun add = (AddableVec2D other) {
+        self.x += other.x;
+        self.y += other.y;
+    };
+
+    fun sub = (AddableVec2D other) {
+        self.x -= other.x;
+        self.y -= other.y;
+    };
+};
+
+# trailing comma in implof list
+type Money = *(i64 cents) implof Comparable(Money), Describable, !{
+    fun cmp = (Money other) -> i32: ret if self.cents < other.cents: -1 else: if self.cents > other.cents: 1 else: 0;
+    fun name = () -> &u8: ret "money";
+};
+
+# assertsize + implof together
+type Id = *(u32 raw) assertsize 4 implof Comparable(Id) !{
+    fun cmp = (Id other) -> i32: ret (self.raw as i64 - other.raw as i64) as i32;
+};
+
+# real example: a byte stream implementing the builtin `Iterable`
+type ByteStream = *(*u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
+    init = (*u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
+    deinit = () {}
+
+    fun next = () -> u8: ret self.buf[self.cursor++];
+    fun has_next = () -> bool: ret self.cursor < self.len;
+    fun peek = () -> u8: ret self.buf[self.cursor];
+    fun skip = (u32 n = 1) { self.cursor += n; };
+
+    pub fun pop = () -> Opt8: ret if self.cursor >= self.len: Opt8.None else: self.buf[self.cursor++];
+};
+
+# generic stream
+stcfun Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iterable(Child) !{
+    init = (*Child in_buf, u32 len): ret Stream(Child)(buf = in_buf, cursor = 0, len = len);
+
+    fun next = () -> Child: ret self.buf[self.cursor++];
+    fun has_next = () -> bool: ret self.cursor < self.len;
+
+    pub fun pop = () -> Opt(Child): ret if self.cursor >= self.len: Opt(Child).None else: self.buf[self.cursor++];
+};
+
+type Int32Stream = Stream(i32);
+
+fun trait_tour = () {
+    trait Speak = !{ fun speak = () -> &u8; };
+    type Dog = *(mut &u8 name) implof Bark, Speak !{
+        fun bark = (): print("%s: Woof!", self.name);
+        fun speak = () -> &u8: ret "woof";
+    };
+    type Cat = *(&u8 name) implof Speak !{
+        fun speak = () -> &u8: ret "meow";
+    };
+
+    Dog rex = Dog(name = "Rex");
+    rex.bark();
+
+    if rex oftype Dog: print("rex is a Dog");
+    if rex oftype Bark: print("rex can bark");
+    if (typeof rex) == Dog: print("exact type check");
+    if !(rex oftype Cat) and rex oftype Speak: print("rex speaks but is no cat");
+
+    fun make_noise = (Speak s): print(s.speak());
+    make_noise(rex);
+    make_noise(Cat(name = "Tom"));
+
+    Money m1 = Money(cents = 100);
+    Money m2 = Money(cents = 250);
+    Money richer = max_of(Money)(m1, m2);
+    bool poorer = m1.lt(m2);
+};
+
+
+
+
+# ============================================================================================== #
+### 6. VARIANTS ###
+# ============================================================================================== #
+
+# A) enum-like variant, no payloads, tag inferred
+variant Direction = +(North, South, East, West);
+
+# A2) enum-like with explicit tag values and tag type
+variant Level = +(Low = 1, Mid = 5, High = 10,) tagof u8;
+
+# B) tagged homogenic union variant
+variant Register = ++(
+    AsLower(i16)                    = 0x00,
+    AsInt(i32)                      = 0x01,
+    AsFloat(f32)                    = 0x02,
+    AsBytes(u8 a, u8 b, u8 c, u8 d) = 0x03,
+) tagof u8;
+
+# C) tagged heterogenic abstract variant
+variant Event = +(
+    Click(i32 x, i32 y) = 0x01,
+    Key(u8)             = 0x02,
+    Scroll(mut f32 delta = 0.0) = 0x03,
+    Close               = 0x00,
+) tagof u8;
+
+# D) untagged homogenic union variant
+variant AnyFixed32 = ++(
+    AsInt(i32),
+    AsFloat(f32),
+    AsBits([4]u8),
+) assertsize u32;
+
+# E) untagged heterogenic abstract variant
+variant AnyPrintable = +(
+    AsInt(i32),
+    AsText(&u8),
+    AsFlag(bool),
+);
+
+# F) self-tagged variants: the payload itself encodes the tag
+variant Opt8 = +(Some(u8), None = 0xFF) tagof self assertsize u8;
+
+variant CommonCode = +(
+    Ok  = 0x0,
+    OOM = 0x1,
+    EOF = 0x2,
+    Undefined(u8),
+) tagof self;
+
+# payloads with every parameter feature
+variant FamilyMember = +(
+    Parent(&u8 name, mut i32 age where age >= 18 else age = 18) = 0x01,
+    Child(&u8 name, mut i32 age, mut bool is_student = false)   = 0x02,
+    Pet(mut [10]u8 name, &u8 species)                           = 0x03,
+) tagof u8;
+
+# generic builtins-alikes
+stcfun Opt    = (type T): ++(Some(T), None) tagof u8;
+stcfun Result = (type T, type E): +(Ok(T), Err(E)) tagof u8;
+
+# variants with methods
+variant Shape = +(Circle(f32 r), Rect(f32 w, f32 h), Tri(f32 a, f32 b, f32 c)) tagof u8 !{
+    fun area = () -> f32: ret match self {
+        Shape.Circle(r) => 3.14159 * r * r,
+        Shape.Rect(w, h) => w * h,
+        Shape.Tri(a, b, c) => heron(a, b, c),
+    };
+};
+
+variant Toggle = +(On, Off) tagof u8 assertsize 1 implof Describable !{
+    fun name = () -> &u8: ret match self { Toggle.On => "on", Toggle.Off => "off" };
+    fun flipped = () -> Toggle: ret if self == Toggle.On: Toggle.Off else: Toggle.On;
+};
+
+# unifying variants into a bigger one
+variant IoError    = +(NotFound, PermissionDenied, Interrupted) tagof u8;
+variant ParseError = +(UnexpectedChar(u8), UnexpectedEof) tagof u8;
+variant NetError   = +(Timeout(u32 ms), Refused) tagof u8;
+variant AppError   = IoError || ParseError || NetError;
+
+fun heron = (f32 a, f32 b, f32 c) -> f32 {
+    f32 s = (a + b + c) / 2.0;
+    ret sqrt(s * (s - a) * (s - b) * (s - c));
+};
+
+fun variant_tour = () {
+    # A)
+    Direction dir = Direction.North;
+    Level lvl = Level.High;
+
+    # B)
+    Register reg = Register.AsInt(42);
+    Register.AsLower lower = reg as Register.AsLower;                          # replaces the tag
+    Register.AsFloat asflo = 4.2 as Register.AsFloat;
+    Register bytes = Register.AsBytes(a = 1, b = 2, c = 3, d = 4);
+
+    # C)
+    Event click = Event.Click(x = 10, y = 20);
+    Event key = Event.Key('q');
+    Event scroll = Event.Scroll();
+    Event close = Event.Close;
+
+    # F)
+    Opt8 some = Opt8.Some(7);
+    Opt8 none = Opt8.None;
+    Opt8 auto_some = 42;                                                 # casts into Opt8.Some
+
+    # generics
+    Opt(i32) maybe = Opt(i32).Some(5);
+    Result(u32, IoError) res = Result(u32, IoError).Err(IoError.NotFound);
+    AppError err = ParseError.UnexpectedChar('%');
+
+    # methods on variants
+    Shape s = Shape.Rect(w = 3.0, h = 4.0);
+    f32 a = s.area();
+    Toggle t = Toggle.On;
+    &u8 tname = t.flipped().name();
+
+    u64 register_size = sizeof Register;
+};
+
+
+
+
+# ============================================================================================== #
+### 7. PATTERN MATCHING ###
+# ============================================================================================== #
+
+# literals, comma-or, bar-or, trailing bar, wildcard
+fun classify_num = (i32 n) -> &u8: ret match n {
+    0 => "zero",
+    1 => "one",
+    2, 3, 4 => "a few",
+    5 | 6 | 7 => "several",
+    8 | 9 | => "almost ten",
+    _ => "many",
+};
+
+# ranges as patterns (comma separated, `|` would bind into the upper bound)
+fun classify_char = (u8 c) -> &u8: ret match c {
+    'a'..='z', 'A'..='Z' => "letter",
+    '0'..='9' => "digit",
+    ' ', '\t', '\n' => "whitespace",
+    _ => "symbol",
+};
+
+fun classify_temp = (i32 celsius): match celsius {
+    ..<0 => print("freezing"),
+    0..<15 => print("cold"),
+    15..<25 => print("nice"),
+    25.. => print("hot"),
+};
+
+# struct patterns with named fields, binders and wildcards
+fun weird_person_search = (Person p): match p {
+    Person(name = "Alice", age = 42, address = _) => print("Found Alice, age 42"),
+    Person(name = i, age = 42, address = _) => print("Found %s, age 42", i),
+    Person(name = i, age = j, address = "Main St") => print("Found %s (%d), living on Main St", i, j),
+    _ => print("Found someone else"),
+};
+
+# payload destructuring, `;` as case separator works too
+fun handle_event = (Event e): match e {
+    Event.Click(x, y) => print("Click at (%d, %d)", x, y);
+    Event.Key(key) => print("Key pressed: %d", key);
+    Event.Scroll(d) => print("Scrolled by %f", d);
+    Event.Close => print("Close");
+};
+
+# untagged variants need a static match, homogenic ones allow a type-cast pattern
+fun handle_anyfixed = (AnyFixed32 a): stcmatch a {
+    AnyFixed32.AsInt(i) => print("Int: %d", i);
+    AnyFixed32.AsFloat(f) => print("Float: %f", f);
+    AnyFixed32.AsBits(bits) => print("Bits...");
+    AnyFixed32 non_specific => print("Non-specific: %d", non_specific);
+};
+
+fun handle_anyprintable = (AnyPrintable a): stcmatch a {
+    AnyPrintable.AsInt(i) => print("Int: %d", i);
+    AnyPrintable.AsText(text) => print("Text: %s", text);
+    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
+};
+
+# static where excluding a case at compile time
+fun specific_printable = (AnyPrintable a stcwhere a != AnyPrintable.AsInt): stcmatch a {
+    AnyPrintable.AsText(text) => print("Text: %s", text);
+    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
+};
+
+# self-tagged variants
+fun handle_opt8 = (Opt8 o): match o {
+    Opt8.Some(val) => print("Some: %d", val);
+    Opt8.None => print("None");
+};
+
+# label arrow inside a pattern binds the matched payload
+fun handle_code = (CommonCode c): match c {
+    CommonCode.Ok => print("Ok");
+    CommonCode.OOM => print("Out of memory");
+    CommonCode.EOF => print("End of file");
+    CommonCode.Undefined <- undefined_val => print("Undefined code: %d", undefined_val);
+};
+
+# nested variant payloads and nested matches
+fun family_greeting = (FamilyMember m) -> &u8: ret match m {
+    FamilyMember.Parent(name, age) => if age > 60: "hello grandparent" else: "hello parent",
+    FamilyMember.Child(name, age, is_student) => match is_student {
+        true => "study hard",
+        false => "go play",
+    },
+    FamilyMember.Pet(name, "dog") => "good boy",
+    FamilyMember.Pet(name, species) => "hello pet",
+};
+
+# unified variants: match on any of the unified cases, type-cast patterns for whole groups
+fun explain = (AppError e) -> &u8: ret match e {
+    IoError.NotFound => "not found",
+    IoError.PermissionDenied | IoError.Interrupted => "io trouble",
+    ParseError.UnexpectedChar(ch) => "bad char",
+    ParseError err => "some parse error",
+    NetError.Timeout(ms) => if ms > 1000: "slow network" else: "blip",
+    _ => "unknown",
+};
+
+# match bodies can be blocks and assignments (use `;` then, `,` would continue the assignment)
+fun match_bodies = (i32 n) -> i32 {
+    mut i32 out = 0;
+    match n {
+        0 => out = 100;
+        1 => {
+            out = 200;
+            out += n;
+        };
+        _ => out = -1;
+    };
+    ret out;
+};
+
+# stcmatch: only the matching arm is ever compiled
+bool static_pick = stcmatch 5 {
+    4 => "never compiled",
+    5 => true,
+    6 => "never compiled",
+};
+
+
+
+
+# ============================================================================================== #
+### 8. CONTROL FLOW (EVERYTHING IS AN EXPRESSION) ###
+# ============================================================================================== #
+
+fun if_tour = (i32 x) {
+    # block form
+    if x > 0 {
+        print("positive");
+    };
+
+    # colon form
+    if x == 0: print("zero");
+
+    # chained, mixing forms
+    if x < -100 {
+        print("very negative");
+    } else: if x < 0 {
+        print("negative");
+    } else if x < 100 {
+        print("small");
+    } else {
+        print("big");
+    };
+
+    # if as value
+    i32 sign = if x > 0: 1 else: if x < 0: -1 else: 0;
+    &u8 parity = if x % 2 == 0: "even" else: "odd";
+
+    # assignments inside branches
+    mut i32 magnitude = 0;
+    if x >= 0: magnitude = x else: magnitude = -x;
+
+    # a block producing unit mixed with a value -> "runit"
+    mut i32 myvar = 0;
+    myvar = if x == 5 {
+        print("x == 5");
+    } else 42;
+
+    # same thing with `do`, which turns anything into unit
+    myvar = if x == 5: do print("x == 5") else: 42;
+
+    # stcif: only the true branch is compiled
+    i32 static_val = stcif 1 == 1: 42 else: "illegal never-compiled value";
+    stcif sizeof u64 == 8: print("64 bit words");
+
+    # parenthesized conditions must be followed by something, a bare `(cond):` would be a function
+    if (x > 0 and x < 10) or x == 42: print("special");
+};
+
+fun while_tour = () {
+    mut i32 j = 0;
+
+    # block form
+    while j < 5 {
+        print("j is %d", j);
+        j++;
+    };
+
+    # with a repeat statement executed after every iteration
+    j = 0;
+    while j < 5, j++ {
+        print("j is %d", j);
+    }
+
+    j = 0;
+    while j < 50, j += 5: print("j is %d", j);
+
+    # while as value produces an array
+    j = 0;
+    []i32 arr = while j < 50: j++;
+
+    # stcwhile runs at compile time and can emit length info
+    stc i32 jjj = 0;
+    []i32 arr2 = stcwhile jjj < 50: jjj++;
+
+    # infinite
+    while true {
+        if j > 1000: brk;
+        j *= 2;
+    }
+};
+
+fun for_tour = () {
+    []u32 arr3 = [1, 2, 3, 4, 5];
+
+    # iterate a sequence, `$it` is the implicit element
+    for arr3 {
+        print("element %d", $it);
+    }
+
+    # named iteration variable
+    for i in arr3 {
+        print("element %d", i);
+    }
+
+    # colon forms
+    for arr3: print("%d", $it);
+    for e in arr3: print("%d", e);
+
+    # every generator sequence form
+    for i in 1..=10: print("#%d: 1 to 10 inclusive", i);
+    for i in 1..<10: print("#%d: 1 to 9", i);
+    for i in ..=10: print("#%d: 0 to 10 inclusive", i);
+    for i in ..<10: print("#%d: 0 to 9", i);
+    for i in 1.. {
+        if i > 100: brk;
+        if i % 2 == 0: cont;
+        print("#%d: odd, forever until brk", i);
+    }
+
+    # computed bounds
+    for i in 0..<arr3.len: arr3[i] *= 2;
+    # generators bind tighter than binary operators, so a computed lower bound needs parens
+    for i in (arr3.len - 1)..=arr3.len * 2: print("%d", i);
+
+    # for as value produces an array
+    [arr3.len]i32 arr4;
+    arr4 = for arr3: $it * 2;
+    []i32 squares = for i in 1..=8: i * i;
+
+    # stcfor: compile-time iteration, iterated length must be static
+    []i32 arr5 = stcfor 0..=50: $it * 2;
+    []u64 sizes = stcfor T in [u8, u16, u32, u64,]: sizeof T;
+
+    # nested loops
+    for y in 0..<3 {
+        for x in 0..<3 {
+            print("(%d, %d)", x, y);
+        }
+    }
+};
+
+fun loop_tour = () {
+    mut i32 k = 0;
+
+    # plain loop
+    loop {
+        if k >= 50 {
+            brk;
+        }
+        k = k + 1;
+    }
+
+    # loop with a repeat statement before every body run
+    k = 0;
+    loop k = k + 1 {
+        if k >= 50 {
+            brk;
+        }
+        print("k is %d", k);
+    }
+
+    k = 0;
+    loop k += 2: if k > 10: brk;
+
+    # loop as value
+    k = 0;
+    [10]i32 arr6 = loop k = k + 1: k;
+
+    # stcloop at compile time
+    stc i32 sss = 0;
+    []i32 arr7 = stcloop sss = sss + 1: sss;
+
+    # brk / cont / ret
+    loop {
+        k--;
+        if k == 3: cont;
+        if k < 0: brk;
+    }
+};
+
+# ret with and without value
+fun early_exit = (bool b) -> i32 {
+    if b {
+        ret 1;
+    }
+    ret 0;
+};
+
+fun void_exit = (bool b) {
+    if b: ret;
+    print("not returned early");
+    ret;
+};
+
+
+
+
+# ============================================================================================== #
+### 9. DEFER, DEINIT, DO ###
+# ============================================================================================== #
+
+type File = *(i32 fd, mut bool open = true) !{
+    init = (&u8 path): ret File(fd = sys_open(path));
+    deinit = () { if self.open: self.close(); };
+    fun close = () { sys_close(self.fd); self.open = false; };
+    fun write = (&u8 data) -> u64: ret sys_write(self.fd, data);
+};
+
+fun resource_tour = () {
+    # plain defer
+    log = File.init("/tmp/log.txt");
+    defer log.close();
+
+    # defer a whole block
+    defer {
+        print("cleanup 1");
+        print("cleanup 2");
+    }
+
+    # defer an assignment
+    mut i32 depth = 1;
+    defer depth = 0;
+
+    # explicit deinit
+    tmp = File.init("/tmp/scratch");
+    tmp.write("scratch data");
+    deinit tmp;
+
+    # deinit deferred right at the construction site
+    data = File.init("/tmp/data.bin") defer deinit;
+    data.write("payload");
+
+    # do: evaluate for side effects only
+    do log.write("hello");
+    do {
+        print("a do block");
+    };
+};
+
+
+
+
+# ============================================================================================== #
+### 10. SELF-TAGGED UNWRAP AND LABEL ARROWS ###
+# ============================================================================================== #
+
+fun calc_something = () -> i32: ret 42;
+# no tuple returns: a small type carries both results, `<- q, r` destructures it again
+type DivMod = *(i32 quot, i32 rem);
+fun divmod = (i32 a, i32 b) -> DivMod: ret DivMod(a / b, a % b);
+fun find_byte = (&[]u8 hay, u8 needle) -> Opt8 {
+    for i in 0..<hay.len: if hay.*[i] == needle: ret Opt8.Some(i as u8);
+    ret Opt8.None;
+};
+
+fun unwrap_tour = () -> u8 {
+    Opt8 vari = 42;
+
+    # `??` alone unwraps (trap on none), with an expression it falls back
+    u8 forced = vari ??;
+    u8 safe1  = vari ?? 0x0;
+    u8 safe2  = vari ?? ret 1;
+    u8 safe3  = find_byte("hello".&, 'l') ?? find_byte("world".&, 'o') ?? 0;
+
+    CommonCode code = CommonCode.EOF;
+    u8 undefined_code = code ?? ret 2;
+
+    # simple label arrow: names a value in the middle of an expression
+    if (calc_something() <- solution) == 42 or solution == 43: do print("alright!");
+
+    # label arrow with destructuring
+    divmod(17, 5) <- q, r;
+    print("17 = 5 * %d + %d", q, r);
+
+    # unwrap arrow: true when the self-tagged value holds a payload
+    if vari ?<- nonnone_var {
+        print("Unwrapped value is %d", nonnone_var);
+    } else {
+        print("opt8 vari was None");
+    };
+
+    while find_byte("abcabc".&, 'c') ?<- pos: brk;
+
+    match code {
+        CommonCode.Undefined(undefined_code) => print("Undefined code: %d", undefined_code);
+        _ => print("Code is defined");
+    };
+
+    ret safe1 + safe2;
+};
+
+
+
+
+# ============================================================================================== #
+### 11. ARRAYS, STRINGS, SEQUENCES ###
+# ============================================================================================== #
+
+fun array_tour = () {
+    # fixed length
+    mut [4]u8 arr = [1, 2, 3, 4];
+    arr[0] = 42;
+    arr[arr.len - 1] += 1;
+
+    # induced length
+    []u8 induced_len = [5, 6, 7, 8, 9];
+
+    # single element needs a trailing comma, otherwise it would be an array type
+    []i32 single = [7,];
+
+    # empty
+    []i32 nothing = [];
+
+    # multi dimensional
+    [2][3]i32 grid = [[1, 2, 3], [4, 5, 6]];
+    i32 center = grid[1][1];
+    grid[0][2] = grid[1][0] * 2;
+
+    # arrays of structs and pointers
+    [3]Vec2 corners = [Vec2(), Vec2(x = 1.0), Vec2(y = 1.0)];
+    [4]*u8 ptrs;
+    &[4]u8 arr_ptr = arr.&;
+    u8 via_ptr = arr_ptr.*[2];
+
+    # strings
+    []u8 str = "Hello, world!";                                               # str.len == 13
+    &u8 cstr = "Hello, world!";                                                  # with \0
+    u8 h = str[0];
+
+    # trailing commas
+    []&u8 names = [
+        "alice",
+        "bob",
+        "carl",
+    ];
+
+    # arrays of functions
+    []BinOp ops = [add_i32, mul_short, (i32 a, i32 b): a - b];
+    i32 via_table = ops[2](10, 3);
+
+    # sequences as values
+    evens = for i in 0..<10: i * 2;
+    stc []u32 lookup = stcfor 0..<16: $it * $it;
+};
+
+
+
+
+# ============================================================================================== #
+### 12. PUTTING IT TOGETHER ###
+# ============================================================================================== #
+
+# ---------------------------------------------------------------------------------------------- #
+# 12.1 a tiny stack based virtual machine
+# ---------------------------------------------------------------------------------------------- #
+
+variant Op = +(
+    Push(i64)  = 0x01,
+    Pop        = 0x02,
+    Add        = 0x10,
+    Sub        = 0x11,
+    Mul        = 0x12,
+    Div        = 0x13,
+    Dup        = 0x20,
+    Swap       = 0x21,
+    Jmp(u32)   = 0x30,
+    Jz(u32)    = 0x31,
+    Print      = 0x40,
+    Halt       = 0xFF,
+) tagof u8;
+
+variant VmError = +(StackOverflow, StackUnderflow, DivByZero, BadJump(u32 target)) tagof u8;
+
+# a status is either fine or carries an error
+stcfun Status = (type E): +(Ok, Err(E)) tagof u8;
+type VmStatus = Status(VmError);
+type Arith64  = (i64, i64) -> i64;
+
+stc u32 VM_STACK_SIZE = 256;
+
+type Vm = *(
+    mut [VM_STACK_SIZE]i64 stack,
+    mut u32 sp = 0,
+    mut u32 pc = 0,
+    &[]Op program,
+    mut bool running = true,
+) !{
+    init = (&[]Op program): ret Vm(program = program);
+
+    fun push = (i64 v) -> VmStatus {
+        if self.sp >= VM_STACK_SIZE: ret VmStatus.Err(VmError.StackOverflow);
+        self.stack[self.sp++] = v;
+        ret VmStatus.Ok;
+    };
+
+    fun pop = () -> Result(i64, VmError) {
+        if self.sp == 0: ret Result(i64, VmError).Err(VmError.StackUnderflow);
+        ret Result(i64, VmError).Ok(self.stack[--self.sp]);
+    };
+
+    fun binary = (Arith64 f) -> VmStatus {
+        i64 rhs = self.pop() ?? ret VmStatus.Err(VmError.StackUnderflow);
+        i64 lhs = self.pop() ?? ret VmStatus.Err(VmError.StackUnderflow);
+        ret self.push(f(lhs, rhs));
+    };
+
+    # arms assign, so they are separated by `;` (a `,` would continue the assigned values)
+    fun step = () -> VmStatus {
+        if self.pc >= self.program.len: ret VmStatus.Err(VmError.BadJump(self.pc));
+        Op op = self.program.*[self.pc++];
+
+        match op {
+            Op.Push(v) => ret self.push(v);
+            Op.Pop => do self.pop();
+            Op.Add => ret self.binary((i64 a, i64 b): a + b);
+            Op.Sub => ret self.binary((i64 a, i64 b): a - b);
+            Op.Mul => ret self.binary((i64 a, i64 b): a * b);
+            Op.Div => {
+                i64 d = self.pop() ?? ret VmStatus.Err(VmError.StackUnderflow);
+                if d == 0: ret VmStatus.Err(VmError.DivByZero);
+                i64 n = self.pop() ?? ret VmStatus.Err(VmError.StackUnderflow);
+                ret self.push(n / d);
+            };
+            Op.Dup => {
+                i64 top = self.pop() ?? ret VmStatus.Err(VmError.StackUnderflow);
+                self.push(top);
+                ret self.push(top);
+            };
+            Op.Swap => {
+                i64 a, b = self.pop() ??, self.pop() ??;
+                self.push(a);
+                ret self.push(b);
+            };
+            Op.Jmp(target) => self.pc = target;
+            Op.Jz(target) => if (self.pop() ?? 0) == 0: self.pc = target;
+            Op.Print => print("%d", self.stack[self.sp - 1]);
+            Op.Halt => self.running = false;
+        };
+        ret VmStatus.Ok;
+    };
+
+    fun run = () -> VmStatus {
+        while self.running {
+            match self.step() {
+                VmStatus.Err(e) => ret VmStatus.Err(e),
+                VmStatus.Ok => cont,
+            };
+        }
+        ret VmStatus.Ok;
+    };
+};
+
+fun vm_demo = () {
+    # computes (2 + 3) * 7 and counts down from it to zero
+    []Op program = [
+        Op.Push(2),
+        Op.Push(3),
+        Op.Add,
+        Op.Push(7),
+        Op.Mul,
+        Op.Print,
+        Op.Dup,
+        Op.Jz(12),
+        Op.Push(1),
+        Op.Sub,
+        Op.Print,
+        Op.Jmp(6),
+        Op.Halt,
+    ];
+
+    mut Vm vm = Vm.init(program.&) defer deinit;
+    match vm.run() {
+        VmStatus.Ok => print("vm finished"),
+        VmStatus.Err(VmError.DivByZero) => print("division by zero"),
+        VmStatus.Err(VmError.BadJump(t)) => print("bad jump to %d", t),
+        VmStatus.Err(e) => print("vm error %d", e as u8),
+    };
+};
+
+
+# ---------------------------------------------------------------------------------------------- #
+# 12.2 a tokenizer over ByteStream
+# ---------------------------------------------------------------------------------------------- #
+
+variant TokKind = +(Number, Ident, Plus, Minus, Star, Slash, LParen, RParen, End) tagof u8;
+
+type Tok = *(TokKind kind, u32 start, u32 end) assertsize 12;
+
+fun is_digit = (u8 c) -> bool: ret c >= '0' and c <= '9';
+fun is_alpha = (u8 c) -> bool: ret c >= 'a' and c <= 'z' or c >= 'A' and c <= 'Z' or c == '_';
+fun is_space = (u8 c) -> bool: ret match c { ' ', '\t', '\n', '\r' => true, _ => false };
+
+fun tokenize = (*u8 src, u32 len) -> []Tok {
+    mut ByteStream bs = ByteStream.init(src, len) defer deinit;
+    mut [1024]Tok out;
+    mut u32 count = 0;
+
+    while bs.has_next() {
+        u32 start = bs.cursor;
+        u8 c = bs.next();
+
+        if is_space(c): cont;
+
+        TokKind kind = match c {
+            '+' => TokKind.Plus,
+            '-' => TokKind.Minus,
+            '*' => TokKind.Star,
+            '/' => TokKind.Slash,
+            '(' => TokKind.LParen,
+            ')' => TokKind.RParen,
+            '0'..='9' => {
+                while bs.has_next() and is_digit(bs.peek()): bs.skip();
+                TokKind.Number;
+            },
+            _ => {
+                while bs.has_next() and is_alpha(bs.peek()): bs.skip();
+                TokKind.Ident;
+            },
+        };
+
+        out[count++] = Tok(kind = kind, start = start, end = bs.cursor);
+    }
+
+    out[count++] = Tok(kind = TokKind.End, start = len, end = len);
+    ret out[0..<count];
+};
+
+
+# ---------------------------------------------------------------------------------------------- #
+# 12.3 a generic ring buffer
+# ---------------------------------------------------------------------------------------------- #
+
+stcfun RingBuffer = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0): *(
+    mut [CAP]T items,
+    mut u32 head = 0,
+    mut u32 tail = 0,
+    mut u32 count = 0,
+) implof Iterable(T) !{
+    stc u32 MASK = CAP - 1;
+
+    fun is_full = () -> bool: ret self.count == CAP;
+    fun is_empty = () -> bool: ret self.count == 0;
+
+    fun push = (T item) -> bool {
+        if self.is_full(): ret false;
+        self.items[self.tail] = item;
+        self.tail = self.tail + 1 & MASK;
+        self.count++;
+        ret true;
+    };
+
+    fun pop = () -> Opt(T) {
+        if self.is_empty(): ret Opt(T).None;
+        T item = self.items[self.head];
+        self.head = self.head + 1 & MASK;
+        self.count--;
+        ret Opt(T).Some(item);
+    };
+
+    # Iterable(T)
+    fun next = () -> T: ret self.pop() ??;
+    fun has_next = () -> bool: ret !self.is_empty();
+};
+
+type EventQueue = RingBuffer(Event, 64);
+
+fun ring_demo = () {
+    mut EventQueue q;
+    q.push(Event.Click(x = 1, y = 2));
+    q.push(Event.Key('a'));
+    q.push(Event.Close);
+
+    for ev in q: handle_event(ev);
+
+    mut RingBuffer(u32, 8) numbers;
+    for i in 0..<20: if !numbers.push(i): brk;
+    u32 total = 0;
+    while numbers.pop() ?<- n: total += n;
+};
+
+
+# ---------------------------------------------------------------------------------------------- #
+# 12.4 binary tree with pointers + recursion
+# ---------------------------------------------------------------------------------------------- #
+
+stcfun Node = (type K, type V): *(K key, mut V value, mut Opt(*Node(K, V)) left, mut Opt(*Node(K, V)) right);
+
+stcfun TreeMap = (type K where K oftype Comparable(K), type V): *(mut Opt(*Node(K, V)) root, mut u64 size = 0) !{
+    fun insert_at = (* *Node(K, V) slot, K key, V value) -> bool {
+        match slot.*.*.key.cmp(key) {
+            0 => {
+                slot.*.*.value = value;
+                ret false;
+            };
+            ..<0 => ret self.insert_or_create(slot.*.*.right.&, key, value);
+            _ => ret self.insert_or_create(slot.*.*.left.&, key, value);
+        };
+    };
+
+    fun insert_or_create = (*Opt(*Node(K, V)) slot, K key, V value) -> bool {
+        if slot.* ?<- node: ret self.insert_at(node.&, key, value);
+        slot.* = Opt(*Node(K, V)).Some(alloc(Node(K, V)(key = key, value = value)));
+        self.size++;
+        ret true;
+    };
+
+    pub fun put = (K key, V value) -> bool: ret self.insert_or_create(self.root.&, key, value);
+
+    pub fun get = (K key) -> Opt(V) {
+        mut cur = self.root;
+        while cur ?<- node {
+            i32 c = node.*.key.cmp(key);
+            if c == 0: ret Opt(V).Some(node.*.value);
+            cur = if c < 0: node.*.right else: node.*.left;
+        }
+        ret Opt(V).None;
+    };
+};
+
+fun tree_demo = () {
+    mut TreeMap(Id, &u8) users;
+    users.put(Id(raw = 3), "carl");
+    users.put(Id(raw = 1), "alice");
+    users.put(Id(raw = 2), "bob");
+
+    &u8 who = users.get(Id(raw = 2)) ?? "nobody";
+    print("id 2 is %s, %d users total", who, users.size);
+};
+
+
+# ---------------------------------------------------------------------------------------------- #
+# 12.5 a state machine driven by variants and loops
+# ---------------------------------------------------------------------------------------------- #
+
+variant TrafficLight = +(Red(u32 wait), Yellow, Green(u32 wait)) tagof u8 !{
+    fun next = () -> TrafficLight: ret match self {
+        TrafficLight.Red(_) => TrafficLight.Green(wait = 30),
+        TrafficLight.Green(_) => TrafficLight.Yellow,
+        TrafficLight.Yellow => TrafficLight.Red(wait = 45),
+    };
+    fun duration = () -> u32: ret match self {
+        TrafficLight.Red(w) | TrafficLight.Green(w) => w,
+        TrafficLight.Yellow => 3,
+    };
+};
+
+fun traffic_demo = () {
+    mut TrafficLight light = TrafficLight.Red(wait = 45);
+    mut u32 elapsed = 0;
+
+    loop light = light.next() {
+        elapsed += light.duration();
+        print("light %d for %d seconds", light as u8, light.duration());
+        if elapsed > 600: brk;
+    }
+};
+
+
+
+
+# ============================================================================================== #
+### MAIN ###
+# ============================================================================================== #
+
+main = (i32 argc, &[]&u8 argv) -> i32 {
+    if argc < 2 {
+        print("usage: %s <demo>", argv.*[0]);
+        ret 1;
+    }
+
+    operator_tour();
+    call_greet();
+    lambda_tour();
+    currying_tour();
+    type_tour();
+    trait_tour();
+    variant_tour();
+    array_tour();
+    resource_tour();
+
+    if_tour(42);
+    while_tour();
+    for_tour();
+    loop_tour();
+
+    u8 unwrapped = unwrap_tour();
+    i32 matched = match_bodies(1);
+
+    &u8 demo = argv.*[1];
+    match demo {
+        "vm" => vm_demo(),
+        "tokens" => do tokenize("12 + foo * (3 - bar)", 20),
+        "ring" => ring_demo(),
+        "tree" => tree_demo(),
+        "traffic" => traffic_demo(),
+        _ => {
+            vm_demo();
+            ring_demo();
+            tree_demo();
+            traffic_demo();
+        },
+    };
+
+    print("fib(20) = %d, 10! = %d", fib(20), factorial(10));
+    print("%s / %s", classify_num(3), classify_char('x'));
+    ret 0;
+};

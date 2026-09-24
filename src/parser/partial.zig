@@ -11,19 +11,26 @@ const Node = @import("../ParseTree.zig").Node;
 
 // ee refers to early eval'd => we have a part of this node already evaluated.
 pub fn ee_fun_header(p: *Parser, early_node0_in_tuple: ?NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.partial__fun_def_header);
-    var def: Node.LayoutStruct(.partial__fun_def_header) = undefined;
-    def.param_tuple = try ee_fun_param_tuple(p, early_node0_in_tuple);
+    const param_tuple = try ee_fun_param_tuple(p, early_node0_in_tuple);
 
-    if (try p.peek_eq_tok(.@"xpct_->")) {
-        p.tok_cursor += 1;
-        def.return_type = try eval.any(p, .forbid_assign, 0);
-    } else {
-        def.return_type = 0xFFFFFFFF;
+    if (!try p.peek_eq_tok(.@"xpct_->")) {
+        return p.tree.push_node_with(.partial__fun_def_header, .{ .param_tuple = param_tuple });
     }
 
-    p.tree.set_children(parent, def);
-    return parent;
+    p.tok_cursor += 1;
+    if (try p.peek_eq_tok(.@"pct_(")) {
+        p.tok_cursor += 1;
+        try p.eat_assert_tok(.@"pct_)");
+        return p.tree.push_node_with(.partial__fun_def_header_ret, .{
+            .param_tuple = param_tuple,
+            .return_type = p.tree.push_node(.type_unit),
+        });
+    }
+
+    return p.tree.push_node_with(.partial__fun_def_header_ret, .{
+        .param_tuple = param_tuple,
+        .return_type = try eval.any(p, .forbid_assign, 0),
+    });
 }
 
 pub fn ee_fun_param_tuple(p: *Parser, early_node0: ?NodeId) anyerror!NodeId {
@@ -35,7 +42,7 @@ pub fn ee_fun_param_tuple(p: *Parser, early_node0: ?NodeId) anyerror!NodeId {
     }
 
     var params: FixedStack(64) = .{};
-    try params.push(try ee_fun_param(p, early_node0.?));
+    try params.push(try ee_fun_param(p, early_node0 orelse return error.IllegalFunParamTuple));
     while (try p.peek_eq_tok(.@"pct_,")) {
         p.tok_cursor += 1;
         if (try p.peek_eq_tok(.@"pct_)")) break;
@@ -48,47 +55,48 @@ pub fn ee_fun_param_tuple(p: *Parser, early_node0: ?NodeId) anyerror!NodeId {
 }
 
 pub fn ee_fun_param(p: *Parser, early_node0: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.partial__fun_def_param);
-    var def: Node.LayoutStruct(.partial__fun_def_param) = undefined;
     // here, we could encounter <expr> <expr> or <expr>
     // + they are followed by , OR ) OR = OR where
 
     // first expr is safe:
-    const a = early_node0;
+    var node = p.tree.push_node_with(.partial__fun_def_param, .{ .type = early_node0 });
+
     const next_tok = try p.peek_tok();
-    if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where) {
+    if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where and next_tok != .kw_stcwhere) {
         try p.eat_assert_tok(.identifier);
-        const b = try eval.identifier(p);
-        def.type = a;
-        def.identifier = b;
-    } else {
-        def.type = a;
-        def.identifier = 0xFFFFFFFF;
+        node = p.tree.push_node_with(.partial__fun_def_param_named, .{
+            .param = node,
+            .identifier = try eval.identifier(p),
+        });
     }
 
     if (try p.peek_eq_tok(.@"xpct_=")) {
         p.tok_cursor += 1;
-        def.default_value = try eval.any(p, .forbid_assign, 0);
-    } else {
-        def.default_value = 0xFFFFFFFF;
+        node = p.tree.push_node_with(.partial__fun_def_param_default, .{
+            .param = node,
+            .default_value = try eval.any(p, .forbid_assign, 0),
+        });
     }
 
-    if (try p.peek_eq_tok(.kw_where)) {
+    const is_stcwhere = try p.peek_eq_tok(.kw_stcwhere);
+    if (is_stcwhere or try p.peek_eq_tok(.kw_where)) {
         p.tok_cursor += 1;
-        def.where_predicate = try eval.any(p, .forbid_assign, 0);
+        const predicate = try eval.any(p, .forbid_assign, 0);
+        node = if (is_stcwhere)
+            p.tree.push_node_with(.partial__fun_def_param_stcwhere, .{ .param = node, .where_predicate = predicate })
+        else
+            p.tree.push_node_with(.partial__fun_def_param_where, .{ .param = node, .where_predicate = predicate });
+
         if (try p.peek_eq_tok(.kw_else)) {
             p.tok_cursor += 1;
-            def.where_else_value = try eval.any(p, .forbid_assign, 0);
-        } else {
-            def.where_else_value = 0xFFFFFFFF;
+            node = p.tree.push_node_with(.partial__fun_def_param_where_else, .{
+                .param = node,
+                .where_else_value = try eval.any(p, .allow_assign, 0),
+            });
         }
-    } else {
-        def.where_predicate = 0xFFFFFFFF;
-        def.where_else_value = 0xFFFFFFFF;
     }
 
-    p.tree.set_children(parent, &def);
-    return parent;
+    return node;
 }
 
 pub fn match_body(p: *Parser) anyerror!NodeId {
@@ -98,7 +106,7 @@ pub fn match_body(p: *Parser) anyerror!NodeId {
     while (true) {
         try match_cases.push(try match_case(p));
         switch (try p.peek_tok()) {
-            .@"pct_," => {
+            .@"pct_,", .@"pct_;" => {
                 p.tok_cursor += 1;
                 if (try p.peek_eq_tok(.@"pct_}")) break;
             },
@@ -118,7 +126,7 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__match_case);
     var def: Node.LayoutStruct(.partial__match_case) = undefined;
 
-    def.pattern = try eval.any(p, .forbid_assign, 0);
+    def.pattern = try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|"));
     switch (try p.peek_tok()) {
         .identifier => {
             p.tok_cursor += 1;
@@ -131,17 +139,24 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
             def.pattern = typecast_node;
         },
         .@"xpct_|" => {
-            p.tok_cursor += 1;
             var or_patterns: FixedStack(64) = .{};
             try or_patterns.push(def.pattern);
-            while (true) {
-                try or_patterns.push(try eval.any(p, .forbid_assign, 0));
-                if (try p.peek_eq_tok(.@"xpct_|")) {
-                    p.tok_cursor += 1;
-                    if (try p.peek_eq_tok(.@"xpct_=>")) break;
-                } else {
-                    return error.IllegalMatchCasePattern;
-                }
+            while (try p.peek_eq_tok(.@"xpct_|")) {
+                p.tok_cursor += 1;
+                if (try p.peek_eq_tok(.@"xpct_=>")) break;
+                try or_patterns.push(try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")));
+            }
+            const or_node = p.tree.push_node(.partial__match_case_pattern_or);
+            p.tree.set_children(or_node, or_patterns.view());
+            def.pattern = or_node;
+        },
+        .@"pct_," => {
+            var or_patterns: FixedStack(64) = .{};
+            try or_patterns.push(def.pattern);
+            while (try p.peek_eq_tok(.@"pct_,")) {
+                p.tok_cursor += 1;
+                if (try p.peek_eq_tok(.@"xpct_=>")) break;
+                try or_patterns.push(try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")));
             }
             const or_node = p.tree.push_node(.partial__match_case_pattern_or);
             p.tree.set_children(or_node, or_patterns.view());
@@ -159,7 +174,6 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
 
 pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__fun_call_param_tuple);
-    try p.eat_assert_tok(.@"pct_(");
 
     if (!try p.peek_eq_tok(.@"pct_)")) {
         var params: FixedStack(64) = .{};
@@ -222,7 +236,7 @@ pub fn destructure(p: *Parser, early_identifier0: NodeId) anyerror!NodeId {
                         try identifiers.push(id);
                     },
                     else => {
-                        p.tok_cursor -= 1;
+                        p.tok_cursor -= 2;
                         break :outer;
                     },
                 }
@@ -258,71 +272,85 @@ pub fn assign_multival(p: *Parser, early_value0: NodeId) anyerror!NodeId {
     return parent;
 }
 
-pub fn type_param(p: *Parser) anyerror!NodeId {
-    const m = try p.peek_eq_tok(.kw_mut);
-    if (m) p.tok_cursor += 1;
-    const is_mut = m;
-    const node0 = try eval.any(p, .forbid_assign, 0);
+pub fn type_param_tuple(p: *Parser) anyerror!NodeId {
+    const parent = p.tree.push_node(.partial__type_def_param_tuple);
 
-    const parent = p.tree.push_node(if (is_mut) .partial__type_def_param_mut else .partial__type_def_param);
-    var def: Node.LayoutStruct(.partial__type_def_param) = undefined;
+    var params: FixedStack(64) = .{};
+    while (!try p.peek_eq_tok(.@"pct_)")) {
+        try params.push(try type_param(p));
+        if (!try p.peek_eq_tok(.@"pct_,")) break;
+        p.tok_cursor += 1;
+    }
+    try p.eat_assert_tok(.@"pct_)");
+    if (params.cursor == 0) return error.IllegalTypeParamList;
+
+    p.tree.set_children(parent, params.view());
+    return parent;
+}
+
+pub fn type_param(p: *Parser) anyerror!NodeId {
+    const is_mut = try p.peek_eq_tok(.kw_mut);
+    if (is_mut) p.tok_cursor += 1;
+
+    var node = p.tree.push_node_with(.partial__type_def_param, .{ .type = try eval.any(p, .forbid_assign, 0) });
 
     const next_tok = try p.peek_tok();
     if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where) {
-        def.type = node0;
-        def.identifier = try eval.any(p, .forbid_assign, 0);
-    } else {
-        def.type = node0;
-        def.identifier = 0xFFFFFFFF;
+        try p.eat_assert_tok(.identifier);
+        node = p.tree.push_node_with(.partial__type_def_param_named, .{
+            .param = node,
+            .identifier = try eval.identifier(p),
+        });
     }
 
     if (try p.peek_eq_tok(.@"xpct_=")) {
         p.tok_cursor += 1;
-        def.default_value = try eval.any(p, .forbid_assign, 0);
-    } else {
-        def.default_value = 0xFFFFFFFF;
+        node = p.tree.push_node_with(.partial__type_def_param_default, .{
+            .param = node,
+            .default_value = try eval.any(p, .forbid_assign, 0),
+        });
     }
 
     if (try p.peek_eq_tok(.kw_where)) {
         p.tok_cursor += 1;
-        def.where_predicate = try eval.any(p, .forbid_assign, 0);
+        node = p.tree.push_node_with(.partial__type_def_param_where, .{
+            .param = node,
+            .where_predicate = try eval.any(p, .forbid_assign, 0),
+        });
+
         if (try p.peek_eq_tok(.kw_else)) {
             p.tok_cursor += 1;
-            def.where_else_value = try eval.any(p, .forbid_assign, 0);
-        } else {
-            def.where_else_value = 0xFFFFFFFF;
+            node = p.tree.push_node_with(.partial__type_def_param_where_else, .{
+                .param = node,
+                .where_else_value = try eval.any(p, .allow_assign, 0),
+            });
         }
-    } else {
-        def.where_predicate = 0xFFFFFFFF;
-        def.where_else_value = 0xFFFFFFFF;
     }
 
-    p.tree.set_children(parent, &def);
+    if (is_mut) node = p.tree.push_node_with(.partial__type_def_param_mut, .{ .param = node });
 
-    return parent;
+    return node;
 }
 
 pub fn variant_param(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.partial__variant_def_param);
-    var def: Node.LayoutStruct(.partial__variant_def_param) = undefined;
-
     try p.eat_assert_tok(.identifier);
-    def.name = try eval.identifier(p);
+    var node = p.tree.push_node_with(.partial__variant_def_param, .{ .name = try eval.identifier(p) });
 
     if (try p.peek_eq_tok(.@"pct_(")) {
         p.tok_cursor += 1;
-        def.opt_def_type = try eval.type_(p);
-    } else {
-        def.opt_def_type = 0xFFFFFFFF;
+        node = p.tree.push_node_with(.partial__variant_def_param_typed, .{
+            .param = node,
+            .def_type = try type_param_tuple(p),
+        });
     }
 
     if (try p.peek_eq_tok(.@"xpct_=")) {
         p.tok_cursor += 1;
-        def.opt_tag_value = try eval.any(p, .forbid_assign, 0);
-    } else {
-        def.opt_tag_value = 0xFFFFFFFF;
+        node = p.tree.push_node_with(.partial__variant_def_param_tagged, .{
+            .param = node,
+            .tag_value = try eval.any(p, .forbid_assign, 0),
+        });
     }
 
-    p.tree.set_children(parent, &def);
-    return parent;
+    return node;
 }

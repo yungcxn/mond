@@ -23,7 +23,7 @@ pub fn main(init: std.process.Init) void {
 
     const in_f = std.Io.Dir.cwd().openFile(
         io,
-        "./examples/v2full.mn",
+        "./examples/huge.mn",
         .{},
     ) catch @panic("File not found");
     const in_bytes = alloc_file_bytes(alloc, io, in_f);

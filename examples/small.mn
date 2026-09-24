@@ -125,7 +125,7 @@ stcfun Stream = (type Child): *(*Child buf, u32 cursor) implof Iterable(Child) !
     fun next = () -> Child: ret self.buf[self.cursor++];
     fun has_next = () -> bool: ret self.cursor < self.buf.len;
 
-    pub fun pop = () -> Opt(Child): ret if self.cursor >= self.buf.len: none else: self.buf[self.cursor++];
+    pub fun pop = () -> Opt(Child): ret if self.cursor >= self.buf.len: Opt(Child).None else: self.buf[self.cursor++];
 };
 
 # realize
@@ -165,14 +165,14 @@ variant AnyFixed32 = ++(                                  # could also be +, as 
     AsInt(i32),
     AsFloat(f32),
     AsBits([4]u8),
-) tagof none assertsize u32;
+) assertsize u32;
 
 # E) not tagged heterogenic abstract variant
 variant AnyPrintable = +(
     AsInt(i32),
     AsText(&u8),
     AsFlag(bool),
-) tagof none;
+);
 
 # F) self-tagged variant
 variant Opt8 = +(Some(u8), None = 0xFF) tagof self assertsize u8;
@@ -433,7 +433,7 @@ main = () {
     i32 k = 0;
     loop {
         if k >= 50 {
-            break;
+            brk;
         }
         print("k is %d", k);
         k = k + 1;
@@ -442,7 +442,7 @@ main = () {
     k = 0;
     loop k = k + 1 {
         if k >= 50 {
-            break;
+            brk;
         }
         print("k is %d", k);
     }

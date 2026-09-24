@@ -63,6 +63,13 @@ pub const Token = struct {
         kw_variant,
         kw_trait,
         kw_deinit,
+        kw_stc,
+        kw_stcif,
+        kw_stcmatch,
+        kw_stcwhile,
+        kw_stcfor,
+        kw_stcloop,
+        kw_stcwhere,
 
         // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
         @"pct_(",
@@ -100,6 +107,12 @@ pub const Token = struct {
         @"xpct_>>",
         @"xpct_<<",
         @"xpct_<-",
+        @"xpct_+=",
+        @"xpct_-=",
+        @"xpct_*=",
+        @"xpct_/=",
+        @"xpct_%=",
+        @"xpct_&&",
         @"xpct_*(",
         @"xpct_+(",
         @"xpct_!{",
@@ -203,10 +216,15 @@ inline fn safe_skip_set(self: *@This(), comptime charset: anytype) bool {
 // -> `false`: outside of `src_bytes`
 // esc: escaped, exc: exclusive (cursor is at `char` + 1)
 inline fn take_esc(self: *@This(), char: u8) bool {
-    var c0: u8 = 0;
+    var escaped = false;
     while (self.peek_srcbyte()) |c| : (self.cursor += 1) {
-        if (char == c and c0 != '\\') return true;
-        c0 = c;
+        if (escaped) {
+            escaped = false;
+        } else if (c == '\\') {
+            escaped = true;
+        } else if (c == char) {
+            return true;
+        }
     }
     return false;
 }
@@ -252,6 +270,20 @@ inline fn gen_next_tok(self: *@This()) !bool {
             },
             '0'...'9' => { // val_int or val_float
                 const cursor0 = self.cursor - 1;
+
+                if (c0 == '0') switch (self.peek_srcbyte() orelse 0) {
+                    'x', 'X', 'b', 'B', 'o', 'O' => {
+                        self.cursor += 1;
+                        while (self.peek_srcbyte()) |c| : (self.cursor += 1) switch (c) {
+                            '0'...'9', 'a'...'f', 'A'...'F', '_' => continue,
+                            else => break,
+                        };
+                        self.push_tok(.val_int, cursor0);
+                        return self.safe_skip_set(anywspace);
+                    },
+                    else => {},
+                };
+
                 var last_dot_at: ?u32 = null;
                 while (self.peek_srcbyte()) |c| : (self.cursor += 1) switch (c) {
                     '.' => {

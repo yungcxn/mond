@@ -10,17 +10,25 @@ pub const Node = struct {
     args: @Vector(2, u32),
 
     const DefTable = .{
-        .{ "CodeBlock", "block", []NodeId },
+        .{ "CodeBlock", "block", []const NodeId },
         .{ "FunctionDefinition", "def_fun", struct { fun_header: NodeId, unit: NodeId } },
-        .{ "PartialExpression_FunctionDefinitionHeader", "partial__fun_def_header", struct { param_tuple: NodeId, return_type: NodeId } },
-        .{ "PartialExpression_FunctionDefinitionParameterTuple", "partial__fun_def_param_tuple", []NodeId },
-        .{ "PartialExpression_FunctionDefinitionParameter", "partial__fun_def_param", struct { type: NodeId, identifier: NodeId, default_value: NodeId, where_predicate: NodeId, where_else_value: NodeId } },
+        .{ "FunctionDeclaration", "def_fun_declaration", struct { fun_header: NodeId } },
+        .{ "PartialExpression_FunctionDefinitionHeader", "partial__fun_def_header", struct { param_tuple: NodeId } },
+        .{ "PartialExpression_FunctionDefinitionHeaderReturning", "partial__fun_def_header_ret", struct { param_tuple: NodeId, return_type: NodeId } },
+        .{ "PartialExpression_FunctionDefinitionParameterTuple", "partial__fun_def_param_tuple", []const NodeId },
+        .{ "PartialExpression_FunctionDefinitionParameter", "partial__fun_def_param", struct { type: NodeId } },
+        .{ "PartialExpression_FunctionDefinitionParameterNamed", "partial__fun_def_param_named", struct { param: NodeId, identifier: NodeId } },
+        .{ "PartialExpression_FunctionDefinitionParameterDefaulted", "partial__fun_def_param_default", struct { param: NodeId, default_value: NodeId } },
+        .{ "PartialExpression_FunctionDefinitionParameterWhere", "partial__fun_def_param_where", struct { param: NodeId, where_predicate: NodeId } },
+        .{ "PartialExpression_FunctionDefinitionParameterStaticWhere", "partial__fun_def_param_stcwhere", struct { param: NodeId, where_predicate: NodeId } },
+        .{ "PartialExpression_FunctionDefinitionParameterWhereElse", "partial__fun_def_param_where_else", struct { param: NodeId, where_else_value: NodeId } },
         .{ "Capture", "capture", struct { subnode: NodeId } },
-        .{ "Array", "array", []NodeId },
+        .{ "Array", "array", []const NodeId },
         .{ "ArrayEmpty", "array_empty", .leaf },
         .{ "TypeOf", "typeof", struct { subnode: NodeId } },
         .{ "SizeOf", "sizeof", struct { subnode: NodeId } },
         .{ "TypeArray", "type_array", struct { length: NodeId, type: NodeId } },
+        .{ "TypeArrayUnlengthed", "type_array_unlengthed", struct { type: NodeId } },
         .{ "NegateNumerical", "neg_num", struct { subnode: NodeId } },
         .{ "NegateLogical", "neg_logic", struct { subnode: NodeId } },
         .{ "IncrementPrefix", "inc_prefix", struct { subnode: NodeId } },
@@ -32,18 +40,29 @@ pub const Node = struct {
         .{ "Deinit", "deinit", struct { subnode: NodeId } },
         .{ "Continue", "cont", .leaf },
         .{ "Break", "brk", .leaf },
-        .{ "Return", "ret", struct { opt_subnode: NodeId } },
+        .{ "Return", "ret", struct { subnode: NodeId } },
+        .{ "ReturnVoid", "ret_void", .leaf },
         .{ "IfThen", "if_then", struct { cond: NodeId, then: NodeId } },
         .{ "IfElse", "if_else", struct { if_then: NodeId, @"else": NodeId } },
+        .{ "StaticIfThen", "stcif_then", struct { cond: NodeId, then: NodeId } },
+        .{ "StaticIfElse", "stcif_else", struct { if_then: NodeId, @"else": NodeId } },
         .{ "While", "while", struct { cond: NodeId, body: NodeId } },
         .{ "WhileWithRepeatStmt", "while_with_repeat_stmt", struct { @"while": NodeId, repeated: NodeId } },
+        .{ "StaticWhile", "stcwhile", struct { cond: NodeId, body: NodeId } },
+        .{ "StaticWhileWithRepeatStmt", "stcwhile_with_repeat_stmt", struct { @"while": NodeId, repeated: NodeId } },
         .{ "ForSeq", "for_seq", struct { seq: NodeId, body: NodeId } },
         .{ "ForVarInSeq", "for_var_in_seq", struct { for_seq: NodeId, variable: NodeId } },
-        .{ "Loop", "loop", struct { opt_repeated: NodeId, body: NodeId } },
+        .{ "StaticForSeq", "stcfor_seq", struct { seq: NodeId, body: NodeId } },
+        .{ "StaticForVarInSeq", "stcfor_var_in_seq", struct { for_seq: NodeId, variable: NodeId } },
+        .{ "Loop", "loop", struct { body: NodeId } },
+        .{ "LoopWithRepeatStmt", "loop_with_repeat_stmt", struct { repeated: NodeId, body: NodeId } },
+        .{ "StaticLoop", "stcloop", struct { body: NodeId } },
+        .{ "StaticLoopWithRepeatStmt", "stcloop_with_repeat_stmt", struct { repeated: NodeId, body: NodeId } },
         .{ "Match", "match", struct { matched: NodeId, match_body: NodeId } },
-        .{ "PartialExpression_MatchBody", "partial__match_body", []NodeId },
+        .{ "StaticMatch", "stcmatch", struct { matched: NodeId, match_body: NodeId } },
+        .{ "PartialExpression_MatchBody", "partial__match_body", []const NodeId },
         .{ "PartialExpression_MatchCase", "partial__match_case", struct { pattern: NodeId, body: NodeId } },
-        .{ "PartialExpression_MatchCasePatternOr", "partial__match_case_pattern_or", []NodeId },
+        .{ "PartialExpression_MatchCasePatternOr", "partial__match_case_pattern_or", []const NodeId },
         .{ "PartialExpression_MatchCasePatternTypeCast", "partial__match_case_pattern_typecast", struct { type: NodeId, casted_var: NodeId } },
         .{ "TypePointerMutable", "type_ptrmut", struct { subnode: NodeId } },
         .{ "TypePointer", "type_ptr", struct { subnode: NodeId } },
@@ -62,25 +81,38 @@ pub const Node = struct {
         .{ "TypeType", "type_type", .leaf },
         .{ "TypeTrait", "type_trait", .leaf },
         .{ "TypeVariant", "type_variant", .leaf },
+        .{ "TypeUnit", "type_unit", .leaf },
         .{ "TypeInlinedFunction", "type_inlfun", .leaf },
         .{ "TypeFunction", "type_fun", .leaf },
         .{ "TypeStaticFunction", "type_stcfun", .leaf },
-        .{ "TypeDefinition", "def_type", struct { param_tuple: NodeId, assertsize: NodeId, def_trait: NodeId } },
-        .{ "TypeDefinitionPacked", "def_type_packed", struct { param_tuple: NodeId, assertsize: NodeId, def_trait: NodeId } },
-        .{ "TypeVariant", "def_variant", struct { param_tuple: NodeId, tagof: NodeId, assertsize: NodeId, def_trait: NodeId } },
-        .{ "TypeVariantUnionsized", "def_variant_unionsized", struct { param_tuple: NodeId, tagof: NodeId, assertsize: NodeId, def_trait: NodeId } },
-        .{ "TypeTrait", "def_trait", struct { implof_tuple: NodeId, body: NodeId } },
-        .{ "PartialExpression_TypeDefinitionParameterTuple", "partial__type_def_param_tuple", []NodeId },
-        .{ "PartialExpression_TypeDefinitionParameter", "partial__type_def_param", struct { type: NodeId, identifier: NodeId, default_value: NodeId, where_predicate: NodeId, where_else_value: NodeId } },
-        .{ "PartialExpression_TypeDefinitionParameterMutable", "partial__type_def_param_mut", struct { type: NodeId, identifier: NodeId, default_value: NodeId, where_predicate: NodeId, where_else_value: NodeId } },
-        .{ "PartialExpression_VariantDefinitionParameterTuple", "partial__variant_def_param_tuple", []NodeId },
-        .{ "PartialExpression_VariantDefinitionParameter", "partial__variant_def_param", struct { name: NodeId, opt_def_type: NodeId, opt_tag_value: NodeId } },
-        .{ "PartialExpression_TraitDefinitionImplementationTuple", "partial__trait_def_implof_tuple", []NodeId },
-        .{ "PartialExpression_TraitDefinitionBody", "partial__trait_def_body", []NodeId },
+        .{ "TypeDefinition", "def_type", struct { param_tuple: NodeId } },
+        .{ "TypeDefinitionPacked", "def_type_packed", struct { param_tuple: NodeId } },
+        .{ "TypeDefinitionWithAssertedSize", "def_type_assertsize", struct { def_type: NodeId, assertsize: NodeId } },
+        .{ "TypeDefinitionWithTrait", "def_type_implof", struct { def_type: NodeId, def_trait: NodeId } },
+        .{ "TypeVariant", "def_variant", struct { param_tuple: NodeId } },
+        .{ "TypeVariantUnionsized", "def_variant_unionsized", struct { param_tuple: NodeId } },
+        .{ "TypeVariantWithTag", "def_variant_tagof", struct { def_variant: NodeId, tagof: NodeId } },
+        .{ "TypeVariantWithAssertedSize", "def_variant_assertsize", struct { def_variant: NodeId, assertsize: NodeId } },
+        .{ "TypeVariantWithTrait", "def_variant_implof", struct { def_variant: NodeId, def_trait: NodeId } },
+        .{ "TypeTrait", "def_trait", struct { body: NodeId } },
+        .{ "TypeTraitWithImplementations", "def_trait_implof", struct { implof_tuple: NodeId, body: NodeId } },
+        .{ "PartialExpression_TypeDefinitionParameterTuple", "partial__type_def_param_tuple", []const NodeId },
+        .{ "PartialExpression_TypeDefinitionParameter", "partial__type_def_param", struct { type: NodeId } },
+        .{ "PartialExpression_TypeDefinitionParameterMutable", "partial__type_def_param_mut", struct { param: NodeId } },
+        .{ "PartialExpression_TypeDefinitionParameterNamed", "partial__type_def_param_named", struct { param: NodeId, identifier: NodeId } },
+        .{ "PartialExpression_TypeDefinitionParameterDefaulted", "partial__type_def_param_default", struct { param: NodeId, default_value: NodeId } },
+        .{ "PartialExpression_TypeDefinitionParameterWhere", "partial__type_def_param_where", struct { param: NodeId, where_predicate: NodeId } },
+        .{ "PartialExpression_TypeDefinitionParameterWhereElse", "partial__type_def_param_where_else", struct { param: NodeId, where_else_value: NodeId } },
+        .{ "PartialExpression_VariantDefinitionParameterTuple", "partial__variant_def_param_tuple", []const NodeId },
+        .{ "PartialExpression_VariantDefinitionParameter", "partial__variant_def_param", struct { name: NodeId } },
+        .{ "PartialExpression_VariantDefinitionParameterTyped", "partial__variant_def_param_typed", struct { param: NodeId, def_type: NodeId } },
+        .{ "PartialExpression_VariantDefinitionParameterTagged", "partial__variant_def_param_tagged", struct { param: NodeId, tag_value: NodeId } },
+        .{ "PartialExpression_TraitDefinitionImplementationTuple", "partial__trait_def_implof_tuple", []const NodeId },
+        .{ "PartialExpression_TraitDefinitionBody", "partial__trait_def_body", []const NodeId },
         .{ "UnifyVariants", "unify_variants", struct { left_type: NodeId, right_type: NodeId } },
         .{ "With", "with", struct { value: NodeId, fun_call_param_tuple: NodeId } },
         .{ "FunctionCall", "fun_call", struct { callable: NodeId, fun_param_tuple: NodeId } },
-        .{ "PartialExpression_FunctionCallParameterTuple", "partial__fun_call_param_tuple", []NodeId },
+        .{ "PartialExpression_FunctionCallParameterTuple", "partial__fun_call_param_tuple", []const NodeId },
         .{ "PartialExpression_FunctionCallAssignedParameter", "partial__fun_call_assigned_param", struct { identifier: NodeId, value: NodeId } },
         .{ "ArrayIndexing", "array_index", struct { indexable: NodeId, index: NodeId } },
         .{ "MemberAccess", "member", struct { parent: NodeId, member: NodeId } },
@@ -96,9 +128,10 @@ pub const Node = struct {
         .{ "As", "as", struct { value: NodeId, type: NodeId } },
         .{ "LabelArrow", "labelarrow", struct { value: NodeId, label: NodeId } },
         .{ "SelfTagArrow", "selftag_arrow", struct { value: NodeId, label: NodeId } },
-        .{ "PartialExpression_Destructure", "partial__destructure", []NodeId },
-        .{ "SelfTagUnwrap", "selftag_unwrap", struct { value: NodeId, fallback: NodeId } },
-        .{ "Defer", "defer", struct { left_opt_node: NodeId, defered: NodeId } },
+        .{ "PartialExpression_Destructure", "partial__destructure", []const NodeId },
+        .{ "SelfTagUnwrap", "selftag_unwrap", struct { value: NodeId } },
+        .{ "SelfTagUnwrapWithFallback", "selftag_unwrap_fallback", struct { value: NodeId, fallback: NodeId } },
+        .{ "Defer", "defer", struct { defered: NodeId } },
         .{ "InlinedDeferDeinit", "inlined_defer_deinit", struct { subnode: NodeId } },
         .{ "BinaryLogicalOr", "binary_logic_or", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryLogicalXor", "binary_logic_xor", struct { lhs: NodeId, rhs: NodeId } },
@@ -131,11 +164,18 @@ pub const Node = struct {
         .{ "CharacterValue", "char", .references_token },
         .{ "BooleanTrue", "boolean_true", .leaf },
         .{ "BooleanFalse", "boolean_false", .leaf },
-        .{ "AssignmentPublicMutable", "assign_pub_mut", struct { opt_type: NodeId, assignee: NodeId, assigned: NodeId } },
-        .{ "AssignmentPublic", "assign_pub", struct { opt_type: NodeId, assignee: NodeId, assigned: NodeId } },
-        .{ "AssignmentMutable", "assign_mut", struct { opt_type: NodeId, assignee: NodeId, assigned: NodeId } },
-        .{ "Assignment", "assign", struct { opt_type: NodeId, assignee: NodeId, assigned: NodeId } },
-        .{ "PartialExpression_MultipleAssignedValues", "partial__assign_multival", []NodeId },
+        .{ "VariableDefinition", "def_var", struct { type: NodeId, identifier: NodeId } },
+        .{ "Assignment", "assign", struct { assignee: NodeId, assigned: NodeId } },
+        .{ "AssignmentTyped", "assign_typed", struct { def_var: NodeId, assigned: NodeId } },
+        .{ "ModifierPublic", "mod_pub", struct { subnode: NodeId } },
+        .{ "ModifierMutable", "mod_mut", struct { subnode: NodeId } },
+        .{ "ModifierStatic", "mod_stc", struct { subnode: NodeId } },
+        .{ "AssignmentAdd", "assign_add", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "AssignmentSubtract", "assign_sub", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "AssignmentMultiply", "assign_mul", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "AssignmentDivide", "assign_div", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "AssignmentModulus", "assign_mod", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "PartialExpression_MultipleAssignedValues", "partial__assign_multival", []const NodeId },
     };
 
     pub const Kind = blk: {
@@ -155,7 +195,7 @@ pub const Node = struct {
     }
 
     const nk_childc = blk: {
-        var t: [256]enum(u8) { none, one, two, many } = undefined;
+        var t: [256]enum(u8) { none, one, two, many, data } = undefined;
         for (DefTable, 0..) |def, i| {
             const layout = def[2];
             if (@TypeOf(layout) == type and @typeInfo(layout) == .@"struct") {
@@ -166,14 +206,26 @@ pub const Node = struct {
                     2 => .two,
                     else => .many,
                 };
-            } else if (@TypeOf(layout) == type and layout == []NodeId) {
+            } else if (@TypeOf(layout) == type and layout == []const NodeId) {
                 t[i] = .many;
             } else if (@TypeOf(layout) == @EnumLiteral() and layout == .leaf) {
                 t[i] = .none;
             } else if (@TypeOf(layout) == @EnumLiteral() and layout == .references_token) {
-                t[i] = .one;
+                t[i] = .data;
             } else {
                 @compileError("unexpected layout type for " ++ def[1]);
+            }
+        }
+        break :blk t;
+    };
+
+    // field names of struct layouts, used to label children in the debug print
+    const nk_field_names = blk: {
+        var t: [DefTable.len][2][]const u8 = @splat(.{ "", "" });
+        for (DefTable, 0..) |def, i| {
+            const layout = def[2];
+            if (@TypeOf(layout) == type and @typeInfo(layout) == .@"struct") {
+                for (@typeInfo(layout).@"struct".fields, 0..) |field, j| t[i][j] = field.name;
             }
         }
         break :blk t;
@@ -197,7 +249,7 @@ pub fn deinit(self: *@This()) void {
     self.extra_childrefs.deinit();
 }
 
-// more than 2 children are passed as pointers to be copied into `extra_childrefs` (which is contiguous)
+// a node holds at most 2 direct children, a `[]const NodeId` is copied into `extra_childrefs` (which is contiguous)
 pub inline fn set_children(
     self: *@This(),
     parent_idx: NodeId,
@@ -206,31 +258,20 @@ pub inline fn set_children(
     const args_ptr = self.ast_nodes.field_ptr(.args, parent_idx) orelse unreachable;
     const ti = @typeInfo(@TypeOf(childrefs));
 
-    if (@TypeOf(childrefs) == NodeId or @TypeOf(childrefs) == comptime_int or @TypeOf(childrefs) == u32) {
+    if (@TypeOf(childrefs) == NodeId or @TypeOf(childrefs) == comptime_int) {
         args_ptr.*[0] = childrefs;
-    } else if (ti == .@"struct" and ti.@"struct".fields.len == 1) {
-        args_ptr.*[0] = @field(childrefs, ti.@"struct".fields[0].name);
-    } else if (ti == .@"struct" and ti.@"struct".fields.len == 2) {
-        args_ptr.*[0] = @field(childrefs, ti.@"struct".fields[0].name);
-        args_ptr.*[1] = @field(childrefs, ti.@"struct".fields[1].name);
-    } else {
-        const ChildT = ti.pointer.child;
-        const child_ti = @typeInfo(ChildT);
+    } else if (ti == .@"struct") {
+        comptime if (ti.@"struct".fields.len > 2) @compileError(
+            "node layout holds more than 2 children, split it into wrapper kinds: " ++ @typeName(@TypeOf(childrefs)),
+        );
 
-        if (child_ti == .@"struct") {
-            const n = child_ti.@"struct".fields.len;
-            comptime if (@sizeOf(ChildT) != n * @sizeOf(u32)) @compileError("unexpected size for " ++ @typeName(ChildT));
-            const arr_ptr: *const [n]u32 = @ptrCast(childrefs);
-            self.extra_childrefs.append(arr_ptr);
-
-            args_ptr.*[0] = self.extra_childrefs.head;
-            args_ptr.*[1] += @intCast(n);
-        } else {
-            self.extra_childrefs.append(childrefs);
-
-            args_ptr.*[0] = self.extra_childrefs.head;
-            args_ptr.*[1] += @intCast(childrefs.len);
+        inline for (ti.@"struct".fields, 0..) |field, i| {
+            args_ptr.*[i] = @field(childrefs, field.name);
         }
+    } else {
+        args_ptr.*[0] = self.extra_childrefs.head;
+        args_ptr.*[1] = @intCast(childrefs.len);
+        self.extra_childrefs.append(childrefs);
     }
 }
 
@@ -238,6 +279,18 @@ pub inline fn set_children(
 pub inline fn push_node(self: *@This(), nodekind: Node.Kind) NodeId {
     self.ast_nodes.push(.{ .nk = nodekind, .args = .{ 0, 0 } });
     return self.ast_nodes.len() - 1;
+}
+
+// -> `NodeId`: idx where node was pushed into, children are set from the node kind's layout
+pub inline fn push_node_with(
+    self: *@This(),
+    comptime nodekind: Node.Kind,
+    childrefs: Node.LayoutStruct(nodekind),
+) NodeId {
+    const new_node_idx = self.push_node(nodekind);
+    self.set_children(new_node_idx, childrefs);
+
+    return new_node_idx;
 }
 
 pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, span_idx: u32) NodeId {
@@ -253,7 +306,7 @@ const COL_KIND = "\x1b[36m";
 const COL_LEAF = "\x1b[32m";
 const COL_FUNC = "\x1b[1;35m";
 const COL_ERR = "\x1b[31m";
-const COL_NONE = "\x1b[2;37m";
+const COL_FIELD = "\x1b[33m";
 
 fn wr(io: std.Io, s: []const u8) void {
     std.Io.File.stdout().writeStreamingAll(io, s) catch @panic("print failed");
@@ -265,15 +318,32 @@ fn leaf_label(self: *@This(), src_bytes: []const u8, node: Node) []const u8 {
     return src_bytes[span[0]..span[1]];
 }
 
-fn print_placeholder(io: std.Io, prefix: []const u8, is_last: bool) void {
-    wr(io, prefix);
-    wr(io, if (is_last) "└── " else "├── ");
-    wr(io, COL_NONE ++ "∅ (none)" ++ COL_RESET ++ "\n");
+// prints `label:` followed by padding, so kinds of siblings line up
+fn wr_field_label(io: std.Io, label: []const u8, label_width: usize) void {
+    if (label.len == 0) return;
+    const pad = "                                ";
+    wr(io, COL_FIELD);
+    wr(io, label);
+    wr(io, COL_DIM);
+    wr(io, ":");
+    wr(io, COL_RESET);
+    wr(io, pad[0..@min(pad.len, label_width -| label.len) + 1]);
 }
 
-fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefix: []const u8, is_first: bool, is_last: bool) anyerror!void {
+fn print_node(
+    self: *@This(),
+    io: std.Io,
+    src_bytes: []const u8,
+    idx: u32,
+    prefix: []const u8,
+    is_first: bool,
+    is_last: bool,
+    field_label: []const u8,
+    field_label_width: usize,
+) anyerror!void {
     wr(io, prefix);
     wr(io, if (is_first) "" else if (is_last) "└── " else "├── ");
+    if (!is_first) wr_field_label(io, field_label, field_label_width);
 
     const node = self.ast_nodes.get(idx) orelse {
         wr(io, COL_ERR);
@@ -286,7 +356,8 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
         return;
     };
 
-    const is_leaf = Node.nk_childc[@intFromEnum(node.nk)] == .none;
+    const nkc = Node.nk_childc[@intFromEnum(node.nk)];
+    const is_leaf = nkc == .none or nkc == .data;
 
     if (!is_first) {
         wr(io, if (is_leaf) COL_LEAF else COL_KIND);
@@ -294,7 +365,7 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
         wr(io, COL_RESET);
     }
 
-    if (is_leaf) {
+    if (nkc == .data) {
         const label = self.leaf_label(src_bytes, node);
         if (label.len != 0) {
             wr(io, COL_DIM);
@@ -313,38 +384,30 @@ fn print_node(self: *@This(), io: std.Io, src_bytes: []const u8, idx: u32, prefi
     const ext = if (is_first) "" else if (is_last) "    " else "\xe2\x94\x82   "; // "│   "
     const new_prefix = std.fmt.bufPrint(&prefix_buf, "{s}{s}", .{ prefix, ext }) catch prefix;
 
-    if (Node.nk_childc[@intFromEnum(node.nk)] == .many) {
+    if (nkc == .many) {
         const start = node.args[0];
         const count = node.args[1];
 
+        // list children are labeled by their index: [0], [1], ...
+        var width_buf: [16]u8 = undefined;
+        const widest_index: []const u8 = std.fmt.bufPrint(&width_buf, "[{d}]", .{count -| 1}) catch "";
+        const index_width = widest_index.len;
+
         var i: u32 = 0;
         while (i < count) : (i += 1) {
-            const childref = self.extra_childrefs.buf[start + i];
-            const child_is_last = i == count - 1;
-            if (childref == 0xFFFFFFFF) {
-                print_placeholder(io, new_prefix, child_is_last);
-            } else {
-                try self.print_node(io, src_bytes, childref, new_prefix, false, child_is_last);
-            }
+            var index_buf: [16]u8 = undefined;
+            const index_label: []const u8 = std.fmt.bufPrint(&index_buf, "[{d}]", .{i}) catch "";
+            try self.print_node(io, src_bytes, self.extra_childrefs.buf[start + i], new_prefix, false, i == count - 1, index_label, index_width);
         }
         return;
     }
 
-    var children: [2]NodeId = undefined;
-    var childc: usize = 0;
-    const a = node.args[0];
-    const b = node.args[1];
-    if (a != 0 and a != 0xFFFFFFFF) {
-        children[childc] = a;
-        childc += 1;
-    }
-    if (b != 0 and b != 0xFFFFFFFF) {
-        children[childc] = b;
-        childc += 1;
-    }
-
-    for (children[0..childc], 0..) |child_idx, i| {
-        try self.print_node(io, src_bytes, child_idx, new_prefix, false, i == childc - 1);
+    const args: [2]NodeId = node.args;
+    const childc: usize = if (nkc == .two) 2 else 1;
+    const names = Node.nk_field_names[@intFromEnum(node.nk)];
+    const field_width = @max(names[0].len, if (childc == 2) names[1].len else 0);
+    for (args[0..childc], 0..) |child_idx, i| {
+        try self.print_node(io, src_bytes, child_idx, new_prefix, false, i == childc - 1, names[i], field_width);
     }
 }
 
@@ -372,7 +435,7 @@ pub fn debug_print_tree(self: *@This(), io: std.Io, src_bytes: []const u8, func_
         wr(io, COL_RESET);
         wr(io, "\n");
 
-        try self.print_node(io, src_bytes, funcid, "", true, true);
+        try self.print_node(io, src_bytes, funcid, "", true, true, "", 0);
         wr(io, "\n");
     }
 

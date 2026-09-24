@@ -34,6 +34,11 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_for)] = &eval.for_;
     t[@intFromEnum(Lexer.Token.Kind.kw_loop)] = &eval.loop;
     t[@intFromEnum(Lexer.Token.Kind.kw_match)] = &eval.match;
+    t[@intFromEnum(Lexer.Token.Kind.kw_stcif)] = &eval.stcif;
+    t[@intFromEnum(Lexer.Token.Kind.kw_stcwhile)] = &eval.stcwhile;
+    t[@intFromEnum(Lexer.Token.Kind.kw_stcfor)] = &eval.stcfor;
+    t[@intFromEnum(Lexer.Token.Kind.kw_stcloop)] = &eval.stcloop;
+    t[@intFromEnum(Lexer.Token.Kind.kw_stcmatch)] = &eval.stcmatch;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = &eval.type_ptr;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = &eval.type_ptrmut;
     t[@intFromEnum(Lexer.Token.Kind.kw_u8)] = &eval.type_u8;
@@ -91,15 +96,46 @@ pub const post = blk: {
     break :blk t;
 };
 
+pub inline fn assign_follows(p: *Parser) bool {
+    var cur = p.tok_cursor;
+    while (p.tokens.get_field(.tk, cur)) |tk| : (cur += 1) switch (tk) {
+        .@"xpct_=" => return true,
+        .identifier => if (cur == p.tok_cursor) return true,
+        .@"pct_," => {},
+        else => return false,
+    };
+    return false;
+}
+
+pub const prec_unary: u8 = blk: {
+    var highest: u8 = 0;
+    for (binary_compute) |entry| {
+        if (entry) |bin| {
+            if (bin.prec > highest) highest = bin.prec;
+        }
+    }
+    break :blk highest + 1;
+};
+
+pub inline fn prec_above(comptime tok: Lexer.Token.Kind) u8 {
+    return comptime binary_compute[@intFromEnum(tok)].?.prec + 1;
+}
+
 pub const binary_compute = blk: {
     var t: [256]?struct {
         f: *const fn (parser: *Parser, lhs: NodeId) anyerror!NodeId,
         prec: u8,
     } = @splat(null);
 
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_+=")] = .{ .f = &eval.templ_binary(.assign_add, 0), .prec = 0 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_-=")] = .{ .f = &eval.templ_binary(.assign_sub, 0), .prec = 0 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_*=")] = .{ .f = &eval.templ_binary(.assign_mul, 0), .prec = 0 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_/=")] = .{ .f = &eval.templ_binary(.assign_div, 0), .prec = 0 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_%=")] = .{ .f = &eval.templ_binary(.assign_mod, 0), .prec = 0 };
     t[@intFromEnum(Lexer.Token.Kind.kw_or)] = .{ .f = &eval.templ_binary(.binary_logic_or, 1), .prec = 1 };
     t[@intFromEnum(Lexer.Token.Kind.kw_xor)] = .{ .f = &eval.templ_binary(.binary_logic_xor, 2), .prec = 2 };
     t[@intFromEnum(Lexer.Token.Kind.kw_and)] = .{ .f = &eval.templ_binary(.binary_logic_and, 3), .prec = 3 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_&&")] = .{ .f = &eval.templ_binary(.binary_logic_and, 3), .prec = 3 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_|")] = .{ .f = &eval.templ_binary(.binary_num_or, 4), .prec = 4 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_^")] = .{ .f = &eval.templ_binary(.binary_num_xor, 5), .prec = 5 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = .{ .f = &eval.templ_binary(.binary_num_and, 6), .prec = 6 };
