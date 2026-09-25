@@ -1,9 +1,30 @@
 const std = @import("std");
 const SoD = @import("ds/dynbuf.zig").SoD;
 const DynBuf = @import("ds/dynbuf.zig").DynBuf;
-const Lexer = @import("Lexer.zig");
 const ParseTree = @import("ParseTree.zig");
 const ts = @import("type_system.zig");
+
+// the resolver answers two questions for every node of the parse tree:
+//   1. which declaration does this identifier mean?   -> node_decl
+//   2. what type does this expression have?           -> node_type
+//
+// how it works:
+//   - one recursive walk per declaration body does everything at once: scoping, name lookup,
+//     type checking + inference, mutability, loop context, runit. every node is visited about
+//     once while its data is still in cache.
+//   - global declarations are resolved lazily: when a body uses a global that is not resolved
+//     yet, it is resolved right there and memoized. a state per declaration detects real cycles.
+//   - types never have to be written: most are known on the spot (the value's type), and where
+//     they are not (induced return types in recursion, `x = []`), a type var stands in and is
+//     filled by unification later (see type_system.zig, section 4). one final sweep replaces
+//     every var by its result, and is skipped entirely when no var was ever created.
+//   - nothing the parse tree already has is copied (defaults, where-clauses, field names are
+//     read from the tree when needed). side tables only hold what is computed.
+//
+// future:
+//   - multithreading: bodies are independent once signatures are ready - check them on worker
+//     threads with their own type vars and diagnostics, decl states become atomics
+//   - incremental: hash every top-level declaration's tokens, reuse results of unchanged ones
 
 const Resolver = @This();
 
@@ -12,70 +33,6 @@ const TypeId = ts.TypeId;
 const ValueId = ts.ValueId;
 const NameId = ts.NameId;
 const DeclId = ts.DeclId;
-const Span = ts.Span;
-
-pub const ScopeId = enum(u32) { global = 0, none = std.math.maxInt(u32), _ };
-pub const OverloadSetId = enum(u32) { none = std.math.maxInt(u32), _ };
-pub const InstanceId = enum(u32) { none = std.math.maxInt(u32), _ };
-
-pub const Role = enum(u8) {
-    unclassified,
-    value,
-    place,
-    type_expr,
-    static_value,
-    pattern,
-    binder,
-    decl_name,
-    member_name,
-    arg_name,
-    label,
-};
-
-pub const NodeFlags = packed struct(u8) {
-    is_static: bool = false,
-    is_place: bool = false,
-    is_mut_place: bool = false,
-    diverges: bool = false,
-    pruned: bool = false,
-    implicit: bool = false,
-    poisoned: bool = false,
-    _pad: u1 = 0,
-};
-
-pub const NodeInfo = struct {
-    parent: NodeId,
-    slot: u16,
-    role: Role,
-    flags: NodeFlags,
-    scope: ScopeId,
-    name: NameId,
-    decl: DeclId,
-    ty: TypeId,
-    static: ValueId,
-};
-
-pub const ScopeKind = enum(u8) {
-    global,
-    static_params,
-    params,
-    block,
-    type_body,
-    trait_body,
-    variant_body,
-    loop_body,
-    for_binding,
-    match_arm,
-    arrow_binding,
-};
-
-pub const Scope = struct {
-    parent: ScopeId,
-    kind: ScopeKind,
-    depth: u16,
-    owner: NodeId,
-    decls: Span,
-};
 
 pub const DeclKind = enum(u8) {
     variable,
@@ -97,106 +54,62 @@ pub const DeclKind = enum(u8) {
     implicit_it,
     implicit_positional,
     implicit_self,
-    init_fn,
-    deinit_fn,
-    main_fn,
 };
 
-pub const DeclFlags = packed struct(u16) {
+pub const DeclFlags = packed struct(u8) {
     is_pub: bool = false,
     is_mut: bool = false,
     is_stc: bool = false,
     is_global: bool = false,
-    is_recursive: bool = false,
-    is_declaration_only: bool = false,
-    has_induced_type: bool = false,
-    is_overloaded: bool = false,
-    is_generic: bool = false,
-    _pad: u7 = 0,
+    _pad: u4 = 0,
 };
 
+// lazy resolution state of a declaration:
+//   unresolved -> resolving_signature -> signature_ready -> checking_body -> done   (or failed)
+// signature_ready is published before the body is checked, so a function can call itself or a
+// mutually recursive partner: an induced return type is a type var until the bodies fix it.
+// meeting a declaration in resolving_signature again is a real cycle (a type containing itself
+// by value, a static value defined through itself) and an error.
 pub const DeclState = enum(u8) {
-    unvisited,
-    signature_in_progress,
-    signature_done,
-    body_in_progress,
-    body_done,
+    unresolved,
+    resolving_signature,
+    signature_ready,
+    checking_body,
+    done,
     failed,
 };
 
+// one row per declaration: globals, locals, params, fields, binders.
+// stored as struct-of-arrays, so every access pattern touches only the columns it needs:
+// looking a name up reads `name` only, checking a use reads `kind`, `flags`, `ty`.
 pub const Decl = struct {
     name: NameId,
-    scope: ScopeId,
     node: NodeId,
     kind: DeclKind,
     flags: DeclFlags,
     state: DeclState,
-    order: u32,
     ty: TypeId,
-    static: ValueId,
-    overload: OverloadSetId,
-    params: Span,
+    value: ValueId,
+    next_overload: DeclId,
 };
 
-pub const ParamFlags = packed struct(u8) {
-    is_unnamed: bool = false,
-    is_static: bool = false,
-    has_default: bool = false,
-    has_where: bool = false,
-    has_stcwhere: bool = false,
-    has_where_else: bool = false,
-    _pad: u2 = 0,
+// per-body state that would otherwise be globals. lives on the machine stack while a body is
+// checked and is passed down by pointer - no table, no allocation.
+// ret_type is a type var for induced return types; every `ret` unifies with it.
+pub const FnCtx = struct {
+    decl: DeclId,
+    ret_type: TypeId,
+    self_type: TypeId,
+    loop_depth: u16,
+    in_static: bool,
 };
 
-pub const ParamInfo = struct {
-    name: NameId,
-    ty: TypeId,
-    flags: ParamFlags,
-    default_node: NodeId,
-    where_node: NodeId,
-    where_else_node: NodeId,
-};
-
-pub const EdgeKind = enum(u8) { signature, body, member_guess };
-
-pub const Component = struct {
-    members: Span,
-    is_recursive: bool,
-};
-
-pub const OverloadSet = struct {
-    name: NameId,
-    scope: ScopeId,
-    members: Span,
-    specificity: Span,
-};
-
-pub const InstanceState = enum(u8) { queued, checking, done, failed };
-
-pub const Instance = struct {
+// the memo key for instances - of a `stcfun`, or of a function with an unlengthed array
+// parameter (`[]u8`, `&[]u8`, `*[]u8`), which is compiled once per length used. the generic declaration plus its interned argument
+// tuple. since the arguments are one pool index, the whole key is 8 bytes and compares as one.
+pub const InstanceKey = struct {
     generic: DeclId,
     args: ValueId,
-    result: ValueId,
-    scope: ScopeId,
-    state: InstanceState,
-};
-
-pub const Guard = struct {
-    decl: DeclId,
-    param: u32,
-    predicate: NodeId,
-    else_node: NodeId,
-    is_static: bool,
-};
-
-pub const DecisionKind = enum(u8) { switch_tag, test_eq, test_range, bind, arm, fail };
-
-pub const Decision = struct {
-    kind: DecisionKind,
-    scrutinee: NodeId,
-    test_value: ValueId,
-    on_match: u32,
-    on_fail: u32,
 };
 
 pub const Severity = enum(u8) { note, warning, @"error" };
@@ -204,41 +117,39 @@ pub const Severity = enum(u8) { note, warning, @"error" };
 pub const DiagCode = enum(u16) {
     undefined_name,
     duplicate_declaration,
-    use_before_declaration,
-    ambiguous_name,
     unknown_member,
     type_mismatch,
+    infinite_type,
+    uninferable_type,
     not_a_type,
     not_callable,
     wrong_arity,
     unknown_named_argument,
     no_matching_overload,
     ambiguous_overload,
-    overlapping_overloads,
     invalid_cast,
     runit_mixing,
+    declaration_cycle,
     recursive_by_value_type,
-    unresolved_cycle,
     assertsize_failed,
     tag_overflow,
     self_tag_without_niche,
     trait_member_missing,
     trait_signature_mismatch,
+    no_deinit,
     not_static,
     static_eval_failed,
     stcwhere_violated,
     brk_outside_loop,
     cont_outside_loop,
     ret_type_mismatch,
-    unreachable_code,
     non_exhaustive_match,
     redundant_match_arm,
     assign_to_immutable,
     write_through_immutable_pointer,
     use_before_initialization,
     destructure_type_conflict,
-    uninferable_type,
-    unused_value,
+    missing_main,
 };
 
 pub const Diagnostic = struct {
@@ -250,387 +161,357 @@ pub const Diagnostic = struct {
 };
 
 alloc: std.mem.Allocator,
-io: std.Io,
-tree: *const ParseTree,
+tree: *ParseTree,
 src_bytes: []const u8,
 roots: []const NodeId,
 
+// identifier text -> NameId. names are interned when a node is visited, no separate pass.
 names: ts.NamePool,
+
+// every type and static value, deduplicated. see type_system.zig.
 pool: ts.Pool,
-metavars: ts.MetaVars,
 
-nodes: SoD(NodeInfo),
-postorder: DynBuf(NodeId),
+// placeholders for types not known yet and what they turned out to be. see type_system.zig.
+vars: ts.TypeVars,
 
-scopes: SoD(Scope),
-scope_decls: DynBuf(DeclId),
+// the two results, one slot per parse tree node, indexed by NodeId.
+// plain arrays of u32: 8 bytes per node in total, and the lowerer reads them with no indirection.
+node_type: []TypeId,
+node_decl: []DeclId,
+
+// all declarations, see `Decl`.
 decls: SoD(Decl),
-params: SoD(ParamInfo),
 
-dep_offsets: DynBuf(u32),
-dep_targets: DynBuf(DeclId),
-dep_kinds: DynBuf(EdgeKind),
-decl_component: DynBuf(u32),
-components: DynBuf(Component),
-component_members: DynBuf(DeclId),
-waves: DynBuf(Span),
+// global names -> first declaration with that name. overloads of the same name are chained
+// through `decls.next_overload`, so the map holds one entry per name.
+// globals need a map because they may be used before they are declared in the file.
+globals: std.AutoHashMapUnmanaged(NameId, DeclId),
 
-overload_sets: SoD(OverloadSet),
-overload_members: DynBuf(DeclId),
-overload_edges: DynBuf(u32),
+// the local scope stack. declaring a local pushes (name, decl); a lookup scans `local_names`
+// backwards, so the innermost declaration wins and shadowing works for free.
+// names and decls are two parallel arrays so the scan reads only a dense run of u32 names -
+// for the few dozen locals a body has, that beats any hash map and vectorizes well.
+local_names: DynBuf(NameId),
+local_decls: DynBuf(DeclId),
 
-instances: SoD(Instance),
-instance_map: std.AutoHashMapUnmanaged(u64, InstanceId),
-instance_queue: DynBuf(InstanceId),
+// where each open scope starts in the local stack. leaving a scope just truncates the stack
+// back to its mark - freeing all its locals at once costs one store.
+scope_marks: DynBuf(u32),
 
-guards: SoD(Guard),
-decisions: SoD(Decision),
+// memoized instances: (generic, args) -> resulting type / function / value.
+// covers `stcfun` calls and functions compiled per array length (args = the tuple of lengths).
+instances: std.AutoHashMapUnmanaged(InstanceKey, ValueId),
 
+// errors and warnings. checking continues after an error: the failing node gets poison_type,
+// which is compatible with everything, so one mistake does not cause a cascade of errors.
 diagnostics: SoD(Diagnostic),
 error_count: u32,
 
-scratch: DynBuf(u32),
-worklist: DynBuf(u32),
+// step budget for the static interpreter, so an endless `stcloop` stops with an error.
+static_budget: u32,
 
-pub fn init(
-    alloc: std.mem.Allocator,
-    io: std.Io,
-    tree: *const ParseTree,
-    src_bytes: []const u8,
-    roots: []const NodeId,
-) Resolver {
-    // allocate every per-node table once, sized to tree.ast_nodes.len(), and fill with none/unclassified
-    // figure out: initial capacities for decls, scopes, extra buffers (estimate from node count?)
-    // figure out: one arena per phase (freed after gate) vs gpa everywhere
-    // figure out: who owns names/pool/metavars - resolver or a longer living compilation context
-    _ = .{ alloc, io, tree, src_bytes, roots };
+pub fn init(alloc: std.mem.Allocator, tree: *ParseTree, src_bytes: []const u8, roots: []const NodeId) Resolver {
+    // allocate node_type / node_decl with one slot per node (filled with none), create the pools
+    // figure out: capacity guesses for decls and diagnostics from the node count
+    _ = .{ alloc, tree, src_bytes, roots };
     @panic("unimplemented");
 }
 
 pub fn deinit(self: *Resolver) void {
-    // free every table, the pools and the instance map
-    // figure out: which tables survive into highlowerer and must not be freed here
+    // figure out: node_type / node_decl / decls / pool outlive the resolver for the lowerer - move them out instead of freeing
     _ = self;
     @panic("unimplemented");
 }
 
 pub fn resolve(self: *Resolver) !void {
-    // figure out: stop at the first failing gate or keep going in "poisoned" mode for more diagnostics
-    // figure out: steps 15-18 are demand driven inside a component - do you need a query function instead of fixed order
-    // figure out: where the parallel dispatch of waves (step 23) lives - here or inside the step
-    self.s01_link_parents();
-    self.s02_linearize_postorder();
-    self.s03_intern_names();
-    self.s04_classify_roles();
-    self.s05_flatten_modifiers();
+    self.s1_collect_globals();
     try self.gate();
 
-    self.s06_build_scopes();
-    self.s07_collect_declarations();
-    self.s08_index_scopes();
-    self.s09_bind_implicit_names();
-    self.s10_resolve_lexical_names();
+    self.s2_check_globals();
     try self.gate();
 
-    self.s11_build_dependency_graph();
-    self.s12_condense_components();
-    self.s13_schedule_waves();
+    self.s3_apply_inferred_types();
     try self.gate();
 
-    self.s14_seed_type_pool();
-    for (self.components.sliced()) |component| {
-        self.s15_lower_type_expressions(component);
-        self.s16_resolve_signatures(component);
-        self.s17_evaluate_static_declarations(component);
-        self.s18_compute_layouts(component);
-    }
+    self.s4_check_entry_point();
     try self.gate();
-
-    self.s19_close_trait_hierarchy();
-    self.s20_check_trait_conformance();
-    self.s21_build_overload_sets();
-    self.s22_order_overload_specificity();
-    try self.gate();
-
-    for (self.waves.sliced()) |wave| self.s23_check_bodies(wave);
-    while (self.s24_drain_instantiations()) {}
-    try self.gate();
-
-    self.s25_check_control_flow();
-    self.s26_check_patterns();
-    self.s27_check_mutability();
-    self.s28_check_definite_initialization();
-    self.s29_lower_where_guards();
-    try self.gate();
-
-    self.s30_zonk_types();
-    self.s31_freeze();
 }
 
 fn gate(self: *Resolver) !void {
-    // figure out: print diagnostics here per phase or collect all and print once at the end
-    // figure out: which diagnostics are fatal for the next phase and which are not (warnings never are)
     if (self.error_count != 0) return error.ResolveFailed;
 }
 
-fn s01_link_parents(self: *Resolver) void {
-    // walk every node once and write parent + slot for each of its children
-    // figure out: generic child iteration via the nk_childc table (one / two / many / data)
-    // figure out: slot meaning for list children (list index) vs struct fields (0 / 1), is u16 enough
-    // figure out: roots get parent 0 (the `none` node) - is that clean enough to detect top level
+// ------------------------------------------------------------------------------------------ //
+// steps
+// ------------------------------------------------------------------------------------------ //
+
+fn s1_collect_globals(self: *Resolver) void {
+    // walk only the top-level roots (not the whole tree) and register every global declaration
+    // in `globals`, so bodies can use globals that are declared further down the file
+    // unwrap mod_pub / mod_mut / mod_stc into decl flags here
+    // same-named functions are chained into an overload list, anything else with a taken name is duplicate_declaration
+    // top-level untyped assigns (`induced = 1337`) are declarations as long as the name is new
     _ = self;
 }
 
-fn s02_linearize_postorder(self: *Resolver) void {
-    // produce a flat postorder array so all later passes are plain loops instead of recursion
-    // figure out: explicit stack type for deep nesting (fixedstack capacity vs dynbuf)
-    // figure out: do scopes need preorder too (enter/exit events) or can step 06 work on postorder
-    // figure out: are pruned stcif/stcmatch branches skipped here or only later
+fn s2_check_globals(self: *Resolver) void {
+    // for every global: h05_ensure_signature, then h06_check_body
+    // many are already done at this point because some body needed them on demand - the state skips them
     _ = self;
 }
 
-fn s03_intern_names(self: *Resolver) void {
-    // intern every identifier span into a NameId and write node.name
-    // figure out: hash function (wyhash vs fxhash) and max load factor of the table
-    // figure out: `$0`, `$1` - intern as normal names or decode to a positional index right away
-    // figure out: identifier_self/init/deinit/main nodes map to the fixed NameIds without touching bytes
+fn s3_apply_inferred_types(self: *Resolver) void {
+    // skip entirely when vars.count() == 0
+    // otherwise one linear sweep over node_type and decls.ty: pool.apply_vars on every entry that has_vars
+    // a var that is still unbound is uninferable_type (e.g. `x = [];` never used with an element)
     _ = self;
 }
 
-fn s04_classify_roles(self: *Resolver) void {
-    // assign every node a role from (parent kind, child slot)
-    // figure out: build that mapping as a comptime table next to DefTable field names
-    // figure out: ambiguous slots - def_var.type is a type expr but `Opt(i32) x` is a call, fun_call callee may be a type constructor
-    // figure out: which identifiers must stay unclassified until step 10 knows if they are types or values
-    // figure out: inside match patterns, which identifiers are binders (`x`) vs constants (`CommonCode.Ok`) vs wildcard (`_`)
+fn s4_check_entry_point(self: *Resolver) void {
+    // `main` exists once and has an accepted signature (no params, or argc / argv; returns unit or an int)
     _ = self;
 }
 
-fn s05_flatten_modifiers(self: *Resolver) void {
-    // collapse mod_pub / mod_mut / mod_stc chains into declaration flags
-    // figure out: where flags live before decls exist (node flags scratch or directly consumed in step 07)
-    // figure out: illegal combinations - pub inside a function body, mut + stc, duplicated modifiers
-    // figure out: partial__type_def_param_mut (fields, variant payloads) handled the same way or separately
+// ------------------------------------------------------------------------------------------ //
+// scopes and names
+// ------------------------------------------------------------------------------------------ //
+
+fn h01_lookup(self: *Resolver, name: NameId) DeclId {
+    // scan local_names from the top down, then fall back to `globals`
+    _ = .{ self, name };
+    @panic("unimplemented");
+}
+
+fn h02_declare_local(self: *Resolver, name: NameId, node: NodeId, kind: DeclKind, ty: TypeId) DeclId {
+    // push a decl row and (name, decl) onto the local stack
+    _ = .{ self, name, node, kind, ty };
+    @panic("unimplemented");
+}
+
+fn h03_push_scope(self: *Resolver) void {
+    // remember local_names.len in scope_marks
     _ = self;
+    @panic("unimplemented");
 }
 
-fn s06_build_scopes(self: *Resolver) void {
-    // open a scope for every node kind that introduces names and write node.scope for all nodes
-    // figure out: exact list of scope opening kinds (block, fun params, type/trait/variant body, loops, match arms, if-then for `<-` / `?<-`)
-    // figure out: stcfun with two parameter tuples = two nested scopes (static_params then params)
-    // figure out: may a where / where-else expression see later parameters or only the ones before it
-    // a `<-` / `?<-` binder is visible in the rest of its own expression and everything below it (then branch, match arms, loop bodies), never in the following statements of the same scope
-    // a binder from an if condition is hidden in the else branch - so the then branch needs its own scope, the else branch stays outside of it
+fn h04_pop_scope(self: *Resolver) void {
+    // truncate the local stack back to the last mark
     _ = self;
+    @panic("unimplemented");
 }
 
-fn s07_collect_declarations(self: *Resolver) void {
-    // create a Decl for every name introducing node, with its declaration order index
-    // figure out: full list of declaring nodes - def_var, untyped assign, destructure, fun params, fields, variant cases, trait members, pattern binders, for variables
-    // an untyped assign `bob = ...` declares bob if no bob is visible yet, otherwise it assigns - so it can only become a decl once step 10 knows what is visible
-    // an induced decl gets a metavar type that its assigned value fixes in step 23
-    // figure out: create tentative decls here and drop them in step 10, or create them lazily in step 10
-    // untyped destructure (`aa, cc = 7, 8`) may mix: existing names are assigned, the others are declared
-    // all names of one destructure share one type - if one of them already exists, the new ones take its type
-    // figure out: existing names of one destructure with different types - destructure_type_conflict error, or join them
-    // figure out: typed decl with a name that already exists in an outer scope - shadowing allowed?
-    // figure out: overloaded functions share a name - duplicates allowed only for function kinds
-    // figure out: ParamInfo extraction from the partial__fun_def_param_* wrapper chains (named / default / where / stcwhere / else)
-    _ = self;
+// ------------------------------------------------------------------------------------------ //
+// declarations
+// ------------------------------------------------------------------------------------------ //
+
+fn h05_ensure_signature(self: *Resolver, decl: DeclId) void {
+    // signature_ready or later -> return, resolving_signature -> declaration_cycle, unresolved -> resolve now
+    // functions: parameter types + return type; an induced return type becomes a fresh type var
+    // types / variants / traits: h19_check_type_def
+    // stc values and aliases (`fun sub_from_templ = my_templ(i32, false)`): h08_eval_static
+    // untyped globals (`induced = 1337`): the type of the value, via h09 with no expected type
+    // figure out: methods - is the implicit self parameter part of the function type
+    // figure out: stcfun with two parameter tuples - the first tuple is static, the second belongs to the produced function
+    _ = .{ self, decl };
+    @panic("unimplemented");
 }
 
-fn s08_index_scopes(self: *Resolver) void {
-    // sort decls by (scope, name) so every scope owns one contiguous span
-    // figure out: radix sort vs std.sort - must be stable to keep declaration order among duplicates
-    // figure out: size threshold from which a scope gets its own hash index instead of binary search
-    // figure out: duplicate declaration detection happens here (same scope, same name, not overloadable)
-    _ = self;
+fn h06_check_body(self: *Resolver, decl: DeclId) void {
+    // set up an FnCtx, push a scope, declare the parameters (and self, $0.. for unnamed ones), h09 on the body, pop
+    // `:` bodies are one expression whose value is the return value; `{}` bodies return through `ret`
+    // where / where-else / stcwhere: predicates must be bool, stcwhere must evaluate true via h08,
+    //   the else value is checked against the param type, or it is a `ret` checked against the return type
+    // figure out: may a where expression see later parameters or only the ones before it
+    _ = .{ self, decl };
+    @panic("unimplemented");
 }
 
-fn s09_bind_implicit_names(self: *Resolver) void {
-    // bind implicit names - $it in for bodies, $0.. for unnamed params, self in type / trait / variant bodies
-    // figure out: $it in nested for loops - innermost only, or a way to reach outer ones
-    // figure out: `p.$0` on tuple-like types is a member access, not a lexical name - exclude it here
-    // figure out: what self means inside a trait body that has no concrete type yet (`typeof self`)
-    _ = self;
+fn h07_lower_type(self: *Resolver, ctx: *FnCtx, node: NodeId) TypeId {
+    // turn a type expression into a pool index: primitives, [n]T, []T, *T, &T, `(..) -> ..` signatures,
+    //   `A || B` unions, `typeof x`, names of types, stcfun calls (`Vec2T(i32)`, via h20)
+    // array lengths are static expressions - h08; an unlengthed array `[]T` gets a fresh var as its length
+    // an unlengthed array anywhere in a parameter type makes the function length-generic: `[]u8 arr` (by value),
+    //   `&[]u8 arr` (immutable pointer), `*[]u8 arr` (mutable pointer). it is compiled once per
+    //   length used, like a stcfun instance, and `arr.len` is a static value inside each instance
+    _ = .{ self, ctx, node };
+    @panic("unimplemented");
 }
 
-fn s10_resolve_lexical_names(self: *Resolver) void {
-    // resolve every identifier use to a DeclId by walking up the scope chain
-    // figure out: order rule - globals are order independent, locals need decl.order < use order
-    // figure out: identifiers that name an overload set - store an OverloadSetId instead of a DeclId?
-    // figure out: member names and named call arguments (`name = "x"`) are skipped here and resolved in step 23
-    // figure out: `_` never resolves, unresolved identifiers in pattern position become binders
-    // untyped assigns are decided here in declaration order - visible name -> assign, otherwise -> declare (see step 07)
-    _ = self;
+fn h08_eval_static(self: *Resolver, ctx: *FnCtx, node: NodeId) ValueId {
+    // tiny interpreter directly over the parse tree for stc values, stcif / stcmatch / stcwhile / stcfor / stcloop,
+    //   sizeof, assertsize, stcwhere, array lengths, stcfun arguments
+    // every step decrements static_budget
+    // figure out: static locals need their own value stack next to the local stack
+    _ = .{ self, ctx, node };
+    @panic("unimplemented");
 }
 
-fn s11_build_dependency_graph(self: *Resolver) void {
-    // build csr edges decl -> referenced decls, each tagged signature / body / member_guess
-    // figure out: exact split of signature deps (types, defaults, static args) vs body deps
-    // figure out: member_guess edges for `x.foo` (all decls named foo) - how coarse is acceptable
-    // figure out: an induced return type turns body edges into signature edges for callers
-    _ = self;
+// ------------------------------------------------------------------------------------------ //
+// expressions
+// ------------------------------------------------------------------------------------------ //
+
+fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: NodeId, expected: TypeId) TypeId {
+    // the heart: switch on the node kind, check the children, write node_type[node] and return it
+    // expected is the type the context wants (or none) - it flows down into literals, `[]`, lambdas, `Opt8 x = 42`
+    // every node kind has a home:
+    //   int / float / string / char / true / false            -> h10_expect (literal rules live there)
+    //   identifier, self / init / deinit / main, $it, $0..     -> h01_lookup, node_decl[node] = found decl
+    //   capture `( .. )`                                       -> the inner expression
+    //   block                                                  -> push scope, every statement, pop
+    //   def_var / assign / assign_typed / mod_* / destructure  -> h11_check_assign
+    //   += -= *= /= %=, ++ / -- (pre / post)                   -> h18_check_place + numeric operand
+    //   binary arithmetic / bitwise                            -> both sides numeric, result via join of the two
+    //   comparisons, and / or / xor / &&, !                    -> bool
+    //   neg_num                                                -> numeric, a negated untyped literal is signed (i32 / i64)
+    //   fun_call, with                                         -> h12_check_call
+    //   member                                                 -> h13_check_member
+    //   array_index, .*, .&                                    -> index must be an integer, pointer rules, auto-deref
+    //   array, array_empty                                     -> element type from expected, else from the elements, `[]` alone -> fresh var
+    //   as / oftype / typeof / sizeof                          -> pool.cast, bool, type value, u64 via h08
+    //   if / stcif                                             -> h15_check_branching
+    //   while / for / loop (+ stc and repeat forms), ranges    -> h16_check_loop
+    //   match / stcmatch                                       -> h14_check_match
+    //   ret / ret_void                                         -> h10_expect against ctx.ret_type, type never
+    //   brk / cont                                             -> ctx.loop_depth > 0, type never
+    //   do                                                     -> check the inner expression, type runit
+    //   defer, `x defer deinit`, deinit x                      -> checked in place, deinit needs a deinit member (no_deinit)
+    //   ??, ?<-, <-                                            -> h17_check_unwrap
+    //   def_fun (lambdas, local functions)                     -> h05 + h06 on the spot
+    //   def_fun_declaration                                    -> a function type
+    //   def_type / def_variant / def_trait (local)             -> h19_check_type_def
+    //   type expressions in value position (`Opt(i32)`, `[4]u8`) -> h07_lower_type, the value is a type
+    // figure out: definite initialization (`mut u64 x;` read before write) - a bitset over locals saved / merged at branches
+    _ = .{ self, ctx, node, expected };
+    @panic("unimplemented");
 }
 
-fn s12_condense_components(self: *Resolver) void {
-    // strongly connected components over the dependency graph, fill components + decl_component
-    // figure out: iterative tarjan / pearce with an explicit stack (no recursion)
-    // figure out: which cycles are legal (mutual recursion through bodies) and which are errors (signature cycles, by-value type cycles)
-    // figure out: tarjan emits components in reverse topological order - confirm the direction you need
-    _ = self;
+fn h10_expect(self: *Resolver, ctx: *FnCtx, node: NodeId, actual: TypeId, expected: TypeId) TypeId {
+    // the one place where "what an expression has" meets "what its context wants"
+    // untyped int literal: expected type (range checked with pool.fits), else u32, i32 when negated, u64 / i64 when it does not fit 32 bit
+    // untyped float literal: expected type, else f32
+    // an unbound var as expected type counts as no expectation: the literal takes its default and the var is bound to it
+    // everything else: pool.coerce (which unifies when vars are involved); incompatible -> type_mismatch, node gets poison
+    _ = .{ self, ctx, node, actual, expected };
+    @panic("unimplemented");
 }
 
-fn s13_schedule_waves(self: *Resolver) void {
-    // kahn levels over the component dag, one wave = components without dependencies between each other
-    // figure out: only body edges matter for waves or signature edges too
-    // figure out: wave granularity vs thread overhead - merge tiny waves, split huge ones
-    _ = self;
+fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: NodeId) TypeId {
+    // typed: declare with the given type, check the value against it (h10)
+    // untyped: name visible -> assign (h18 for mutability), otherwise declare with the value's type (may be a var)
+    // destructure: existing names are assigned, new ones declared, all share one type - from an existing name, else from joining the values
+    // multi values (`= 1, 2`) pair up with the destructured names, a single value is shared by all (figure out)
+    // figure out: existing names with different types in one destructure - destructure_type_conflict or join
+    _ = .{ self, ctx, node };
+    @panic("unimplemented");
 }
 
-fn s14_seed_type_pool(self: *Resolver) void {
-    // intern all primitive types and values so their Index equals the ts.Index enum order
-    // figure out: assert this ordering once at startup (debug only)
-    _ = self;
+fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: NodeId, expected: TypeId) TypeId {
+    // callee kinds: function / overload list, type constructor (`Person(name = ..)`), variant case (`Event.Key(13)`),
+    //   stcfun (-> h20_instantiate), a value of function type (`op(a, b)`), a lambda called directly
+    // match positional + named arguments to parameters, fill missing ones from defaults in the parse tree
+    // `x with (name = ..)`: a copy of record x, the named arguments must be fields
+    // overloads: keep the candidates whose parameter types accept the arguments, then pick the most specific:
+    //   exact type match beats a coercion, fixed length array beats unlengthed (`&[1]u8` over `&[]u8`),
+    //   a parameter with where beats the same parameter without
+    //   several left that differ only by runtime where-clauses -> dispatch at runtime, most specific first (the lowerer emits the chain)
+    //   several left that are equally specific -> ambiguous_overload
+    // calling a function whose signature is still in progress uses its type var return type - unify decides later
+    // a length-generic function (`[]u8` / `&[]u8` / `*[]u8` param): the argument's array length picks the instance via h20,
+    //   with the lengths as args; overload specificity is decided before instantiating
+    _ = .{ self, ctx, node, expected };
+    @panic("unimplemented");
 }
 
-fn s15_lower_type_expressions(self: *Resolver, component: Component) void {
-    // evaluate every type position node of this component into a TypeId
-    // figure out: nominal placeholders for recursive types (`*Tree` inside Tree) via fresh_nominal / complete_nominal
-    // figure out: array lengths need static evaluation - call into step 17 on demand
-    // figure out: type_array_unlengthed - slice, or array whose length is induced from the initializer
-    // figure out: variant `||` - flatten nested unions, reject overlapping cases or tag values?
-    _ = .{ self, component };
+fn h13_check_member(self: *Resolver, ctx: *FnCtx, node: NodeId) TypeId {
+    // check the parent, then pool.lookup_member (auto-derefs one pointer level like zig)
+    // `Type.Case`, `Type.init` and `Stream(i32).None` are members of a type value, not of an instance
+    // a parent whose type is still an unbound var cannot be looked into yet -> uninferable_type (needs an annotation)
+    _ = .{ self, ctx, node };
+    @panic("unimplemented");
 }
 
-fn s16_resolve_signatures(self: *Resolver, component: Component) void {
-    // build function types, record fields, variant payloads and trait member types
-    // figure out: induced return types - leave a metavar and fill it after the body check
-    // figure out: default values checked here (need expected type) or in step 23
-    // figure out: methods - is the implicit self parameter part of the function type or not
-    _ = .{ self, component };
-}
-
-fn s17_evaluate_static_declarations(self: *Resolver, component: Component) void {
-    // run the comptime interpreter for stc decls, stcfun calls in signatures, assertsize, sizeof
-    // figure out: interpret the ast directly or compile static code to a small bytecode first
-    // figure out: memo key = (generic decl, interned argument tuple), detect infinite instantiation (depth limit?)
-    // figure out: evaluation budget (like zig's branch quota) and how errors inside static code are reported
-    // figure out: forbid reading runtime values in static context - enforce via node flags
-    _ = .{ self, component };
-}
-
-fn s18_compute_layouts(self: *Resolver, component: Component) void {
-    // compute size, alignment and field offsets of every type in this component
-    // figure out: bool as 1 byte, or 1 bit inside packed types
-    // figure out: tag placement and tag type inference when no `tagof` is given
-    // figure out: `tagof self` niche search - which payload bit patterns are invalid and can encode the other cases
-    // figure out: `++(` vs `+(` size rules, and assertsize against a type (`assertsize u32`) vs a number
-    _ = .{ self, component };
-}
-
-fn s19_close_trait_hierarchy(self: *Resolver) void {
-    // transitive closure of implof per type and per trait, stored as bitsets
-    // figure out: bitset width bound by trait count, or a sparse fallback for huge programs
-    // figure out: generic trait instances (`Comparable(Money)`) are separate traits in the closure
-    _ = self;
-}
-
-fn s20_check_trait_conformance(self: *Resolver) void {
-    // check that every type provides each trait member with a matching signature
-    // figure out: signature matching with `typeof self` / self type substitution
-    // figure out: default implementations - copied into the type or referenced from the trait
-    // figure out: two traits requiring members with the same name
-    _ = self;
-}
-
-fn s21_build_overload_sets(self: *Resolver) void {
-    // group same-named functions of one scope into overload sets
-    // figure out: local functions - shadow a global set or join it
-    // figure out: may a non-function share its name with an overload set
-    _ = self;
-}
-
-fn s22_order_overload_specificity(self: *Resolver) void {
-    // order overloads by specificity using parameter types and where predicates
-    // figure out: how smart predicate implication is (syntactic equality, intervals over comparisons, smt later?)
-    // figure out: array length overloads (&[0]u8, &[1]u8, &[]u8) - exact length beats unlengthed
-    // figure out: incomparable overlaps - error statically or fall back to declaration order
-    _ = self;
-}
-
-fn s23_check_bodies(self: *Resolver, wave: Span) void {
-    // type check every body in the wave - check against an expected type when there is one, infer otherwise
-    // untyped int literal - takes the expected type if there is one (range checked with fits), otherwise u32, or i32 when directly negated
-    // untyped float literal - expected type or f32
-    // figure out: expected type propagation into lambdas, `[]` and payload shorthand (`Opt8 x = 42`)
-    // an untyped int literal that does not fit into 32 bit is upcast to u64, or i64 when negated
-    // figure out: member lookup order - field, own method, trait method, variant case, builtin (len), with zig-like auto-deref
-    // figure out: overload resolution at calls - static where picks at compile time, runtime where builds a dispatch chain
-    // runit - brk / ret / cont and nested if / match in a valued if / match are auto runit, a plain unit call must be wrapped in `do`
-    // figure out: typing of loops that produce arrays
-    // figure out: typing of `?<-`, `??`, `<-` (binder scopes are fixed in step 06)
-    // untyped destructure - the shared type comes from an existing name, otherwise from joining the assigned values
-    // figure out: parallel execution - per thread metavars and diagnostics, merged into the global tables afterwards
-    _ = .{ self, wave };
-}
-
-fn s24_drain_instantiations(self: *Resolver) bool {
-    // check the bodies of queued stcfun instances until the queue is empty, return true on progress
-    // figure out: instances created while draining - same loop or next iteration
-    // figure out: dedupe identical instantiations requested from different threads
-    _ = self;
-    return false;
-}
-
-fn s25_check_control_flow(self: *Resolver) void {
-    // check brk / cont are inside loops, ret types match, detect unreachable code
-    // figure out: what a brk yields inside an assigned loop (`[]i32 a = while ...`)
-    // figure out: may defer bodies contain ret / brk
-    // runit - a branch of a valued if / match that is plain unit (no do, not brk / ret / cont / if / match) is a runit_mixing error
-    _ = self;
-}
-
-fn s26_check_patterns(self: *Resolver) void {
-    // check exhaustiveness and redundancy of every match and build its decision tree
-    // figure out: start with maranget usefulness matrices, move to lower your guards later
-    // figure out: int patterns with ranges (interval sets), string patterns, struct patterns with named fields
-    // figure out: stcmatch - scrutinee must be static, mark all other arms as pruned
+fn h14_check_match(self: *Resolver, ctx: *FnCtx, node: NodeId, expected: TypeId) TypeId {
+    // per arm: push a scope, check the pattern against the scrutinee type (declares binders), check the body, pop
+    // patterns: literals, `,` / `|` or-lists, ranges, `_`, binders, variant cases with payload binders,
+    //   struct patterns with named fields, type-cast patterns (`AnyFixed32 x`), label arrows (`Case <- v`)
+    // arm values are joined like if branches (runit rules)
+    // exhaustiveness: variants / bools -> a small bitset of covered cases; ints / strings need `_` or a binder
+    // redundancy: an arm whose cases are all covered already, or anything after `_`
+    // stcmatch: the scrutinee is static, only the matching arm is checked
     // figure out: untagged variants only in stcmatch, type-cast patterns only for homogenic ones
-    _ = self;
+    _ = .{ self, ctx, node, expected };
+    @panic("unimplemented");
 }
 
-fn s27_check_mutability(self: *Resolver) void {
-    // check that writes only hit mutable places and go through mutable pointers
-    // figure out: place computation through member / index / deref chains
-    // figure out: is self mutable inside methods by default, or does that need a marker
-    // figure out: where-else that repairs a parameter (`else p = 50`) - does that make the param implicitly mutable
-    _ = self;
+fn h15_check_branching(self: *Resolver, ctx: *FnCtx, node: NodeId, expected: TypeId) TypeId {
+    // condition is bool (or a `?<-` / `<-` expression, h17)
+    // then branch gets its own scope, so binders of the condition are visible there but hidden in else
+    // used as a value: pool.join of both branches; brk / ret / cont (never), nested if / match and blocks
+    //   count as runit, a plain unit call needs `do`, plain unit + value is runit_mixing
+    // no else and used as a value -> the missing branch is unit
+    // stcif: condition via h08, only the chosen branch is checked
+    _ = .{ self, ctx, node, expected };
+    @panic("unimplemented");
 }
 
-fn s28_check_definite_initialization(self: *Resolver) void {
-    // dataflow - every read sees an initialized variable
-    // figure out: declarations without value (`mut u64 x;`), joins at branches and loops
-    // figure out: arrays declared by length and assigned later (`arr4 = for ...`)
-    _ = self;
+fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: NodeId, expected: TypeId) TypeId {
+    // while: bool condition, optional repeat statement; for: a sequence (array, range, Iterable) with $it or a named variable;
+    //   loop: optional repeat statement; stc forms run through h08
+    // ranges (`1..=10`, `..<n`, `1..`): both bounds one integer type, only valid as a for sequence or a match pattern
+    // ctx.loop_depth++ around the body so brk / cont know they are inside
+    // used as a value: an array of the body values (`[]i32 arr = while j < 50: j++`)
+    // figure out: what a brk yields inside a loop used as a value
+    _ = .{ self, ctx, node, expected };
+    @panic("unimplemented");
 }
 
-fn s29_lower_where_guards(self: *Resolver) void {
-    // turn where / where-else clauses into guard rows, prove stcwhere statically
-    // figure out: guards decide the overload (dispatch) vs guards only validate the chosen one
-    // figure out: typing of the else value - must match the param type, or the return type when it is `ret x`
-    _ = self;
+fn h17_check_unwrap(self: *Resolver, ctx: *FnCtx, node: NodeId, expected: TypeId) TypeId {
+    // `x ??`: x is a self-tagged variant, the result is its payload type
+    // `x ?? fallback`: fallback is checked against the payload type (never is fine: `?? ret 1`)
+    // `x ?<- name`: bool, declares name with the payload type in the current expression scope
+    // `x <- name` / `x <- a, b`: the value itself, declares the names (destructured from a record for several)
+    // binders live in their own expression and below it, never in following statements
+    _ = .{ self, ctx, node, expected };
+    @panic("unimplemented");
 }
 
-fn s30_zonk_types(self: *Resolver) void {
-    // replace every metavar in node types and decl types by its final binding
-    // still unbound metavars are an uninferable_type error, there is no defaulting (literals never stay unbound)
-    _ = self;
+fn h18_check_place(self: *Resolver, ctx: *FnCtx, node: NodeId) TypeId {
+    // the left side of a write: identifier / member / index / deref chain
+    // writable only through `mut` declarations, `mut` fields and `*T` pointers (never `&T`)
+    // figure out: is self mutable in methods by default
+    _ = .{ self, ctx, node };
+    @panic("unimplemented");
 }
 
-fn s31_freeze(self: *Resolver) void {
-    // shrink the tables and expose read-only views for highlowerer
-    // figure out: what exactly the lowerer needs (node types, decl ids, instances, guards, decisions)
-    // figure out: free scratch, worklist and metavars here
-    _ = self;
+// ------------------------------------------------------------------------------------------ //
+// types, generics, diagnostics
+// ------------------------------------------------------------------------------------------ //
+
+fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclId, node: NodeId) TypeId {
+    // records (`*(..)`, `**(..)` packed), variants (`+(..)`, `++(..)`), traits (`!{..}`, `implof .. !{..}`)
+    // reserve_nominal first, so fields can point back at the type (`*Tree`), then fields / cases / members, then complete_nominal
+    // field and payload defaults and where-clauses are checked against the field type
+    // variants: tag values must fit the tag type (tag_overflow), `tagof self` needs a niche (self_tag_without_niche)
+    // assertsize: compare pool.layout(ty).size with the static value or type size (assertsize_failed)
+    // trait body members become methods; implof: every member of every listed trait (and their supers) must exist
+    //   with a matching signature, `typeof self` replaced by the type (trait_member_missing / trait_signature_mismatch),
+    //   members with a default implementation may be left out
+    _ = .{ self, ctx, decl, node };
+    @panic("unimplemented");
+}
+
+fn h20_instantiate(self: *Resolver, generic: DeclId, args: ValueId) ValueId {
+    // look up `instances`; on a miss evaluate the stcfun with the static args bound and memoize the result
+    // length-generic functions: bind every unlengthed parameter's length to its arg, then check the body as a new declaration
+    // the produced function / type is checked like any declaration (h05 / h06 / h19)
+    // figure out: recursion limit for instances that instantiate themselves forever
+    //   (`arr_sum` recursing on `&[arr.len-1]u32` is fine because the `&[0]u32` overload ends it; a missing base case would not end)
+    _ = .{ self, generic, args };
+    @panic("unimplemented");
+}
+
+fn h21_report(self: *Resolver, code: DiagCode, node: NodeId, a: u32, b: u32) void {
+    // push a diagnostic, count errors, and let the caller set node_type[node] = poison_type
+    _ = .{ self, code, node, a, b };
+    @panic("unimplemented");
 }
