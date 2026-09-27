@@ -1,6 +1,7 @@
 const std = @import("std");
 const Lexer = @import("Lexer.zig");
 const Parser = @import("Parser.zig");
+const Resolver = @import("Resolver.zig");
 
 inline fn alloc_file_bytes(alloc: std.mem.Allocator, io: std.Io, file: std.Io.File) []u8 {
     const max_file_size = 50 * 1024 * 1024;
@@ -42,4 +43,8 @@ pub fn main(init: std.process.Init) void {
         in_bytes,
         parser.global_store.sliced(),
     ) catch |e| @panic(@errorName(e));
+
+    var resolver = Resolver.init(alloc, &parser.tree, in_bytes, parser.global_store.sliced());
+    defer resolver.deinit();
+    resolver.resolve() catch {};
 }
