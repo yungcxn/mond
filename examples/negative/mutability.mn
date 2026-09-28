@@ -1,0 +1,20 @@
+type P = *(i32 x, mut i32 y);
+fun f = (i32 param, &i32 ro, *i32 rw, &P rp) {
+    i32 a = 1;
+    a = 2; #! assign_to_immutable
+    param = 3; #! assign_to_immutable
+    a++; #! assign_to_immutable
+    a += 1; #! assign_to_immutable
+    mut P p = P(x = 1, y = 2);
+    p.x = 5; #! assign_to_immutable
+    p.y = 6;
+    P q = P(x = 1, y = 2);
+    q.y = 7; #! assign_to_immutable
+    ro.* = 1; #! write_through_immutable_pointer
+    rw.* = 1;
+    rp.y = 1; #! write_through_immutable_pointer
+    mut [2]u8 arr = [1, 2];
+    &[2]u8 ap = arr.&;
+    ap[0] = 3; #! write_through_immutable_pointer
+    arr[0] = 4;
+};

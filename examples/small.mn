@@ -1,5 +1,20 @@
 
 
+### EXTERNALS ###
+# declarations only (no body, no logic): provided by the runtime / linker later on.
+fun print = (&u8 fmt);
+fun print = (&u8 fmt, i32 a);
+fun print = (&u8 fmt, u32 a);
+fun print = (&u8 fmt, u8 a);
+fun print = (&u8 fmt, f32 a);
+fun print = (&u8 fmt, bool a);
+fun print = (&u8 fmt, &u8 a);
+fun print = (&u8 fmt, AnyFixed32 a);
+fun print = (&u8 fmt, i32 a, i32 b);
+
+
+
+
 ### FUNCTION DEFINITIONS ###
 # complete function definition
 fun add_i32 = (i32 a, i32 b) -> i32 { ret a + b; };
@@ -75,7 +90,7 @@ fun weird_person_search = (Person p): match p {
 ### TYPES AND TRAITS ###
 
 # type with trait definition
-type AddablePointI32 = *(i32 x, i32 y) !{
+type AddablePointI32 = *(mut i32 x, mut i32 y) !{
     fun add = (AddablePointI32 other) {
         self.x += other.x;
         self.y += other.y;
@@ -93,7 +108,7 @@ stcfun SubtractableT = (type T): !{
 };
 
 # using them
-type AddableVec2D = *(i32 x, i32 y) implof Addable, SubtractableT(AddableVec2D) !{
+type AddableVec2D = *(mut i32 x, mut i32 y) implof Addable, SubtractableT(AddableVec2D) !{
     fun add = (AddableVec2D other) {
         self.x += other.x;
         self.y += other.y;
@@ -106,30 +121,35 @@ type AddableVec2D = *(i32 x, i32 y) implof Addable, SubtractableT(AddableVec2D) 
 };
 
 # real example, `Iterable` is a builtin
-type ByteStream = *(*u8 buf, u32 cursor) implof Iterable(u8) !{
-    init = (*u8 in_buf): ret ByteStream(buf = in_buf, cursor = 0);
+stcfun Iterable = (type T): !{
+    fun next = () -> T;
+    fun has_next = () -> bool;
+};
+
+type ByteStream = *(*u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
+    init = (*u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
     deinit = () {} # could be left out
 
     # for Iterable(u8)
     fun next = () -> u8: ret self.buf[self.cursor++];
-    fun has_next = () -> bool: ret self.cursor < self.buf.len;
+    fun has_next = () -> bool: ret self.cursor < self.len;
 
-    pub fun pop = () -> Opt8: ret if self.cursor >= self.buf.len: Opt8.None else: self.buf[self.cursor++];
+    pub fun pop = () -> Opt8: ret if self.cursor >= self.len: Opt8.None else: self.buf[self.cursor++];
 }
 
 # real example with static function:
-stcfun Stream = (type Child): *(*Child buf, u32 cursor) implof Iterable(Child) !{
-    init = (*Child in_buf): ret Stream(buf = in_buf, cursor = 0);
+stcfun Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iterable(Child) !{
+    init = (*Child in_buf, u32 len): ret Stream(Child)(buf = in_buf, cursor = 0, len = len);
     deinit = () {} # could be left out
 
     fun next = () -> Child: ret self.buf[self.cursor++];
-    fun has_next = () -> bool: ret self.cursor < self.buf.len;
+    fun has_next = () -> bool: ret self.cursor < self.len;
 
-    pub fun pop = () -> Opt(Child): ret if self.cursor >= self.buf.len: Opt(Child).None else: self.buf[self.cursor++];
+    pub fun pop = () -> Opt(Child): ret if self.cursor >= self.len: Opt(Child).None else: self.buf[self.cursor++];
 };
 
 # realize
-stcfun Int32Stream = Stream(i32);
+type Int32Stream = Stream(i32);
 
 
 
@@ -160,14 +180,14 @@ variant Event = +(
     Close               = 0x00,
 ) tagof u8;
 
-# D) not tagged homogenic unionvariant
+# D) homogenic unionvariant (tagged by default)
 variant AnyFixed32 = ++(                                  # could also be +, as that implies here ++
     AsInt(i32),
     AsFloat(f32),
     AsBits([4]u8),
-) assertsize u32;
+) assertsize u64;
 
-# E) not tagged heterogenic abstract variant
+# E) heterogenic abstract variant (tagged by default)
 variant AnyPrintable = +(
     AsInt(i32),
     AsText(&u8),
@@ -207,7 +227,7 @@ fun handle_anyfixed = (AnyFixed32 a): stcmatch a {             # static match du
     AnyFixed32.AsInt(i) => print("Int: %d", i);
     AnyFixed32.AsFloat(f) => print("Float: %f", f);
     AnyFixed32.AsBits(bits) => print("Bits...");
-    AnyFixed32 non_specified => print("Non-specific: %d", non_specific);  # homogenic -> storable
+    AnyFixed32 non_specific => print("Non-specific: %d", non_specific);  # homogenic -> storable
 };
 
 # use E):
@@ -254,7 +274,7 @@ fun safe_div = (f32 a, f32 b where b != 0.0 else ret 0x7FC00000) -> f32 {
 
 # same as:
 fun safe_div2 = (f32 a, f32 b) -> f32 {
-    if ! b != 0.0: ret 0x7FC00000;
+    if b == 0.0: ret 0x7FC00000;
     ret a / b;
 }
 
@@ -316,7 +336,7 @@ fun test = () {
 
 # arrays and strings
 fun test2 = () {
-    [4]u8 arr = [1, 2, 3, 4];
+    mut [4]u8 arr = [1, 2, 3, 4];
     arr[0] = 42;
 
     []u8 induced_len = [5, 6, 7, 8, 9];                                       # induced_len.len == 5
@@ -336,6 +356,8 @@ fun test2 = () {
 
 
 ### CONTROL FLOW AND SUGARS ###
+fun calc_something = () -> i32: ret 42;
+
 main = () {
     # no statements exist in this languages -> from if to loop everything is an expression.
 
@@ -371,7 +393,7 @@ main = () {
     match y {
         0 => print("y is zero"),
         1 => print("y is one"),
-        2, 3, 4 => print("y is %d", i),
+        2, 3, 4 => print("y is %d", y),
         _ => print("y is something else"),
     };
 
@@ -392,7 +414,7 @@ main = () {
 
 
     # while unassigned, also with repeat statement
-    i32 j = 0;
+    mut i32 j = 0;
     while j < 50 {
         print("j is %d", j);
         j++;
@@ -423,14 +445,14 @@ main = () {
     }
 
     # for assigned
-    [arr3.len]i32 arr4;
-    arr4 = for arr3: i * 2;
+    mut [arr3.len]u32 arr4;
+    arr4 = for arr3: $it * 2;
 
     # stcfor - allows emitting length info -> no predefinition needed
     []i32 arr5 = stcfor 0..=50: $it * 2;                            # iterated length must be static
 
     # loop unassigned, also with repeat statement
-    i32 k = 0;
+    mut i32 k = 0;
     loop {
         if k >= 50 {
             brk;
@@ -458,7 +480,7 @@ main = () {
 
     # defer, defer deinit
     can = Person(name = "Can", age = 30, address = "789 Oak St");
-    defer can.some_method();
+    defer print("deferred for %s", can.address);
     deinit can;
 
     efe = Person(name = "Efe", age = 25, address = "321 Pine St") defer deinit;
@@ -479,7 +501,7 @@ main = () {
 
 
     # self-tagged variant unwrap with ??
-    opt8 vari = 42;                                                     # auto cast to Opt8.Some(42)
+    Opt8 vari = 42;                                                     # auto cast to Opt8.Some(42)
     u8 safe1 = vari ?? 0x0;                                          # ?? casts left hand to payload
     u8 safe2 = vari ?? ret 1;
 
@@ -491,7 +513,7 @@ main = () {
     if (calc_something() <- solution) == 42 or solution == 43: do print("alright!");
     # unwrap arrow
     if vari ?<- nonnone_var {
-        print("Unwrapped value is %d", vari);
+        print("Unwrapped value is %d", nonnone_var);
     } else {
         print("opt8 vari was None");
     };

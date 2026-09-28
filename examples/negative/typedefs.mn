@@ -1,0 +1,10 @@
+type Rec = *(Rec inner); #! recursive_by_value_type
+type Small = *(u8 a, u32 b) assertsize 4; #! assertsize_failed
+variant Big = +(A = 300) tagof u8; #! tag_overflow
+variant Two = +(A(u8), B(u8)) tagof self; #! self_tag_without_niche
+variant Flt = +(A(f32), B) tagof self; #! self_tag_without_niche
+type NotT = 5; #! not_a_type
+trait T = !{ fun need = () -> i32; fun opt = () -> i32: ret 1; };
+type Missing = *(i32 v) implof T !{ fun other = () {}; }; #! trait_member_missing
+type Wrong = *(i32 v) implof T !{ fun need = () -> bool: ret true; }; #! trait_signature_mismatch
+type Fine = *(i32 v) implof T !{ fun need = () -> i32: ret self.v; };

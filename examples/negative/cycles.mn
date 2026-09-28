@@ -1,0 +1,3 @@
+x = x + 1; #! declaration_cycle
+i32 a = b; #! declaration_cycle
+i32 b = a;

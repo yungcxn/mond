@@ -1,0 +1,8 @@
+type R = *(i32 a);
+fun f = () {
+    R r = R(a = 1);
+    i32 x = r as i32; #! invalid_cast
+    bool b = "s" as bool; #! invalid_cast
+    R r2 = 5 as R; #! invalid_cast
+    f32 ok = 5 as f32;
+};

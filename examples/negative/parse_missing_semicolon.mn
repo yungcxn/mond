@@ -1,0 +1,2 @@
+i32 a = 1 #! ExpectedSemicolon
+i32 b = 2;

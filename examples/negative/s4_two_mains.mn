@@ -1,0 +1,2 @@
+main = () {};
+main = (i32 argc, &[]&u8 argv) {}; #! duplicate_declaration

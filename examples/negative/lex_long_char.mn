@@ -1,0 +1,1 @@
+u8 c = 'ab'; #! LexingError_CharScanEOF

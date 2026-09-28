@@ -1,0 +1,15 @@
+type R = *(i32 x) !{ fun m = () -> i32: ret self.x; };
+fun f = () {
+    Nope a; #! undefined_name
+    i32 b = a.x + a.y;
+    a.m();
+    c = a;
+    i32 d = c.q;
+    e = [a, a];
+    i32 g = if a: 1 else: 2;
+    match a { R(x = 1) => 1, _ => 2 };
+    for it in a {};
+    R r = R(x = missing); #! undefined_name
+    i32 h = r.x + 1;
+    i32 k = r.nope + r.nope2; #! unknown_member unknown_member
+};

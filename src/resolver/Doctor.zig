@@ -53,8 +53,7 @@ pub const Diagnosis = struct {
 
 diagnostics: SoD(Diagnosis),
 
-fn h21_report(self: *Resolver, code: Disorder, node: ParseTree.NodeId, a: u32, b: u32) void {
-    // push a diagnostic, count errors, and let the caller set node_type[node] = poison_type
-    _ = .{ self, code, node, a, b };
-    @panic("unimplemented");
+pub fn h21_report(self: *Resolver, code: Disorder, node: ParseTree.NodeId, a: u32, b: u32) void {
+    const severity: Disorder.Severity = if (code == .redundant_match_arm) .warning else .@"error";
+    self.doc.diagnostics.push(.{ .code = code, .severity = severity, .node = node, .a = a, .b = b });
 }

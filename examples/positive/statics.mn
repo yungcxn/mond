@@ -1,0 +1,23 @@
+stcfun pow2 = (u32 n) -> u32: ret 1 << n;
+stcfun fact = (u64 n) -> u64: ret if n <= 1: 1 else: n * fact(n - 1);
+stcfun fib = (u64 n) -> u64: ret if n < 2: n else: fib(n - 1) + fib(n - 2);
+stc u32 KIB = pow2(10); #= KIB 1024
+stc u64 F = fact(10); #= F 3628800
+stc u64 F10 = fib(10); #= F10 55
+stc []u32 sq = stcfor 0..<5: $it * $it; #= sq [0, 1, 4, 9, 16]
+stc []u32 evens = stcfor x in [2, 4, 6]: x / 2; #= evens [1, 2, 3]
+stc u32 m = stcmatch 3 { 1 => 10, 3 => 30, _ => 0 }; #= m 30
+stc bool b = 3 > 2 and 1 == 1; #= b true
+stc bool nb = !(3 > 2) or false; #= nb false
+stc i32 neg = -7 / 2; #= neg -3
+stc i32 md = -7 % 3; #= md -1
+stc u32 sh = 1 << 10 | 3; #= sh 1027
+stc type T = stcif sizeof u64 == 8: u64 else: u32; #= T u64
+stc u64 dep = KIB * 2 + F10; #= dep 2103
+[KIB / 256]u8 buf; #: buf [4]u8
+stc u32 cnt = 0;
+stc []u32 counted = stcwhile cnt < 3: cnt++; #= counted [0, 1, 2]
+stc f32 half = 1.0 / 2.0; #= half 0.5
+stc u32 hexed = 0xFF & 0x0F; #= hexed 15
+stc u8 ch = 'a' + 1; #= ch 98
+main = () {};

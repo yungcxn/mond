@@ -194,7 +194,7 @@ pub const Node = struct {
         return DefTable[@intFromEnum(nk)][2];
     }
 
-    const nk_childc = blk: {
+    pub const nk_childc = blk: {
         var t: [256]enum(u8) { none, one, two, many, data } = undefined;
         for (DefTable, 0..) |def, i| {
             const layout = def[2];
@@ -220,7 +220,7 @@ pub const Node = struct {
     };
 
     // field names of struct layouts, used to label children in the debug print
-    const nk_field_names = blk: {
+    pub const nk_field_names = blk: {
         var t: [DefTable.len][2][]const u8 = @splat(.{ "", "" });
         for (DefTable, 0..) |def, i| {
             const layout = def[2];
@@ -298,150 +298,4 @@ pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, span_idx: u32)
     self.set_children(new_node_idx, span_idx);
 
     return new_node_idx;
-}
-
-const COL_RESET = "\x1b[0m";
-const COL_DIM = "\x1b[90m";
-const COL_KIND = "\x1b[36m";
-const COL_LEAF = "\x1b[32m";
-const COL_FUNC = "\x1b[1;35m";
-const COL_ERR = "\x1b[31m";
-const COL_FIELD = "\x1b[33m";
-
-fn wr(io: std.Io, s: []const u8) void {
-    std.Io.File.stdout().writeStreamingAll(io, s) catch @panic("print failed");
-}
-
-fn leaf_label(self: *@This(), src_bytes: []const u8, node: Node) []const u8 {
-    const idx = node.args[0];
-    const span = self.span_store[idx];
-    return src_bytes[span[0]..span[1]];
-}
-
-// prints `label:` followed by padding, so kinds of siblings line up
-fn wr_field_label(io: std.Io, label: []const u8, label_width: usize) void {
-    if (label.len == 0) return;
-    const pad = "                                ";
-    wr(io, COL_FIELD);
-    wr(io, label);
-    wr(io, COL_DIM);
-    wr(io, ":");
-    wr(io, COL_RESET);
-    wr(io, pad[0..@min(pad.len, label_width -| label.len) + 1]);
-}
-
-fn print_node(
-    self: *@This(),
-    io: std.Io,
-    src_bytes: []const u8,
-    idx: u32,
-    prefix: []const u8,
-    is_first: bool,
-    is_last: bool,
-    field_label: []const u8,
-    field_label_width: usize,
-) anyerror!void {
-    wr(io, prefix);
-    wr(io, if (is_first) "" else if (is_last) "└── " else "├── ");
-    if (!is_first) wr_field_label(io, field_label, field_label_width);
-
-    const node = self.ast_nodes.get(idx) orelse {
-        wr(io, COL_ERR);
-        wr(io, "<missing node #");
-        var idx_buf: [16]u8 = undefined;
-        wr(io, std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch "?");
-        wr(io, ">");
-        wr(io, COL_RESET);
-        wr(io, "\n");
-        return;
-    };
-
-    const nkc = Node.nk_childc[@intFromEnum(node.nk)];
-    const is_leaf = nkc == .none or nkc == .data;
-
-    if (!is_first) {
-        wr(io, if (is_leaf) COL_LEAF else COL_KIND);
-        wr(io, @tagName(node.nk));
-        wr(io, COL_RESET);
-    }
-
-    if (nkc == .data) {
-        const label = self.leaf_label(src_bytes, node);
-        if (label.len != 0) {
-            wr(io, COL_DIM);
-            wr(io, "  \"");
-            wr(io, label);
-            wr(io, "\"");
-            wr(io, COL_RESET);
-        }
-    }
-
-    if (!is_first) wr(io, "\n");
-
-    if (is_leaf) return;
-
-    var prefix_buf: [1024]u8 = undefined;
-    const ext = if (is_first) "" else if (is_last) "    " else "\xe2\x94\x82   "; // "│   "
-    const new_prefix = std.fmt.bufPrint(&prefix_buf, "{s}{s}", .{ prefix, ext }) catch prefix;
-
-    if (nkc == .many) {
-        const start = node.args[0];
-        const count = node.args[1];
-
-        // list children are labeled by their index: [0], [1], ...
-        var width_buf: [16]u8 = undefined;
-        const widest_index: []const u8 = std.fmt.bufPrint(&width_buf, "[{d}]", .{count -| 1}) catch "";
-        const index_width = widest_index.len;
-
-        var i: u32 = 0;
-        while (i < count) : (i += 1) {
-            var index_buf: [16]u8 = undefined;
-            const index_label: []const u8 = std.fmt.bufPrint(&index_buf, "[{d}]", .{i}) catch "";
-            try self.print_node(io, src_bytes, self.extra_childrefs.buf[start + i], new_prefix, false, i == count - 1, index_label, index_width);
-        }
-        return;
-    }
-
-    const args: [2]NodeId = node.args;
-    const childc: usize = if (nkc == .two) 2 else 1;
-    const names = Node.nk_field_names[@intFromEnum(node.nk)];
-    const field_width = @max(names[0].len, if (childc == 2) names[1].len else 0);
-    for (args[0..childc], 0..) |child_idx, i| {
-        try self.print_node(io, src_bytes, child_idx, new_prefix, false, i == childc - 1, names[i], field_width);
-    }
-}
-
-pub fn debug_print_tree(self: *@This(), io: std.Io, src_bytes: []const u8, func_ids: []const NodeId) !void {
-    wr(io, COL_DIM);
-    wr(io, "[DEBUG PARSER AST DUMP]\n");
-    wr(io, COL_RESET);
-
-    for (func_ids, 0..) |funcid, i| {
-        const node = self.ast_nodes.get(funcid) orelse {
-            wr(io, COL_ERR);
-            wr(io, "func: <missing>\n\n");
-            wr(io, COL_RESET);
-            continue;
-        };
-
-        var num_buf: [16]u8 = undefined;
-        const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch "?";
-
-        wr(io, COL_FUNC);
-        wr(io, @tagName(node.nk));
-        wr(io, " (#");
-        wr(io, num_str);
-        wr(io, ")");
-        wr(io, COL_RESET);
-        wr(io, "\n");
-
-        try self.print_node(io, src_bytes, funcid, "", true, true, "", 0);
-        wr(io, "\n");
-    }
-
-    var stats_buf: [64]u8 = undefined;
-    const stats = std.fmt.bufPrint(&stats_buf, "{d} functions, {d} nodes total", .{ func_ids.len, self.ast_nodes.len() }) catch "";
-    wr(io, COL_DIM);
-    wr(io, stats);
-    wr(io, "\n" ++ COL_RESET);
 }

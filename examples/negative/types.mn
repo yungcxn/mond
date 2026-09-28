@@ -1,0 +1,31 @@
+fun r = () -> i32 { ret "s"; }; #! type_mismatch
+fun v = () -> i32 { ret; }; #! ret_type_mismatch
+fun takes = (i32 a) {};
+type Rec = *(i32 a);
+fun f = (i32 n) {
+    bool b = 1; #! type_mismatch
+    i32 s = "str"; #! type_mismatch
+    i32 fl = 1.5; #! type_mismatch
+    u8 big = 256; #! type_mismatch
+    u32 neg = -1; #! type_mismatch
+    f64 wide = 1.0;
+    f32 narrow = wide; #! type_mismatch
+    i64 l = 1;
+    i32 short = l; #! type_mismatch
+    bool sum = true + false; #! type_mismatch
+    if 1 {}; #! type_mismatch
+    while 2 {}; #! type_mismatch
+    [2]u8 arr = [1, "x"]; #! type_mismatch
+    takes("s"); #! type_mismatch
+    Rec rec = Rec(a = "s"); #! type_mismatch
+    Rec rec2 = rec with (a = true); #! type_mismatch
+    i32 dr = n.*; #! type_mismatch
+    u8 ix = arr[true]; #! type_mismatch
+    i32 ixn = n[0]; #! type_mismatch
+    for x in 5 {}; #! type_mismatch
+    i32 un = n ??; #! type_mismatch
+    i32 m = match n { 1 => "s", _ => 2 }; #! type_mismatch
+    bool cmp = n == "s"; #! type_mismatch
+    i32 neg_bool = -true; #! type_mismatch
+};
+fun inf = (): ret [inf(),]; #! infinite_type

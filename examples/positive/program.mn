@@ -1,0 +1,92 @@
+fun print = (&u8 fmt);
+fun print = (&u8 fmt, i64 v);
+
+variant Tok = +(Num(i64 v), Plus, Minus, Star, LParen, RParen, End) tagof u8;
+variant Op = +(Push(i64 v), Add, Sub, Mul) tagof u8;
+stcfun Opt = (type T): ++(Some(T), None) tagof u8;
+stcfun Stack = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0): *(mut [CAP]T items, mut u32 len = 0) !{
+    stc u32 MASK = CAP - 1;
+    fun push = (T v) -> bool {
+        if self.len >= CAP: ret false;
+        self.items[self.len & MASK] = v;
+        self.len += 1;
+        ret true;
+    };
+    fun pop = () -> Opt(T) {
+        if self.len == 0: ret Opt(T).None;
+        self.len -= 1;
+        ret Opt(T).Some(self.items[self.len]);
+    };
+    fun is_empty = () -> bool: ret self.len == 0;
+};
+type Stack16 = Stack(i64, 16); #= Stack16 *([16]i64 items, u32 len)
+type OpList = Stack(Op, 64);
+
+trait Eval = !{ fun eval = () -> i64; };
+type Program = *(mut OpList ops) implof Eval !{
+    fun eval = () -> i64 {
+        mut Stack16 st;
+        mut u32 pc = 0;
+        while pc < self.ops.len {
+            Op op = self.ops.items[pc];
+            pc += 1;
+            match op {
+                Op.Push(v) => do st.push(v),
+                Op.Add => do st.push(self.bin(st.&, (i64 a, i64 b): a + b)),
+                Op.Sub => do st.push(self.bin(st.&, (i64 a, i64 b): a - b)),
+                Op.Mul => do st.push(self.bin(st.&, (i64 a, i64 b): a * b)),
+            };
+        }
+        ret st.pop() ?? 0;
+    };
+    fun bin = (*Stack16 st, (i64, i64) -> i64 f) -> i64 {
+        i64 r = st.pop() ?? 0;
+        i64 l = st.pop() ?? 0;
+        ret f(l, r);
+    };
+};
+
+fun is_digit = (u8 c) -> bool: ret c >= '0' and c <= '9';
+fun tok_of = (u8 c where c == '+') -> Tok: ret Tok.Plus;
+fun tok_of = (u8 c where c == '-') -> Tok: ret Tok.Minus;
+fun tok_of = (u8 c where c == '*') -> Tok: ret Tok.Star;
+fun tok_of = (u8 c) -> Tok: ret Tok.End;
+
+stc []u64 POW10 = stcfor 0..<4: $it * 10; #= POW10 [0, 10, 20, 30]
+stc u32 DIGITS = 6; #= DIGITS 6
+
+fun digits = (&[]u8 src, u32 at) -> i64 {
+    mut i64 v = 0;
+    mut u32 i = at;
+    while i < src.len and is_digit(src.*[i]) {
+        v = v * 10 + (src.*[i] - '0') as i64;
+        i += 1;
+    }
+    ret v;
+};
+
+fun compile = (&[]u8 src) -> Program {
+    mut Program p;
+    mut u32 i = 0;
+    Tok pending = Tok.End;
+    while i < src.len {
+        u8 c = src.*[i];
+        if is_digit(c) {
+            do p.ops.push(Op.Push(digits(src, i)));
+            while i < src.len and is_digit(src.*[i]): i += 1;
+            cont;
+        }
+        t = tok_of(c); #: t +(Num, Plus, Minus, Star, LParen, RParen, End)
+        i += 1;
+    }
+    ret p;
+};
+
+main = (i32 argc, &[]&u8 argv) -> i32 {
+    Program prog = compile("12+30".&);
+    result = prog.eval(); #: result i64
+    print("result %d", result);
+    Eval e = prog;
+    via_trait = e.eval(); #: via_trait i64
+    ret if result == 42: 0 else: 1;
+};

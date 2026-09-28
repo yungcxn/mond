@@ -29,48 +29,44 @@ pub const Index = enum(u32) { none = std.math.maxInt(u32), _ };
 pool: SoD(AbstractType),
 
 pub fn init(alloc: std.mem.Allocator) AbstractPool {
-    _ = alloc;
-    @panic("unimplemented");
+    return .{ .pool = .init(alloc, 64) };
 }
 
 pub fn deinit(self: *AbstractPool) void {
-    _ = self;
-    @panic("unimplemented");
+    self.pool.deinit();
 }
 
 pub fn fresh(self: *AbstractPool, origin: u32) Index {
-    // new var that is its own root, binding none, origin = the node that needed it (for error messages)
-    _ = .{ self, origin };
-    @panic("unimplemented");
+    const v: Index = @enumFromInt(self.pool.len());
+    self.pool.push(.{ .parent = v, .binding = .none, .origin = origin });
+    return v;
 }
 
 pub fn find(self: *AbstractPool, v: Index) Index {
-    // walk to the root, pointing every visited var at its grandparent (path halving)
-    // only through parents
-    _ = .{ self, v };
-    @panic("unimplemented");
+    const parents = self.pool.sliced_field(.parent);
+    var cur = v;
+    while (parents[@intFromEnum(cur)] != cur) {
+        const grand = parents[@intFromEnum(parents[@intFromEnum(cur)])];
+        parents[@intFromEnum(cur)] = grand;
+        cur = grand;
+    }
+    return cur;
 }
 
-pub fn bind(self: *AbstractPool, v: Index, ty: Resolver.StaticPool.Index) void {
-    // set the binding of the root of v, the occurs check is done by Pool.unify before
-    _ = .{ self, v, ty };
-    @panic("unimplemented");
+pub fn bind(self: *AbstractPool, v: Index, ty: StaticPool.Index) void {
+    self.pool.sliced_field(.binding)[@intFromEnum(self.find(v))] = ty;
 }
 
 pub fn link(self: *AbstractPool, a: Index, b: Index) void {
-    // join two unbound groups by pointing one root at the other
-    _ = .{ self, a, b };
-    @panic("unimplemented");
+    const ra = self.find(a);
+    const rb = self.find(b);
+    if (ra != rb) self.pool.sliced_field(.parent)[@intFromEnum(ra)] = rb;
 }
 
-pub fn binding(self: *AbstractPool, v: Index) Resolver.StaticPool.Index {
-    // binding of the root of v, or none
-    _ = .{ self, v };
-    @panic("unimplemented");
+pub fn binding(self: *AbstractPool, v: Index) StaticPool.Index {
+    return self.pool.sliced_field(.binding)[@intFromEnum(self.find(v))];
 }
 
 pub fn count(self: *const AbstractPool) u32 {
-    // zero means no inference happened at all, so the final fix-up pass can be skipped
-    _ = self;
-    @panic("unimplemented");
+    return self.pool.len();
 }

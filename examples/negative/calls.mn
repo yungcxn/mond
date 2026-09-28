@@ -1,0 +1,23 @@
+fun two = (i32 a, i32 b) {};
+fun def = (i32 a, i32 b = 2) {};
+fun ov = (i32 a) {};
+fun ov = (f32 a) {};
+fun same = (i32 a) {};
+fun same = (i32 b) {};
+type Rec = *(i32 a);
+variant V = +(A, B(u8));
+fun f = () {
+    two(1); #! wrong_arity
+    two(1, 2, 3); #! wrong_arity
+    def(1);
+    def(); #! wrong_arity
+    two(a = 1, c = 2); #! unknown_named_argument
+    Rec r = Rec(zz = 1); #! unknown_named_argument
+    Rec r2 = r with (zz = 2); #! unknown_named_argument
+    Rec r3 = Rec(1, 2); #! wrong_arity
+    V v = V.A(1); #! wrong_arity
+    ov(true); #! no_matching_overload
+    same(1); #! ambiguous_overload
+    i32 n = 5;
+    n(); #! not_callable
+};

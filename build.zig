@@ -21,6 +21,12 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the application.");
     run_step.dependOn(&run_exe.step);
 
+    const tests = b.addExecutable(.{ .name = "mond-test", .root_module = b.createModule(.{ .root_source_file = b.path("src/test.zig"), .target = b.graph.host }) });
+    const run_tests = b.addRunArtifact(tests);
+    run_tests.setCwd(b.path("."));
+    if (b.args) |args| run_tests.addArgs(args);
+    b.step("test", "Run the positive and negative example tests.").dependOn(&run_tests.step);
+
     { // https://zigtools.org/zls/guides/build-on-save/
         const exe_check = b.addExecutable(.{
             .name = "mond",

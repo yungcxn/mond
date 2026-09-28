@@ -1,0 +1,16 @@
+variant V = +(A(i32), B);
+type R = *(mut i32 n) !{
+    fun bump = () {
+        for i in 0..<3 {
+            match i {
+                0 => self.n += "s", #! type_mismatch
+                _ => { fun inner = (i32 q) -> bool: ret q; }, #! type_mismatch
+            };
+        };
+    };
+};
+fun lambdas = () {
+    f = (i32 a): (i32 b): (i32 c): a + b + c + true; #! type_mismatch
+    g = (V v): match v { V.A(x) => x, V.B => "s" }; #! type_mismatch
+    i32 h = f(1)(2)("x"); #! type_mismatch
+};

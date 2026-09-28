@@ -13,7 +13,7 @@
 #   4.  types (plain, packed, mutable fields, defaults, where-else fields, assertsize, generics,
 #       init / deinit, methods, `with` copies)
 #   5.  traits (plain, generic, trait-implementing traits, implof lists)
-#   6.  variants (enum-like, tagged unions, untagged unions, self-tagged, unification with ||)
+#   6.  variants (enum-like, tagged unions, self-tagged, untagged unification with ||)
 #   7.  pattern matching (literals, or-patterns with `,` and `|`, ranges, payload destructuring,
 #       struct patterns, type-cast patterns, label arrows, nested matches, stcmatch)
 #   8.  control flow as expressions (if, while, for, loop + all their static `stc...` twins)
@@ -24,6 +24,39 @@
 #
 # Everything in mond is an expression, statements are separated by `;` (optional after `}`).
 # ============================================================================================== #
+
+
+
+
+# ============================================================================================== #
+### EXTERNALS ###
+# ============================================================================================== #
+
+# declarations only (no body, no logic): provided by the runtime / linker later on.
+# there are no variadics, so `print` is overloaded for every argument list used in this file.
+fun print = (&u8 fmt);
+fun print = (&u8 fmt, i32 a);
+fun print = (&u8 fmt, u32 a);
+fun print = (&u8 fmt, u8 a);
+fun print = (&u8 fmt, u64 a);
+fun print = (&u8 fmt, i64 a);
+fun print = (&u8 fmt, f32 a);
+fun print = (&u8 fmt, bool a);
+fun print = (&u8 fmt, &u8 a);
+fun print = (&u8 fmt, AnyFixed32 a);
+fun print = (&u8 fmt, u32 a, u32 b);
+fun print = (&u8 fmt, &u8 a, &u8 b);
+fun print = (&u8 fmt, &u8 a, i32 b);
+fun print = (&u8 fmt, &u8 a, u64 b);
+fun print = (&u8 fmt, u8 a, u32 b);
+fun print = (&u8 fmt, u32 a, u64 b);
+fun print = (&u8 fmt, i32 a, i32 b);
+
+fun sqrt = (f32 x) -> f32;
+fun sys_open = (&u8 path) -> i32;
+fun sys_close = (i32 fd);
+fun sys_write = (i32 fd, &u8 data) -> u64;
+fun alloc = (Node(Id, &u8) node) -> *Node(Id, &u8);
 
 
 
@@ -414,7 +447,7 @@ type Tree = *(i32 value, mut *Tree left, mut *Tree right);
 
 # generic types through static functions
 stcfun Vec2T  = (type T): *(mut T x, mut T y);
-stcfun Matrix = (type T, u32 ROWS, u32 COLS): *([ROWS][COLS]T cells);
+stcfun Matrix = (type T, u32 ROWS, u32 COLS): *(mut [ROWS][COLS]T cells);
 stcfun Slice  = (type T): *(*T ptr, u64 len);
 
 type Vec2i   = Vec2T(i32);
@@ -474,7 +507,7 @@ fun type_tour = () {
     # generic types
     Vec2i gp = Vec2i(x = 3, y = 4);
     Vec2T(f64) fp = Vec2T(f64)(x = 0.5, y = 0.25);
-    Mat4 identity;
+    mut Mat4 identity;
     identity.cells[0][0] = 1.0;
 
     # pointers to types
@@ -632,14 +665,14 @@ variant Event = +(
     Close               = 0x00,
 ) tagof u8;
 
-# D) untagged homogenic union variant
+# D) homogenic union variant (tagged by default: 1 tag byte + 4 payload bytes, aligned)
 variant AnyFixed32 = ++(
     AsInt(i32),
     AsFloat(f32),
     AsBits([4]u8),
-) assertsize u32;
+) assertsize u64;
 
-# E) untagged heterogenic abstract variant
+# E) heterogenic abstract variant (tagged by default)
 variant AnyPrintable = +(
     AsInt(i32),
     AsText(&u8),
@@ -757,7 +790,7 @@ fun classify_temp = (i32 celsius): match celsius {
     ..<0 => print("freezing"),
     0..<15 => print("cold"),
     15..<25 => print("nice"),
-    25.. => print("hot"),
+    _ => print("hot"),
 };
 
 # struct patterns with named fields, binders and wildcards
@@ -776,7 +809,7 @@ fun handle_event = (Event e): match e {
     Event.Close => print("Close");
 };
 
-# untagged variants need a static match, homogenic ones allow a type-cast pattern
+# static matches check only the matching arm, homogenic variants allow a type-cast pattern
 fun handle_anyfixed = (AnyFixed32 a): stcmatch a {
     AnyFixed32.AsInt(i) => print("Int: %d", i);
     AnyFixed32.AsFloat(f) => print("Float: %f", f);
@@ -946,7 +979,7 @@ fun while_tour = () {
 };
 
 fun for_tour = () {
-    []u32 arr3 = [1, 2, 3, 4, 5];
+    mut []u32 arr3 = [1, 2, 3, 4, 5];
 
     # iterate a sequence, `$it` is the implicit element
     for arr3 {
@@ -979,7 +1012,7 @@ fun for_tour = () {
     for i in (arr3.len - 1)..=arr3.len * 2: print("%d", i);
 
     # for as value produces an array
-    [arr3.len]i32 arr4;
+    mut [arr3.len]u32 arr4;
     arr4 = for arr3: $it * 2;
     []i32 squares = for i in 1..=8: i * i;
 
@@ -1167,7 +1200,7 @@ fun array_tour = () {
     []i32 nothing = [];
 
     # multi dimensional
-    [2][3]i32 grid = [[1, 2, 3], [4, 5, 6]];
+    mut [2][3]i32 grid = [[1, 2, 3], [4, 5, 6]];
     i32 center = grid[1][1];
     grid[0][2] = grid[1][0] * 2;
 
@@ -1234,6 +1267,7 @@ type VmStatus = Status(VmError);
 type Arith64  = (i64, i64) -> i64;
 
 stc u32 VM_STACK_SIZE = 256;
+[VM_STACK_SIZE]i64 empty_stack;
 
 type Vm = *(
     mut [VM_STACK_SIZE]i64 stack,
@@ -1242,7 +1276,7 @@ type Vm = *(
     &[]Op program,
     mut bool running = true,
 ) !{
-    init = (&[]Op program): ret Vm(program = program);
+    init = (&[]Op program): ret Vm(stack = empty_stack, program = program);
 
     fun push = (i64 v) -> VmStatus {
         if self.sp >= VM_STACK_SIZE: ret VmStatus.Err(VmError.StackOverflow);
@@ -1431,7 +1465,7 @@ fun ring_demo = () {
 
     mut RingBuffer(u32, 8) numbers;
     for i in 0..<20: if !numbers.push(i): brk;
-    u32 total = 0;
+    mut u32 total = 0;
     while numbers.pop() ?<- n: total += n;
 };
 
@@ -1456,7 +1490,7 @@ stcfun TreeMap = (type K where K oftype Comparable(K), type V): *(mut Opt(*Node(
 
     fun insert_or_create = (*Opt(*Node(K, V)) slot, K key, V value) -> bool {
         if slot.* ?<- node: ret self.insert_at(node.&, key, value);
-        slot.* = Opt(*Node(K, V)).Some(alloc(Node(K, V)(key = key, value = value)));
+        slot.* = Opt(*Node(K, V)).Some(alloc(Node(K, V)(key = key, value = value, left = Opt(*Node(K, V)).None, right = Opt(*Node(K, V)).None)));
         self.size++;
         ret true;
     };

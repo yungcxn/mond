@@ -2,6 +2,7 @@ const std = @import("std");
 const Lexer = @import("Lexer.zig");
 const Parser = @import("Parser.zig");
 const Resolver = @import("Resolver.zig");
+const dbg = @import("debug.zig");
 
 inline fn alloc_file_bytes(alloc: std.mem.Allocator, io: std.Io, file: std.Io.File) []u8 {
     const max_file_size = 50 * 1024 * 1024;
@@ -17,6 +18,18 @@ inline fn alloc_file_bytes(alloc: std.mem.Allocator, io: std.Io, file: std.Io.Fi
 }
 
 const debug = true;
+
+// the architecture the resolver lays types out for
+pub const target: struct { pointer_bits: u8 } = .{ .pointer_bits = 64 };
+
+var parsed: ?struct { io: std.Io, parser: *Parser } = null;
+
+pub const panic = std.debug.FullPanic(struct {
+    fn f(msg: []const u8, first_trace_addr: ?usize) noreturn {
+        if (parsed) |p| dbg.Parser.print_tree(p.io, &p.parser.tree, p.parser.src_bytes, p.parser.global_store.sliced()) catch {};
+        std.debug.defaultPanic(msg, first_trace_addr);
+    }
+}.f);
 
 pub fn main(init: std.process.Init) void {
     const io = init.io;
@@ -38,13 +51,16 @@ pub fn main(init: std.process.Init) void {
     defer parser.deinit();
     parser.build_ast() catch |e| parser.handle_err(io, e);
 
-    if (debug) parser.tree.debug_print_tree(
-        io,
-        in_bytes,
-        parser.global_store.sliced(),
-    ) catch |e| @panic(@errorName(e));
+    var dbg_less = false;
+    var args = init.minimal.args.iterate();
+    while (args.next()) |a| dbg_less = dbg_less or std.mem.eql(u8, a, "--dbg-less");
+
+    if (debug) parsed = .{ .io = io, .parser = &parser };
 
     var resolver = Resolver.init(alloc, &parser.tree, in_bytes, parser.global_store.sliced());
     defer resolver.deinit();
     resolver.resolve() catch {};
+
+    parsed = null;
+    if (debug) (if (dbg_less) dbg.Resolver.print(io, &resolver) else dbg.Resolver.print_tree(io, &resolver)) catch |e| @panic(@errorName(e));
 }

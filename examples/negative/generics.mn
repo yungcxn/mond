@@ -1,0 +1,11 @@
+stcfun Box = (type T): *(T value);
+stcfun Pair = (type A, type B): *(A a, B b);
+fun f = (u32 n) {
+    Box(i32) b = Box(i32)(value = "s"); #! type_mismatch
+    Pair(u8) p; #! wrong_arity
+    Box(n) x; #! not_static
+    Box(i32) ok = Box(i32)(value = 1);
+    stc u32 s = n; #! not_static
+    i32 w = stcif n > 0: 1 else: 2; #! not_static
+    [1.5]u8 fl; #! not_static
+};

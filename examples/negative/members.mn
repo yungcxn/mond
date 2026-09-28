@@ -1,0 +1,15 @@
+type P = *(i32 x) !{ fun m = () {}; };
+variant V = +(A, B);
+fun free = (P p) {};
+fun f = () {
+    P p = P(x = 1);
+    i32 y = p.y; #! unknown_member
+    p.nope(); #! unknown_member
+    V v = V.C; #! unknown_member
+    i32 n = 5;
+    i32 z = n.x; #! unknown_member
+    p.free(); #! unknown_member
+    p.m();
+    P.m(p.&);
+    P.m(); #! wrong_arity
+};

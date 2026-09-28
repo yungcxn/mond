@@ -1,0 +1,16 @@
+fun unit_fn = () {};
+variant V = +(A, B, C);
+fun f = (bool c, V v, i32 n) {
+    brk; #! brk_outside_loop
+    cont; #! cont_outside_loop
+    while true { fun inner = () { brk; }; brk; }; #! brk_outside_loop
+    i32 x = if c: 1; #! runit_mixing
+    i32 y = if c: unit_fn() else: 2; #! runit_mixing
+    i32 z = match n { 1 => unit_fn(), _ => 2 }; #! runit_mixing
+    match v { V.A => 1, V.B => 2 }; #! non_exhaustive_match
+    match c { true => 1 }; #! non_exhaustive_match
+    match n { 1 => 1 }; #! non_exhaustive_match
+    match v { _ => 1, V.A => 2 }; #! redundant_match_arm
+    match v { V.A => 1, V.A => 2, _ => 3 }; #! redundant_match_arm
+    match v { V.A(p) => 1, _ => 2 }; #! wrong_arity
+};

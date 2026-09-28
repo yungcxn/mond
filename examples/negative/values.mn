@@ -1,0 +1,21 @@
+fun unit_fn = () {};
+fun apply = ((i32) -> i32 f, i32 x) -> i32: ret f(x);
+variant V = +(A, B);
+variant W = +(A, B);
+variant O = +(Some(u8), None) tagof u8;
+fun q = () -> bool: 5; #! type_mismatch
+fun f = (&i32 ro) {
+    [3]u8 a = [1, 2]; #! type_mismatch
+    *i32 p = ro; #! type_mismatch
+    V v = W.A; #! type_mismatch
+    O o = O.Some("s"); #! type_mismatch
+    i32 r = apply((f32 x): x, 1); #! type_mismatch
+    i32 u = unit_fn(); #! type_mismatch
+    i32 t = i32 + 1; #! type_mismatch
+    mut bool bb = true;
+    bb++; #! type_mismatch
+    f32 fl = 1.0;
+    f32 nf = !fl; #! type_mismatch
+    for i in 0.5..<2.0 {}; #! type_mismatch
+    [2]i32 m = [[1, 2], [3, 4]]; #! type_mismatch type_mismatch
+};

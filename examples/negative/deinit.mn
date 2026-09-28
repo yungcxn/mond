@@ -1,0 +1,4 @@
+fun f = () {
+    deinit 5; #! no_deinit
+    x = 5 defer deinit; #! no_deinit
+};
