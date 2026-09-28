@@ -75,8 +75,8 @@ peter        = bob with (name = "peter");
 # match struct 
 fun weird_person_search = (Person p): match p {
     Person(name = "Alice", age = 42, address = _) => print("Found Alice, age 42"),
-    Person(name = i, age = 42, address = _) => print("Found %s, age 42", i),
-    Person(name = i, age = j, address = "Main St") => print("Found %s, living on Main St", i),
+    Person(name = i, age = 42, address = _) => print("Found %s, age 42", i.&),
+    Person(name = i, age = j, address = "Main St") => print("Found %s, living on Main St", i.&),
     _ => print("Found someone else"),
 };
 
@@ -216,14 +216,14 @@ Register.AsLower lower = reg as Register.AsLower;                               
 Register.AsFloat asflo = 4.2 as Register.AsFloat;                  # cast into Register.AsFloat(4.2)
 
 # use C):
-fun handle_event = (Event e): stcmatch e {
+fun handle_event = (Event e): match e {
     Event.Click(x, y) => print("Click at (%d, %d)", x, y);
     Event.Key(key) => print("Key pressed: %d", key);
     Event.Close => print("Close");
 };
 
 # use D):
-fun handle_anyfixed = (AnyFixed32 a): stcmatch a {             # static match due to no discriminant
+fun handle_anyfixed = (AnyFixed32 a): match a {
     AnyFixed32.AsInt(i) => print("Int: %d", i);
     AnyFixed32.AsFloat(f) => print("Float: %f", f);
     AnyFixed32.AsBits(bits) => print("Bits...");
@@ -231,7 +231,7 @@ fun handle_anyfixed = (AnyFixed32 a): stcmatch a {             # static match du
 };
 
 # use E):
-fun handle_anyprintable = (AnyPrintable a): stcmatch a {       # static match due to no discriminant
+fun handle_anyprintable = (AnyPrintable a): match a {
     AnyPrintable.AsInt(i) => print("Int: %d", i);
     AnyPrintable.AsText(text) => print("Text: %s", text);
     AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
@@ -279,10 +279,10 @@ fun safe_div2 = (f32 a, f32 b) -> f32 {
 }
 
 # static where for compile-time checks:
-fun specific_printable = (AnyPrintable a stcwhere a != AnyPrintable.AsInt): stcmatch a {
+fun specific_printable = (AnyPrintable a stcwhere a != AnyPrintable.AsInt): match a {
     AnyPrintable.AsText(text) => print("Text: %s", text);
     AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
-    # AnyPrintable.AsInt is not possible 
+    _ => print("excluded by the stcwhere");
 };
 
 # classic overloading:
@@ -427,7 +427,7 @@ main = () {
 
     # while assigned - produces array
     j = 0;
-    []i32 arr = while j < 50: j++;
+    [50]i32 arr = while j < 50: j++;
 
     # stcwhile - allows emitting length info -> no predefinition needed
     stc i32 jjj = 0;
@@ -475,7 +475,7 @@ main = () {
 
     # stcloop - allows emitting length info -> no predefinition needed
     stc i32 sss = 0;
-    []i32 arr7 = stcloop sss = sss + 1: sss;                                       # ran in comptime
+    []i32 arr7 = stcloop sss = sss + 1: if sss > 10: brk else: sss;                                       # ran in comptime
 
 
     # defer, defer deinit

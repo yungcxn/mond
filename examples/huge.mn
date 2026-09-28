@@ -796,8 +796,8 @@ fun classify_temp = (i32 celsius): match celsius {
 # struct patterns with named fields, binders and wildcards
 fun weird_person_search = (Person p): match p {
     Person(name = "Alice", age = 42, address = _) => print("Found Alice, age 42"),
-    Person(name = i, age = 42, address = _) => print("Found %s, age 42", i),
-    Person(name = i, age = j, address = "Main St") => print("Found %s (%d), living on Main St", i, j),
+    Person(name = i, age = 42, address = _) => print("Found %s, age 42", i.&),
+    Person(name = i, age = j, address = "Main St") => print("Found %s (%d), living on Main St", i.&, j),
     _ => print("Found someone else"),
 };
 
@@ -810,23 +810,24 @@ fun handle_event = (Event e): match e {
 };
 
 # static matches check only the matching arm, homogenic variants allow a type-cast pattern
-fun handle_anyfixed = (AnyFixed32 a): stcmatch a {
+fun handle_anyfixed = (AnyFixed32 a): match a {
     AnyFixed32.AsInt(i) => print("Int: %d", i);
     AnyFixed32.AsFloat(f) => print("Float: %f", f);
     AnyFixed32.AsBits(bits) => print("Bits...");
     AnyFixed32 non_specific => print("Non-specific: %d", non_specific);
 };
 
-fun handle_anyprintable = (AnyPrintable a): stcmatch a {
+fun handle_anyprintable = (AnyPrintable a): match a {
     AnyPrintable.AsInt(i) => print("Int: %d", i);
     AnyPrintable.AsText(text) => print("Text: %s", text);
     AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
 };
 
 # static where excluding a case at compile time
-fun specific_printable = (AnyPrintable a stcwhere a != AnyPrintable.AsInt): stcmatch a {
+fun specific_printable = (AnyPrintable a stcwhere a != AnyPrintable.AsInt): match a {
     AnyPrintable.AsText(text) => print("Text: %s", text);
     AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
+    _ => print("excluded by the stcwhere");
 };
 
 # self-tagged variants
@@ -965,7 +966,7 @@ fun while_tour = () {
 
     # while as value produces an array
     j = 0;
-    []i32 arr = while j < 50: j++;
+    [50]i32 arr = while j < 50: j++;
 
     # stcwhile runs at compile time and can emit length info
     stc i32 jjj = 0;
@@ -1057,7 +1058,7 @@ fun loop_tour = () {
 
     # stcloop at compile time
     stc i32 sss = 0;
-    []i32 arr7 = stcloop sss = sss + 1: sss;
+    []i32 arr7 = stcloop sss = sss + 1: if sss > 10: brk else: sss;
 
     # brk / cont / ret
     loop {

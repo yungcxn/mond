@@ -2,6 +2,8 @@ const std = @import("std");
 const Lexer = @import("Lexer.zig");
 const Parser = @import("Parser.zig");
 const Resolver = @import("Resolver.zig");
+const HighLowerer = @import("HighLowerer.zig");
+const Ref = @import("high_lowerer/HighIr.zig").Ref;
 const debug = @import("debug.zig");
 
 const reset = "\x1b[0m";
@@ -38,8 +40,14 @@ fn run(a: std.mem.Allocator, src: []u8) !Result {
         if (parser.build_ast()) |_| {
             const r = try a.create(Resolver);
             r.* = Resolver.init(a, &parser.tree, src, parser.global_store.sliced());
-            r.resolve() catch {};
+            const resolved = if (r.resolve()) |_| true else |_| false;
             res = r;
+            if (resolved) {
+                const l = try a.create(HighLowerer);
+                l.* = HighLowerer.init(a, r);
+                l.lower();
+                if (try verify(a, l)) |v| try out.append(a, .{ .line = if (v.d == .none) 1 else if (debug.node_span(&parser.tree, src, r.decls.pool.node.buf[@intFromEnum(v.d)])) |s| line_at(src, s[0]) else 1, .code = "invalid_ir", .msg = v.msg });
+            }
             const d = r.doc.diagnostics.sliced();
             for (d.code, d.node, d.a, d.b) |code, node, x, y| {
                 var msg: std.Io.Writer.Allocating = .init(a);
@@ -50,6 +58,107 @@ fn run(a: std.mem.Allocator, src: []u8) !Result {
     } else |e| try out.append(a, .{ .line = line_at(src, lexer.cursor -| 1), .code = @errorName(e) });
     std.mem.sort(Finding, out.items, {}, Finding.lt);
     return .{ .found = out.items, .r = res };
+}
+
+const Bad = struct { d: Resolver.Decl.Index, msg: []const u8 };
+
+fn bad(a: std.mem.Allocator, d: Resolver.Decl.Index, comptime fmt: []const u8, args: anytype) !?Bad {
+    return .{ .d = d, .msg = try std.fmt.allocPrint(a, fmt, args) };
+}
+
+fn verify(a: std.mem.Allocator, l: *HighLowerer) !?Bad {
+    const ir = &l.ir;
+    const f = ir.functions.sliced();
+    const bs = ir.blocks.sliced();
+    const is = ir.insts.sliced();
+    for (0..f.decl.len) |fi| {
+        const nb = f.blocks[fi];
+        if (nb == 0) continue;
+        const b0 = f.first_block[fi];
+        const base = f.first_inst[fi];
+        const owner = try a.alloc(u32, f.insts[fi]);
+        const succs = try a.alloc(std.ArrayList(u32), nb);
+        const dom = try a.alloc(std.DynamicBitSetUnmanaged, nb);
+        const d = f.decl[fi];
+        var next: u32 = 0;
+        for (0..nb) |b| {
+            const blk = bs.start[b0 + b];
+            if (blk != next) return try bad(a, d, "fn #{d} b{d} not contiguous", .{ fi, b });
+            next += bs.len[b0 + b];
+            if (bs.len[b0 + b] == 0) return try bad(a, d, "fn #{d} b{d} empty", .{ fi, b });
+            succs[b] = .empty;
+            for (blk..blk + bs.len[b0 + b]) |i| {
+                owner[i] = @intCast(b);
+                const op = is.op[base + i];
+                if (op.is_terminator() != (i + 1 == blk + bs.len[b0 + b])) return try bad(a, d, "fn #{d} b{d} terminator misplaced at %{d}", .{ fi, b, i });
+                const ib = is.b[base + i];
+                switch (op) {
+                    .br => try succs[b].append(a, is.a[base + i]),
+                    .cond_br => try succs[b].appendSlice(a, ir.list(ib)),
+                    .@"switch" => for (ir.list(ib), 0..) |x, k| if (k % 2 == 0) try succs[b].append(a, x),
+                    else => {},
+                }
+            }
+            for (succs[b].items) |x| if (x >= nb) return try bad(a, d, "fn #{d} b{d} jumps out of range", .{ fi, b });
+        }
+        if (next != f.insts[fi]) return try bad(a, d, "fn #{d} instruction count mismatch", .{fi});
+        for (0..nb) |b| for (0..nb) |t| {
+            var n: usize = 0;
+            for (succs[t].items) |x| n += @intFromBool(x == b);
+            var m: usize = 0;
+            for (ir.list(bs.preds[b0 + b])) |p| m += @intFromBool(p == t);
+            if (n != m) return try bad(a, d, "fn #{d} b{d} preds disagree with b{d}", .{ fi, b, t });
+        };
+        for (dom, 0..) |*x, b| {
+            x.* = try .initFull(a, nb);
+            if (b == 0) {
+                x.unsetAll();
+                x.set(0);
+            }
+        }
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (1..nb) |b| {
+                var nd = try dom[b].clone(a);
+                for (ir.list(bs.preds[b0 + b])) |p| nd.setIntersection(dom[p]);
+                nd.set(b);
+                if (!nd.eql(dom[b])) {
+                    dom[b] = nd;
+                    changed = true;
+                }
+            }
+        }
+        for (0..f.insts[fi]) |i| {
+            const op = is.op[base + i];
+            const u = owner[i];
+            const sh = op.shape();
+            const preds = ir.list(bs.preds[b0 + u]);
+            if (op == .phi and ir.list(is.b[base + i]).len != preds.len) return try bad(a, d, "fn #{d} phi %{d} has {d} operands for {d} preds", .{ fi, i, ir.list(is.b[base + i]).len, preds.len });
+            inline for (.{ .{ sh[0], is.a[base + i] }, .{ sh[1], is.b[base + i] } }) |o| {
+                const items: []const u32 = switch (o[0]) {
+                    .ref => &.{o[1]},
+                    .refs, .cases => ir.list(o[1]),
+                    else => &.{},
+                };
+                for (items, 0..) |x, k| {
+                    const r: Ref = @enumFromInt(x);
+                    if (o[0] == .cases and k % 2 == 0 or r == .none) continue;
+                    if (r.is_const()) continue;
+                    if (r.is_global()) {
+                        if (r.index() >= ir.globals.len()) return try bad(a, d, "fn #{d} %{d} bad global", .{ fi, i });
+                        continue;
+                    }
+                    if (o[0] == .cases) return try bad(a, d, "fn #{d} %{d} non-constant case", .{ fi, i });
+                    if (x >= f.insts[fi]) return try bad(a, d, "fn #{d} %{d} uses out of range %{d}", .{ fi, i, x });
+                    const def = owner[x];
+                    const ok = if (op == .phi) dom[preds[k]].isSet(def) else if (def == u) x < i else dom[u].isSet(def);
+                    if (!ok) return try bad(a, d, "fn #{d} %{d} uses %{d} not dominating", .{ fi, i, x });
+                }
+            }
+        }
+    }
+    return null;
 }
 
 fn marker(l: []const u8, m: []const u8) ?[]const u8 {

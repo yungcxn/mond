@@ -3,3 +3,5 @@
 
 // to know when to really stop possibly infinite loops
 step_budget: u32,
+unwind: enum { none, ret, brk, cont } = .none,
+depth: u32 = 0,

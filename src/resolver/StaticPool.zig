@@ -124,6 +124,8 @@ pub const CoercionKind = enum(u8) {
     int_widen,
     float_widen,
     string_to_ptr,
+    array_ptr_to_elem_ptr,
+    to_slice,
     ptr_mut_to_ptr,
     case_to_variant,
     payload_to_self_tagged,
@@ -662,9 +664,52 @@ pub fn lookup_member(self: *StaticPool, ty: Index, name: NamePool.Index) Member 
     return if (nominal and name == .init) .builtin_init else if (nominal and name == .deinit) .builtin_deinit else .none;
 }
 
+pub const dyn_len: Index = .unit_value;
+
+fn is_reserved(self: *const StaticPool, ty: Index) bool {
+    return ty != .poison_type and self.tag(ty) == .simple_type and self.items.pool.data.buf[@intFromEnum(ty)] == @intFromEnum(SimpleType.poison);
+}
+
+pub fn tag_range(self: *const StaticPool, v: Index) u64 {
+    const vt = self.get(v).variant_type;
+    var hi: u64 = vt.cases.len;
+    if (vt.tag_mode == .int) for (vt.cases) |c| {
+        const t = self.get(c).variant_case_type.tag;
+        if (self.tag(t) == .int_value) hi = @max(hi, self.get(t).int.bits + 1);
+    };
+    return hi;
+}
+
+pub fn union_offset(self: *const StaticPool, u: Index, member: Index) u64 {
+    var off: u64 = 0;
+    for (self.get(u).variant_union_type) |m| {
+        if (m == member) return off;
+        off += self.tag_range(m);
+    }
+    return off;
+}
+
+pub fn union_tag_type(self: *const StaticPool, u: Index) Index {
+    const members = self.get(u).variant_union_type;
+    return smallest_tag_type(if (members.len == 0) 1 else self.union_offset(u, .none));
+}
+
+fn payloads(self: *StaticPool, v: Index, size: *u64, al: *u8) Layout.State {
+    var state: Layout.State = .done;
+    for (self.get(v).variant_type.cases) |cs| {
+        const p = self.get(cs).variant_case_type.payload;
+        if (p == .none) continue;
+        const pl = self.layout(p);
+        if (pl.state != .done) state = pl.state;
+        size.* = @max(size.*, pl.size);
+        al.* = @max(al.*, pl.align_log2);
+    }
+    return state;
+}
+
 // c layout in declaration order (fields are never reordered), pointer size from `target` in main.zig
-// LIMITATION: a type asked while still reserved (a by-value cycle through another type in progress) is memoized as empty
 pub fn layout(self: *StaticPool, ty: Index) Layout {
+    if (self.is_reserved(ty)) return std.mem.zeroes(Layout);
     const i = @intFromEnum(ty);
     const state = &self.layouts.pool.state.buf[i];
     switch (state.*) {
@@ -679,6 +724,7 @@ pub fn layout(self: *StaticPool, ty: Index) Layout {
     var al: u8 = 0;
     var niche = std.mem.zeroes(Layout.Niche);
     var infinite = false;
+    var incomplete = false;
     switch (self.get(ty)) {
         .int_type => |t| {
             size = t.bits / 8;
@@ -693,13 +739,18 @@ pub fn layout(self: *StaticPool, ty: Index) Layout {
             niche = .{ .offset = 0, .bits = 8, .start = 2, .count = 254 };
         },
         .ptr_type, .function_type => {
-            size = target.pointer_bits / 8;
-            al = std.math.log2_int(u64, size);
+            const slice = self.get(ty) == .ptr_type and self.get(self.get(ty).ptr_type.child) == .array_type and self.get(self.get(ty).ptr_type.child).array_type.len == dyn_len;
+            size = target.pointer_bits / 8 * @as(u64, if (slice) 2 else 1);
+            al = std.math.log2_int(u64, target.pointer_bits / 8);
             niche = .{ .offset = 0, .bits = target.pointer_bits, .start = 0, .count = 1 };
         },
-        .array_type => |a| if (self.tag(a.len) == .int_value) {
+        .array_type => |a| if (a.len == dyn_len) {
+            size = target.pointer_bits / 8 * 2;
+            al = std.math.log2_int(u64, target.pointer_bits / 8);
+        } else if (self.tag(a.len) == .int_value) {
             const e = self.layout(a.elem);
             infinite = e.state == .infinite;
+            incomplete = e.state == .unknown;
             size = self.get(a.len).int.bits * e.size;
             al = e.align_log2;
         },
@@ -707,6 +758,7 @@ pub fn layout(self: *StaticPool, ty: Index) Layout {
             for (c.field_types) |f| {
                 const fl = self.layout(f);
                 infinite = infinite or fl.state == .infinite;
+                incomplete = incomplete or fl.state == .unknown;
                 if (!c.is_packed) al = @max(al, fl.align_log2);
             }
             size = self.field_offset(ty, @intCast(c.field_types.len));
@@ -714,30 +766,30 @@ pub fn layout(self: *StaticPool, ty: Index) Layout {
         .variant_type => |v| {
             var payload_al: u8 = 0;
             var payload: u64 = 0;
-            for (v.cases) |cs| {
-                const p = self.get(cs).variant_case_type.payload;
-                if (p == .none) continue;
-                const pl = self.layout(p);
-                infinite = infinite or pl.state == .infinite;
-                payload = @max(payload, pl.size);
-                payload_al = @max(payload_al, pl.align_log2);
-            }
+            const ps = self.payloads(ty, &payload, &payload_al);
+            infinite = ps == .infinite;
+            incomplete = ps == .unknown;
             const tag_l = if (v.tag_mode == .int) self.layout(v.tag_type) else std.mem.zeroes(Layout);
             al = @max(payload_al, tag_l.align_log2);
             size = if (v.tag_mode == .self and payload == 0) self.layout(v.tag_type).size else std.mem.alignForward(u64, tag_l.size, @as(u64, 1) << @intCast(payload_al)) + payload;
         },
         .variant_case_type => |c| return self.layout(c.variant),
-        // `A || B` is untagged: as big as its biggest member, the members keep their own tags
-        .variant_union_type => |u| for (u) |v| {
-            const vl = self.layout(v);
-            infinite = infinite or vl.state == .infinite;
-            size = @max(size, vl.size);
-            al = @max(al, vl.align_log2);
+        .variant_union_type => |u| {
+            var payload_al: u8 = 0;
+            var payload: u64 = 0;
+            for (u) |v| {
+                const ps = self.payloads(v, &payload, &payload_al);
+                infinite = infinite or ps == .infinite;
+                incomplete = incomplete or ps == .unknown;
+            }
+            const tag_l = self.layout(self.union_tag_type(ty));
+            al = @max(payload_al, tag_l.align_log2);
+            size = std.mem.alignForward(u64, tag_l.size, @as(u64, 1) << @intCast(payload_al)) + payload;
         },
         else => {},
     }
     size = std.mem.alignForward(u64, size, @as(u64, 1) << @intCast(al));
-    const result = Layout{ .size = size, .align_log2 = al, .state = if (infinite or state.* == .infinite) .infinite else .done, .niche = niche };
+    const result = Layout{ .size = size, .align_log2 = al, .state = if (infinite or state.* == .infinite) .infinite else if (incomplete) .unknown else .done, .niche = niche };
     self.layouts.pool.size.buf[i] = result.size;
     self.layouts.pool.align_log2.buf[i] = result.align_log2;
     self.layouts.pool.niche.buf[i] = result.niche;
@@ -948,8 +1000,8 @@ pub fn single_payload(self: *const StaticPool, variant: Index) Index {
 }
 
 pub fn coerce(self: *StaticPool, vars: *AbstractPool, from0: Index, to0: Index) CoercionKind {
-    const from = self.shallow(vars, from0);
-    const to = self.shallow(vars, to0);
+    const from = self.apply_vars(vars, from0);
+    const to = self.apply_vars(vars, to0);
     if (from == to) return .identity;
     if (from == .poison_type or to == .poison_type) return .poison;
     if (from == .never_type) return .never_to_any;
@@ -963,9 +1015,14 @@ pub fn coerce(self: *StaticPool, vars: *AbstractPool, from0: Index, to0: Index) 
         return if ((same and t.int_type.bits >= f.int_type.bits) or (to_signed and t.int_type.bits > f.int_type.bits)) .int_widen else .incompatible;
     }
     if (f == .float_type and t == .float_type) return if (t.float_type.bits >= f.float_type.bits) .float_widen else .incompatible;
-    // LIMITATION: any u8 array decays to a u8 pointer here, not only string literals
-    if (f == .array_type and t == .ptr_type and f.array_type.elem == .u8_type and t.ptr_type.child == .u8_type) return .string_to_ptr;
     if (f == .ptr_type and t == .ptr_type and f.ptr_type.mutable and !t.ptr_type.mutable and f.ptr_type.child == t.ptr_type.child) return .ptr_mut_to_ptr;
+    if (f == .ptr_type and t == .ptr_type and (f.ptr_type.mutable or !t.ptr_type.mutable)) {
+        const fc = self.get(f.ptr_type.child);
+        const tc = self.get(t.ptr_type.child);
+        if (fc == .array_type and fc.array_type.elem == t.ptr_type.child) return .array_ptr_to_elem_ptr;
+        if (fc == .array_type and tc == .array_type and tc.array_type.len == dyn_len and fc.array_type.elem == tc.array_type.elem) return .to_slice;
+    }
+    if (f == .array_type and t == .array_type and t.array_type.len == dyn_len and f.array_type.elem == t.array_type.elem) return .to_slice;
     if (f == .variant_case_type) return if (f.variant_case_type.variant == to or self.coerce(vars, f.variant_case_type.variant, to) != .incompatible) .case_to_variant else .incompatible;
     if (t == .variant_union_type) {
         for (t.variant_union_type) |v| if (v == from) return .variant_to_union;

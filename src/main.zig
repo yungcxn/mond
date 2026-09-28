@@ -2,6 +2,7 @@ const std = @import("std");
 const Lexer = @import("Lexer.zig");
 const Parser = @import("Parser.zig");
 const Resolver = @import("Resolver.zig");
+const HighLowerer = @import("HighLowerer.zig");
 const dbg = @import("debug.zig");
 
 inline fn alloc_file_bytes(alloc: std.mem.Allocator, io: std.Io, file: std.Io.File) []u8 {
@@ -22,11 +23,14 @@ const debug = true;
 // the architecture the resolver lays types out for
 pub const target: struct { pointer_bits: u8 } = .{ .pointer_bits = 64 };
 
-var parsed: ?struct { io: std.Io, parser: *Parser } = null;
+var stage: union(enum) { none, parsed: struct { std.Io, *Parser } } = .none;
 
 pub const panic = std.debug.FullPanic(struct {
     fn f(msg: []const u8, first_trace_addr: ?usize) noreturn {
-        if (parsed) |p| dbg.Parser.print_tree(p.io, &p.parser.tree, p.parser.src_bytes, p.parser.global_store.sliced()) catch {};
+        switch (stage) {
+            .none => {},
+            .parsed => |p| dbg.Parser.print_tree(p[0], &p[1].tree, p[1].src_bytes, p[1].global_store.sliced()) catch {},
+        }
         std.debug.defaultPanic(msg, first_trace_addr);
     }
 }.f);
@@ -52,15 +56,27 @@ pub fn main(init: std.process.Init) void {
     parser.build_ast() catch |e| parser.handle_err(io, e);
 
     var dbg_less = false;
+    var inspect = false;
     var args = init.minimal.args.iterate();
-    while (args.next()) |a| dbg_less = dbg_less or std.mem.eql(u8, a, "--dbg-less");
+    while (args.next()) |a| {
+        dbg_less = dbg_less or std.mem.eql(u8, a, "--dbg-less");
+        inspect = inspect or std.mem.eql(u8, a, "--dbg-inspect");
+    }
 
-    if (debug) parsed = .{ .io = io, .parser = &parser };
+    if (debug) stage = .{ .parsed = .{ io, &parser } };
 
     var resolver = Resolver.init(alloc, &parser.tree, in_bytes, parser.global_store.sliced());
     defer resolver.deinit();
-    resolver.resolve() catch {};
+    const resolved = if (resolver.resolve()) |_| true else |_| false;
+    stage = .none;
+    if (inspect and !resolved) return dbg.Inspector.run(io, &resolver, null) catch |e| @panic(@errorName(e));
+    if (debug and !inspect) (if (dbg_less) dbg.Resolver.print(io, &resolver) else dbg.Resolver.print_tree(io, &resolver)) catch |e| @panic(@errorName(e));
+    if (!resolved) return;
 
-    parsed = null;
-    if (debug) (if (dbg_less) dbg.Resolver.print(io, &resolver) else dbg.Resolver.print_tree(io, &resolver)) catch |e| @panic(@errorName(e));
+    var lowerer = HighLowerer.init(alloc, &resolver);
+    defer lowerer.deinit();
+    lowerer.lower();
+
+    if (inspect) return dbg.Inspector.run(io, &resolver, &lowerer) catch |e| @panic(@errorName(e));
+    if (debug) dbg.HighLowerer.print(io, &lowerer) catch |e| @panic(@errorName(e));
 }

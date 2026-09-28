@@ -1,0 +1,30 @@
+fun f = (bool c) {
+    mut u32 x;
+    u32 a = x; #! use_before_initialization
+    mut u32 y;
+    if c: y = 1 else: y = 2;
+    u32 b = y;
+    mut u32 z;
+    if c: z = 1;
+    u32 d = z; #! use_before_initialization
+    mut u32 w;
+    for i in 0..<3: w = i;
+    u32 e = w; #! use_before_initialization
+    mut u32 v;
+    loop { v = 1; brk; };
+    u32 g = v;
+    mut u32 u;
+    if c: ret else: u = 5;
+    u32 h = u;
+    mut u32 p;
+    q = p.&;
+    u32 j = p;
+    mut u32 t;
+    t += 1; #! use_before_initialization
+    mut u32 m;
+    match c { true => m = 1; false => m = 2 };
+    u32 k = m;
+    mut u32 s;
+    bool ok = c and { s = 1; true; };
+    u32 l = s; #! use_before_initialization
+};
