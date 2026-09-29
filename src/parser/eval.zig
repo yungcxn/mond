@@ -218,14 +218,14 @@ pub fn dec_prefix(p: *Parser) anyerror!NodeId {
 
 pub fn gen_upperbound_incl(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.gen_upperbound_incl);
-    const def: Node.LayoutStruct(.gen_upperbound_incl) = .{ .subnode = try any(p, .forbid_assign, 0) };
+    const def: Node.LayoutStruct(.gen_upperbound_incl) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")) };
     p.tree.set_children(parent, def);
     return parent;
 }
 
 pub fn gen_upperbound_excl(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.gen_upperbound_excl);
-    const def: Node.LayoutStruct(.gen_upperbound_excl) = .{ .subnode = try any(p, .forbid_assign, 0) };
+    const def: Node.LayoutStruct(.gen_upperbound_excl) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")) };
     p.tree.set_children(parent, def);
     return parent;
 }
@@ -732,7 +732,7 @@ pub fn gen_incl(p: *Parser, lhs: NodeId) anyerror!NodeId {
     const parent = p.tree.push_node(.gen_incl);
     const def: Node.LayoutStruct(.gen_incl) = .{
         .lower = lhs,
-        .upper = try any(p, .forbid_assign, 0),
+        .upper = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")),
     };
     p.tree.set_children(parent, def);
     return parent;
@@ -742,7 +742,7 @@ pub fn gen_excl(p: *Parser, lhs: NodeId) anyerror!NodeId {
     const parent = p.tree.push_node(.gen_excl);
     const def: Node.LayoutStruct(.gen_excl) = .{
         .lower = lhs,
-        .upper = try any(p, .forbid_assign, 0),
+        .upper = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")),
     };
     p.tree.set_children(parent, def);
     return parent;
@@ -920,7 +920,7 @@ pub fn ee_assign(p: *Parser, early_lhs: NodeId) anyerror!NodeId {
 
 fn assigned_value(p: *Parser) anyerror!NodeId {
     const value = try any(p, .forbid_assign, 0);
-    if (try p.peek_eq_tok(.@"pct_,")) {
+    if (lookahead.multival_follows(p)) {
         // cursor should be right at first comma
         return partial.assign_multival(p, value);
     }

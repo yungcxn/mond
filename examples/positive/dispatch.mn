@@ -21,4 +21,4 @@ main = () {
     z = first([].&); #: z u32
     u32 small = 3;
     wv = widen(small); #: wv i64
-};
+}

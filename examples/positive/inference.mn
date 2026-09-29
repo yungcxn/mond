@@ -1,6 +1,6 @@
 fun make_adder = (i32 n): (i32 x): x + n; #: make_adder (i32) -> (i32) -> i32
-fun induced = (i32 a, u8 b) { ret a + b; }; #: induced (i32, u8) -> i32
-fun unit_ret = () {}; #: unit_ret () -> ()
+fun induced = (i32 a, u8 b) { ret a + b; } #: induced (i32, u8) -> i32
+fun unit_ret = () {} #: unit_ret () -> ()
 fun lit_ret = (): ret 1; #: lit_ret () -> u32
 fun signed_ret = (): ret -1; #: signed_ret () -> i32
 fun rec = (u64 n) -> u64: ret if n <= 1: 1 else: n * rec(n - 1); #: rec (u64) -> u64
@@ -38,4 +38,4 @@ main = () -> i32 {
     lam = (i32 a, i32 b): a * b; #: lam (i32, i32) -> i32
     called = ((u8 c): c + 1)(4); #: called u8
     ret r;
-};
+}

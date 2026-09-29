@@ -1,9 +1,9 @@
-fun two = (i32 a, i32 b) {};
-fun def = (i32 a, i32 b = 2) {};
-fun ov = (i32 a) {};
-fun ov = (f32 a) {};
-fun same = (i32 a) {};
-fun same = (i32 b) {};
+fun two = (i32 a, i32 b) {}
+fun def = (i32 a, i32 b = 2) {}
+fun ov = (i32 a) {}
+fun ov = (f32 a) {}
+fun same = (i32 a) {}
+fun same = (i32 b) {}
 type Rec = *(i32 a);
 variant V = +(A, B(u8));
 fun f = () {
@@ -20,4 +20,4 @@ fun f = () {
     same(1); #! ambiguous_overload
     i32 n = 5;
     n(); #! not_callable
-};
+}

@@ -1,11 +1,11 @@
-trait T = !{ fun need = () -> i32; };
-trait S = implof T !{ fun more = (); };
-type X = *(i32 v) implof S !{ fun more = () {}; }; #! trait_member_missing
-type Y = *(i32 v) implof S !{ fun more = () {}; fun need = () -> i32: ret 1; };
-type Z = *(i32 v) implof T !{ fun need = (i32 extra) -> i32: ret extra; }; #! trait_signature_mismatch
-type P = *(i32 v) !{ fun m = () {}; };
+trait T = !{ fun need = () -> i32; }
+trait S = implof T !{ fun more = (); }
+type X = *(i32 v) implof S !{ fun more = () {} } #! trait_member_missing
+type Y = *(i32 v) implof S !{ fun more = () {} fun need = () -> i32: ret 1; }
+type Z = *(i32 v) implof T !{ fun need = (i32 extra) -> i32: ret extra; } #! trait_signature_mismatch
+type P = *(i32 v) !{ fun m = () {} }
 fun f = () {
     P p = P(v = 1);
     P.m(5); #! type_mismatch
-    fun lambda_in_loop = () { while true { fun g = () { cont; }; brk; }; }; #! cont_outside_loop
-};
+    fun lambda_in_loop = () { while true { fun g = () { cont; } brk; } } #! cont_outside_loop
+}

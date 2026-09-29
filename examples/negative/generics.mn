@@ -8,4 +8,4 @@ fun f = (u32 n) {
     stc u32 s = n; #! not_static
     i32 w = stcif n > 0: 1 else: 2; #! not_static
     [1.5]u8 fl; #! not_static
-};
+}

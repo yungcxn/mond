@@ -1,9 +1,9 @@
-stcfun Cmp = (type T): !{ fun cmp = (T other) -> i32; };
-type Good = *(i32 v) implof Cmp(Good) !{ fun cmp = (Good other) -> i32: ret 0; };
-type WrongArg = *(i32 v) implof Cmp(Good) !{ fun cmp = (WrongArg other) -> i32: ret 0; }; #! trait_signature_mismatch
-type NoImpl = *(i32 v) implof Cmp(NoImpl) !{ }; #! trait_member_missing
+stcfun Cmp = (type T): !{ fun cmp = (T other) -> i32; }
+type Good = *(i32 v) implof Cmp(Good) !{ fun cmp = (Good other) -> i32: ret 0; }
+type WrongArg = *(i32 v) implof Cmp(Good) !{ fun cmp = (WrongArg other) -> i32: ret 0; } #! trait_signature_mismatch
+type NoImpl = *(i32 v) implof Cmp(NoImpl) !{ } #! trait_member_missing
 type Plain = *(i32 v);
-trait Show = !{ fun show = () -> &u8; };
+trait Show = !{ fun show = () -> &u8; }
 fun print_it = (Show s) -> &u8: ret s.show();
 stcfun max_of = (type T where T oftype Cmp(T)): (T a, T b) -> T: ret a; #! stcwhere_violated
 fun f = () {
@@ -13,4 +13,4 @@ fun f = () {
     i32 y = s2.nope(); #! unknown_member
     NoImpl n = max_of(NoImpl)(NoImpl(v = 1), NoImpl(v = 2));
     Plain p = max_of(Plain)(Plain(v = 1), Plain(v = 2));
-};
+}

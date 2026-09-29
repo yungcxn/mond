@@ -11,18 +11,18 @@ stcfun Stack = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0): *(
         self.items[self.len & MASK] = v;
         self.len += 1;
         ret true;
-    };
+    }
     fun pop = () -> Opt(T) {
         if self.len == 0: ret Opt(T).None;
         self.len -= 1;
         ret Opt(T).Some(self.items[self.len]);
-    };
+    }
     fun is_empty = () -> bool: ret self.len == 0;
-};
+}
 type Stack16 = Stack(i64, 16); #= Stack16 *([16]i64 items, u32 len)
 type OpList = Stack(Op, 64);
 
-trait Eval = !{ fun eval = () -> i64; };
+trait Eval = !{ fun eval = () -> i64; }
 type Program = *(mut OpList ops) implof Eval !{
     fun eval = () -> i64 {
         mut Stack16 st;
@@ -35,16 +35,16 @@ type Program = *(mut OpList ops) implof Eval !{
                 Op.Add => do st.push(self.bin(st.&, (i64 a, i64 b): a + b)),
                 Op.Sub => do st.push(self.bin(st.&, (i64 a, i64 b): a - b)),
                 Op.Mul => do st.push(self.bin(st.&, (i64 a, i64 b): a * b)),
-            };
+            }
         }
         ret st.pop() ?? 0;
-    };
+    }
     fun bin = (*Stack16 st, (i64, i64) -> i64 f) -> i64 {
         i64 r = st.pop() ?? 0;
         i64 l = st.pop() ?? 0;
         ret f(l, r);
-    };
-};
+    }
+}
 
 fun is_digit = (u8 c) -> bool: ret c >= '0' and c <= '9';
 fun tok_of = (u8 c where c == '+') -> Tok: ret Tok.Plus;
@@ -63,7 +63,7 @@ fun digits = (&[]u8 src, u32 at) -> i64 {
         i += 1;
     }
     ret v;
-};
+}
 
 fun compile = (&[]u8 src) -> Program {
     mut Program p;
@@ -80,7 +80,7 @@ fun compile = (&[]u8 src) -> Program {
         i += 1;
     }
     ret p;
-};
+}
 
 main = (i32 argc, &[]&u8 argv) -> i32 {
     Program prog = compile("12+30".&);
@@ -89,4 +89,4 @@ main = (i32 argc, &[]&u8 argv) -> i32 {
     Eval e = prog;
     via_trait = e.eval(); #: via_trait i64
     ret if result == 42: 0 else: 1;
-};
+}

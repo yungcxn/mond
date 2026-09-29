@@ -106,7 +106,7 @@ pub fn match_body(p: *Parser) anyerror!NodeId {
     while (true) {
         try match_cases.push(try match_case(p));
         switch (try p.peek_tok()) {
-            .@"pct_,", .@"pct_;" => {
+            .@"pct_," => {
                 p.tok_cursor += 1;
                 if (try p.peek_eq_tok(.@"pct_}")) break;
             },
@@ -142,18 +142,6 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
             var or_patterns: FixedStack(64) = .{};
             try or_patterns.push(def.pattern);
             while (try p.peek_eq_tok(.@"xpct_|")) {
-                p.tok_cursor += 1;
-                if (try p.peek_eq_tok(.@"xpct_=>")) break;
-                try or_patterns.push(try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")));
-            }
-            const or_node = p.tree.push_node(.partial__match_case_pattern_or);
-            p.tree.set_children(or_node, or_patterns.view());
-            def.pattern = or_node;
-        },
-        .@"pct_," => {
-            var or_patterns: FixedStack(64) = .{};
-            try or_patterns.push(def.pattern);
-            while (try p.peek_eq_tok(.@"pct_,")) {
                 p.tok_cursor += 1;
                 if (try p.peek_eq_tok(.@"xpct_=>")) break;
                 try or_patterns.push(try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")));

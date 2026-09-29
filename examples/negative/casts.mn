@@ -5,4 +5,4 @@ fun f = () {
     bool b = "s" as bool; #! invalid_cast
     R r2 = 5 as R; #! invalid_cast
     f32 ok = 5 as f32;
-};
+}

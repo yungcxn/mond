@@ -11,7 +11,7 @@ fun f = (bool c) {
     for i in 0..<3: w = i;
     u32 e = w; #! use_before_initialization
     mut u32 v;
-    loop { v = 1; brk; };
+    loop { v = 1; brk; }
     u32 g = v;
     mut u32 u;
     if c: ret else: u = 5;
@@ -22,9 +22,9 @@ fun f = (bool c) {
     mut u32 t;
     t += 1; #! use_before_initialization
     mut u32 m;
-    match c { true => m = 1; false => m = 2 };
+    match c { true => m = 1, false => m = 2 }
     u32 k = m;
     mut u32 s;
-    bool ok = c and { s = 1; true; };
+    bool ok = c and { s = 1; true; }
     u32 l = s; #! use_before_initialization
-};
+}

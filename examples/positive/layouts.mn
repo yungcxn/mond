@@ -15,4 +15,4 @@ stc u64 sb = sizeof bool; #= sb 1
 stc u64 sf = sizeof f64; #= sf 8
 stc u64 sfn = sizeof (i32) -> i32; #= sfn 8
 stc u64 su8 = sizeof u8; #= su8 1
-main = () {};
+main = () {}

@@ -1,6 +1,6 @@
-fun r = () -> i32 { ret "s"; }; #! type_mismatch
-fun v = () -> i32 { ret; }; #! ret_type_mismatch
-fun takes = (i32 a) {};
+fun r = () -> i32 { ret "s"; } #! type_mismatch
+fun v = () -> i32 { ret; } #! ret_type_mismatch
+fun takes = (i32 a) {}
 type Rec = *(i32 a);
 fun f = (i32 n) {
     bool b = 1; #! type_mismatch
@@ -13,8 +13,8 @@ fun f = (i32 n) {
     i64 l = 1;
     i32 short = l; #! type_mismatch
     bool sum = true + false; #! type_mismatch
-    if 1 {}; #! type_mismatch
-    while 2 {}; #! type_mismatch
+    if 1 {} #! type_mismatch
+    while 2 {} #! type_mismatch
     [2]u8 arr = [1, "x"]; #! type_mismatch
     takes("s"); #! type_mismatch
     Rec rec = Rec(a = "s"); #! type_mismatch
@@ -22,10 +22,10 @@ fun f = (i32 n) {
     i32 dr = n.*; #! type_mismatch
     u8 ix = arr[true]; #! type_mismatch
     i32 ixn = n[0]; #! type_mismatch
-    for x in 5 {}; #! type_mismatch
+    for x in 5 {} #! type_mismatch
     i32 un = n ??; #! type_mismatch
-    i32 m = match n { 1 => "s", _ => 2 }; #! type_mismatch
+    i32 m = match n { 1 => "s", _ => 2 } #! type_mismatch
     bool cmp = n == "s"; #! type_mismatch
     i32 neg_bool = -true; #! type_mismatch
-};
+}
 fun inf = (): ret [inf(),]; #! infinite_type

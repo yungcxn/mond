@@ -6,7 +6,7 @@ stc u64 F = fact(10); #= F 3628800
 stc u64 F10 = fib(10); #= F10 55
 stc []u32 sq = stcfor 0..<5: $it * $it; #= sq [0, 1, 4, 9, 16]
 stc []u32 evens = stcfor x in [2, 4, 6]: x / 2; #= evens [1, 2, 3]
-stc u32 m = stcmatch 3 { 1 => 10, 3 => 30, _ => 0 }; #= m 30
+stc u32 m = stcmatch 3 { 1 => 10, 3 => 30, _ => 0 } #= m 30
 stc bool b = 3 > 2 and 1 == 1; #= b true
 stc bool nb = !(3 > 2) or false; #= nb false
 stc i32 neg = -7 / 2; #= neg -3
@@ -20,4 +20,4 @@ stc []u32 counted = stcwhile cnt < 3: cnt++; #= counted [0, 1, 2]
 stc f32 half = 1.0 / 2.0; #= half 0.5
 stc u32 hexed = 0xFF & 0x0F; #= hexed 15
 stc u8 ch = 'a' + 1; #= ch 98
-main = () {};
+main = () {}

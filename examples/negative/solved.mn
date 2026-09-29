@@ -7,7 +7,7 @@ fun f = (bool c, u32 n) {
     if c: 1 else: "s"; #! type_mismatch
     calc() <- x;
     u32 y = x; #! undefined_name
-    u32 z = stcmatch n { _ => 1 }; #! not_static
+    u32 z = stcmatch n { _ => 1 } #! not_static
     [3]u8 arr = [1, 2, 3];
     &u8 p = arr; #! type_mismatch
     &u8 q = arr.&;
@@ -15,4 +15,4 @@ fun f = (bool c, u32 n) {
     u32 dynamic = limited(n); #! not_static
     u32 over = limited(20); #! stcwhere_violated
     u32 fine = limited(3);
-};
+}

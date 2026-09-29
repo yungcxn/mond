@@ -4,9 +4,9 @@ stcfun Opt = (type T): ++(Some(T), None) tagof u8;
 stcfun Matrix = (type T, u32 R, u32 C): *([R][C]T cells);
 stcfun apply2 = (type T): (T a, (T) -> T f) -> T: ret f(f(a));
 stcfun Stack = (type T, u32 CAP stcwhere CAP > 0): *(mut [CAP]T items, mut u32 len = 0) !{
-    fun push = (T item) { self.items[self.len] = item; self.len += 1; }; #: push (**([4]u8 items, u32 len), u8) -> ()
+    fun push = (T item) { self.items[self.len] = item; self.len += 1; } #: push (**([4]u8 items, u32 len), u8) -> ()
     fun top = () -> T: ret self.items[self.len - 1]; #: top (**([4]u8 items, u32 len)) -> u8
-};
+}
 type BI = Box(i32); #= BI *(i32 value)
 type PB = Pair(u8, bool); #= PB *(u8 first, bool second)
 type OI = Opt(i32); #= OI ++(Some, None)
@@ -26,4 +26,4 @@ main = () {
     top = st.top(); #: top u8
     M mat;
     c = mat.cells[1][2]; #: c f32
-};
+}

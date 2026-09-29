@@ -1,16 +1,16 @@
 variant V = +(A, B);
-type P = *(i32 v) !{ fun m = () {}; };
+type P = *(i32 v) !{ fun m = () {} }
 fun f = () {
     u64 t = sizeof (typeof self); #! undefined_name
     P p = P(v = 1);
     P.m(p); #! type_mismatch
     [4]u8 a = [1, 2, 3, 4];
     u8 x = a[1.5]; #! type_mismatch
-    for e in a.* {}; #! type_mismatch
+    for e in a.* {} #! type_mismatch
     [2]u8 s = "long"; #! type_mismatch
     [3]i32 w = while false: "s"; #! type_mismatch
     V v = 1 as V; #! invalid_cast
     []u8 sl = a[0..<2];
     u64 n = a.len;
     u64 bad = a.size; #! unknown_member
-};
+}

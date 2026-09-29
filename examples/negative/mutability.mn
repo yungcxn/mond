@@ -17,4 +17,4 @@ fun f = (i32 param, &i32 ro, *i32 rw, &P rp) {
     &[2]u8 ap = arr.&;
     ap[0] = 3; #! write_through_immutable_pointer
     arr[0] = 4;
-};
+}

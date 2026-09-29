@@ -2,12 +2,12 @@ variant V = +(A, B(u8));
 variant W = +(X, Y);
 type R = *(i32 a, i32 b);
 fun f = (V v, i32 n, R r) {
-    match v { W.X => 1, _ => 2 }; #! type_mismatch
-    match n { "s" => 1, _ => 2 }; #! type_mismatch
-    match v { V.B("s") => 1, _ => 2 }; #! type_mismatch
-    match r { R(c = 1) => 1, _ => 2 }; #! wrong_arity
-    match n { 1..=3 => 1, _ => 2 };
-    match n { 1.0..=3.0 => 1, _ => 2 }; #! type_mismatch
-    match v { V.A => 1, V.B(x) => x };
-    match v { W y => 1, _ => 2 }; #! type_mismatch
-};
+    match v { W.X => 1, _ => 2 } #! type_mismatch
+    match n { "s" => 1, _ => 2 } #! type_mismatch
+    match v { V.B("s") => 1, _ => 2 } #! type_mismatch
+    match r { R(c = 1) => 1, _ => 2 } #! wrong_arity
+    match n { 1..=3 => 1, _ => 2 }
+    match n { 1.0..=3.0 => 1, _ => 2 } #! type_mismatch
+    match v { V.A => 1, V.B(x) => x }
+    match v { W y => 1, _ => 2 } #! type_mismatch
+}

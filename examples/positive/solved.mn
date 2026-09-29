@@ -1,9 +1,9 @@
 stcfun first_over = (u32 limit) -> u32 {
     for i in 0..<100 {
         if i * i > limit: ret i;
-    };
+    }
     ret 0;
-};
+}
 stc u32 FO = first_over(50); #= FO 8
 stc u32 cnt = 0;
 stc []u32 upto = stcloop cnt = cnt + 1: if cnt > 4: brk else: cnt; #= upto [1, 2, 3, 4]
@@ -15,15 +15,15 @@ stc u32 t2 = tbl[2]; #= t2 6
 variant A = +(X, Y);
 variant B = +(Z(u8));
 variant U = A || B;
-fun by_range = (i8 x) -> u8: ret match x { ..<0 => 0, 0..=127 => 1 };
-fun by_member = (U v) -> u8: ret match v { A.X => 1, A.Y => 2, B.Z(z) => z };
-fun by_group = (U v) -> u8: ret match v { A a => 1, B b => 2 };
+fun by_range = (i8 x) -> u8: ret match x { ..<0 => 0, 0..=127 => 1 }
+fun by_member = (U v) -> u8: ret match v { A.X => 1, A.Y => 2, B.Z(z) => z }
+fun by_group = (U v) -> u8: ret match v { A a => 1, B b => 2 }
 type Buf = *(&[]u8 data);
 fun blen = (Buf b) -> u64: ret b.data.len; #: blen (*(&[]u8 data)) -> u64
 fun squares = (u32 n) -> []u32: ret for i in 0..<n: i * i; #: squares (u32) -> []u32
 fun area = (u32 w, u32 h = w) -> u32: ret w * h;
-trait Speak = !{ fun speak = () -> &u8; };
-type Dog = *(u8 age) implof Speak !{ fun speak = () -> &u8: ret "woof"; };
+trait Speak = !{ fun speak = () -> &u8; }
+type Dog = *(u8 age) implof Speak !{ fun speak = () -> &u8: ret "woof"; }
 fun is_dog = (Speak s) -> bool: ret s oftype Dog;
 fun small = (type T stcwhere sizeof T <= 8) -> u64: ret sizeof T;
 main = (i32 argc, &[]&u8 argv) -> i32 {
@@ -43,4 +43,4 @@ main = (i32 argc, &[]&u8 argv) -> i32 {
     if argc > 1: later = 1 else: later = 2;
     u64 used = later;
     ret counter;
-};
+}

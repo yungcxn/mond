@@ -1,4 +1,4 @@
-fun unit_fn = () {};
+fun unit_fn = () {}
 fun apply = ((i32) -> i32 f, i32 x) -> i32: ret f(x);
 variant V = +(A, B);
 variant W = +(A, B);
@@ -16,6 +16,6 @@ fun f = (&i32 ro) {
     bb++; #! type_mismatch
     f32 fl = 1.0;
     f32 nf = !fl; #! type_mismatch
-    for i in 0.5..<2.0 {}; #! type_mismatch
+    for i in 0.5..<2.0 {} #! type_mismatch
     [2]i32 m = [[1, 2], [3, 4]]; #! type_mismatch type_mismatch
-};
+}

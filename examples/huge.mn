@@ -14,7 +14,7 @@
 #       init / deinit, methods, `with` copies)
 #   5.  traits (plain, generic, trait-implementing traits, implof lists)
 #   6.  variants (enum-like, tagged unions, self-tagged, untagged unification with ||)
-#   7.  pattern matching (literals, or-patterns with `,` and `|`, ranges, payload destructuring,
+#   7.  pattern matching (literals, or-patterns with `|`, ranges, payload destructuring,
 #       struct patterns, type-cast patterns, label arrows, nested matches, stcmatch)
 #   8.  control flow as expressions (if, while, for, loop + all their static `stc...` twins)
 #   9.  defer, deinit, `defer deinit`, do, brk, cont, ret
@@ -259,7 +259,7 @@ fun operator_tour = () {
     u64 sz        = sizeof i32;
     u64 sz_arr    = sizeof [16]u8;
     u64 sz_expr   = sizeof a + sizeof b;
-};
+}
 
 
 
@@ -269,13 +269,13 @@ fun operator_tour = () {
 # ============================================================================================== #
 
 # full definition
-fun add_i32 = (i32 a, i32 b) -> i32 { ret a + b; };
+fun add_i32 = (i32 a, i32 b) -> i32 { ret a + b; }
 
 # induced return type
-fun add_induced = (i32 a, i32 b) { ret a + b; };
+fun add_induced = (i32 a, i32 b) { ret a + b; }
 
 # unnamed parameters are reachable through $0, $1, ...
-fun add_unnamed = (i32, i32) { ret $0 + $1; };
+fun add_unnamed = (i32, i32) { ret $0 + $1; }
 
 # short form: `:` followed by exactly one expression
 fun add_short = (i32 a, i32 b): ret a + b;
@@ -289,10 +289,10 @@ fun forty_two = () -> i32: ret 42;
 # unit return explicitly
 fun say_hi = () -> () {
     print("Hi!");
-};
+}
 
 # unit return induced, empty body
-fun do_nothing = () {};
+fun do_nothing = () {}
 
 # declaration only (the body lives elsewhere, e.g. extern / trait requirement)
 fun extern_puts = (&u8 str) -> i32;
@@ -303,7 +303,7 @@ fun greet = (&u8 name = "stranger", u32 times = 1, bool shout = false) {
     for 0..<times {
         if shout: print("HELLO %s!", name) else: print("hello %s", name);
     }
-};
+}
 
 fun call_greet = () {
     greet();
@@ -311,7 +311,7 @@ fun call_greet = () {
     greet("Can", 3);
     greet(name = "Efe", shout = true);
     greet(times = 2, name = "Bob",);                                  # trailing comma is fine
-};
+}
 
 # unnamed + defaulted parameter
 fun scaled = (f32 value, f32 = 2.0): ret value * $1;
@@ -319,7 +319,7 @@ fun scaled = (f32 value, f32 = 2.0): ret value * $1;
 # where-else: predicate per parameter, else-branch handles the violation
 fun safe_div = (f32 a, f32 b where b != 0.0 else ret 0x7FC00000) -> f32 {
     ret a / b;
-};
+}
 
 # where-else with an early return value
 fun clamp_percent = (i32 p where p >= 0 and p <= 100 else ret 50) -> i32: ret p;
@@ -363,12 +363,12 @@ fun apply_n = ((i32) -> i32 f, i32 n, i32 x) -> i32 {
     mut i32 acc = x;
     for 0..<n: acc = f(acc);
     ret acc;
-};
+}
 fun count_if = (&[]i32 arr, Pred p) -> u32 {
     mut u32 n = 0;
     for v in arr.*: if p(v): n++;
     ret n;
-};
+}
 
 # lambdas are just unnamed functions
 fun lambda_tour = () {
@@ -384,24 +384,24 @@ fun lambda_tour = () {
 
     # immediately invoked
     i32 r7 = ((i32 x): x * 3)(14);
-};
+}
 
 # currying: a function returning a function
 fun make_adder = (i32 n): (i32 x): x + n;
 # `-> (` always means unit, so function-typed returns go through an alias
-fun make_multiplier = (i32 n) -> IntFn { ret (i32 x): x * n; };
+fun make_multiplier = (i32 n) -> IntFn { ret (i32 x): x * n; }
 
 fun currying_tour = () {
     add5 = make_adder(5);
     i32 fifteen = add5(10);
     i32 direct  = make_adder(1)(2);
     i32 chained = make_multiplier(3)(make_adder(1)(1));
-};
+}
 
 # static functions: parameters must be compile-time known; a second tuple is allowed
 stcfun my_templ = (type T, bool add_or_sub): (T a, T b) -> T {
     ret stcif add_or_sub: a + b else: a - b;
-};
+}
 
 # realizing templates
 fun add_from_templ = my_templ(i32, true);
@@ -459,17 +459,17 @@ type Counter = *(mut u32 count = 0, u32 step = 1) !{
     init = (u32 step): ret Counter(step = step);
     deinit = () {}
 
-    fun tick = () { self.count += self.step; };
-    fun reset = () { self.count = 0; };
+    fun tick = () { self.count += self.step; }
+    fun reset = () { self.count = 0; }
     pub fun value = () -> u32: ret self.count;
     fun is_over = (u32 limit) -> bool: ret self.count > limit;
-};
+}
 
 # size assertion AND methods
 type Color = *(u8 r, u8 g, u8 b) assertsize 3 !{
     fun brightness = () -> u32: ret (self.r as u32 + self.g as u32 + self.b as u32) / 3;
     fun inverted = (): ret self with (r = 255 - self.r, g = 255 - self.g, b = 255 - self.b);
-};
+}
 
 fun type_tour = () {
     # construction with named fields
@@ -517,7 +517,7 @@ fun type_tour = () {
 
     # deinit explicitly
     deinit bob;
-};
+}
 
 
 
@@ -529,59 +529,59 @@ fun type_tour = () {
 # plain trait, members are declarations or default implementations
 trait Addable = !{
     fun add = ((typeof self) other);
-};
+}
 
 trait Describable = !{
     fun name = () -> &u8;
     fun describe = () -> &u8: ret self.name();                        # default implementation
-};
+}
 
-trait Bark = !{ fun bark = (); };
+trait Bark = !{ fun bark = (); }
 
 # generic traits through static functions
 stcfun SubtractableT = (type T): !{
     fun sub = (T other);
-};
+}
 
 stcfun Comparable = (type T): !{
     fun cmp = (T other) -> i32;
     fun lt = (T other) -> bool: ret self.cmp(other) < 0;
     fun eq = (T other) -> bool: ret self.cmp(other) == 0;
-};
+}
 
 stcfun Iterable = (type T): !{
     fun next = () -> T;
     fun has_next = () -> bool;
-};
+}
 
 # a trait that builds on other traits
 trait Numeric = implof Addable, SubtractableT(i32) !{
     fun zero = () -> typeof self;
-};
+}
 
 # using traits: implof list followed by the implementation body
 type AddableVec2D = *(mut i32 x, mut i32 y) implof Addable, SubtractableT(AddableVec2D) !{
     fun add = (AddableVec2D other) {
         self.x += other.x;
         self.y += other.y;
-    };
+    }
 
     fun sub = (AddableVec2D other) {
         self.x -= other.x;
         self.y -= other.y;
-    };
-};
+    }
+}
 
 # trailing comma in implof list
 type Money = *(i64 cents) implof Comparable(Money), Describable, !{
     fun cmp = (Money other) -> i32: ret if self.cents < other.cents: -1 else: if self.cents > other.cents: 1 else: 0;
     fun name = () -> &u8: ret "money";
-};
+}
 
 # assertsize + implof together
 type Id = *(u32 raw) assertsize 4 implof Comparable(Id) !{
     fun cmp = (Id other) -> i32: ret (self.raw as i64 - other.raw as i64) as i32;
-};
+}
 
 # real example: a byte stream implementing the builtin `Iterable`
 type ByteStream = *(*u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
@@ -591,10 +591,10 @@ type ByteStream = *(*u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
     fun next = () -> u8: ret self.buf[self.cursor++];
     fun has_next = () -> bool: ret self.cursor < self.len;
     fun peek = () -> u8: ret self.buf[self.cursor];
-    fun skip = (u32 n = 1) { self.cursor += n; };
+    fun skip = (u32 n = 1) { self.cursor += n; }
 
     pub fun pop = () -> Opt8: ret if self.cursor >= self.len: Opt8.None else: self.buf[self.cursor++];
-};
+}
 
 # generic stream
 stcfun Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iterable(Child) !{
@@ -604,19 +604,19 @@ stcfun Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iter
     fun has_next = () -> bool: ret self.cursor < self.len;
 
     pub fun pop = () -> Opt(Child): ret if self.cursor >= self.len: Opt(Child).None else: self.buf[self.cursor++];
-};
+}
 
 type Int32Stream = Stream(i32);
 
 fun trait_tour = () {
-    trait Speak = !{ fun speak = () -> &u8; };
+    trait Speak = !{ fun speak = () -> &u8; }
     type Dog = *(mut &u8 name) implof Bark, Speak !{
         fun bark = (): print("%s: Woof!", self.name);
         fun speak = () -> &u8: ret "woof";
-    };
+    }
     type Cat = *(&u8 name) implof Speak !{
         fun speak = () -> &u8: ret "meow";
-    };
+    }
 
     Dog rex = Dog(name = "Rex");
     rex.bark();
@@ -634,7 +634,7 @@ fun trait_tour = () {
     Money m2 = Money(cents = 250);
     Money richer = max_of(Money)(m1, m2);
     bool poorer = m1.lt(m2);
-};
+}
 
 
 
@@ -706,13 +706,13 @@ variant Shape = +(Circle(f32 r), Rect(f32 w, f32 h), Tri(f32 a, f32 b, f32 c)) t
         Shape.Circle(r) => 3.14159 * r * r,
         Shape.Rect(w, h) => w * h,
         Shape.Tri(a, b, c) => heron(a, b, c),
-    };
-};
+    }
+}
 
 variant Toggle = +(On, Off) tagof u8 assertsize 1 implof Describable !{
-    fun name = () -> &u8: ret match self { Toggle.On => "on", Toggle.Off => "off" };
+    fun name = () -> &u8: ret match self { Toggle.On => "on", Toggle.Off => "off" }
     fun flipped = () -> Toggle: ret if self == Toggle.On: Toggle.Off else: Toggle.On;
-};
+}
 
 # unifying variants into a bigger one
 variant IoError    = +(NotFound, PermissionDenied, Interrupted) tagof u8;
@@ -723,7 +723,7 @@ variant AppError   = IoError || ParseError || NetError;
 fun heron = (f32 a, f32 b, f32 c) -> f32 {
     f32 s = (a + b + c) / 2.0;
     ret sqrt(s * (s - a) * (s - b) * (s - c));
-};
+}
 
 fun variant_tour = () {
     # A)
@@ -759,7 +759,7 @@ fun variant_tour = () {
     &u8 tname = t.flipped().name();
 
     u64 register_size = sizeof Register;
-};
+}
 
 
 
@@ -772,26 +772,26 @@ fun variant_tour = () {
 fun classify_num = (i32 n) -> &u8: ret match n {
     0 => "zero",
     1 => "one",
-    2, 3, 4 => "a few",
+    2 | 3 | 4 => "a few",
     5 | 6 | 7 => "several",
     8 | 9 | => "almost ten",
     _ => "many",
-};
+}
 
 # ranges as patterns (comma separated, `|` would bind into the upper bound)
 fun classify_char = (u8 c) -> &u8: ret match c {
-    'a'..='z', 'A'..='Z' => "letter",
+    'a'..='z' | 'A'..='Z' => "letter",
     '0'..='9' => "digit",
-    ' ', '\t', '\n' => "whitespace",
+    ' ' | '\t' | '\n' => "whitespace",
     _ => "symbol",
-};
+}
 
 fun classify_temp = (i32 celsius): match celsius {
     ..<0 => print("freezing"),
     0..<15 => print("cold"),
     15..<25 => print("nice"),
     _ => print("hot"),
-};
+}
 
 # struct patterns with named fields, binders and wildcards
 fun weird_person_search = (Person p): match p {
@@ -799,50 +799,50 @@ fun weird_person_search = (Person p): match p {
     Person(name = i, age = 42, address = _) => print("Found %s, age 42", i.&),
     Person(name = i, age = j, address = "Main St") => print("Found %s (%d), living on Main St", i.&, j),
     _ => print("Found someone else"),
-};
+}
 
 # payload destructuring, `;` as case separator works too
 fun handle_event = (Event e): match e {
-    Event.Click(x, y) => print("Click at (%d, %d)", x, y);
-    Event.Key(key) => print("Key pressed: %d", key);
-    Event.Scroll(d) => print("Scrolled by %f", d);
-    Event.Close => print("Close");
-};
+    Event.Click(x, y) => print("Click at (%d, %d)", x, y),
+    Event.Key(key) => print("Key pressed: %d", key),
+    Event.Scroll(d) => print("Scrolled by %f", d),
+    Event.Close => print("Close"),
+}
 
 # static matches check only the matching arm, homogenic variants allow a type-cast pattern
 fun handle_anyfixed = (AnyFixed32 a): match a {
-    AnyFixed32.AsInt(i) => print("Int: %d", i);
-    AnyFixed32.AsFloat(f) => print("Float: %f", f);
-    AnyFixed32.AsBits(bits) => print("Bits...");
-    AnyFixed32 non_specific => print("Non-specific: %d", non_specific);
-};
+    AnyFixed32.AsInt(i) => print("Int: %d", i),
+    AnyFixed32.AsFloat(f) => print("Float: %f", f),
+    AnyFixed32.AsBits(bits) => print("Bits..."),
+    AnyFixed32 non_specific => print("Non-specific: %d", non_specific),
+}
 
 fun handle_anyprintable = (AnyPrintable a): match a {
-    AnyPrintable.AsInt(i) => print("Int: %d", i);
-    AnyPrintable.AsText(text) => print("Text: %s", text);
-    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
-};
+    AnyPrintable.AsInt(i) => print("Int: %d", i),
+    AnyPrintable.AsText(text) => print("Text: %s", text),
+    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag),
+}
 
 # static where excluding a case at compile time
 fun specific_printable = (AnyPrintable a stcwhere a != AnyPrintable.AsInt): match a {
-    AnyPrintable.AsText(text) => print("Text: %s", text);
-    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
-    _ => print("excluded by the stcwhere");
-};
+    AnyPrintable.AsText(text) => print("Text: %s", text),
+    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag),
+    _ => print("excluded by the stcwhere"),
+}
 
 # self-tagged variants
 fun handle_opt8 = (Opt8 o): match o {
-    Opt8.Some(val) => print("Some: %d", val);
-    Opt8.None => print("None");
-};
+    Opt8.Some(val) => print("Some: %d", val),
+    Opt8.None => print("None"),
+}
 
 # label arrow inside a pattern binds the matched payload
 fun handle_code = (CommonCode c): match c {
-    CommonCode.Ok => print("Ok");
-    CommonCode.OOM => print("Out of memory");
-    CommonCode.EOF => print("End of file");
-    CommonCode.Undefined <- undefined_val => print("Undefined code: %d", undefined_val);
-};
+    CommonCode.Ok => print("Ok"),
+    CommonCode.OOM => print("Out of memory"),
+    CommonCode.EOF => print("End of file"),
+    CommonCode.Undefined <- undefined_val => print("Undefined code: %d", undefined_val),
+}
 
 # nested variant payloads and nested matches
 fun family_greeting = (FamilyMember m) -> &u8: ret match m {
@@ -853,7 +853,7 @@ fun family_greeting = (FamilyMember m) -> &u8: ret match m {
     },
     FamilyMember.Pet(name, "dog") => "good boy",
     FamilyMember.Pet(name, species) => "hello pet",
-};
+}
 
 # unified variants: match on any of the unified cases, type-cast patterns for whole groups
 fun explain = (AppError e) -> &u8: ret match e {
@@ -863,28 +863,28 @@ fun explain = (AppError e) -> &u8: ret match e {
     ParseError err => "some parse error",
     NetError.Timeout(ms) => if ms > 1000: "slow network" else: "blip",
     _ => "unknown",
-};
+}
 
-# match bodies can be blocks and assignments (use `;` then, `,` would continue the assignment)
+# match bodies can be blocks and assignments, every case is separated by `,`
 fun match_bodies = (i32 n) -> i32 {
     mut i32 out = 0;
     match n {
-        0 => out = 100;
+        0 => out = 100,
         1 => {
             out = 200;
             out += n;
-        };
-        _ => out = -1;
-    };
+        },
+        _ => out = -1,
+    }
     ret out;
-};
+}
 
 # stcmatch: only the matching arm is ever compiled
 bool static_pick = stcmatch 5 {
     4 => "never compiled",
     5 => true,
     6 => "never compiled",
-};
+}
 
 
 
@@ -897,7 +897,7 @@ fun if_tour = (i32 x) {
     # block form
     if x > 0 {
         print("positive");
-    };
+    }
 
     # colon form
     if x == 0: print("zero");
@@ -911,7 +911,7 @@ fun if_tour = (i32 x) {
         print("small");
     } else {
         print("big");
-    };
+    }
 
     # if as value
     i32 sign = if x > 0: 1 else: if x < 0: -1 else: 0;
@@ -936,7 +936,7 @@ fun if_tour = (i32 x) {
         0 => 100,
         1 => if x > 0: ret else: 7,
         _ => x,
-    };
+    }
 
     # stcif: only the true branch is compiled
     i32 static_val = stcif 1 == 1: 42 else: "illegal never-compiled value";
@@ -944,7 +944,7 @@ fun if_tour = (i32 x) {
 
     # parenthesized conditions must be followed by something, a bare `(cond):` would be a function
     if (x > 0 and x < 10) or x == 42: print("special");
-};
+}
 
 fun while_tour = () {
     mut i32 j = 0;
@@ -953,7 +953,7 @@ fun while_tour = () {
     while j < 5 {
         print("j is %d", j);
         j++;
-    };
+    }
 
     # with a repeat statement executed after every iteration
     j = 0;
@@ -977,7 +977,7 @@ fun while_tour = () {
         i32 next = if j > 1000: brk else: j * 2;
         j = next;
     }
-};
+}
 
 fun for_tour = () {
     mut []u32 arr3 = [1, 2, 3, 4, 5];
@@ -1027,7 +1027,7 @@ fun for_tour = () {
             print("(%d, %d)", x, y);
         }
     }
-};
+}
 
 fun loop_tour = () {
     mut i32 k = 0;
@@ -1066,7 +1066,7 @@ fun loop_tour = () {
         if k == 3: cont;
         if k < 0: brk;
     }
-};
+}
 
 # ret with and without value
 fun early_exit = (bool b) -> i32 {
@@ -1074,13 +1074,13 @@ fun early_exit = (bool b) -> i32 {
         ret 1;
     }
     ret 0;
-};
+}
 
 fun void_exit = (bool b) {
     if b: ret;
     print("not returned early");
     ret;
-};
+}
 
 
 
@@ -1091,10 +1091,10 @@ fun void_exit = (bool b) {
 
 type File = *(i32 fd, mut bool open = true) !{
     init = (&u8 path): ret File(fd = sys_open(path));
-    deinit = () { if self.open: self.close(); };
-    fun close = () { sys_close(self.fd); self.open = false; };
+    deinit = () { if self.open: self.close(); }
+    fun close = () { sys_close(self.fd); self.open = false; }
     fun write = (&u8 data) -> u64: ret sys_write(self.fd, data);
-};
+}
 
 fun resource_tour = () {
     # plain defer
@@ -1124,8 +1124,8 @@ fun resource_tour = () {
     do log.write("hello");
     do {
         print("a do block");
-    };
-};
+    }
+}
 
 
 
@@ -1141,7 +1141,7 @@ fun divmod = (i32 a, i32 b) -> DivMod: ret DivMod(a / b, a % b);
 fun find_byte = (&[]u8 hay, u8 needle) -> Opt8 {
     for i in 0..<hay.len: if hay.*[i] == needle: ret Opt8.Some(i as u8);
     ret Opt8.None;
-};
+}
 
 fun unwrap_tour = () -> u8 {
     Opt8 vari = 42;
@@ -1166,17 +1166,17 @@ fun unwrap_tour = () -> u8 {
         print("Unwrapped value is %d", nonnone_var);
     } else {
         print("opt8 vari was None");                         # nonnone_var is hidden in here
-    };
+    }
 
     while find_byte("abcabc".&, 'c') ?<- pos: brk;
 
     match code {
-        CommonCode.Undefined(undefined_code) => print("Undefined code: %d", undefined_code);
-        _ => print("Code is defined");
-    };
+        CommonCode.Undefined(undefined_code) => print("Undefined code: %d", undefined_code),
+        _ => print("Code is defined"),
+    }
 
     ret safe1 + safe2;
-};
+}
 
 
 
@@ -1232,7 +1232,7 @@ fun array_tour = () {
     # sequences as values
     evens = for i in 0..<10: i * 2;
     stc []u32 lookup = stcfor 0..<16: $it * $it;
-};
+}
 
 
 
@@ -1283,18 +1283,18 @@ type Vm = *(
         if self.sp >= VM_STACK_SIZE: ret VmStatus.Err(VmError.StackOverflow);
         self.stack[self.sp++] = v;
         ret VmStatus.Ok;
-    };
+    }
 
     fun pop = () -> Result(i64, VmError) {
         if self.sp == 0: ret Result(i64, VmError).Err(VmError.StackUnderflow);
         ret Result(i64, VmError).Ok(self.stack[--self.sp]);
-    };
+    }
 
     fun binary = (Arith64 f) -> VmStatus {
         i64 rhs = self.pop() ?? ret VmStatus.Err(VmError.StackUnderflow);
         i64 lhs = self.pop() ?? ret VmStatus.Err(VmError.StackUnderflow);
         ret self.push(f(lhs, rhs));
-    };
+    }
 
     # arms assign, so they are separated by `;` (a `,` would continue the assigned values)
     fun step = () -> VmStatus {
@@ -1302,45 +1302,45 @@ type Vm = *(
         Op op = self.program.*[self.pc++];
 
         match op {
-            Op.Push(v) => ret self.push(v);
-            Op.Pop => do self.pop();
-            Op.Add => ret self.binary((i64 a, i64 b): a + b);
-            Op.Sub => ret self.binary((i64 a, i64 b): a - b);
-            Op.Mul => ret self.binary((i64 a, i64 b): a * b);
+            Op.Push(v) => ret self.push(v),
+            Op.Pop => do self.pop(),
+            Op.Add => ret self.binary((i64 a, i64 b): a + b),
+            Op.Sub => ret self.binary((i64 a, i64 b): a - b),
+            Op.Mul => ret self.binary((i64 a, i64 b): a * b),
             Op.Div => {
                 i64 d = self.pop() ?? ret VmStatus.Err(VmError.StackUnderflow);
                 if d == 0: ret VmStatus.Err(VmError.DivByZero);
                 i64 n = self.pop() ?? ret VmStatus.Err(VmError.StackUnderflow);
                 ret self.push(n / d);
-            };
+            },
             Op.Dup => {
                 i64 top = self.pop() ?? ret VmStatus.Err(VmError.StackUnderflow);
                 self.push(top);
                 ret self.push(top);
-            };
+            },
             Op.Swap => {
                 i64 a, b = self.pop() ??, self.pop() ??;
                 self.push(a);
                 ret self.push(b);
-            };
-            Op.Jmp(target) => self.pc = target;
-            Op.Jz(target) => if (self.pop() ?? 0) == 0: self.pc = target;
-            Op.Print => print("%d", self.stack[self.sp - 1]);
-            Op.Halt => self.running = false;
-        };
+            },
+            Op.Jmp(target) => self.pc = target,
+            Op.Jz(target) => if (self.pop() ?? 0) == 0: self.pc = target,
+            Op.Print => print("%d", self.stack[self.sp - 1]),
+            Op.Halt => self.running = false,
+        }
         ret VmStatus.Ok;
-    };
+    }
 
     fun run = () -> VmStatus {
         while self.running {
             match self.step() {
                 VmStatus.Err(e) => ret VmStatus.Err(e),
                 VmStatus.Ok => cont,
-            };
+            }
         }
         ret VmStatus.Ok;
-    };
-};
+    }
+}
 
 fun vm_demo = () {
     # computes (2 + 3) * 7 and counts down from it to zero
@@ -1366,8 +1366,8 @@ fun vm_demo = () {
         VmStatus.Err(VmError.DivByZero) => print("division by zero"),
         VmStatus.Err(VmError.BadJump(t)) => print("bad jump to %d", t),
         VmStatus.Err(e) => print("vm error %d", e as u8),
-    };
-};
+    }
+}
 
 
 # ---------------------------------------------------------------------------------------------- #
@@ -1380,7 +1380,7 @@ type Tok = *(TokKind kind, u32 start, u32 end) assertsize 12;
 
 fun is_digit = (u8 c) -> bool: ret c >= '0' and c <= '9';
 fun is_alpha = (u8 c) -> bool: ret c >= 'a' and c <= 'z' or c >= 'A' and c <= 'Z' or c == '_';
-fun is_space = (u8 c) -> bool: ret match c { ' ', '\t', '\n', '\r' => true, _ => false };
+fun is_space = (u8 c) -> bool: ret match c { ' ' | '\t' | '\n' | '\r' => true, _ => false }
 
 fun tokenize = (*u8 src, u32 len) -> []Tok {
     mut ByteStream bs = ByteStream.init(src, len) defer deinit;
@@ -1408,14 +1408,14 @@ fun tokenize = (*u8 src, u32 len) -> []Tok {
                 while bs.has_next() and is_alpha(bs.peek()): bs.skip();
                 TokKind.Ident;
             },
-        };
+        }
 
         out[count++] = Tok(kind = kind, start = start, end = bs.cursor);
     }
 
     out[count++] = Tok(kind = TokKind.End, start = len, end = len);
     ret out[0..<count];
-};
+}
 
 
 # ---------------------------------------------------------------------------------------------- #
@@ -1439,7 +1439,7 @@ stcfun RingBuffer = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0
         self.tail = self.tail + 1 & MASK;
         self.count++;
         ret true;
-    };
+    }
 
     fun pop = () -> Opt(T) {
         if self.is_empty(): ret Opt(T).None;
@@ -1447,12 +1447,12 @@ stcfun RingBuffer = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0
         self.head = self.head + 1 & MASK;
         self.count--;
         ret Opt(T).Some(item);
-    };
+    }
 
     # Iterable(T)
     fun next = () -> T: ret self.pop() ??;
     fun has_next = () -> bool: ret !self.is_empty();
-};
+}
 
 type EventQueue = RingBuffer(Event, 64);
 
@@ -1468,7 +1468,7 @@ fun ring_demo = () {
     for i in 0..<20: if !numbers.push(i): brk;
     mut u32 total = 0;
     while numbers.pop() ?<- n: total += n;
-};
+}
 
 
 # ---------------------------------------------------------------------------------------------- #
@@ -1483,18 +1483,18 @@ stcfun TreeMap = (type K where K oftype Comparable(K), type V): *(mut Opt(*Node(
             0 => {
                 slot.*.*.value = value;
                 ret false;
-            };
-            ..<0 => ret self.insert_or_create(slot.*.*.right.&, key, value);
-            _ => ret self.insert_or_create(slot.*.*.left.&, key, value);
-        };
-    };
+            },
+            ..<0 => ret self.insert_or_create(slot.*.*.right.&, key, value),
+            _ => ret self.insert_or_create(slot.*.*.left.&, key, value),
+        }
+    }
 
     fun insert_or_create = (*Opt(*Node(K, V)) slot, K key, V value) -> bool {
         if slot.* ?<- node: ret self.insert_at(node.&, key, value);
         slot.* = Opt(*Node(K, V)).Some(alloc(Node(K, V)(key = key, value = value, left = Opt(*Node(K, V)).None, right = Opt(*Node(K, V)).None)));
         self.size++;
         ret true;
-    };
+    }
 
     pub fun put = (K key, V value) -> bool: ret self.insert_or_create(self.root.&, key, value);
 
@@ -1506,8 +1506,8 @@ stcfun TreeMap = (type K where K oftype Comparable(K), type V): *(mut Opt(*Node(
             cur = if c < 0: node.right else: node.left;
         }
         ret Opt(V).None;
-    };
-};
+    }
+}
 
 fun tree_demo = () {
     mut TreeMap(Id, &u8) users;
@@ -1517,7 +1517,7 @@ fun tree_demo = () {
 
     &u8 who = users.get(Id(raw = 2)) ?? "nobody";
     print("id 2 is %s, %d users total", who, users.size);
-};
+}
 
 
 # ---------------------------------------------------------------------------------------------- #
@@ -1529,12 +1529,12 @@ variant TrafficLight = +(Red(u32 wait), Yellow, Green(u32 wait)) tagof u8 !{
         TrafficLight.Red(_) => TrafficLight.Green(wait = 30),
         TrafficLight.Green(_) => TrafficLight.Yellow,
         TrafficLight.Yellow => TrafficLight.Red(wait = 45),
-    };
+    }
     fun duration = () -> u32: ret match self {
         TrafficLight.Red(w) | TrafficLight.Green(w) => w,
         TrafficLight.Yellow => 3,
-    };
-};
+    }
+}
 
 fun traffic_demo = () {
     mut TrafficLight light = TrafficLight.Red(wait = 45);
@@ -1545,7 +1545,7 @@ fun traffic_demo = () {
         print("light %d for %d seconds", light as u8, light.duration());
         if elapsed > 600: brk;
     }
-};
+}
 
 
 
@@ -1591,9 +1591,9 @@ main = (i32 argc, &[]&u8 argv) -> i32 {
             tree_demo();
             traffic_demo();
         },
-    };
+    }
 
     print("fib(20) = %d, 10! = %d", fib(20), factorial(10));
     print("%s / %s", classify_num(3), classify_char('x'));
     ret 0;
-};
+}

@@ -107,6 +107,23 @@ pub inline fn assign_follows(p: *Parser) bool {
     return false;
 }
 
+pub inline fn multival_follows(p: *Parser) bool {
+    if ((p.tokens.get_field(.tk, p.tok_cursor) orelse return false) != .@"pct_,") return false;
+    var depth: u32 = 0;
+    var cur = p.tok_cursor + 1;
+    while (p.tokens.get_field(.tk, cur)) |tk| : (cur += 1) switch (tk) {
+        .@"pct_(", .@"pct_[", .@"pct_{", .@"xpct_!{", .@"xpct_*(", .@"xpct_**(", .@"xpct_+(", .@"xpct_++(" => depth += 1,
+        .@"pct_)", .@"pct_]", .@"pct_}" => {
+            if (depth == 0) return cur != p.tok_cursor + 1;
+            depth -= 1;
+        },
+        .@"xpct_=>" => if (depth == 0) return false,
+        .@"pct_;" => if (depth == 0) return true,
+        else => {},
+    };
+    return true;
+}
+
 pub const prec_unary: u8 = blk: {
     var highest: u8 = 0;
     for (binary_compute) |entry| {

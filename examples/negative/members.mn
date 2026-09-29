@@ -1,6 +1,6 @@
-type P = *(i32 x) !{ fun m = () {}; };
+type P = *(i32 x) !{ fun m = () {} }
 variant V = +(A, B);
-fun free = (P p) {};
+fun free = (P p) {}
 fun f = () {
     P p = P(x = 1);
     i32 y = p.y; #! unknown_member
@@ -12,4 +12,4 @@ fun f = () {
     p.m();
     P.m(p.&);
     P.m(); #! wrong_arity
-};
+}

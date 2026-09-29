@@ -1,14 +1,14 @@
 trait Named = !{
     fun name = () -> &u8;
     fun greet = () -> &u8: ret self.name(); #: greet (*!{name; greet}) -> &u8
-};
-trait Sized = implof Named !{ fun size = () -> u32; };
-stcfun Cmp = (type T): !{ fun cmp = (T other) -> i32; fun lt = (T other) -> bool: ret self.cmp(other) < 0; };
+}
+trait Sized = implof Named !{ fun size = () -> u32; }
+stcfun Cmp = (type T): !{ fun cmp = (T other) -> i32; fun lt = (T other) -> bool: ret self.cmp(other) < 0; }
 type Money = *(i64 cents) implof Cmp(Money), Sized !{
     fun cmp = (Money other) -> i32: ret if self.cents < other.cents: -1 else: if self.cents > other.cents: 1 else: 0;
     fun name = () -> &u8: ret "money";
     fun size = () -> u32: ret 8;
-};
+}
 stcfun max_of = (type T where T oftype Cmp(T)): (T a, T b) -> T: ret if b.lt(a): a else: b;
 fun describe = (Named n) -> &u8: ret n.greet(); #: describe (!{name; greet}) -> &u8
 main = () {
@@ -21,4 +21,4 @@ main = () {
     s = a.size(); #: s u32
     is_named = a oftype Named; #: is_named bool
     c = Money.cmp(a.&, b); #: c i32
-};
+}

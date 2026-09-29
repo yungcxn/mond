@@ -17,13 +17,13 @@ fun print = (&u8 fmt, i32 a, i32 b);
 
 ### FUNCTION DEFINITIONS ###
 # complete function definition
-fun add_i32 = (i32 a, i32 b) -> i32 { ret a + b; };
+fun add_i32 = (i32 a, i32 b) -> i32 { ret a + b; }
 
 # induced return type
-fun add_i32_induced = (i32 a, i32 b) { ret a + b; };
+fun add_i32_induced = (i32 a, i32 b) { ret a + b; }
 
 # with inserted names
-fun add_i32_ins = (i32, i32) { ret $0 + $1; };
+fun add_i32_ins = (i32, i32) { ret $0 + $1; }
 
 # without code block
 fun add_i32_short = (i32, i32): ret $0 + $1;
@@ -31,12 +31,12 @@ fun add_i32_short = (i32, i32): ret $0 + $1;
 # "unit" (no return type) is better to induce
 fun my_void_func = () -> () {
     print("Hi!");
-};
+}
 
 # static functions allow a second param-tuple (not mandatory)
 stcfun my_templ = (type T, bool add_or_sub): (T a, T b) -> T {
     ret stcif add_or_sub: a + b else: a - b;
-};
+}
 
 # realize template with alias
 fun sub_from_templ = my_templ(i32, false);
@@ -78,7 +78,7 @@ fun weird_person_search = (Person p): match p {
     Person(name = i, age = 42, address = _) => print("Found %s, age 42", i.&),
     Person(name = i, age = j, address = "Main St") => print("Found %s, living on Main St", i.&),
     _ => print("Found someone else"),
-};
+}
 
 
 
@@ -94,37 +94,37 @@ type AddablePointI32 = *(mut i32 x, mut i32 y) !{
     fun add = (AddablePointI32 other) {
         self.x += other.x;
         self.y += other.y;
-    };
-};
+    }
+}
 
 # just a trait
 trait Addable = !{
     fun add = ((typeof self) other);
-};
+}
 
 # abstract traits through static functions
 stcfun SubtractableT = (type T): !{
     fun sub = (T other);
-};
+}
 
 # using them
 type AddableVec2D = *(mut i32 x, mut i32 y) implof Addable, SubtractableT(AddableVec2D) !{
     fun add = (AddableVec2D other) {
         self.x += other.x;
         self.y += other.y;
-    };
+    }
 
     fun sub = (AddableVec2D other) {
         self.x -= other.x;
         self.y -= other.y;
-    };
-};
+    }
+}
 
 # real example, `Iterable` is a builtin
 stcfun Iterable = (type T): !{
     fun next = () -> T;
     fun has_next = () -> bool;
-};
+}
 
 type ByteStream = *(*u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
     init = (*u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
@@ -146,7 +146,7 @@ stcfun Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iter
     fun has_next = () -> bool: ret self.cursor < self.len;
 
     pub fun pop = () -> Opt(Child): ret if self.cursor >= self.len: Opt(Child).None else: self.buf[self.cursor++];
-};
+}
 
 # realize
 type Int32Stream = Stream(i32);
@@ -217,39 +217,39 @@ Register.AsFloat asflo = 4.2 as Register.AsFloat;                  # cast into R
 
 # use C):
 fun handle_event = (Event e): match e {
-    Event.Click(x, y) => print("Click at (%d, %d)", x, y);
-    Event.Key(key) => print("Key pressed: %d", key);
-    Event.Close => print("Close");
-};
+    Event.Click(x, y) => print("Click at (%d, %d)", x, y),
+    Event.Key(key) => print("Key pressed: %d", key),
+    Event.Close => print("Close"),
+}
 
 # use D):
 fun handle_anyfixed = (AnyFixed32 a): match a {
-    AnyFixed32.AsInt(i) => print("Int: %d", i);
-    AnyFixed32.AsFloat(f) => print("Float: %f", f);
-    AnyFixed32.AsBits(bits) => print("Bits...");
-    AnyFixed32 non_specific => print("Non-specific: %d", non_specific);  # homogenic -> storable
-};
+    AnyFixed32.AsInt(i) => print("Int: %d", i),
+    AnyFixed32.AsFloat(f) => print("Float: %f", f),
+    AnyFixed32.AsBits(bits) => print("Bits..."),
+    AnyFixed32 non_specific => print("Non-specific: %d", non_specific),  # homogenic -> storable
+}
 
 # use E):
 fun handle_anyprintable = (AnyPrintable a): match a {
-    AnyPrintable.AsInt(i) => print("Int: %d", i);
-    AnyPrintable.AsText(text) => print("Text: %s", text);
-    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
-};
+    AnyPrintable.AsInt(i) => print("Int: %d", i),
+    AnyPrintable.AsText(text) => print("Text: %s", text),
+    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag),
+}
 
 # use F):
 fun handle_opt8 = (Opt8 o): match o {
-    Opt8.Some(val) => print("Some: %d", val);
-    Opt8.None => print("None");
-};
+    Opt8.Some(val) => print("Some: %d", val),
+    Opt8.None => print("None"),
+}
 
 # use F): self-tagged variants
 fun handle_code = (CommonCode c): match c {
-    CommonCode.Ok => print("Ok");
-    CommonCode.OOM => print("Out of memory");
-    CommonCode.EOF => print("End of file");
-    CommonCode.Undefined <- undefined_val => print("Undefined code: %d", undefined_val);
-};
+    CommonCode.Ok => print("Ok"),
+    CommonCode.OOM => print("Out of memory"),
+    CommonCode.EOF => print("End of file"),
+    CommonCode.Undefined <- undefined_val => print("Undefined code: %d", undefined_val),
+}
 
 # some more complex example
 variant FamilyMember = +(
@@ -280,14 +280,14 @@ fun safe_div2 = (f32 a, f32 b) -> f32 {
 
 # static where for compile-time checks:
 fun specific_printable = (AnyPrintable a stcwhere a != AnyPrintable.AsInt): match a {
-    AnyPrintable.AsText(text) => print("Text: %s", text);
-    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag);
-    _ => print("excluded by the stcwhere");
-};
+    AnyPrintable.AsText(text) => print("Text: %s", text),
+    AnyPrintable.AsFlag(flag) => print("Flag: %d", flag),
+    _ => print("excluded by the stcwhere"),
+}
 
 # classic overloading:
-fun add = (i32 a, i32 b) -> i32 { ret a + b; };
-fun add = (f32 a, f32 b) -> f32 { ret a + b; };
+fun add = (i32 a, i32 b) -> i32 { ret a + b; }
+fun add = (f32 a, f32 b) -> f32 { ret a + b; }
 
 # true overloading through different array lengths --- pointer allow here 0-copy + free type cast
 fun recv_sum = (&[]u8 arr)  -> u32: ret recv_sum(arr as &[arr.len-1]u8) + arr.*[arr.len-1];
@@ -308,7 +308,7 @@ fun safe_div_ovl2 = (f32 a, f32 b) -> f32 {
     if b == 1: ret a;
     if b != 0.0: ret a / b;
     ret 0x7FC00000;
-};
+}
 
 
 
@@ -332,7 +332,7 @@ fun test = () {
     mut &u32 immut_ptr = storage.&;
     # immut_ptr.* = 44; is illegal
     immut_ptr = other_storage.&;                             # immut_ptr points to other_storage now
-};
+}
 
 # arrays and strings
 fun test2 = () {
@@ -344,7 +344,7 @@ fun test2 = () {
     []u8 str = "Hello, world!";                                                      # str.len == 13
     &u8 str2 = "Hello, world!";                                                      # with \0
     # *u8 str3 = "Hello, world!"; is illegal, as string literals are immutable
-};
+}
 
 
 
@@ -368,7 +368,7 @@ main = () {
         print("2 + 3 == 6");
     } else {
         print("2 + 3 != 5 and 2 + 3 != 6");
-    };
+    }
 
 
     # if-else assigned
@@ -393,24 +393,24 @@ main = () {
     match y {
         0 => print("y is zero"),
         1 => print("y is one"),
-        2, 3, 4 => print("y is %d", y),
+        2 | 3 | 4 => print("y is %d", y),
         _ => print("y is something else"),
-    };
+    }
 
     # match assigned
     bool z = match y {
         0 => true,
         1 => false,
-        2, 3, 4 => if y == 3: true else: false,
+        2 | 3 | 4 => if y == 3: true else: false,
         _ => false,
-    };
+    }
 
     # stcmatch
     bool w = stcmatch 5 {
         4 => "never compiled",
         5 => true,
         6 => "never compiled",
-    };
+    }
 
 
     # while unassigned, also with repeat statement
@@ -418,7 +418,7 @@ main = () {
     while j < 50 {
         print("j is %d", j);
         j++;
-    };
+    }
 
     j = 0;
     while j < 50, j++: {
@@ -516,11 +516,11 @@ main = () {
         print("Unwrapped value is %d", nonnone_var);
     } else {
         print("opt8 vari was None");
-    };
+    }
     match code {
-        CommonCode.Undefined(undefined_code) => print("Undefined code: %d", undefined_code);
-        _ => print("Code is defined");
-    };
+        CommonCode.Undefined(undefined_code) => print("Undefined code: %d", undefined_code),
+        _ => print("Code is defined"),
+    }
 
 
 
@@ -534,8 +534,8 @@ main = () {
     i32 myint = 42;
     f32 myfloat = myint as f32;
 
-    trait Bark = !{ fun bark = (); };
-    type Dog = *(mut &u8 name) implof Bark !{ fun bark = (): print("%s: Woof!", self.name); };
+    trait Bark = !{ fun bark = (); }
+    type Dog = *(mut &u8 name) implof Bark !{ fun bark = (): print("%s: Woof!", self.name); }
 
     Dog my_dog = Dog(name = "Fido");
     if (typeof my_dog) == Dog: print("this is printed");
@@ -543,7 +543,7 @@ main = () {
 
     if my_dog oftype Dog: print("this is printed");
     if my_dog oftype Bark: print("this is printed");
-};
+}
 
 
 
@@ -558,4 +558,4 @@ main = () {
 # quote {}, refl, include, <> and manipulation of `ast` type
 fun meta_test = () {
 
-};
+}

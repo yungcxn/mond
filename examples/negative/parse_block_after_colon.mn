@@ -1,1 +1,1 @@
-fun f = (): { ret; }; #! IllegalBlockAfterColon
+fun f = (): { ret; } #! IllegalBlockAfterColon

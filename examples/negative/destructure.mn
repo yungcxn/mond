@@ -3,4 +3,4 @@ fun f = () {
     mut u8 b = 2;
     a, b = 3, 4; #! destructure_type_conflict
     c, d = 1, "s"; #! destructure_type_conflict
-};
+}
