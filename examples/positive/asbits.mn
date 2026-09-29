@@ -1,0 +1,20 @@
+stc u32 ONE = 1.0 asbits u32; #= ONE 1065353216
+stc f64 BACK = 4607182418800017408 asbits f64; #= BACK 1
+stc i32 SIGN = 4294967295 asbits i32; #= SIGN -1
+stc u16 HALF = (1.5 as f16) asbits u16; #= HALF 15872
+
+# a wider target keeps the source bits and fills the rest with zeros
+stc u64 WIDE = (-1 as i8) asbits u64; #= WIDE 255
+stc u64 BYTE = true asbits u64; #= BYTE 1
+
+stcfun roundtrip = (f32 x) -> f32: ret (x asbits u32) asbits f32;
+
+stc f32 RT = roundtrip(2.5); #= RT 2.5
+
+fun raw = (f32 x) -> u64: ret x asbits u64; #: raw (f32) -> u64
+fun same = (f32 x) -> i32: ret x asbits i32;
+
+$main = () {
+    u64 r = raw(1.0);
+    i32 s = same(1.0);
+}

@@ -109,6 +109,7 @@ pub const Member = union(enum) {
     trait_method: struct { trait: Index, index: u32 },
     case: Index,
     builtin_len,
+    builtin_tag,
     builtin_init,
     builtin_deinit,
 };
@@ -125,7 +126,7 @@ pub const CoercionKind = enum(u8) {
     float_widen,
     string_to_ptr,
     array_ptr_to_elem_ptr,
-    to_slice,
+    to_dyn,
     ptr_mut_to_ptr,
     case_to_variant,
     payload_to_self_tagged,
@@ -143,9 +144,12 @@ pub const CastKind = enum(u8) {
     float_to_int,
     float_resize,
     bit_reinterpret,
+    bit_extend,
     variant_retag,
     payload_wrap,
     pointer_relength,
+    array_narrow,
+    trait_narrow,
     invalid,
 };
 
@@ -214,6 +218,7 @@ pub const Item = struct {
         variant_union_type,
         trait_type,
         generic,
+        template_type,
         type_var,
         int_value,
         float_value,
@@ -240,6 +245,7 @@ pub const Key = union(enum) {
     variant_union_type: []const Index,
     trait_type: TraitType,
     static_fun: StaticFun,
+    template_type: Resolver.Decl.Index,
     abstract_type: AbstractPool.Index,
     int: IntValue,
     float: FloatValue,
@@ -560,6 +566,22 @@ pub fn tag(self: *const StaticPool, index: Index) Item.Tag {
     return self.items.pool.tag.buf[@intFromEnum(index)];
 }
 
+pub fn is_ptr(self: *const StaticPool, t: Index) bool {
+    return t != .none and (self.tag(t) == .ptr_type or self.tag(t) == .ptr_mut_type);
+}
+
+pub fn pointee(self: *const StaticPool, t: Index) Index {
+    return if (self.is_ptr(t)) @enumFromInt(self.items.pool.data.buf[@intFromEnum(t)]) else t;
+}
+
+pub fn array_elem(self: *const StaticPool, t: Index) Index {
+    return if (t != .none and self.tag(t) == .array_type) self.get(t).array_type.elem else .none;
+}
+
+pub fn method_decl(self: *const StaticPool, m: @FieldType(Member, "trait_method")) Resolver.Decl.Index {
+    return self.get(m.trait).trait_type.decl.member(m.index);
+}
+
 pub fn has_vars(self: *const StaticPool, index: Index) bool {
     const i = @intFromEnum(index);
     return (self.var_bits.buf[i / 64] >> @intCast(i % 64)) & 1 != 0;
@@ -598,6 +620,7 @@ const class_table = blk: {
         .variant_case_type, .variant_union_type => .{ .is_type = true, .is_variant = true, .has_layout = true },
         .trait_type => .{ .is_type = true, .is_nominal = true, .is_trait = true, .is_static_only = true },
         .generic => .{ .is_value = true, .is_callable = true, .is_static_only = true },
+        .template_type => .{ .is_type = true, .is_static_only = true },
         .type_var => .{ .is_type = true },
         .function_value => .{ .is_value = true, .is_callable = true },
         else => .{ .is_value = true },
@@ -631,11 +654,21 @@ fn trait_member(self: *const StaticPool, traits: []const Index, name: NamePool.I
         for (tt.member_names, 0..) |n, i| if (n == name) return if (dynamic)
             .{ .trait_method = .{ .trait = t, .index = @intCast(i) } }
         else
-            .{ .method = @enumFromInt(@intFromEnum(tt.decl) + 1 + i) };
+            .{ .method = tt.decl.member(i) };
         const m = self.trait_member(tt.supers, name, dynamic);
         if (m != .none) return m;
     }
     return .none;
+}
+
+pub fn tag_type_of(self: *const StaticPool, t: Index) Index {
+    return switch (self.get(t)) {
+        .variant_type => |v| if (v.tag_mode == .self) .none else if (v.tag_type == .none or v.tag_type == .poison_type) .u8_type else v.tag_type,
+        .variant_case_type => |c| self.tag_type_of(c.variant),
+        .variant_union_type => self.union_tag_type(t),
+        .ptr_type => |p| self.tag_type_of(p.child),
+        else => .none,
+    };
 }
 
 pub fn lookup_member(self: *StaticPool, ty: Index, name: NamePool.Index) Member {
@@ -660,6 +693,7 @@ pub fn lookup_member(self: *StaticPool, ty: Index, name: NamePool.Index) Member 
         else => .none,
     };
     if (found != .none) return found;
+    if (name == .tag and self.tag_type_of(t) != .none) return .builtin_tag;
     const nominal = self.tag(t) == .record_type or self.tag(t) == .variant_type;
     return if (nominal and name == .init) .builtin_init else if (nominal and name == .deinit) .builtin_deinit else .none;
 }
@@ -739,8 +773,8 @@ pub fn layout(self: *StaticPool, ty: Index) Layout {
             niche = .{ .offset = 0, .bits = 8, .start = 2, .count = 254 };
         },
         .ptr_type, .function_type => {
-            const slice = self.get(ty) == .ptr_type and self.get(self.get(ty).ptr_type.child) == .array_type and self.get(self.get(ty).ptr_type.child).array_type.len == dyn_len;
-            size = target.pointer_bits / 8 * @as(u64, if (slice) 2 else 1);
+            const dyn = self.get(ty) == .ptr_type and self.get(self.get(ty).ptr_type.child) == .array_type and self.get(self.get(ty).ptr_type.child).array_type.len == dyn_len;
+            size = target.pointer_bits / 8 * @as(u64, if (dyn) 2 else 1);
             al = std.math.log2_int(u64, target.pointer_bits / 8);
             niche = .{ .offset = 0, .bits = target.pointer_bits, .start = 0, .count = 1 };
         },
@@ -807,10 +841,6 @@ pub fn field_offset(self: *StaticPool, record: Index, field: u32) u64 {
     }
     if (field == c.field_types.len or c.is_packed) return off;
     return std.mem.alignForward(u64, off, @as(u64, 1) << @intCast(self.layout(c.field_types[field]).align_log2));
-}
-
-pub fn niche_of(self: *StaticPool, ty: Index) Layout.Niche {
-    return self.layout(ty).niche;
 }
 
 pub fn smallest_tag_type(case_count: u64) Index {
@@ -894,6 +924,7 @@ fn fmt(self: *const StaticPool, names: *const NamePool, vars: *const AbstractPoo
             try w.writeAll("}");
         },
         .static_fun => |s| try w.print("stcfun#{d}", .{@intFromEnum(s.decl)}),
+        .template_type => |d| try w.print("abstract#{d}", .{@intFromEnum(d)}),
         .abstract_type => |v| {
             const parents = vars.pool.sliced_field(.parent);
             var root = v;
@@ -985,6 +1016,11 @@ pub fn unify(self: *StaticPool, vars: *AbstractPool, a: Index, b: Index) UnifyRe
     };
 }
 
+pub fn payload_case(self: *const StaticPool, variant: Index) Index {
+    for (self.get(variant).variant_type.cases) |c| if (self.get(c).variant_case_type.payload != .none) return c;
+    return .none;
+}
+
 // the single payload field of a variant with exactly one payload case (`Opt8.Some(u8)`), or none
 pub fn single_payload(self: *const StaticPool, variant: Index) Index {
     if (self.tag(variant) != .variant_type) return .none;
@@ -1020,9 +1056,9 @@ pub fn coerce(self: *StaticPool, vars: *AbstractPool, from0: Index, to0: Index) 
         const fc = self.get(f.ptr_type.child);
         const tc = self.get(t.ptr_type.child);
         if (fc == .array_type and fc.array_type.elem == t.ptr_type.child) return .array_ptr_to_elem_ptr;
-        if (fc == .array_type and tc == .array_type and tc.array_type.len == dyn_len and fc.array_type.elem == tc.array_type.elem) return .to_slice;
+        if (fc == .array_type and tc == .array_type and tc.array_type.len == dyn_len and fc.array_type.elem == tc.array_type.elem) return .to_dyn;
     }
-    if (f == .array_type and t == .array_type and t.array_type.len == dyn_len and f.array_type.elem == t.array_type.elem) return .to_slice;
+    if (f == .array_type and t == .array_type and t.array_type.len == dyn_len and f.array_type.elem == t.array_type.elem) return .to_dyn;
     if (f == .variant_case_type) return if (f.variant_case_type.variant == to or self.coerce(vars, f.variant_case_type.variant, to) != .incompatible) .case_to_variant else .incompatible;
     if (t == .variant_union_type) {
         for (t.variant_union_type) |v| if (v == from) return .variant_to_union;
@@ -1064,14 +1100,28 @@ pub fn cast(self: *StaticPool, from: Index, to: Index) CastKind {
             .payload_wrap
         else
             .invalid,
-        .ptr_type => |p| if (f != .ptr_type)
+        .ptr_type => |p| if (f != .ptr_type or p.mutable and !f.ptr_type.mutable)
             .invalid
-        else if (self.get(p.child) == .array_type and self.get(f.ptr_type.child) == .array_type and self.get(p.child).array_type.elem == self.get(f.ptr_type.child).array_type.elem)
-            .pointer_relength
+        else if (self.get(p.child) == .array_type and self.elem_of(f.ptr_type.child) == self.get(p.child).array_type.elem)
+            (if (self.longer(p.child, f.ptr_type.child) or self.tag(self.get(p.child).array_type.len) != .int_value and self.get(f.ptr_type.child) != .array_type) .invalid else .pointer_relength)
         else
             .bit_reinterpret,
+        .array_type => |a| blk: {
+            const src = if (f == .ptr_type) f.ptr_type.child else from;
+            const sized = self.get(src) == .array_type and self.tag(self.get(src).array_type.len) == .int_value;
+            break :blk if (self.elem_of(src) != a.elem or self.tag(a.len) != .int_value or f != .ptr_type and !sized or self.longer(to, src)) .invalid else .array_narrow;
+        },
         else => .invalid,
     };
+}
+
+fn longer(self: *const StaticPool, to: Index, from: Index) bool {
+    if (self.get(from) != .array_type or self.tag(self.get(from).array_type.len) != .int_value or self.tag(self.get(to).array_type.len) != .int_value) return false;
+    return self.get(self.get(to).array_type.len).int.bits > self.get(self.get(from).array_type.len).int.bits;
+}
+
+fn elem_of(self: *const StaticPool, t: Index) Index {
+    return if (self.get(t) == .array_type) self.get(t).array_type.elem else t;
 }
 
 pub fn apply_vars(self: *StaticPool, vars: *AbstractPool, index: Index) Index {

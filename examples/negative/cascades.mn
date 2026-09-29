@@ -1,4 +1,5 @@
 type R = *(i32 x) !{ fun m = () -> i32: ret self.x; }
+
 fun f = () {
     Nope a; #! undefined_name
     i32 b = a.x + a.y;

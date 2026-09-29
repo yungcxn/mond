@@ -1,0 +1,19 @@
+stcfun loops = (u32 n) -> u32 {
+    mut u32 i = 0;
+    stcwhile i < n: i++; #! redundant_stc
+    ret stcif n > 2: 1 else: 0; #! redundant_stc
+}
+
+stc u32 L = loops(3);
+
+stcfun leak = () -> *u32 { mut u32 x = 1; ret x.&; } #! not_static
+
+stc *u32 P = leak();
+
+fun limited = (u32 x stcwhere x < 10) -> u32: ret x;
+
+stcfun over = (u32 n) -> u32 { mut u32 k = n; ret limited(k); } #! stcwhere_violated
+
+stc u32 OV = over(20);
+
+$main = () {}

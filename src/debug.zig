@@ -269,7 +269,7 @@ pub fn node_span(t: *const ParseTree, src: []const u8, node: NodeId) ?Lexer.Text
         .ret_void => "ret",
         .boolean_true => "true",
         .boolean_false => "false",
-        .identifier_self, .identifier_init, .identifier_deinit, .identifier_main => @tagName(k)["identifier_".len..],
+        .identifier_self => @tagName(k)["identifier_".len..],
         else => if (@intFromEnum(k) >= @intFromEnum(Node.Kind.type_u8) and @intFromEnum(k) <= @intFromEnum(Node.Kind.type_stcfun)) @tagName(k)["type_".len..] else return if (spans.len > 0) spans[tok] else null,
     };
     var rank: usize = 0;
@@ -420,10 +420,10 @@ pub const HighLowerer = struct {
             }),
             .meta_type => |m| try w.writeAll(@tagName(m)),
             .ptr_type => |p| {
-                const slice = sp.get(p.child) == .array_type and sp.get(p.child).array_type.len == Pool.dyn_len;
+                const dyn = sp.get(p.child) == .array_type and sp.get(p.child).array_type.len == Pool.dyn_len;
                 if (!p.mutable) try w.writeAll("const ");
                 try ty(w, l, p.child);
-                if (!slice) try w.writeAll(type_col ++ "*");
+                if (!dyn) try w.writeAll(type_col ++ "*");
             },
             .array_type => |a| {
                 try ty(w, l, a.elem);
@@ -627,7 +627,7 @@ pub const HighLowerer = struct {
                 try ref(w, l, i.b);
                 try w.writeAll("]");
             },
-            .slice => {
+            .dyn => {
                 try ref(w, l, i.a);
                 try w.writeAll("[");
                 try ref(w, l, l.ir.list(i.b)[0]);

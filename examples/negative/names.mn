@@ -1,4 +1,5 @@
 variant O = +(Some(u8), None) tagof u8;
+
 fun f = () {
     i32 a = nope; #! undefined_name
     missing(); #! undefined_name
@@ -10,8 +11,10 @@ fun f = () {
     for i in 0..<3 {}
     u64 k = i; #! undefined_name
 }
+
 fun g = (O o) {
     if o ?<- v { u8 w = v; } else { u8 z = v; } #! undefined_name
     fun local = () {}
 }
+
 fun h = () { local(); } #! undefined_name

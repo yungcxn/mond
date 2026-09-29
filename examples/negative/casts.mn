@@ -1,8 +1,29 @@
 type R = *(i32 a);
-fun f = () {
+
+fun f = (u32 n) {
     R r = R(a = 1);
     i32 x = r as i32; #! invalid_cast
     bool b = "s" as bool; #! invalid_cast
     R r2 = 5 as R; #! invalid_cast
     f32 ok = 5 as f32;
+    [5]u8 a = [1, 2, 3, 4, 5];
+    [2]u8 fine = a as [3..<5]u8;
+    [9]u8 big = a as [9]u8; #! invalid_cast
+    [6]u8 out = a as [2..<8]u8; #! invalid_cast
+    [2]u8 dyn = a as [n..<5]u8; #! not_static
+    [2]i8 other = a as [2]i8; #! invalid_cast
+}
+
+fun g = (u64 w, bool b) {
+    u8 small = w asbits u8; #! invalid_cast
+    u8 ok = b asbits u8;
+    t = w asbits type; #! invalid_cast
+}
+
+fun h = (*u8 p, *u8 q, *[4]u8 arr) {
+    *[]u8 lost = p as *[]u8; #! invalid_cast
+    *[]u8 kept = arr as *[]u8;
+    *u8 back = 2 - p; #! type_mismatch
+    *u8 prod = p * q; #! type_mismatch
+    *u8 lead = 2 + p;
 }

@@ -1,4 +1,5 @@
 type P = *(i32 x, mut i32 y);
+
 fun f = (i32 param, &i32 ro, *i32 rw, &P rp) {
     i32 a = 1;
     a = 2; #! assign_to_immutable

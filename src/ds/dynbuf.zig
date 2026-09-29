@@ -43,6 +43,13 @@ pub fn DynBuf(T: type) type {
             self.head += 1;
         }
 
+        pub inline fn extend(self: *@This(), n: u32, value: T) void {
+            const new_head = self.head + n;
+            while (new_head > self.cap) self.grow();
+            @memset(self.buf[self.head..new_head], value);
+            self.head = new_head;
+        }
+
         pub inline fn append(self: *@This(), values: []const T) void {
             const new_head = self.head + @as(u32, @intCast(values.len));
             while (new_head > self.cap) self.grow();

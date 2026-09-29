@@ -10,7 +10,26 @@ const Interpreter = @import("resolver/Interpreter.zig");
 const AbstractPool = @import("resolver/AbstractPool.zig");
 
 const Resolver = @This();
-const step_budget = 1_000_000;
+const calls = @import("resolver/checker/calls.zig");
+const control = @import("resolver/checker/control.zig");
+const types = @import("resolver/checker/types.zig");
+const statics = @import("resolver/checker/statics.zig");
+
+pub const same_params = calls.same_params;
+pub const bind_args = calls.bind_args;
+pub const payload_of = control.payload_of;
+pub const h07_lower_type = types.h07_lower_type;
+pub const static_type = types.static_type;
+pub const cast_target = types.cast_target;
+pub const literal_value = statics.literal_value;
+pub const retype = statics.retype;
+pub const h20_instantiate = statics.h20_instantiate;
+pub const is_template = statics.is_template;
+pub const length_generic = statics.length_generic;
+pub const generic_slot = statics.generic_slot;
+pub const templated = statics.templated;
+pub const realizes = statics.realizes;
+pub const holds_template = statics.holds_template;
 const none_node: NodeId = std.math.maxInt(NodeId);
 const NodeId = ParseTree.NodeId;
 const NodeKind = ParseTree.Node.Kind;
@@ -77,7 +96,8 @@ pub const Decl = struct {
         is_mut: bool = false,
         is_stc: bool = false,
         is_global: bool = false,
-        _pad: u4 = 0,
+        is_view: bool = false,
+        _pad: u3 = 0,
     };
 
     //   unresolved -> resolving_signature -> signature_ready -> checking_body -> done   (or failed)
@@ -94,21 +114,30 @@ pub const Decl = struct {
         failed,
     };
 
-    pub const Index = enum(u32) { none = std.math.maxInt(u32), _ };
+    pub const Index = enum(u32) {
+        none = std.math.maxInt(u32),
+        _,
+
+        pub fn member(d: Index, i: usize) Index {
+            return @enumFromInt(@intFromEnum(d) + 1 + i);
+        }
+    };
 };
 
 // per-body state that would otherwise be globals. lives on the machine stack while a body is
 // checked and is passed down by pointer - no table, no allocation.
 // ret_type is a type var for induced return types; every `ret` unifies with it.
 pub const NodeInfo = struct { ty: StaticPool.Index, decl: Decl.Index, value: StaticPool.Index };
-pub const Body = struct { decl: Decl.Index, lo: ParseTree.NodeId, len: u32, start: u32 };
+pub const Body = struct { decl: Decl.Index = .none, lo: ParseTree.NodeId = 0, len: u32 = 0, start: u32 = 0, first: u32 = 0, locals: u32 = 0 };
 
 pub const FnCtx = struct {
-    decl: Decl.Index,
-    ret_type: StaticPool.Index,
-    self_type: StaticPool.Index,
-    loop_depth: u16,
-    in_static: bool,
+    decl: Decl.Index = .none,
+    ret_type: StaticPool.Index = .none,
+    self_type: StaticPool.Index = .none,
+    loop_depth: u16 = 0,
+    in_static: bool = false,
+    interpreted: bool = false,
+    abstract: bool = false,
 };
 
 alloc: std.mem.Allocator,
@@ -136,10 +165,12 @@ node_decl: []Decl.Index,
 node_value: []StaticPool.Index,
 bodies: SoD(Body),
 body_nodes: SoD(NodeInfo),
+body_of: std.AutoHashMapUnmanaged(Decl.Index, u32) = .empty,
 template_of: std.AutoHashMapUnmanaged(Decl.Index, Decl.Index) = .empty,
 realized_args: std.AutoHashMapUnmanaged(Decl.Index, StaticPool.Index) = .empty,
 init_tracked: DynBuf(Decl.Index),
 uninit: u64 = 0,
+deferrals: u32 = 0,
 loop_exits: DynBuf(u64),
 
 // global names -> first declaration with that name
@@ -186,75 +217,48 @@ pub inline fn init(alloc: std.mem.Allocator, tree: *ParseTree, src_bytes: []cons
         .local_decls = .init(alloc, 256),
         .local_scope_marks = .init(alloc, 16),
         .doc = .{ .diagnostics = .init(alloc, 16) },
-        .interpreter = .{ .step_budget = step_budget },
+        .interpreter = .init(alloc),
     };
 }
 
 pub inline fn deinit(self: *Resolver) void {
-    self.name_pool.deinit();
-    self.static_pool.deinit();
-    self.abstract_pool.deinit();
-    self.decls.deinit();
-    self.alloc.free(self.node_type);
-    self.alloc.free(self.node_decl);
-    self.alloc.free(self.node_value);
-    self.bodies.deinit();
-    self.body_nodes.deinit();
-    self.template_of.deinit(self.alloc);
-    self.realized_args.deinit(self.alloc);
-    self.init_tracked.deinit();
-    self.loop_exits.deinit();
-    self.globals.deinit(self.alloc);
-    self.local_names.deinit();
-    self.local_decls.deinit();
-    self.local_scope_marks.deinit();
-    self.doc.diagnostics.deinit();
+    inline for (.{ &self.name_pool, &self.static_pool, &self.abstract_pool, &self.decls, &self.bodies, &self.body_nodes, &self.interpreter, &self.init_tracked, &self.loop_exits, &self.local_names, &self.local_decls, &self.local_scope_marks, &self.doc.diagnostics }) |x| x.deinit();
+    inline for (.{ &self.body_of, &self.template_of, &self.realized_args, &self.globals }) |m| m.deinit(self.alloc);
+    inline for (.{ self.node_type, self.node_decl, self.node_value }) |x| self.alloc.free(x);
 }
 
 pub inline fn resolve(self: *Resolver) !void {
-    self.s1_collect_globals();
-    try self.gate();
-
-    self.s2_check_globals();
-    try self.gate();
-
-    self.s3_apply_inferred_types();
-    try self.gate();
-
-    self.s4_check_entry_point();
-    try self.gate();
-}
-
-inline fn gate(self: *Resolver) !void {
-    if (self.doc.diagnostics.len() > 0) return error.ResolveFailed;
+    inline for (.{ s1_collect_globals, s2_check_globals, s3_apply_inferred_types, s4_check_entry_point }) |step| {
+        step(self);
+        if (self.doc.diagnostics.len() > 0) return error.ResolveFailed;
+    }
 }
 
 fn s1_collect_globals(self: *Resolver) void {
     @memset(self.node_type, .none);
     @memset(self.node_decl, .none);
     @memset(self.node_value, .none);
-    for ([_][]const u8{ "", "_", "$it", "self", "init", "deinit", "main", "len" }) |s| _ = self.name_pool.intern(s);
+    for ([_][]const u8{ "", "_", "$it", "self", "$init", "$deinit", "$main", "$len", "$has_next", "$next", "$tag" }) |s| _ = self.name_pool.intern(s);
     for (self.roots) |root| {
-        var flags = Decl.Flags{ .is_global = true };
-        const n = self.unwrap_mods(root, &flags);
-        const parts = self.stmt_parts(n);
-        const kind = self.decl_kind(parts.type, parts.value);
-        const declares = parts.type != 0 or @as(u8, @bitCast(flags)) != @as(u8, @bitCast(Decl.Flags{ .is_global = true })) or kind != .variable;
-        for (parts.ids) |id| {
+        const s = self.statement(root);
+        var flags = s.flags;
+        flags.is_global = true;
+        const declares = s.type != 0 or @as(u8, @bitCast(s.flags)) != 0 or s.kind != .variable;
+        for (s.ids) |id| {
             const name = self.name_of(id);
             if (name == .none) continue;
             const gop = self.globals.getOrPut(self.alloc, name) catch @panic("OOM");
-            if (gop.found_existing and !(is_fn(kind) and is_fn(self.dp(.kind, gop.value_ptr.*).*))) {
+            if (gop.found_existing and !(is_fn(s.kind) and is_fn(self.dp(.kind, gop.value_ptr.*).*))) {
                 if (declares) _ = self.report(.duplicate_declaration, id, name, gop.value_ptr.*);
                 if (declares and self.node_decl[root] == .none) self.node_decl[root] = gop.value_ptr.*;
                 continue;
             }
-            const d = self.push_decl(name, n, kind, .none, flags);
+            const d = self.push_decl(name, s.node, s.kind, .none, flags);
             // overloads with a where clause come before the ones without, so every group of same-typed
             // overloads reads as a runtime dispatch: its where-clauses in order, the where-less fallback last
             if (gop.found_existing) {
                 var at = gop.value_ptr;
-                while (at.* != .none and (!self.has_where(d) or self.has_where(at.*))) at = self.dp(.next_overload, at.*);
+                while (at.* != .none and (!calls.has_where(self, d) or calls.has_where(self, at.*))) at = self.dp(.next_overload, at.*);
                 self.dp(.next_overload, d).* = at.*;
                 at.* = d;
             } else gop.value_ptr.* = d;
@@ -270,7 +274,7 @@ fn s2_check_globals(self: *Resolver) void {
         self.h05_ensure_signature(@enumFromInt(i));
         self.h06_check_body(@enumFromInt(i));
     }
-    var ctx = FnCtx{ .decl = .none, .ret_type = .none, .self_type = .none, .loop_depth = 0, .in_static = false };
+    var ctx = FnCtx{};
     for (self.roots) |root| if (self.node_decl[root] == .none) {
         _ = self.h09_check_expr(&ctx, root, .none);
     };
@@ -280,15 +284,13 @@ fn s2_check_globals(self: *Resolver) void {
         var c = h.*;
         while (c != .none) : (c = self.dp(.next_overload, c).*) {
             const ct = self.dp(.ty, self.real(c)).*;
-            var first = h.*;
-            while (first != c and !self.same_params(self.dp(.ty, self.real(first)).*, ct)) first = self.dp(.next_overload, first).*;
-            if (first != c) continue;
+            if (self.group_head(h.*, c) != c) continue;
             var size: u32 = 0;
             var fallback = false;
             var m = c;
-            while (m != .none) : (m = self.dp(.next_overload, m).*) if (self.same_params(self.dp(.ty, self.real(m)).*, ct)) {
+            while (m != .none) : (m = self.dp(.next_overload, m).*) if (calls.same_params(self, self.dp(.ty, self.real(m)).*, ct)) {
                 size += 1;
-                fallback = fallback or !self.dispatches(self.real(m));
+                fallback = fallback or !calls.dispatches(self, self.real(m));
             };
             if (size > 1 and !fallback) _ = self.report(.no_matching_overload, self.dp(.node, c).*, size, 0);
         }
@@ -300,7 +302,7 @@ fn s3_apply_inferred_types(self: *Resolver) void {
     const sp = &self.static_pool;
     for (self.decls.sliced_field(.ty), 0..) |t, i| if (t != .none and sp.has_vars(t)) {
         const at = sp.apply_vars(&self.abstract_pool, t);
-        if (self.open_type_var(at) and !self.length_generic(at)) _ = self.report(.uninferable_type, self.decls.pool.node.buf[i], at, .none);
+        if (statics.open_type_var(self, at) and !statics.length_generic(self, at)) _ = self.report(.uninferable_type, self.decls.pool.node.buf[i], at, .none);
     };
     // lengths nothing fixed are only known at runtime; a loop value then needs its element count at loop entry
     const vs = self.abstract_pool.pool.sliced();
@@ -317,7 +319,7 @@ fn s3_apply_inferred_types(self: *Resolver) void {
                 const f = if (k == .for_var_in_seq) self.arg(origin, 0) else origin;
                 const seq = self.arg(f, 0);
                 const st = self.deref(sp.apply_vars(&self.abstract_pool, self.node_type[seq]));
-                break :blk (is_range_kind(self.nk(seq)) and self.nk(seq) != .gen_lowerbound) or (st != .none and sp.tag(st) == .array_type) or self.is_ptr_array(self.node_type[seq]);
+                break :blk (is_range_kind(self.nk(seq)) and self.nk(seq) != .gen_lowerbound) or (st != .none and sp.tag(st) == .array_type) or control.is_ptr_array(self, self.node_type[seq]);
             },
             .@"while", .while_with_repeat_stmt, .loop, .loop_with_repeat_stmt => false,
             .type_array_unlengthed, .array_index, .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => true,
@@ -329,18 +331,15 @@ fn s3_apply_inferred_types(self: *Resolver) void {
         if (g != 0) _ = self.report(.uninferable_type, g, sp.apply_vars(&self.abstract_pool, self.node_type[g]), .none);
         self.abstract_pool.bind(@enumFromInt(i), StaticPool.dyn_len);
     };
-    for (self.node_type) |*t| if (t.* != .none and sp.has_vars(t.*)) {
-        t.* = sp.apply_vars(&self.abstract_pool, t.*);
-    };
-    for (self.decls.sliced_field(.ty)) |*t| if (t.* != .none and sp.has_vars(t.*)) {
+    for ([_][]StaticPool.Index{ self.node_type, self.decls.sliced_field(.ty) }) |ts| for (ts) |*t| if (t.* != .none and sp.has_vars(t.*)) {
         t.* = sp.apply_vars(&self.abstract_pool, t.*);
     };
 }
 
 fn s4_check_entry_point(self: *Resolver) void {
-    const main = self.globals.get(.main) orelse return Doctor.h21_report(self, .missing_main, 0, 0, 0);
+    const main = self.globals.get(.main) orelse return self.doc.h21_report(.missing_main, 0, 0, 0);
     const node = self.dp(.node, main).*;
-    if (self.dp(.next_overload, main).* != .none) return Doctor.h21_report(self, .duplicate_declaration, self.dp(.node, self.dp(.next_overload, main).*).*, @intFromEnum(NamePool.Index.main), @intFromEnum(main));
+    if (self.dp(.next_overload, main).* != .none) return self.doc.h21_report(.duplicate_declaration, self.dp(.node, self.dp(.next_overload, main).*).*, NamePool.Index.main, main);
     const ty = self.dp(.ty, main).*;
     const sp = &self.static_pool;
     const ok = ty != .none and sp.tag(ty) == .function_type and blk: {
@@ -355,7 +354,7 @@ fn s4_check_entry_point(self: *Resolver) void {
 // scopes and names
 // ------------------------------------------------------------------------------------------ //
 
-fn h01_lookup(self: *Resolver, name: NamePool.Index) Decl.Index {
+pub fn h01_lookup(self: *Resolver, name: NamePool.Index) Decl.Index {
     const names = self.local_names.sliced();
     var i = names.len;
     while (i > 0) {
@@ -366,18 +365,30 @@ fn h01_lookup(self: *Resolver, name: NamePool.Index) Decl.Index {
     return self.globals.get(name) orelse .none;
 }
 
-fn h02_declare_local(self: *Resolver, name: NamePool.Index, node: ParseTree.NodeId, kind: Decl.Kind, ty: StaticPool.Index) Decl.Index {
+pub fn use(self: *Resolver, node: NodeId) Decl.Index {
+    const name = self.name_of(node);
+    const d = self.h01_lookup(name);
+    if (d == .none) {
+        _ = self.report(.undefined_name, node, name, 0);
+        return d;
+    }
+    self.node_decl[node] = d;
+    self.h05_ensure_signature(d);
+    return d;
+}
+
+pub fn h02_declare_local(self: *Resolver, name: NamePool.Index, node: ParseTree.NodeId, kind: Decl.Kind, ty: StaticPool.Index) Decl.Index {
     const d = self.push_decl(name, node, kind, ty, .{});
     self.local_names.push(name);
     self.local_decls.push(d);
     return d;
 }
 
-fn h03_push_scope(self: *Resolver) void {
+pub fn h03_push_scope(self: *Resolver) void {
     self.local_scope_marks.push(self.local_names.head);
 }
 
-fn h04_pop_scope(self: *Resolver) void {
+pub fn h04_pop_scope(self: *Resolver) void {
     self.local_scope_marks.head -= 1;
     self.local_names.head = self.local_scope_marks.buf[self.local_scope_marks.head];
     self.local_decls.head = self.local_names.head;
@@ -387,7 +398,7 @@ fn h04_pop_scope(self: *Resolver) void {
 // declarations
 // ------------------------------------------------------------------------------------------ //
 
-fn h05_ensure_signature(self: *Resolver, decl: Decl.Index) void {
+pub fn h05_ensure_signature(self: *Resolver, decl: Decl.Index) void {
     const state = self.dp(.state, decl);
     switch (state.*) {
         .unresolved => {},
@@ -401,43 +412,52 @@ fn h05_ensure_signature(self: *Resolver, decl: Decl.Index) void {
     state.* = .resolving_signature;
     const sp = &self.static_pool;
     const kind = self.dp(.kind, decl).*;
+    const s = self.statement(self.dp(.node, decl).*);
+    if (s.type != 0 and self.nk(s.type) == .type_fun and switch (self.dp(.name, decl).*) {
+        .init, .deinit, .main, .has_next, .next => true,
+        else => false,
+    }) _ = self.report(.redundant_fun, s.type, 0, 0);
     const flags = self.dp(.flags, decl).*;
-    var ctx = FnCtx{ .decl = decl, .ret_type = .none, .self_type = self.owner_of(decl), .loop_depth = 0, .in_static = flags.is_stc };
+    var ctx = FnCtx{ .decl = decl, .self_type = self.owner_of(decl), .in_static = flags.is_stc };
     const v = self.value_node(decl);
     self.open_scope(flags.is_global, if (self.self_off(decl) == 1) ctx.self_type else .none, v);
     switch (kind) {
         .function, .static_function, .inlined_function, .trait_member => if (self.nk(v) == .def_fun or self.nk(v) == .def_fun_declaration) {
             // stcfun: the first tuple is static, whatever the body produces is the result (a second tuple belongs to the produced function)
-            const ret: StaticPool.Index = if (kind == .static_function) switch (self.nk(self.core(self.arg(v, 1)))) {
-                .def_type, .def_type_packed => .type_type,
-                .def_variant, .def_variant_unionsized => .variant_type,
-                .def_trait, .def_trait_implof => .trait_type,
-                .def_fun, .def_fun_declaration => .fun_type,
-                else => .poison_type,
-            } else if (self.nk(v) == .def_fun_declaration or self.nk(self.arg(v, 0)) == .partial__fun_def_header_ret) .unit_type else self.fresh_var(v);
+            const unit = self.arg(v, 1);
+            const tk = self.template(decl);
+            const uk = self.type_kind(unit);
+            if (kind == .static_function and tk == .variable and uk != .variable) _ = self.report(.missing_ret, unit, 0, 0);
+            const res = if (self.nk(unit) == .ret) self.arg(unit, 0) else unit;
+            const ret: StaticPool.Index = if (kind == .static_function)
+                meta(self.type_kind(res), if (self.nk(res) == .def_fun or self.nk(res) == .def_fun_declaration) .fun_type else .poison_type)
+            else if (self.nk(v) == .def_fun_declaration or self.nk(self.arg(v, 0)) == .partial__fun_def_header_ret) .unit_type else self.fresh_var(v);
+            if (tk != .variable and uk == .variable) {
+                _ = self.report(.redundant_ret, unit, 0, 0);
+            } else if (tk != .variable and uk != tk) _ = self.report(.type_mismatch, unit, ret, meta(tk, .trait_type));
             const category: StaticPool.FunType.Category = switch (kind) {
                 .static_function => .static,
                 .inlined_function => .inlined,
                 else => .default,
             };
             // a method's first parameter is the induced `*Self`, `init` constructs and has none
-            self.dp(.ty, decl).* = self.fun_type(&ctx, v, category, ret, if (self.self_off(decl) == 1) self.self_ptr(ctx.self_type) else .none);
-            if (flags.is_global and self.dp(.name, decl).* == .main) self.dp(.ty, decl).* = self.dynify(self.dp(.ty, decl).*);
+            self.dp(.ty, decl).* = types.fun_type(self, &ctx, v, category, ret, if (self.self_off(decl) == 1) self.self_ptr(ctx.self_type) else .none);
+            if (flags.is_global and self.dp(.name, decl).* == .main) self.dp(.ty, decl).* = types.dynify(self, self.dp(.ty, decl).*);
             self.dp(.value, decl).* = if (kind == .static_function)
                 sp.intern(.{ .static_fun = .{ .decl = decl, .result_kind = if (sp.tag(ret) == .meta_type) sp.get(ret).meta_type else .stcfun } })
             else
                 sp.intern(.{ .function = decl });
         } else {
             // a function produced by a static expression (`fun sub_from_templ = my_templ(i32, false)`)
-            const fv = self.h08_eval_static(&ctx, v);
+            const fv = statics.h08_eval_static(self, &ctx, v);
             if (sp.tag(fv) == .function_value) {
                 self.dp(.value, decl).* = fv;
                 self.dp(.ty, decl).* = self.dp(.ty, sp.get(fv).function).*;
             } else if (fv != .poison_type) _ = self.report(.type_mismatch, v, sp.type_of(fv), .fun_type);
         },
-        .record, .variant, .trait => _ = self.h19_check_type_def(&ctx, decl, v),
+        .record, .variant, .trait => _ = types.h19_check_type_def(self, &ctx, decl, v),
         .type_alias => {
-            const t = self.h07_lower_type(&ctx, v);
+            const t = types.h07_lower_type(self, &ctx, v);
             self.dp(.value, decl).* = t;
             self.dp(.ty, decl).* = sp.type_of(t);
         },
@@ -447,7 +467,7 @@ fn h05_ensure_signature(self: *Resolver, decl: Decl.Index) void {
     if (self.dp(.state, decl).* == .resolving_signature) self.dp(.state, decl).* = .signature_ready;
 }
 
-fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
+pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     const state = self.dp(.state, decl);
     if (state.* != .signature_ready) return;
     const sp = &self.static_pool;
@@ -455,254 +475,74 @@ fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     const v = self.value_node(decl);
     const ty = self.dp(.ty, decl).*;
     // stcfun bodies are checked per realization, length-generic ones per length (h20); `main` is realized once, by the runtime
-    const generic = self.length_generic(ty) and !self.template_of.contains(decl);
-    if (kind == .static_function or !is_fn(kind) or self.nk(v) != .def_fun or generic) {
+    const generic = statics.length_generic(self, ty) and !self.template_of.contains(decl);
+    const abstract = generic and statics.only_templates(self, ty);
+    if (kind == .static_function or !is_fn(kind) or self.nk(v) != .def_fun or generic and !abstract) {
         state.* = .done;
         return;
     }
     state.* = .checking_body;
-    const tracked = self.init_tracked.head;
-    const outer_uninit = self.uninit;
-    self.uninit = 0;
-    defer {
-        self.init_tracked.head = tracked;
-        self.uninit = outer_uninit;
-    }
-    var ctx = FnCtx{ .decl = decl, .ret_type = sp.get(ty).function_type.ret, .self_type = self.owner_of(decl), .loop_depth = 0, .in_static = false };
-    self.open_scope(self.dp(.flags, decl).is_global, if (self.self_off(decl) == 1) ctx.self_type else .none, v);
+    const first = self.decls.len();
+    const mark = self.doc.diagnostics.len();
+    const outer = self.init_enter();
+    defer self.init_leave(outer);
     const off = self.self_off(decl);
+    var ctx = FnCtx{ .decl = decl, .ret_type = sp.get(ty).function_type.ret, .self_type = self.owner_of(decl), .abstract = abstract };
+    self.open_scope(self.dp(.flags, decl).is_global, if (off == 1) ctx.self_type else .none, v);
+    const g = self.template_of.get(decl);
+    const args = self.realized_args.get(decl);
+    const view = if (g) |t| !statics.only_templates(self, self.dp(.ty, t).*) else false;
     // a where clause sees its own parameter and the ones before it; realized `type` parameters are static values
     var slot: usize = 0;
     for (self.params_of(v), 0..) |pn, i| {
         const p = self.param(pn);
         const pt = sp.get(ty).function_type.params[i + off];
         if (p.default != 0) _ = self.check(&ctx, p.default, pt);
-        const pd = self.h02_declare_local(self.param_name(pn, i), pn, .parameter, pt);
+        const pd = self.h02_declare_local(self.name_at(p, i), pn, .parameter, pt);
         self.node_decl[pn] = pd;
-        if (self.realized_args.get(decl)) |args| if (self.generic_slot(pt)) {
-            if (sp.tag(pt) == .meta_type) self.dp(.value, pd).* = sp.get(args).aggregate.elems[slot];
+        const gp = if (g) |t| self.sig(t).params[i + off] else pt;
+        self.dp(.flags, pd).is_view = view and statics.templated(self, gp) != .none;
+        if (args) |a| if (statics.generic_slot(self, gp)) {
+            if (sp.tag(gp) == .meta_type) self.dp(.value, pd).* = sp.get(a).aggregate.elems[slot];
             slot += 1;
         };
-        self.link(p.name, pd, pt);
-        if (p.where != 0) _ = self.check(&ctx, p.where, .bool_type);
-        if (p.@"else" != 0) _ = if (self.nk(p.@"else") == .assign) self.h09_check_expr(&ctx, p.@"else", .none) else self.check(&ctx, p.@"else", pt);
+        calls.link(self, p.name, pd, pt);
+        self.check_guards(&ctx, p, pt);
     }
-    const body = self.arg(v, 1);
-    if (self.nk(body) == .block) {
-        _ = self.h09_check_expr(&ctx, body, .none);
-        // a `{}` body that never returns a value returns unit
-        if (sp.tag(sp.apply_vars(&self.abstract_pool, ctx.ret_type)) == .type_var) _ = sp.unify(&self.abstract_pool, ctx.ret_type, .unit_type);
-    } else _ = self.check(&ctx, body, ctx.ret_type);
+    self.check_unit(&ctx, self.arg(v, 1));
     self.h04_pop_scope();
-    self.dp(.state, decl).* = .done;
-    self.snapshot(decl, v);
+    self.dp(.state, decl).* = if (self.errors_since(mark, v)) .failed else .done;
+    if (!abstract) statics.snapshot(self, decl, v, first);
 }
 
-fn h07_lower_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
-    const sp = &self.static_pool;
-    const k = self.nk(node);
-    if (@intFromEnum(k) >= @intFromEnum(NodeKind.type_u8) and @intFromEnum(k) <= @intFromEnum(NodeKind.type_bool))
-        return @enumFromInt(@intFromEnum(k) - @intFromEnum(NodeKind.type_u8));
-    return switch (k) {
-        .type_unit => .unit_type,
-        .type_type => .type_type,
-        .type_trait => .trait_type,
-        .type_variant => .variant_type,
-        .type_fun => .fun_type,
-        .type_stcfun => .stcfun_type,
-        .type_inlfun => .inlfun_type,
-        .capture => self.h07_lower_type(ctx, self.arg(node, 0)),
-        .typeof => blk: {
-            const t = self.h09_check_expr(ctx, self.arg(node, 0), .none);
-            break :blk if (self.nk(self.arg(node, 0)) == .identifier_self and sp.get(t) == .ptr_type) sp.get(t).ptr_type.child else t;
-        },
-        .type_ptr, .type_ptrmut => sp.intern(.{ .ptr_type = .{ .child = self.h07_lower_type(ctx, self.arg(node, 0)), .mutable = k == .type_ptrmut } }),
-        // an unlengthed array gets a var as its length: inferred from the value, or per call for parameters
-        // record fields, `main` parameters and lengths nothing fixes become runtime-length slices (dynify, s3)
-        .type_array_unlengthed => sp.intern(.{ .array_type = .{ .len = self.fresh_var(node), .elem = self.h07_lower_type(ctx, self.arg(node, 0)) } }),
-        .type_array => blk: {
-            const len = self.h08_eval_static(ctx, self.arg(node, 0));
-            const n = if (sp.tag(len) == .int_value) sp.intern(.{ .int = .{ .ty = .u64_type, .bits = sp.get(len).int.bits } }) else if (len == .poison_type) len else self.report(.not_static, self.arg(node, 0), len, 0);
-            break :blk sp.intern(.{ .array_type = .{ .len = n, .elem = self.h07_lower_type(ctx, self.arg(node, 1)) } });
-        },
-        .def_fun_declaration => self.fun_type(ctx, node, .default, .unit_type, .none),
-        else => blk: {
-            const v = self.h08_eval_static(ctx, node);
-            break :blk if (v == .poison_type or sp.class(v).is_type) v else self.report(.not_a_type, node, v, .none);
-        },
+pub fn errors_since(self: *Resolver, mark: usize, v: NodeId) bool {
+    const d = self.doc.diagnostics.sliced();
+    var s: ?[2]NodeId = null;
+    for (d.severity[mark..], d.node[mark..]) |sev, n| if (sev == .@"error") {
+        if (s == null) s = self.subtree(v);
+        if (n >= s.?[0] and n < s.?[1]) return true;
     };
+    return false;
 }
 
-fn h08_eval_static(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
+pub fn check_unit(self: *Resolver, ctx: *FnCtx, body: NodeId) void {
     const sp = &self.static_pool;
-    if (self.interpreter.step_budget == 0) {
-        self.interpreter.step_budget = step_budget;
-        return self.report(.static_eval_failed, node, 0, 0);
+    if (self.nk(body) != .block) {
+        _ = self.check(ctx, body, ctx.ret_type);
+        return;
     }
-    self.interpreter.step_budget -= 1;
-    self.interpreter.depth += 1;
-    defer self.interpreter.depth -= 1;
-    const a0 = self.arg(node, 0);
-    const a1 = self.arg(node, 1);
-    const k = self.nk(node);
-    const v: StaticPool.Index = switch (k) {
-        .int, .char, .float, .string, .boolean_true, .boolean_false => self.literal_value(node, false),
-        .neg_num => if (self.is_literal(node)) self.literal_value(a0, true) else self.fold(node, .binary_sub, sp.intern(.{ .int = .{ .ty = .i64_type, .bits = 0 } }), self.h08_eval_static(ctx, a0)),
-        .neg_logic => self.fold(node, .binary_eq, self.h08_eval_static(ctx, a0), .bool_false),
-        .capture, .do => self.h08_eval_static(ctx, a0),
-        .ret => blk: {
-            const x = self.h08_eval_static(ctx, a0);
-            self.interpreter.unwind = .ret;
-            break :blk x;
-        },
-        .ret_void, .brk, .cont => blk: {
-            self.interpreter.unwind = if (k == .brk) .brk else if (k == .cont) .cont else .ret;
-            break :blk .unit_value;
-        },
-        .array_index => blk: {
-            const pv = self.h08_eval_static(ctx, a0);
-            const iv = self.h08_eval_static(ctx, a1);
-            if (sp.tag(pv) != .aggregate_value or sp.tag(iv) != .int_value) break :blk if (pv == .poison_type or iv == .poison_type) .poison_type else self.report(.not_static, node, 0, 0);
-            const elems = sp.get(pv).aggregate.elems;
-            break :blk if (sp.get(iv).int.bits < elems.len) elems[sp.get(iv).int.bits] else self.report(.static_eval_failed, node, iv, elems.len);
-        },
-        .identifier, .identifier_self, .identifier_init, .identifier_deinit, .identifier_main => blk: {
-            const d = self.h01_lookup(self.name_of(node));
-            if (d == .none) break :blk self.report(.undefined_name, node, self.name_of(node), 0);
-            self.node_decl[node] = d;
-            self.h05_ensure_signature(d);
-            const v = self.dp(.value, d).*;
-            break :blk if (v != .none) v else if (self.dp(.state, d).* == .failed) .poison_type else self.report(.not_static, node, self.name_of(node), 0);
-        },
-        .member => blk: {
-            const name = self.name_of(a1);
-            if (name == .len) { // `arr.len` is static whenever the array length is
-                var t = sp.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, a0, .none));
-                if (sp.get(t) == .ptr_type) t = sp.get(t).ptr_type.child;
-                if (sp.get(t) == .array_type and sp.tag(sp.get(t).array_type.len) == .int_value) break :blk sp.get(t).array_type.len;
-            }
-            const pv = self.h08_eval_static(ctx, a0);
-            if (pv == .poison_type) break :blk pv;
-            if (sp.tag(pv) == .aggregate_value and sp.tag(sp.get(pv).aggregate.ty) == .record_type) switch (sp.lookup_member(sp.get(pv).aggregate.ty, name)) {
-                .field => |f| break :blk sp.get(pv).aggregate.elems[f.index],
-                else => {},
-            };
-            if (!sp.class(pv).is_type) break :blk self.report(.not_static, node, 0, 0);
-            break :blk switch (sp.lookup_member(pv, name)) {
-                .case => |c| c,
-                .method => |m| mv: {
-                    self.h05_ensure_signature(m);
-                    break :mv self.dp(.value, m).*;
-                },
-                else => self.report(.unknown_member, node, name, pv),
-            };
-        },
-        .sizeof => blk: {
-            const t = self.h09_check_expr(ctx, a0, .none);
-            const ty = if (sp.tag(t) == .meta_type) self.h08_eval_static(ctx, a0) else t;
-            break :blk sp.intern(.{ .int = .{ .ty = .u64_type, .bits = sp.layout(ty).size } });
-        },
-        .unify_variants => blk: {
-            var members: [64]StaticPool.Index = undefined;
-            var n: usize = 0;
-            for ([_]NodeId{ a0, a1 }) |side| {
-                const t = self.h07_lower_type(ctx, side);
-                if (sp.tag(t) == .variant_union_type) {
-                    const m = sp.get(t).variant_union_type;
-                    @memcpy(members[n..][0..m.len], m);
-                    n += m.len;
-                } else if (sp.tag(t) == .variant_type) {
-                    members[n] = t;
-                    n += 1;
-                } else if (t != .poison_type) _ = self.report(.type_mismatch, side, t, .variant_type);
-            }
-            break :blk sp.intern(.{ .variant_union_type = members[0..n] });
-        },
-        .def_type, .def_type_packed, .def_type_assertsize, .def_type_implof, .def_variant, .def_variant_unionsized, .def_variant_tagof, .def_variant_assertsize, .def_variant_implof, .def_trait, .def_trait_implof => blk: {
-            const d = self.push_decl(.empty, node, self.type_kind(node), .none, .{});
-            self.node_decl[node] = d;
-            break :blk self.h19_check_type_def(ctx, d, node);
-        },
-        .def_fun => blk: {
-            _ = self.h09_check_expr(ctx, node, .none);
-            break :blk self.dp(.value, self.node_decl[node]).*;
-        },
-        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_eq, .binary_neq, .binary_less, .binary_greater, .binary_less_eq, .binary_greater_eq, .binary_logic_or, .binary_logic_xor, .binary_logic_and => self.fold(node, k, self.h08_eval_static(ctx, a0), self.h08_eval_static(ctx, a1)),
-        .oftype => blk: {
-            const v = self.h08_eval_static(ctx, a0);
-            const t = self.h07_lower_type(ctx, a1);
-            const vt = if (sp.class(v).is_type) v else sp.type_of(v);
-            break :blk if (vt == t or sp.type_of(v) == t or sp.implements(vt, t)) .bool_true else .bool_false;
-        },
-        .as => self.retype(self.h08_eval_static(ctx, a0), self.h07_lower_type(ctx, a1)),
-        .fun_call => blk: {
-            const cv = self.h08_eval_static(ctx, a0);
-            if (sp.tag(cv) == .record_type or sp.tag(cv) == .variant_case_type) break :blk self.static_construct(ctx, cv, self.kids(a1));
-            if (sp.tag(cv) != .generic) break :blk if (cv == .poison_type) cv else self.report(.not_static, node, 0, 0);
-            const args = self.kids(a1);
-            const want = sp.get(self.dp(.ty, sp.get(cv).static_fun.decl).*).function_type.params.len;
-            if (args.len != want) break :blk self.report(.wrong_arity, node, args.len, want);
-            var vals: [64]StaticPool.Index = undefined;
-            for (args, 0..) |a, i| vals[i] = self.h08_eval_static(ctx, self.arg_value(a));
-            break :blk self.h20_instantiate(sp.get(cv).static_fun.decl, sp.intern(.{ .aggregate = .{ .ty = .none, .elems = vals[0..args.len] } }));
-        },
-        .if_then, .stcif_then, .if_else, .stcif_else => blk: {
-            const has_else = k == .if_else or k == .stcif_else;
-            const it = if (has_else) a0 else node;
-            const c = self.h08_eval_static(ctx, self.arg(it, 0));
-            if (c == .bool_true) break :blk self.h08_eval_static(ctx, self.arg(it, 1));
-            break :blk if (c != .bool_false) self.report(.type_mismatch, self.arg(it, 0), c, .bool_type) else if (has_else) self.h08_eval_static(ctx, a1) else .unit_value;
-        },
-        .match, .stcmatch => blk: {
-            const v = self.h08_eval_static(ctx, a0);
-            self.h03_push_scope();
-            defer self.h04_pop_scope();
-            for (self.kids(a1)) |arm| if (self.static_match(ctx, self.arg(arm, 0), v)) break :blk self.h08_eval_static(ctx, self.arg(arm, 1));
-            break :blk self.report(.non_exhaustive_match, node, v, .none);
-        },
-        .block => blk: {
-            self.h03_push_scope();
-            defer self.h04_pop_scope();
-            var v: StaticPool.Index = .unit_value;
-            for (self.kids(node)) |s| {
-                v = self.h08_eval_static(ctx, s);
-                if (self.interpreter.unwind != .none or v == .poison_type) break;
-            }
-            break :blk v;
-        },
-        .def_var, .assign, .assign_typed, .mod_pub, .mod_mut, .mod_stc => blk: {
-            _ = self.h11_check_assign(ctx, node);
-            break :blk .unit_value;
-        },
-        .inc_prefix, .dec_prefix, .inc_postfix, .dec_postfix, .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => blk: {
-            // static locals keep their current value in the decl row
-            const old = self.h08_eval_static(ctx, a0);
-            const d = self.node_decl[a0];
-            if (old == .poison_type or d == .none) break :blk old;
-            const one = sp.intern(.{ .int = .{ .ty = .u64_type, .bits = 1 } });
-            const op: NodeKind = switch (k) {
-                .inc_prefix, .inc_postfix, .assign_add => .binary_add,
-                .dec_prefix, .dec_postfix, .assign_sub => .binary_sub,
-                .assign_mul => .binary_mul,
-                .assign_div => .binary_div,
-                else => .binary_mod,
-            };
-            const rhs = if (@intFromEnum(k) >= @intFromEnum(NodeKind.assign_add)) self.h08_eval_static(ctx, a1) else one;
-            self.dp(.value, d).* = self.retype(self.fold(node, op, old, rhs), sp.type_of(old));
-            break :blk if (k == .inc_postfix or k == .dec_postfix) old else self.dp(.value, d).*;
-        },
-        .array => blk: {
-            var vals: [256]StaticPool.Index = undefined;
-            const elems = self.kids(node);
-            for (elems, 0..) |e, i| vals[i] = self.h08_eval_static(ctx, e);
-            break :blk self.aggregate(vals[0..elems.len]);
-        },
-        .for_seq, .stcfor_seq, .for_var_in_seq, .stcfor_var_in_seq, .@"while", .stcwhile, .while_with_repeat_stmt, .stcwhile_with_repeat_stmt, .loop, .stcloop, .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => self.static_loop(ctx, node),
-        else => if (is_type_expr(k)) self.h07_lower_type(ctx, node) else self.report(.not_static, node, 0, 0),
-    };
-    self.node_value[node] = v;
-    return v;
+    _ = self.h09_check_expr(ctx, body, .none);
+    // a `{}` body that never returns a value returns unit
+    if (sp.tag(sp.apply_vars(&self.abstract_pool, ctx.ret_type)) == .type_var) _ = sp.unify(&self.abstract_pool, ctx.ret_type, .unit_type);
 }
+
+pub const prim_types = blk: {
+    var t: [256]StaticPool.Index = @splat(.none);
+    for (@typeInfo(StaticPool.Index).@"enum".fields) |f| if (std.mem.endsWith(u8, f.name, "_type") and @hasField(NodeKind, "type_" ++ f.name[0 .. f.name.len - 5])) {
+        t[@intFromEnum(@field(NodeKind, "type_" ++ f.name[0 .. f.name.len - 5]))] = @enumFromInt(f.value);
+    };
+    break :blk t;
+};
 
 // ------------------------------------------------------------------------------------------ //
 // expressions
@@ -710,20 +550,18 @@ fn h08_eval_static(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
 
 // scalars declared without a value must be written before they are read: `uninit` has one bit per such local,
 // branches merge their bits, loops leave with the union of the states at their exits
-fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
+pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
     const ap = &self.abstract_pool;
     const a0 = self.arg(node, 0);
     const a1 = self.arg(node, 1);
     const k = self.nk(node);
+    if (ctx.interpreted and class(k).stc and !self.doc.has(node)) _ = self.report(.redundant_stc, node, 0, 0);
     const t: StaticPool.Index = switch (k) {
-        .int, .float, .char, .string, .boolean_true, .boolean_false => self.literal_type(node, expected),
-        .identifier, .identifier_self, .identifier_init, .identifier_deinit, .identifier_main => blk: {
-            const name = self.name_of(node);
-            const d = self.h01_lookup(name);
-            if (d == .none) break :blk self.report(.undefined_name, node, name, 0);
-            self.node_decl[node] = d;
-            self.h05_ensure_signature(d);
+        .int, .float, .char, .string, .boolean_true, .boolean_false => statics.literal_type(self, node, expected),
+        .identifier, .identifier_self => blk: {
+            const d = self.use(node);
+            if (d == .none) break :blk .poison_type;
             self.check_init(node, d);
             const ty = self.dp(.ty, d).*;
             break :blk if (ty == .none) .poison_type else ty;
@@ -735,10 +573,7 @@ fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected
             var last: StaticPool.Index = .unit_type;
             const stmts = self.kids(node);
             for (stmts, 0..) |s, i| {
-                const declares = switch (self.nk(s)) {
-                    .def_var, .assign, .assign_typed, .mod_pub, .mod_mut, .mod_stc => true,
-                    else => false,
-                };
+                const declares = class(self.nk(s)).declares;
                 if (!declares) self.h03_push_scope();
                 last = self.h09_check_expr(ctx, s, if (i + 1 == stmts.len) expected else .none);
                 if (!declares) self.h04_pop_scope();
@@ -748,16 +583,17 @@ fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected
         .def_var, .assign, .assign_typed, .mod_pub, .mod_mut, .mod_stc => self.h11_check_assign(ctx, node),
         .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => blk: {
             const lt = self.h18_check_place(ctx, a0);
+            if ((k == .assign_add or k == .assign_sub) and self.elem_ptr(lt)) break :blk if (self.integer(ctx, a1)) .unit_type else .poison_type;
             _ = self.check(ctx, a1, lt);
             break :blk self.numeric(node, lt, .unit_type);
         },
         .inc_prefix, .dec_prefix, .inc_postfix, .dec_postfix => blk: {
             const lt = self.h18_check_place(ctx, a0);
-            break :blk self.numeric(node, lt, lt);
+            break :blk if (self.elem_ptr(lt)) lt else self.numeric(node, lt, lt);
         },
         .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and => blk: {
             const j = self.pair(ctx, node, a0, a1, if (self.is_numeric(expected)) expected else .none);
-            break :blk self.numeric(node, j, j);
+            break :blk if ((k == .binary_add or k == .binary_sub) and self.elem_ptr(j)) j else self.numeric(node, j, j);
         },
         .binary_eq, .binary_neq, .binary_less, .binary_greater, .binary_less_eq, .binary_greater_eq => blk: {
             const j = self.pair(ctx, node, a0, a1, .none);
@@ -772,73 +608,82 @@ fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected
         },
         .neg_logic => blk: { // `!` is logical on bools and bitwise on integers
             const st = self.h09_check_expr(ctx, a0, expected);
-            break :blk if (st == .bool_type or st == .poison_type or sp.class(st).is_integer) st else self.report(.type_mismatch, node, st, .bool_type);
+            break :blk if (st == .bool_type or sp.class(st).is_integer) st else self.mismatch(node, st, .bool_type);
         },
-        .neg_num => if (self.is_literal(node)) self.literal_type(node, expected) else self.numeric(node, self.h09_check_expr(ctx, a0, expected), .none),
-        .fun_call, .with => self.h12_check_call(ctx, node, expected),
+        .neg_num => if (self.is_literal(node)) statics.literal_type(self, node, expected) else self.numeric(node, self.h09_check_expr(ctx, a0, expected), .none),
+        .fun_call, .with => calls.h12_check_call(self, ctx, node),
         .member => self.h13_check_member(ctx, node),
         .array_index => blk: {
             var st = sp.apply_vars(ap, self.h09_check_expr(ctx, a0, .none));
-            const is_range = is_range_kind(self.nk(a1));
+            if (is_range_kind(self.nk(a1))) break :blk self.report(.genexpr_index, a1, 0, 0);
             const it = self.h09_check_expr(ctx, a1, .none);
-            if (!is_range and it != .poison_type and !sp.class(it).is_integer) _ = self.report(.type_mismatch, a1, it, .u64_type);
+            if (!sp.class(it).is_integer) _ = self.mismatch(a1, it, .u64_type);
             if (st == .poison_type) break :blk st;
-            const through_ptr = sp.get(st) == .ptr_type;
-            if (through_ptr) st = sp.get(st).ptr_type.child;
+            const through_ptr = sp.is_ptr(st);
+            st = sp.pointee(st);
             // pointers index like arrays (`*u8 buf; buf[i]`), arrays auto-deref once
             const elem = if (sp.get(st) == .array_type) sp.get(st).array_type.elem else if (through_ptr) st else break :blk self.report(.type_mismatch, a0, st, .none);
-            break :blk if (is_range) sp.intern(.{ .array_type = .{ .len = self.fresh_var(node), .elem = elem } }) else elem;
+            break :blk elem;
         },
         .dereference => blk: {
             const st = sp.apply_vars(ap, self.h09_check_expr(ctx, a0, .none));
-            break :blk if (sp.get(st) == .ptr_type) sp.get(st).ptr_type.child else if (st == .poison_type) st else self.report(.type_mismatch, node, st, .none);
+            break :blk if (sp.is_ptr(st)) sp.pointee(st) else self.mismatch(node, st, .none);
         },
         .address_of => blk: {
             if (self.nk(a0) == .identifier) self.uninit &= ~self.init_bit(self.h01_lookup(self.name_of(a0)));
-            const exp = if (expected == .none) expected else sp.apply_vars(ap, expected);
-            const st = self.h09_check_expr(ctx, a0, if (exp != .none and sp.get(exp) == .ptr_type) sp.get(exp).ptr_type.child else .none);
+            const exp = sp.apply_vars(ap, expected);
+            const st = self.h09_check_expr(ctx, a0, if (sp.is_ptr(exp)) sp.pointee(exp) else .none);
             break :blk if (st == .poison_type) st else self.self_ptr(st);
         },
         .array, .array_empty => blk: {
-            const exp = if (expected == .none) expected else sp.apply_vars(ap, expected);
-            var elem: StaticPool.Index = if (exp != .none and sp.get(exp) == .array_type) sp.get(exp).array_type.elem else .none;
+            const exp = sp.apply_vars(ap, expected);
+            var elem = sp.array_elem(exp);
             const elems = if (k == .array) self.kids(node) else &[_]NodeId{};
             for (elems) |e| {
                 const et = self.h09_check_expr(ctx, e, elem);
-                if (elem == .none) elem = et else _ = self.h10_expect(ctx, e, et, elem);
+                if (elem == .none) elem = et else _ = self.h10_expect(e, et, elem);
             }
             if (elem == .none) elem = self.fresh_var(node);
             break :blk sp.intern(.{ .array_type = .{ .len = sp.intern(.{ .int = .{ .ty = .u64_type, .bits = elems.len } }), .elem = elem } });
         },
         .as => blk: {
-            const to = self.h07_lower_type(ctx, a1);
             const from = sp.apply_vars(ap, self.h09_check_expr(ctx, a0, .none));
-            break :blk if (sp.cast(from, to) == .invalid) self.report(.invalid_cast, node, from, to) else to;
+            const to = types.cast_target(self, ctx, a1, from);
+            const lost = to == .poison_type or from == .poison_type or sp.get(to) == .array_type and sp.get(to).array_type.len == .poison_type or sp.get(to) == .ptr_type and sp.get(sp.get(to).ptr_type.child) == .array_type and sp.get(sp.get(to).ptr_type.child).array_type.len == .poison_type;
+            break :blk if (lost) .poison_type else if (sp.cast(from, to) == .invalid) self.report(.invalid_cast, node, from, to) else to;
+        },
+        .asbits => blk: {
+            const from = sp.apply_vars(ap, self.h09_check_expr(ctx, a0, .none));
+            const to = types.h07_lower_type(self, ctx, a1);
+            if (from == .poison_type or to == .poison_type) break :blk .poison_type;
+            break :blk if (!sp.class(from).has_layout or !sp.class(to).has_layout or sp.layout(to).size < sp.layout(from).size) self.report(.invalid_cast, node, from, to) else to;
         },
         .oftype => blk: {
             const vt = self.deref(self.h09_check_expr(ctx, a0, .none));
-            const ot = self.h07_lower_type(ctx, a1);
+            const ot0 = if (ctx.interpreted) statics.deferred(self, ctx, a1) orelse .none else types.h07_lower_type(self, ctx, a1);
+            const ot = if (ot0 != .none and sp.tag(ot0) == .generic) types.h07_lower_type(self, ctx, a1) else ot0;
             self.node_value[a1] = ot;
-            self.node_value[node] = if (vt == ot or sp.implements(vt, ot)) .bool_true else if (sp.tag(vt) == .trait_type) .none else .bool_false;
+            self.node_value[node] = if (ot == .none or (ctx.interpreted and sp.tag(vt) == .meta_type)) .none else if (statics.templated(self, ot) != .none) (if (statics.realizes(self, vt, ot)) .bool_true else .bool_false) else if (statics.templated(self, vt) != .none) .none else if (vt == ot or sp.implements(vt, ot)) .bool_true else if (sp.tag(vt) == .trait_type) .none else .bool_false;
             break :blk .bool_type;
         },
         .typeof, .sizeof => blk: {
             _ = self.h09_check_expr(ctx, a0, .none);
-            _ = self.try_static(ctx, node);
+            if (self.nk(a0) == .identifier and statics.is_template(self, self.node_decl[a0])) break :blk self.report(.unrealized_template, a0, 0, 0);
+            _ = statics.try_static(self, ctx, node);
             break :blk if (k == .typeof) .type_type else .u64_type;
         },
-        .if_then, .if_else, .stcif_then, .stcif_else => self.h15_check_branching(ctx, node, expected),
-        .@"while", .while_with_repeat_stmt, .stcwhile, .stcwhile_with_repeat_stmt, .for_seq, .for_var_in_seq, .stcfor_seq, .stcfor_var_in_seq, .loop, .loop_with_repeat_stmt, .stcloop, .stcloop_with_repeat_stmt => self.h16_check_loop(ctx, node, expected),
+        .if_then, .if_else, .stcif_then, .stcif_else => control.h15_check_branching(self, ctx, node, expected),
+        .@"while", .while_with_repeat_stmt, .stcwhile, .stcwhile_with_repeat_stmt, .for_seq, .for_var_in_seq, .stcfor_seq, .stcfor_var_in_seq, .loop, .loop_with_repeat_stmt, .stcloop, .stcloop_with_repeat_stmt => control.h16_check_loop(self, ctx, node, expected),
         // ranges are sequences of their bound type, so `for` and slicing treat them like arrays
-        .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound, .gen_upperbound_incl, .gen_upperbound_excl => blk: {
-            const exp = if (expected == .none) expected else sp.apply_vars(ap, expected);
-            const hint = if (exp != .none and sp.get(exp) == .array_type) sp.get(exp).array_type.elem else if (self.is_numeric(exp)) exp else .none;
+        .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => blk: {
+            const exp = sp.apply_vars(ap, expected);
+            const e = sp.array_elem(exp);
+            const hint = if (e != .none) e else if (self.is_numeric(exp)) exp else .none;
             const b = if (k == .gen_incl or k == .gen_excl) self.pair(ctx, node, a0, a1, hint) else self.operand(ctx, a0, hint);
-            if (b == .poison_type) break :blk b;
-            if (!sp.class(b).is_integer) break :blk self.report(.type_mismatch, node, b, .u64_type);
+            if (!sp.class(b).is_integer) break :blk self.mismatch(node, b, .u64_type);
             break :blk sp.intern(.{ .array_type = .{ .len = self.fresh_var(node), .elem = b } });
         },
-        .match, .stcmatch => self.h14_check_match(ctx, node, expected),
+        .match, .stcmatch => control.h14_check_match(self, ctx, node, expected),
         .ret => blk: {
             _ = if (ctx.ret_type == .none) self.h09_check_expr(ctx, a0, .none) else self.check(ctx, a0, ctx.ret_type);
             break :blk .never_type;
@@ -848,24 +693,16 @@ fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected
             if (k == .brk and self.loop_exits.head > 0) self.loop_exits.buf[self.loop_exits.head - 1] |= self.uninit;
             break :blk .never_type;
         } else self.report(if (k == .brk) .brk_outside_loop else .cont_outside_loop, node, 0, 0),
-        .do => blk: {
+        .do, .@"defer" => blk: {
             _ = self.h09_check_expr(ctx, a0, .none);
-            break :blk .runit_type;
+            break :blk if (k == .do) .runit_type else .unit_type;
         },
-        .@"defer" => blk: {
-            _ = self.h09_check_expr(ctx, a0, .none);
-            break :blk .unit_type;
-        },
-        .deinit => blk: {
-            self.need_deinit(node, self.h09_check_expr(ctx, a0, .none));
-            break :blk .unit_type;
-        },
-        .inlined_defer_deinit => blk: {
-            const st = self.h09_check_expr(ctx, a0, expected);
+        .deinit, .inlined_defer_deinit => blk: {
+            const st = self.h09_check_expr(ctx, a0, if (k == .deinit) .none else expected);
             self.need_deinit(node, st);
-            break :blk st;
+            break :blk if (k == .deinit) .unit_type else st;
         },
-        .selftag_unwrap, .selftag_unwrap_fallback, .selftag_arrow, .labelarrow => self.h17_check_unwrap(ctx, node, expected),
+        .selftag_unwrap, .selftag_unwrap_fallback, .selftag_arrow, .labelarrow => control.h17_check_unwrap(self, ctx, node, expected),
         .def_fun => blk: { // lambdas and local functions are checked on the spot and see the enclosing locals
             const d = self.push_decl(.empty, node, .function, .none, .{});
             self.node_decl[node] = d;
@@ -874,28 +711,37 @@ fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected
             break :blk self.dp(.ty, d).*;
         },
         // type expressions in value position: the value is a type
-        else => if (is_type_expr(k) or k == .unify_variants or self.type_kind(node) != .variable) sp.type_of(self.h08_eval_static(ctx, node)) else .unit_type,
+        else => if (class(k).type_expr or k == .unify_variants or self.type_kind(node) != .variable) (if (statics.deferred(self, ctx, node)) |v| sp.type_of(v) else types.meta_of(self, node)) else .unit_type,
     };
     return self.set(node, t);
 }
 
-fn h10_expect(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, actual: StaticPool.Index, expected: StaticPool.Index) StaticPool.Index {
-    _ = ctx;
+pub fn h10_expect(self: *Resolver, node: ParseTree.NodeId, actual: StaticPool.Index, expected: StaticPool.Index) StaticPool.Index {
     // a poisoned value settles what it was expected to infer, so the error does not spread
     if (actual == .poison_type and expected != .none and self.static_pool.has_vars(expected)) _ = self.static_pool.unify(&self.abstract_pool, expected, .poison_type);
     if (expected == .none or actual == .poison_type or expected == .poison_type) return actual;
     // literals take the expected type directly (an unbound var: their default, which then binds the var)
-    const a = if (self.is_literal(node)) self.set(node, self.literal_type(node, expected)) else actual;
+    const a = if (self.is_literal(node)) self.set(node, statics.literal_type(self, node, expected)) else actual;
     if (self.static_pool.coerce(&self.abstract_pool, a, expected) != .incompatible) return expected;
     return self.report(if (self.static_pool.unify(&self.abstract_pool, a, expected) == .infinite) .infinite_type else .type_mismatch, node, a, expected);
 }
 
-fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
+pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
     const sp = &self.static_pool;
-    var flags = Decl.Flags{};
-    const n = self.unwrap_mods(node, &flags);
-    const parts = self.stmt_parts(n);
-    const kind = self.decl_kind(parts.type, parts.value);
+    const parts = self.statement(node);
+    const n = parts.node;
+    const flags = parts.flags;
+    const kind = parts.kind;
+    if (ctx.interpreted and is_type_decl(kind)) {
+        _ = self.h09_check_expr(ctx, parts.value, .none);
+        const t = statics.deferred(self, ctx, parts.value);
+        for (parts.ids) |id| {
+            const d = self.declare(id, n, kind, if (t) |x| sp.type_of(x) else types.meta_of(self, parts.value), flags);
+            self.dp(.state, d).* = .done;
+            self.dp(.value, d).* = t orelse .none;
+        }
+        return .unit_type;
+    }
     if (kind != .variable) { // local function / type / trait
         for (parts.ids) |id| {
             const d = self.declare(id, n, kind, .none, flags);
@@ -904,7 +750,7 @@ fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Static
         }
         return .unit_type;
     }
-    const values = if (parts.value == 0) &[_]NodeId{} else self.list_at(n, 1, .partial__assign_multival);
+    const values = parts.values;
     // a write into a place (`p.x = v`, `a[i] = v`, `ptr.* = v`)
     if (parts.ids.len == 1 and self.name_of(parts.ids[0]) == .none) {
         const pt = self.h18_check_place(ctx, parts.ids[0]);
@@ -912,7 +758,7 @@ fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Static
         return .unit_type;
     }
     const declaring = parts.type != 0 or @as(u8, @bitCast(flags)) != 0;
-    var ty: StaticPool.Index = if (parts.type != 0) self.h07_lower_type(ctx, parts.type) else .none;
+    var ty: StaticPool.Index = if (parts.type != 0) types.realized_type(self, ctx, parts.type) else .none;
     // untyped: visible names are assigned, their type is shared by the new ones
     var existing: [64]Decl.Index = undefined;
     for (parts.ids, 0..) |id, i| {
@@ -939,206 +785,16 @@ fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Static
         // a fresh var as expectation means "a value is wanted" (loops / ifs as values) without fixing its type
         const got = self.check(ctx, values[0], if (ty != .none) ty else self.fresh_var(n));
         if (ty == .none) ty = sp.apply_vars(&self.abstract_pool, got);
+        if (ty != .none and sp.tag(ty) == .function_type and statics.holds_template(self, ty)) ty = self.report(.unrealized_template, values[0], ty, 0);
     }
     self.h04_pop_scope();
     for (parts.ids, 0..) |id, i| {
         const d = if (existing[i] != .none) existing[i] else self.declare(id, n, .variable, if (ty == .none) .poison_type else ty, flags);
         if (existing[i] != .none) self.uninit &= ~self.init_bit(d) else if (values.len == 0 and !self.dp(.flags, d).is_global and self.scalar(self.dp(.ty, d).*)) self.track(d);
-        if (values.len > 0 and (existing[i] == .none or self.interpreter.depth > 0) and (self.dp(.flags, d).is_stc or ctx.in_static))
-            self.dp(.value, d).* = self.retype(self.static_of(ctx, values[@min(i, values.len - 1)]), self.dp(.ty, d).*);
+        if (values.len > 0 and self.node_type[values[@min(i, values.len - 1)]] != .poison_type and (existing[i] == .none or (self.interpreter.depth > 0 and !ctx.interpreted)) and (self.dp(.flags, d).is_stc or ctx.in_static))
+            self.dp(.value, d).* = statics.retype(self, statics.static_of(self, ctx, values[@min(i, values.len - 1)]), self.dp(.ty, d).*);
     }
     return .unit_type;
-}
-
-fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
-    _ = expected; // arguments get their parameter types as expectation instead
-    const sp = &self.static_pool;
-    const args = self.kids(self.arg(node, 1));
-    if (self.nk(node) == .with) { // a copy of a record, the named arguments must be its fields
-        const t = self.deref(self.h09_check_expr(ctx, self.arg(node, 0), .none));
-        for (args) |a| {
-            const m = if (self.nk(a) == .partial__fun_call_assigned_param and t != .poison_type) sp.lookup_member(t, self.name_of(self.arg(a, 0))) else StaticPool.Member.none;
-            _ = if (m == .field) self.check(ctx, self.arg(a, 1), self.named(a, m.field.ty)) else if (t == .poison_type) t else self.report(.unknown_named_argument, a, self.name_of(self.arg(a, 0)), t);
-        }
-        return t;
-    }
-    const callee = self.arg(node, 0);
-    const ct = self.h09_check_expr(ctx, callee, .none);
-    const d = if (self.nk(callee) == .fun_call) .none else self.node_decl[callee];
-    // `x.m(..)` binds x as the self argument, `Type.m(x.&, ..)` passes it like any other argument
-    const recv = if (self.nk(callee) == .member and sp.tag(self.node_type[self.arg(callee, 0)]) != .meta_type) self.arg(callee, 0) else 0;
-    if (ct != .poison_type and d != .none and is_fn(self.dp(.kind, d).*)) return self.call_decl(ctx, node, d, args, recv);
-    const target = if (sp.tag(ct) == .meta_type) self.h08_eval_static(ctx, callee) else sp.apply_vars(&self.abstract_pool, ct);
-    switch (sp.tag(target)) {
-        // type constructors: records (`Person(name = ..)`) and variant cases (`Event.Key(13)`)
-        .record_type, .variant_case_type => {
-            const rec = if (sp.tag(target) == .variant_case_type) sp.get(target).variant_case_type.payload else target;
-            var map: [64]u32 = undefined;
-            if (rec == .none and args.len > 0) return self.report(.wrong_arity, node, args.len, 0);
-            if (rec != .none and !self.bind_args(self.fields_of(rec), args, &map, false)) return self.bad_args(node, self.fields_of(rec), args);
-            for (args, 0..) |a, i| _ = self.check(ctx, self.arg_value(a), self.named(a, sp.get(rec).custom_type.field_types[map[i]]));
-            return target;
-        },
-        // a value of function type (`op(a, b)`, `make_adder(1)(2)`, a lambda called directly)
-        .function_type => {
-            if (sp.get(target).function_type.params.len != args.len) return self.report(.wrong_arity, node, args.len, sp.get(target).function_type.params.len);
-            for (args, 0..) |a, i| _ = self.check(ctx, self.arg_value(a), sp.get(target).function_type.params[i]);
-            return sp.get(target).function_type.ret;
-        },
-        else => {
-            for (args) |a| _ = self.h09_check_expr(ctx, self.arg_value(a), .none);
-            return if (target == .poison_type) target else self.report(.not_callable, callee, ct, .none);
-        },
-    }
-}
-
-// calls of declared functions: overload resolution, stcfun realization, length-generic realization
-fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_args: []const NodeId, recv: NodeId) StaticPool.Index {
-    const sp = &self.static_pool;
-    if (self.dp(.kind, first).* == .static_function) {
-        const want = sp.get(self.dp(.ty, first).*).function_type.params.len;
-        if (all_args.len != want) return self.report(.wrong_arity, node, all_args.len, want);
-        var vals: [64]StaticPool.Index = undefined;
-        for (all_args, 0..) |a, i| vals[i] = self.h08_eval_static(ctx, self.arg_value(a));
-        const r = self.h20_instantiate(first, sp.intern(.{ .aggregate = .{ .ty = .none, .elems = vals[0..all_args.len] } }));
-        const ret = sp.get(self.dp(.ty, first).*).function_type.ret;
-        if (sp.tag(r) != .function_value) return if (sp.tag(ret) == .meta_type or ret == .poison_type) sp.type_of(r) else ret;
-        self.node_decl[node] = sp.get(r).function;
-        return self.dp(.ty, sp.get(r).function).*;
-    }
-    // the self argument of a method: the receiver, or the first argument when called through the type
-    const off = self.self_off(first);
-    var args = all_args;
-    if (off == 1) {
-        const ft = self.dp(.ty, self.real(first)).*;
-        const p0 = if (ft != .none and sp.tag(ft) == .function_type) sp.get(ft).function_type.params[0] else StaticPool.Index.poison_type;
-        if (recv != 0) {
-            const rt = sp.apply_vars(&self.abstract_pool, self.node_type[recv]);
-            const child = if (sp.get(p0) == .ptr_type) sp.get(p0).ptr_type.child else p0;
-            if (rt != .poison_type and p0 != .poison_type and rt != child and !sp.implements(rt, child) and sp.coerce(&self.abstract_pool, rt, p0) == .incompatible)
-                _ = self.report(.type_mismatch, recv, rt, p0);
-        } else if (args.len > 0) {
-            _ = self.check(ctx, self.arg_value(args[0]), p0);
-            args = args[1..];
-        } else return self.report(.wrong_arity, node, 0, 1);
-    }
-    // argument types once, with the first candidate's parameters as expectation
-    var tys: [64]StaticPool.Index = undefined;
-    var map: [64]u32 = undefined;
-    const f0 = self.real(first);
-    const f0_ok = self.dp(.ty, f0).* != .none and self.bind_args(self.params_of(self.value_node(f0)), args, &map, false);
-    for (args, 0..) |a, i| {
-        const hint = if (f0_ok) sp.get(self.dp(.ty, f0).*).function_type.params[map[i] + off] else .none;
-        tys[i] = self.h09_check_expr(ctx, self.arg_value(a), hint);
-    }
-    // most specific candidate: exact > coercion > unlengthed, a where clause beats none
-    var best: Decl.Index = .none;
-    var best_score: i32 = -1;
-    var ambiguous = false;
-    var count: u32 = 0;
-    var c = first;
-    while (c != .none) : (c = self.dp(.next_overload, c).*) {
-        count += 1;
-        const s = self.score(c, args, tys[0..args.len], off);
-        if (s > best_score) {
-            best, best_score, ambiguous = .{ c, s, false };
-        } else if (s == best_score and s >= 0 and !self.has_where(self.real(c)) and !self.has_where(self.real(best))) ambiguous = true;
-    }
-    if (best == .none) {
-        if (count > 1) return self.report(.no_matching_overload, node, args.len, 0);
-        if (!f0_ok) return self.bad_args(node, self.params_of(self.value_node(f0)), args);
-        for (args, 0..) |a, i| _ = self.h10_expect(ctx, self.arg_value(a), tys[i], sp.get(self.dp(.ty, f0).*).function_type.params[map[i] + off]);
-        return .poison_type;
-    }
-    if (ambiguous) _ = self.report(.ambiguous_overload, node, best, 0);
-    var callee = self.real(best);
-    const pnodes = self.params_of(self.value_node(callee));
-    _ = self.bind_args(pnodes, args, &map, false);
-    self.check_stcwhere(ctx, node, callee, pnodes, args, map[0..args.len]);
-    if (self.length_generic(self.dp(.ty, callee).*)) {
-        // the argument lengths, in parameter order, pick the realization
-        var lens: [64]StaticPool.Index = undefined;
-        var n: usize = 0;
-        for (0..pnodes.len) |j| {
-            const p = sp.get(self.dp(.ty, callee).*).function_type.params[j + off];
-            if (!self.generic_slot(p)) continue;
-            for (0..args.len) |i| if (map[i] == j) {
-                lens[n] = if (sp.tag(p) == .meta_type) self.try_static(ctx, self.arg_value(args[i])) orelse return self.report(.not_static, args[i], 0, 0) else self.arg_len(tys[i], p);
-                n += 1;
-            };
-        }
-        const realized = self.h20_instantiate(callee, sp.intern(.{ .aggregate = .{ .ty = .none, .elems = lens[0..n] } }));
-        if (sp.tag(realized) != .function_value) return .poison_type;
-        callee = sp.get(realized).function;
-        self.node_decl[node] = callee;
-    } else {
-        for (args, 0..) |a, i| _ = self.h10_expect(ctx, self.arg_value(a), tys[i], self.named(a, sp.get(self.dp(.ty, callee).*).function_type.params[map[i] + off]));
-        // the call names the head of its dispatch group: the lowerer walks `next_overload` from there over the
-        // overloads with the identical parameter types, tests their where clauses in order, the where-less one last
-        var head = first;
-        while (!self.same_params(self.dp(.ty, self.real(head)).*, self.dp(.ty, callee).*)) head = self.dp(.next_overload, head).*;
-        self.node_decl[node] = self.real(head);
-    }
-    return sp.get(self.dp(.ty, callee).*).function_type.ret;
-}
-
-// stcwhere holds at every call: the callee's parameters are bound to the static arguments in a scope of their own
-fn check_stcwhere(self: *Resolver, ctx: *FnCtx, node: NodeId, callee: Decl.Index, pnodes: []const NodeId, args: []const NodeId, map: []const u32) void {
-    for (pnodes) |pn| {
-        if (self.param(pn).stc) break;
-    } else return;
-    const ft = self.dp(.ty, callee).*;
-    const off = self.self_off(callee);
-    self.open_scope(true, .none, 0);
-    defer self.h04_pop_scope();
-    for (pnodes, 0..) |pn, j| {
-        var v: StaticPool.Index = .none;
-        for (args, 0..) |a, i| if (map[i] == j) {
-            v = self.try_static(ctx, self.arg_value(a)) orelse .none;
-        };
-        const pt = self.static_pool.get(ft).function_type.params[j + off];
-        self.dp(.value, self.h02_declare_local(self.param_name(pn, j), pn, .static_parameter, pt)).* = if (v == .none) v else self.retype(v, pt);
-    }
-    for (pnodes) |pn| {
-        const p = self.param(pn);
-        if (!p.stc) continue;
-        const r = self.try_static(ctx, p.where) orelse {
-            _ = self.report(.not_static, node, 0, 0);
-            continue;
-        };
-        if (r == .bool_false) _ = self.report(.stcwhere_violated, node, callee, 0);
-    }
-}
-
-pub fn dispatches(self: *Resolver, d: Decl.Index) bool {
-    for (self.params_of(self.value_node(d))) |pn| {
-        const p = self.param(pn);
-        if (p.where != 0 and p.@"else" == 0 and !p.stc) return true;
-    }
-    return false;
-}
-
-fn score(self: *Resolver, c: Decl.Index, args: []const NodeId, tys: []const StaticPool.Index, off: usize) i32 {
-    const sp = &self.static_pool;
-    self.h05_ensure_signature(c);
-    const r = self.real(c);
-    const ft = self.dp(.ty, r).*;
-    if (ft == .none or sp.tag(ft) != .function_type) return -1;
-    var map: [64]u32 = undefined;
-    const pnodes = self.params_of(self.value_node(r));
-    if (!self.bind_args(pnodes, args, &map, false)) return -1;
-    var total: i32 = 0;
-    for (args, tys, 0..) |a, t, i| {
-        const p = sp.get(ft).function_type.params[map[i] + off];
-        const v = self.arg_value(a);
-        total += if (t == p or t == .poison_type or (self.is_literal(v) and sp.coerce(&self.abstract_pool, self.literal_type(v, p), p) == .identity))
-            @as(i32, 6) - @intFromBool(sp.class(p).is_float and !sp.class(t).is_float)
-        else if (sp.has_vars(p))
-            (if (self.arg_len(t, p) != .none) 2 else return -1)
-        else if (sp.coerce(&self.abstract_pool, t, p) != .incompatible) 4 else return -1;
-        if (self.param(pnodes[map[i]]).where != 0) total += 1;
-    }
-    return total;
 }
 
 fn h13_check_member(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
@@ -1149,193 +805,32 @@ fn h13_check_member(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Static
     if (pt == .poison_type) return pt;
     // `Type.Case`, `Type.init`, `Stream(i32).None` are members of the type value
     const on_type = sp.tag(pt) == .meta_type;
-    const base = if (on_type) self.h08_eval_static(ctx, parent) else sp.apply_vars(&self.abstract_pool, pt);
+    const base = if (!on_type) sp.apply_vars(&self.abstract_pool, pt) else statics.deferred(self, ctx, parent) orelse return .poison_type;
     if (base == .poison_type) return base;
     if (sp.tag(base) == .type_var) return self.report(.uninferable_type, parent, base, .none);
+    if (statics.templated(self, base) != .none) return statics.template_member(self, node, statics.templated(self, base), name);
+    const view = if (self.nk(parent) == .identifier and self.node_decl[parent] != .none) self.dp(.flags, self.node_decl[parent]).is_view else false;
+    if (view and statics.source_of(self, base) != .none and statics.template_member(self, node, sp.intern(.{ .template_type = statics.source_of(self, base) }), name) == .poison_type) return .poison_type;
     return switch (sp.lookup_member(base, name)) {
         .field => |f| if (on_type) self.report(.unknown_member, node, name, base) else f.ty,
         .method => |m| self.method(node, m),
-        .trait_method => |m| self.method(node, @enumFromInt(@intFromEnum(sp.get(m.trait).trait_type.decl) + 1 + m.index)),
+        .trait_method => |m| self.method(node, sp.method_decl(m)),
         .case => |c| c,
         .builtin_len => .u64_type,
+        .builtin_tag => if (on_type) self.report(.unknown_member, node, name, base) else sp.tag_type_of(base),
         .builtin_init, .builtin_deinit => sp.intern(.{ .function_type = .{ .category = .default, .params = &.{}, .ret = if (name == .init) base else .unit_type } }),
         .none => self.report(.unknown_member, node, name, base),
-    };
-}
-
-fn h14_check_match(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
-    const arms = self.kids(self.arg(node, 1));
-    const st = self.deref(self.h09_check_expr(ctx, self.arg(node, 0), .none));
-    const is_stc = self.nk(node) == .stcmatch;
-    // stcmatch needs a static scrutinee, only the matching arm is checked
-    if (is_stc) {
-        const v = self.h08_eval_static(ctx, self.arg(node, 0));
-        if (v == .poison_type) return v;
-        self.h03_push_scope();
-        defer self.h04_pop_scope();
-        for (arms) |arm| if (self.static_match(ctx, self.arg(arm, 0), v)) {
-            self.node_value[arm] = .bool_true;
-            return self.branch(ctx, self.arg(arm, 1), expected);
-        };
-        return self.report(.non_exhaustive_match, node, v, .none);
-    }
-    var ivs: std.ArrayList([2]i128) = .empty;
-    defer ivs.deinit(self.alloc);
-    var covered: u64 = 0;
-    var catch_all = false;
-    var result: StaticPool.Index = .none;
-    const before = self.uninit;
-    var after: u64 = 0;
-    defer self.uninit = after;
-    for (arms) |arm| {
-        self.uninit = before;
-        self.h03_push_scope();
-        const pat = self.pattern(ctx, self.arg(arm, 0), st);
-        self.intervals(ctx, self.arg(arm, 0), &ivs);
-        if (catch_all or (!pat.all and pat.mask != 0 and pat.mask & ~covered == 0)) Doctor.h21_report(self, .redundant_match_arm, arm, 0, 0);
-        covered |= pat.mask;
-        catch_all = catch_all or pat.all;
-        const t = self.branch(ctx, self.arg(arm, 1), expected);
-        if (t != .never_type) after |= self.uninit;
-        self.h04_pop_scope();
-        result = self.merge(arm, result, t, expected);
-    }
-    // variants, unions and bools by their case bits, integers by interval coverage, strings only with `_` or a binder
-    const cases = self.case_count(st);
-    const all_cases = cases <= 64 and covered == @as(u64, std.math.maxInt(u64)) >> @intCast(64 - cases);
-    if (!catch_all and !is_stc and st != .poison_type and !all_cases and !self.covers(st, ivs.items))
-        _ = self.report(.non_exhaustive_match, node, st, .none);
-    return if (result == .none) .unit_type else result;
-}
-
-fn h15_check_branching(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
-    const k = self.nk(node);
-    const has_else = k == .if_else or k == .stcif_else;
-    const it = if (has_else) self.arg(node, 0) else node;
-    const cond = self.arg(it, 0);
-    const then = self.arg(it, 1);
-    if (k == .stcif_then or k == .stcif_else) {
-        const c = self.h08_eval_static(ctx, cond);
-        _ = self.set(cond, .bool_type);
-        if (c == .bool_true) return self.branch(ctx, then, expected);
-        if (c != .bool_false) return if (c == .poison_type) c else self.report(.type_mismatch, cond, self.static_pool.type_of(c), .bool_type);
-        return if (has_else) self.branch(ctx, self.arg(node, 1), expected) else .unit_type;
-    }
-    // binders of the condition (`x ?<- v`) are visible in the then branch only
-    self.h03_push_scope();
-    _ = self.check(ctx, cond, .bool_type);
-    const before = self.uninit;
-    const tt = self.branch(ctx, then, expected);
-    const after_then = if (tt == .never_type) 0 else self.uninit;
-    self.uninit = before;
-    self.h04_pop_scope();
-    if (!has_else) {
-        const valued = tt != .never_type and tt != .runit_type and tt != .poison_type and tt != .unit_type;
-        return if (self.concrete(expected) and valued) self.report(.runit_mixing, node, tt, .unit_type) else self.merge(node, tt, .unit_type, if (valued) .none else expected);
-    }
-    const et = self.branch(ctx, self.arg(node, 1), expected);
-    self.uninit = after_then | if (et == .never_type) 0 else self.uninit;
-    return self.merge(node, tt, et, expected);
-}
-
-fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
-    const sp = &self.static_pool;
-    const k = self.nk(node);
-    const a0 = self.arg(node, 0);
-    const a1 = self.arg(node, 1);
-    const exp = if (expected == .none) expected else sp.apply_vars(&self.abstract_pool, expected);
-    const elem_hint = if (exp != .none and sp.get(exp) == .array_type) sp.get(exp).array_type.elem else .none;
-    self.h03_push_scope();
-    defer self.h04_pop_scope();
-    const body = switch (k) {
-        .@"while", .stcwhile => blk: {
-            _ = self.check(ctx, a0, .bool_type);
-            break :blk a1;
-        },
-        .while_with_repeat_stmt, .stcwhile_with_repeat_stmt => blk: {
-            _ = self.check(ctx, self.arg(a0, 0), .bool_type);
-            _ = self.h09_check_expr(ctx, a1, .none);
-            _ = self.set(a0, .unit_type);
-            break :blk self.arg(a0, 1);
-        },
-        .loop, .stcloop => a0,
-        .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => blk: {
-            _ = self.h09_check_expr(ctx, a0, .none);
-            break :blk a1;
-        },
-        else => blk: { // for: over an array, a range or anything with an Iterable `next`
-            const has_var = k == .for_var_in_seq or k == .stcfor_var_in_seq;
-            const f = if (has_var) a0 else node;
-            var st = sp.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, self.arg(f, 0), if (elem_hint != .none and is_range_kind(self.nk(self.arg(f, 0)))) exp else .none));
-            if (sp.get(st) == .ptr_type) st = sp.get(st).ptr_type.child;
-            const elem = switch (sp.lookup_member(st, if (sp.get(st) == .array_type) .len else self.name_pool.intern("next"))) {
-                .builtin_len => sp.get(st).array_type.elem,
-                .method => |m| self.fn_ret(m),
-                .trait_method => |m| self.fn_ret(@enumFromInt(@intFromEnum(sp.get(m.trait).trait_type.decl) + 1 + m.index)),
-                else => if (st == .poison_type) st else self.report(.type_mismatch, self.arg(f, 0), st, .none),
-            };
-            const it = self.h02_declare_local(if (has_var) self.name_of(a1) else .dollar_it, if (has_var) a1 else f, if (has_var) .loop_variable else .autoins_it, elem);
-            self.node_decl[f] = it;
-            if (has_var) {
-                self.node_decl[a1] = it;
-                _ = self.set(a1, elem);
-                _ = self.set(f, .unit_type);
-            }
-            break :blk self.arg(f, 1);
-        },
-    };
-    const at_exit = self.uninit;
-    self.loop_exits.push(0);
-    ctx.loop_depth += 1;
-    const bt = self.h09_check_expr(ctx, body, if (expected != .none) elem_hint else .none);
-    ctx.loop_depth -= 1;
-    self.loop_exits.head -= 1;
-    const conditional = switch (k) {
-        .loop, .stcloop, .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => false,
-        else => true,
-    };
-    self.uninit = self.loop_exits.buf[self.loop_exits.head] | if (conditional) at_exit else 0;
-    if (@intFromEnum(k) >= @intFromEnum(NodeKind.stcwhile) and switch (k) {
-        .stcwhile, .stcwhile_with_repeat_stmt, .stcfor_seq, .stcfor_var_in_seq, .stcloop, .stcloop_with_repeat_stmt => true,
-        else => false,
-    }) _ = self.static_of(ctx, node);
-    // used as a value: an array of the body values; brk ends it without adding one
-    if (expected == .none) return .unit_type;
-    return sp.intern(.{ .array_type = .{ .len = self.fresh_var(node), .elem = if (bt == .never_type or bt == .runit_type) (if (elem_hint != .none) elem_hint else .unit_type) else bt } });
-}
-
-// binders belong to their statement: a block scopes every non-declaring statement, a declaration its values
-fn h17_check_unwrap(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
-    const k = self.nk(node);
-    const vt = self.static_pool.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, self.arg(node, 0), if (k == .labelarrow) expected else .none));
-    if (k == .labelarrow) {
-        self.bind_label(self.arg(node, 1), vt);
-        return vt;
-    }
-    const pt = self.payload_of(vt);
-    if (pt == .none) return if (vt == .poison_type) vt else self.report(.type_mismatch, self.arg(node, 0), vt, .none);
-    return switch (k) {
-        .selftag_unwrap_fallback => blk: {
-            const before = self.uninit;
-            _ = self.check(ctx, self.arg(node, 1), pt);
-            self.uninit = before;
-            break :blk pt;
-        },
-        .selftag_arrow => blk: {
-            self.bind_label(self.arg(node, 1), pt);
-            break :blk .bool_type;
-        },
-        else => pt,
     };
 }
 
 fn h18_check_place(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
     // self is mutable in methods; stc locals are compile-time variables and writable too
     const t = self.h09_check_expr(ctx, node, .none);
+    if (t == .poison_type and self.errors_since(0, node)) return t;
     switch (self.writable(node)) {
         .ok => {},
-        .immutable => Doctor.h21_report(self, .assign_to_immutable, node, 0, 0),
-        .through_ptr => Doctor.h21_report(self, .write_through_immutable_pointer, node, 0, 0),
+        .immutable => self.doc.h21_report(.assign_to_immutable, node, 0, 0),
+        .through_ptr => self.doc.h21_report(.write_through_immutable_pointer, node, 0, 0),
     }
     return t;
 }
@@ -1344,227 +839,13 @@ fn h18_check_place(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
 // types, generics, diagnostics
 // ------------------------------------------------------------------------------------------ //
 
-fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: ParseTree.NodeId) StaticPool.Index {
-    const sp = &self.static_pool;
-    var body: NodeId = 0;
-    var size: NodeId = 0;
-    var tagof: NodeId = 0;
-    var c = node;
-    while (true) switch (self.nk(c)) {
-        .def_type_implof, .def_variant_implof => {
-            body = self.arg(c, 1);
-            c = self.arg(c, 0);
-        },
-        .def_type_assertsize, .def_variant_assertsize => {
-            size = self.arg(c, 1);
-            c = self.arg(c, 0);
-        },
-        .def_variant_tagof => {
-            tagof = self.arg(c, 1);
-            c = self.arg(c, 0);
-        },
-        else => break,
-    };
-    const ck = self.nk(c);
-    // reserved first (or already by h20), so fields can point back at the type (`*Tree`)
-    if (self.dp(.value, decl).* == .none) self.dp(.value, decl).* = sp.reserve_nominal(decl);
-    const ty = self.dp(.value, decl).*;
-    self.dp(.ty, decl).* = switch (ck) {
-        .def_trait, .def_trait_implof => .trait_type,
-        .def_variant, .def_variant_unionsized => .variant_type,
-        else => .type_type,
-    };
-    if (self.dp(.state, decl).* == .resolving_signature) self.dp(.state, decl).* = .signature_ready;
-    self.h03_push_scope();
-    defer self.h04_pop_scope();
-
-    var traits: [32]StaticPool.Index = undefined;
-    var nt: usize = 0;
-    var own: StaticPool.Index = .none; // the anonymous `!{..}` body
-    if (ck == .def_trait or ck == .def_trait_implof) {
-        body = c;
-    } else if (body != 0) {
-        const impls = if (self.nk(body) == .def_trait_implof) self.kids(self.arg(body, 0)) else &[_]NodeId{};
-        const members = self.arg(body, if (self.nk(body) == .def_trait_implof) 1 else 0);
-        if (self.kids(members).len > 0) {
-            own = self.trait_body(ctx, members, .none, ty, &.{}, decl);
-            traits[0] = own;
-            nt = 1;
-        }
-        for (impls) |t| {
-            traits[nt] = self.h07_lower_type(ctx, t);
-            nt += @intFromBool(traits[nt] != .poison_type);
-        }
-    }
-
-    switch (ck) {
-        .def_trait, .def_trait_implof => {
-            var supers: [32]StaticPool.Index = undefined;
-            const impls = if (ck == .def_trait_implof) self.kids(self.arg(c, 0)) else &[_]NodeId{};
-            for (impls, 0..) |t, i| supers[i] = self.h07_lower_type(ctx, t);
-            own = self.trait_body(ctx, self.arg(c, if (ck == .def_trait_implof) 1 else 0), ty, .none, supers[0..impls.len], decl);
-        },
-        .def_variant, .def_variant_unionsized => {
-            const params = self.kids(self.arg(c, 0));
-            var cases: [256]StaticPool.Index = undefined;
-            var payload_case: ?usize = null;
-            var payloads: usize = 0;
-            var next_tag: u64 = 0;
-            for (params, 0..) |pn, i| {
-                var q = pn;
-                var tag_node: NodeId = 0;
-                var payload_node: NodeId = 0;
-                if (self.nk(q) == .partial__variant_def_param_tagged) {
-                    tag_node = self.arg(q, 1);
-                    q = self.arg(q, 0);
-                }
-                if (self.nk(q) == .partial__variant_def_param_typed) {
-                    payload_node = self.arg(q, 1);
-                    q = self.arg(q, 0);
-                }
-                const payload = if (payload_node == 0) .none else self.h19_check_type_def(ctx, self.push_decl(.empty, payload_node, .record, .none, .{}), payload_node);
-                if (payload != .none) {
-                    payload_case = i;
-                    payloads += 1;
-                }
-                const tv = if (tag_node == 0) sp.intern(.{ .int = .{ .ty = .u64_type, .bits = next_tag } }) else self.h08_eval_static(ctx, tag_node);
-                if (sp.tag(tv) == .int_value) next_tag = sp.get(tv).int.bits +% 1;
-                cases[i] = self.set(self.arg(q, 0), sp.intern(.{ .variant_case_type = .{ .variant = ty, .case = @intCast(i), .name = self.name_of(self.arg(q, 0)), .tag = tv, .payload = payload } }));
-            }
-            // variants are always tagged, without tagof by the smallest tag type for their case count
-            const mode: StaticPool.VariantTagMode = if (tagof != 0 and self.nk(tagof) == .identifier_self) .self else .int;
-            var tag_ty: StaticPool.Index = if (tagof == 0) StaticPool.smallest_tag_type(params.len) else if (mode == .self) .none else self.h07_lower_type(ctx, tagof);
-            if (mode == .self) {
-                // the one payload type encodes the other cases in bit patterns it never uses
-                if (payloads != 1) _ = self.report(.self_tag_without_niche, tagof, payloads, 0) else {
-                    const fields = sp.get(sp.get(cases[payload_case.?]).variant_case_type.payload).custom_type.field_types;
-                    tag_ty = if (fields.len == 1 and sp.class(fields[0]).is_integer) fields[0] else self.report(.self_tag_without_niche, tagof, 0, 0);
-                }
-            }
-            if (tag_ty != .none and tag_ty != .poison_type) for (params, 0..) |pn, i| {
-                const case = sp.get(cases[i]).variant_case_type;
-                if ((mode == .int or case.payload == .none) and sp.tag(case.tag) == .int_value and !sp.fits(case.tag, tag_ty)) _ = self.report(.tag_overflow, pn, case.tag, tag_ty);
-            };
-            sp.complete_nominal(ty, .{ .variant_type = .{ .decl = decl, .tag_mode = mode, .tag_type = tag_ty, .is_unionsized = ck == .def_variant_unionsized, .cases = cases[0..params.len], .traits = traits[0..nt] } });
-        },
-        else => { // records: `*(..)`, `**(..)` and payload tuples
-            const fields = self.fields_of_node(c);
-            var names: [64]NamePool.Index = undefined;
-            var types: [64]StaticPool.Index = undefined;
-            for (fields, 0..) |f, i| {
-                const p = self.param(f);
-                types[i] = self.dynify(self.h07_lower_type(ctx, p.ty));
-                names[i] = if (p.name != 0) self.name_of(p.name) else self.param_name(f, i);
-            }
-            sp.complete_nominal(ty, .{ .custom_type = .{ .decl = decl, .is_packed = ck == .def_type_packed, .field_names = names[0..fields.len], .field_types = types[0..fields.len], .traits = traits[0..nt] } });
-            // defaults and where-clauses see the fields by name
-            for (fields, 0..) |f, i| {
-                const fd = self.h02_declare_local(names[i], f, .field, types[i]);
-                self.dp(.flags, fd).is_mut = self.param(f).is_mut;
-                self.link(self.param(f).name, fd, types[i]);
-            }
-            for (fields, 0..) |f, i| {
-                const p = self.param(f);
-                if (p.default != 0) _ = self.check(ctx, p.default, types[i]);
-                if (p.where != 0) _ = self.check(ctx, p.where, .bool_type);
-                if (p.@"else" != 0) _ = if (self.nk(p.@"else") == .assign) self.h09_check_expr(ctx, p.@"else", .none) else self.check(ctx, p.@"else", types[i]);
-            }
-        },
-    }
-    // member bodies once the type is complete, then trait conformance
-    if (own != .none) {
-        const b = @intFromEnum(sp.get(own).trait_type.decl);
-        for (0..sp.get(own).trait_type.member_names.len) |i| self.h06_check_body(@enumFromInt(b + 1 + i));
-    }
-    if (ck != .def_trait and ck != .def_trait_implof) for (traits[0..nt]) |t| if (t != own and sp.tag(t) == .trait_type) self.conform(ty, own, t, node);
-    if (ck != .def_trait and ck != .def_trait_implof and sp.layout(ty).state == .infinite) _ = self.report(.recursive_by_value_type, node, ty, .none);
-    if (ck != .def_trait and ck != .def_trait_implof) self.snapshot(decl, node);
-    if (size != 0) {
-        const v = self.h08_eval_static(ctx, size);
-        const want = if (sp.class(v).is_type) sp.layout(v).size else if (sp.tag(v) == .int_value) sp.get(v).int.bits else 0;
-        if (v != .poison_type and sp.layout(ty).size != want) _ = self.report(.assertsize_failed, size, sp.layout(ty).size, want);
-    }
-    return ty;
-}
-
-fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.Index) StaticPool.Index {
-    const sp = &self.static_pool;
-    const key = StaticPool.AbstractKey{ .generic_tuple = generic, .args_tuple = args };
-    if (sp.realized_abstracts.get(key)) |r| return r;
-    const node = self.dp(.node, generic).*;
-    // a realization that realizes itself forever eats the static budget and stops there
-    if (self.interpreter.step_budget < 64 or self.local_scope_marks.head > max_nesting) return self.report(.static_eval_failed, node, generic, 0);
-    self.interpreter.step_budget -= 64;
-    var argv: [64]StaticPool.Index = undefined;
-    const argc = sp.get(args).aggregate.elems.len;
-    @memcpy(argv[0..argc], sp.get(args).aggregate.elems);
-
-    if (self.dp(.kind, generic).* != .static_function) {
-        // length-generic function: a new declaration per tuple of lengths, the lengths bound in order of appearance
-        const d = self.push_decl(self.dp(.name, generic).*, node, self.dp(.kind, generic).*, .none, self.dp(.flags, generic).*);
-        self.template_of.put(self.alloc, d, generic) catch @panic("OOM");
-        const fv = sp.intern(.{ .function = d });
-        self.memo(key, fv);
-        self.h05_ensure_signature(d);
-        self.realized_args.put(self.alloc, d, args) catch @panic("OOM");
-        var i: usize = 0;
-        for (0..sp.get(self.dp(.ty, d).*).function_type.params.len) |j| {
-            var p = sp.get(self.dp(.ty, d).*).function_type.params[j];
-            if (!self.generic_slot(p) or i >= argc) continue;
-            i += 1;
-            if (sp.get(p) == .ptr_type) p = sp.get(p).ptr_type.child;
-            if (sp.get(p) == .array_type) _ = sp.unify(&self.abstract_pool, sp.get(p).array_type.len, argv[i - 1]);
-        }
-        self.h06_check_body(d);
-        return fv;
-    }
-
-    var ctx = FnCtx{ .decl = generic, .ret_type = .none, .self_type = .none, .loop_depth = 0, .in_static = true };
-    self.open_scope(true, .none, 0);
-    defer self.h04_pop_scope();
-    const v = self.value_node(generic);
-    const params = self.params_of(v);
-    for (params, 0..) |pn, i| {
-        const pt = sp.get(self.dp(.ty, generic).*).function_type.params[i];
-        const d = self.h02_declare_local(self.param_name(pn, i), pn, .static_parameter, pt);
-        self.link(self.param(pn).name, d, pt);
-        self.dp(.value, d).* = self.retype(argv[i], pt);
-    }
-    for (params) |pn| {
-        const w = self.param(pn).where;
-        if (w != 0 and self.h08_eval_static(&ctx, w) == .bool_false) _ = self.report(.stcwhere_violated, w, generic, args);
-    }
-    const unit = self.arg(v, 1);
-    const kind = self.type_kind(unit);
-    if (kind != .variable) { // a type: memoized before its body, so it can mention itself (`Stream(Child)` inside Stream)
-        const d = self.push_decl(self.dp(.name, generic).*, unit, kind, .none, .{});
-        self.realized_args.put(self.alloc, d, args) catch @panic("OOM");
-        self.dp(.value, d).* = sp.reserve_nominal(d);
-        self.memo(key, self.dp(.value, d).*);
-        return self.h19_check_type_def(&ctx, d, unit);
-    }
-    if (self.nk(unit) == .def_fun) {
-        const d = self.push_decl(self.dp(.name, generic).*, unit, .function, .none, .{});
-        const fv = sp.intern(.{ .function = d });
-        self.memo(key, fv);
-        self.h05_ensure_signature(d);
-        self.h06_check_body(d);
-        return fv;
-    }
-    const r = self.h08_eval_static(&ctx, unit);
-    self.interpreter.unwind = .none;
-    self.memo(key, r);
-    return r;
-}
-
 // ------------------------------------------------------------------------------------------ //
 // helpers
 // ------------------------------------------------------------------------------------------ //
 
-const max_nesting = 256;
+pub const max_nesting = 256;
 pub const Param = struct { ty: NodeId = 0, name: NodeId = 0, default: NodeId = 0, where: NodeId = 0, @"else": NodeId = 0, is_mut: bool = false, stc: bool = false };
 pub const Parts = struct { type: NodeId = 0, ids: []const NodeId = &.{}, value: NodeId = 0 };
-const Pat = struct { mask: u64 = 0, all: bool = false };
 const Access = enum { ok, immutable, through_ptr };
 
 const dollar_names = blk: {
@@ -1603,9 +884,6 @@ pub fn name_of(self: *Resolver, n: NodeId) NamePool.Index {
     return switch (self.nk(n)) {
         .identifier => self.name_pool.intern(self.text(n)),
         .identifier_self => .self,
-        .identifier_init => .init,
-        .identifier_deinit => .deinit,
-        .identifier_main => .main,
         else => .none,
     };
 }
@@ -1614,26 +892,54 @@ pub inline fn dp(self: *Resolver, comptime f: @EnumLiteral(), d: Decl.Index) *@F
     return &@field(self.decls.pool, @tagName(f)).buf[@intFromEnum(d)];
 }
 
-inline fn set(self: *Resolver, n: NodeId, t: StaticPool.Index) StaticPool.Index {
+pub inline fn set(self: *Resolver, n: NodeId, t: StaticPool.Index) StaticPool.Index {
     self.node_type[n] = t;
     return t;
 }
 
-fn report(self: *Resolver, code: Doctor.Disorder, n: NodeId, a: anytype, b: anytype) StaticPool.Index {
-    Doctor.h21_report(self, code, n, word(a), word(b));
+pub fn report(self: *Resolver, code: Doctor.Disorder, n: NodeId, a: anytype, b: anytype) StaticPool.Index {
+    self.doc.h21_report(code, n, a, b);
     return self.set(n, .poison_type);
 }
 
-fn word(v: anytype) u32 {
-    return switch (@typeInfo(@TypeOf(v))) {
-        .@"enum" => @intFromEnum(v),
-        .enum_literal => @intFromEnum(@as(StaticPool.Index, v)),
-        else => @intCast(v),
-    };
+pub fn check_guards(self: *Resolver, ctx: *FnCtx, p: Param, t: StaticPool.Index) void {
+    if (p.where != 0) _ = self.check(ctx, p.where, .bool_type);
+    if (p.@"else" != 0) _ = if (self.nk(p.@"else") == .assign) self.h09_check_expr(ctx, p.@"else", .none) else self.check(ctx, p.@"else", t);
 }
 
-fn check(self: *Resolver, ctx: *FnCtx, n: NodeId, expected: StaticPool.Index) StaticPool.Index {
-    return self.h10_expect(ctx, n, self.h09_check_expr(ctx, n, expected), expected);
+const InitState = struct { tracked: u32, uninit: u64 };
+
+pub fn init_enter(self: *Resolver) InitState {
+    defer self.uninit = 0;
+    return .{ .tracked = self.init_tracked.head, .uninit = self.uninit };
+}
+
+pub fn init_leave(self: *Resolver, s: InitState) void {
+    self.init_tracked.head = s.tracked;
+    self.uninit = s.uninit;
+}
+
+pub fn check(self: *Resolver, ctx: *FnCtx, n: NodeId, expected: StaticPool.Index) StaticPool.Index {
+    return self.h10_expect(n, self.h09_check_expr(ctx, n, expected), expected);
+}
+
+pub const Class = packed struct(u8) { stc: bool = false, loop: bool = false, range: bool = false, type_expr: bool = false, declares: bool = false, runit: bool = false, literal: bool = false, _pad: u1 = 0 };
+
+const classes = blk: {
+    var t: [256]Class = @splat(.{});
+    for ([_]NodeKind{ .stcif_then, .stcif_else, .stcwhile, .stcwhile_with_repeat_stmt, .stcfor_seq, .stcfor_var_in_seq, .stcloop, .stcloop_with_repeat_stmt, .stcmatch }) |k| t[@intFromEnum(k)].stc = true;
+    for ([_]NodeKind{ .@"while", .while_with_repeat_stmt, .stcwhile, .stcwhile_with_repeat_stmt, .for_seq, .for_var_in_seq, .stcfor_seq, .stcfor_var_in_seq, .loop, .loop_with_repeat_stmt, .stcloop, .stcloop_with_repeat_stmt }) |k| t[@intFromEnum(k)].loop = true;
+    for ([_]NodeKind{ .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl }) |k| t[@intFromEnum(k)].range = true;
+    for (@intFromEnum(NodeKind.type_ptrmut)..@intFromEnum(NodeKind.type_stcfun) + 1) |i| t[i].type_expr = true;
+    for ([_]NodeKind{ .type_array, .type_array_unlengthed, .def_fun_declaration, .typeof }) |k| t[@intFromEnum(k)].type_expr = true;
+    for ([_]NodeKind{ .def_var, .assign, .assign_typed, .mod_pub, .mod_mut, .mod_stc }) |k| t[@intFromEnum(k)].declares = true;
+    for ([_]NodeKind{ .block, .if_then, .if_else, .stcif_then, .stcif_else, .match, .stcmatch }) |k| t[@intFromEnum(k)].runit = true;
+    for ([_]NodeKind{ .int, .float, .char, .string }) |k| t[@intFromEnum(k)].literal = true;
+    break :blk t;
+};
+
+pub inline fn class(k: NodeKind) Class {
+    return classes[@intFromEnum(k)];
 }
 
 pub fn is_fn(kind: Decl.Kind) bool {
@@ -1643,28 +949,18 @@ pub fn is_fn(kind: Decl.Kind) bool {
     };
 }
 
-fn is_range_kind(k: NodeKind) bool {
-    return switch (k) {
-        .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound, .gen_upperbound_incl, .gen_upperbound_excl => true,
-        else => false,
-    };
+pub fn is_range_kind(k: NodeKind) bool {
+    return class(k).range;
 }
 
-fn is_type_expr(k: NodeKind) bool {
-    return (@intFromEnum(k) >= @intFromEnum(NodeKind.type_ptrmut) and @intFromEnum(k) <= @intFromEnum(NodeKind.type_stcfun)) or switch (k) {
-        .type_array, .type_array_unlengthed, .def_fun_declaration, .typeof => true,
-        else => false,
-    };
-}
-
-fn push_decl(self: *Resolver, name: NamePool.Index, node: NodeId, kind: Decl.Kind, ty: StaticPool.Index, flags: Decl.Flags) Decl.Index {
+pub fn push_decl(self: *Resolver, name: NamePool.Index, node: NodeId, kind: Decl.Kind, ty: StaticPool.Index, flags: Decl.Flags) Decl.Index {
     const d: Decl.Index = @enumFromInt(self.decls.len());
     const lazy = flags.is_global or is_fn(kind) or is_type_decl(kind);
     self.decls.push(.{ .name = name, .node = node, .kind = kind, .flags = flags, .state = if (lazy) .unresolved else .done, .ty = ty, .value = .none, .next_overload = .none });
     return d;
 }
 
-fn is_type_decl(kind: Decl.Kind) bool {
+pub fn is_type_decl(kind: Decl.Kind) bool {
     return kind == .type_alias or kind == .record or kind == .variant or kind == .trait;
 }
 
@@ -1686,7 +982,7 @@ fn pre_declared(self: *Resolver, d: Decl.Index, stmt: NodeId) bool {
 }
 
 // a scope for a declaration: globals get a barrier so they never see their user's locals
-fn open_scope(self: *Resolver, barrier: bool, self_type: StaticPool.Index, node: NodeId) void {
+pub fn open_scope(self: *Resolver, barrier: bool, self_type: StaticPool.Index, node: NodeId) void {
     self.h03_push_scope();
     if (barrier) {
         self.local_names.push(.none);
@@ -1696,7 +992,7 @@ fn open_scope(self: *Resolver, barrier: bool, self_type: StaticPool.Index, node:
 }
 
 // methods: the owning type is the value of the trait body row right before its members; realizations ask their template
-pub fn owner_of(self: *Resolver, decl: Decl.Index) StaticPool.Index {
+fn owner_of(self: *Resolver, decl: Decl.Index) StaticPool.Index {
     if (self.template_of.get(decl)) |t| return self.owner_of(t);
     if (self.dp(.kind, decl).* != .trait_member) return .none;
     var d = @intFromEnum(decl);
@@ -1712,11 +1008,28 @@ pub fn value_node(self: *Resolver, d: Decl.Index) NodeId {
     };
 }
 
-pub fn core(self: *const Resolver, n: NodeId) NodeId {
-    var c = n;
-    while (true) switch (self.nk(c)) {
-        .def_type_assertsize, .def_type_implof, .def_variant_tagof, .def_variant_assertsize, .def_variant_implof => c = self.arg(c, 0),
-        else => return c,
+pub const Def = struct { core: NodeId, body: NodeId = 0, size: NodeId = 0, tagof: NodeId = 0 };
+
+pub fn definition(self: *const Resolver, n: NodeId) Def {
+    var d = Def{ .core = n };
+    while (true) : (d.core = self.arg(d.core, 0)) switch (self.nk(d.core)) {
+        .def_type_implof, .def_variant_implof => d.body = self.arg(d.core, 1),
+        .def_type_assertsize, .def_variant_assertsize => d.size = self.arg(d.core, 1),
+        .def_variant_tagof => d.tagof = self.arg(d.core, 1),
+        else => return d,
+    };
+}
+
+fn core(self: *const Resolver, n: NodeId) NodeId {
+    return self.definition(n).core;
+}
+
+pub fn meta(kind: Decl.Kind, other: StaticPool.Index) StaticPool.Index {
+    return switch (kind) {
+        .record => .type_type,
+        .variant => .variant_type,
+        .trait => .trait_type,
+        else => other,
     };
 }
 
@@ -1729,21 +1042,23 @@ pub fn type_kind(self: *const Resolver, n: NodeId) Decl.Kind {
     };
 }
 
-pub fn decl_kind(self: *const Resolver, type_node: NodeId, value: NodeId) Decl.Kind {
+fn decl_kind(self: *const Resolver, type_node: NodeId, value: NodeId) Decl.Kind {
     const tk = self.type_kind(value);
     return switch (self.nk(type_node)) {
         .type_fun => .function,
         .type_stcfun => .static_function,
         .type_inlfun => .inlined_function,
-        .type_type => if (tk == .record) .record else .type_alias,
-        .type_variant => if (tk == .variant) .variant else .type_alias,
-        .type_trait => if (tk == .trait) .trait else .type_alias,
+        .type_type, .type_variant, .type_trait => if (value != 0 and self.nk(value) == .def_fun) .static_function else switch (self.nk(type_node)) {
+            .type_type => if (tk == .record) .record else .type_alias,
+            .type_variant => if (tk == .variant) .variant else .type_alias,
+            else => if (tk == .trait) .trait else .type_alias,
+        },
         .none => if (value != 0 and (self.nk(value) == .def_fun or self.nk(value) == .def_fun_declaration)) .function else .variable,
         else => .variable,
     };
 }
 
-pub fn unwrap_mods(self: *const Resolver, n0: NodeId, flags: *Decl.Flags) NodeId {
+fn unwrap_mods(self: *const Resolver, n0: NodeId, flags: *Decl.Flags) NodeId {
     var n = n0;
     while (true) : (n = self.arg(n, 0)) switch (self.nk(n)) {
         .mod_pub => flags.is_pub = true,
@@ -1753,7 +1068,28 @@ pub fn unwrap_mods(self: *const Resolver, n0: NodeId, flags: *Decl.Flags) NodeId
     };
 }
 
-pub fn stmt_parts(self: *const Resolver, n: NodeId) Parts {
+pub const Stmt = struct {
+    node: NodeId,
+    flags: Decl.Flags,
+    kind: Decl.Kind,
+    type: NodeId,
+    ids: []const NodeId,
+    value: NodeId,
+    values: []const NodeId,
+
+    pub fn is_member(s: Stmt) bool {
+        return s.ids.len == 1 and is_fn(s.kind);
+    }
+};
+
+pub fn statement(self: *const Resolver, n0: NodeId) Stmt {
+    var flags = Decl.Flags{};
+    const n = self.unwrap_mods(n0, &flags);
+    const p = self.stmt_parts(n);
+    return .{ .node = n, .flags = flags, .kind = self.decl_kind(p.type, p.value), .type = p.type, .ids = p.ids, .value = p.value, .values = if (p.value == 0) &.{} else self.list_at(n, 1, .partial__assign_multival) };
+}
+
+fn stmt_parts(self: *const Resolver, n: NodeId) Parts {
     return switch (self.nk(n)) {
         .def_var => .{ .type = self.arg(n, 0), .ids = self.list_at(n, 1, .partial__destructure) },
         .assign_typed => .{ .type = self.arg(self.arg(n, 0), 0), .ids = self.list_at(self.arg(n, 0), 1, .partial__destructure), .value = self.arg(n, 1) },
@@ -1791,8 +1127,16 @@ pub fn param(self: *const Resolver, n0: NodeId) Param {
 
 // unnamed parameters and fields are `$0`, `$1`, ...
 pub fn param_name(self: *Resolver, pn: NodeId, i: usize) NamePool.Index {
-    const p = self.param(pn);
+    return self.name_at(self.param(pn), i);
+}
+
+pub fn name_at(self: *Resolver, p: Param, i: usize) NamePool.Index {
     return if (p.name != 0) self.name_of(p.name) else self.name_pool.intern(dollar_names[@min(i, 63)]);
+}
+
+pub fn template_field(self: *Resolver, g: Decl.Index, name: NamePool.Index) ?NodeId {
+    for (self.fields_of_node(self.core(self.arg(self.value_node(g), 1))), 0..) |f, i| if (self.param_name(f, i) == name) return f;
+    return null;
 }
 
 pub fn params_of(self: *const Resolver, v: NodeId) []const NodeId {
@@ -1808,27 +1152,13 @@ pub fn fields_of(self: *Resolver, rec: StaticPool.Index) []const NodeId {
     return self.fields_of_node(self.core(self.value_node(self.static_pool.get(rec).custom_type.decl)));
 }
 
-fn fun_type(self: *Resolver, ctx: *FnCtx, v: NodeId, category: StaticPool.FunType.Category, ret: StaticPool.Index, self_param: StaticPool.Index) StaticPool.Index {
-    const header = self.arg(v, 0);
-    const params = self.params_of(v);
-    const off = @intFromBool(self_param != .none);
-    var buf: [64]StaticPool.Index = undefined;
-    buf[0] = self_param;
-    for (params, 0..) |p, i| buf[i + off] = self.h07_lower_type(ctx, self.param(p).ty);
-    const r = if (self.nk(header) == .partial__fun_def_header_ret) self.h07_lower_type(ctx, self.arg(header, 1)) else ret;
-    return self.static_pool.intern(.{ .function_type = .{ .category = category, .params = buf[0 .. params.len + off], .ret = r } });
+// 1 when the declaration's function type starts with the induced `*Self` (methods except `init`)
+pub fn sig(self: *Resolver, d: Decl.Index) StaticPool.FunType {
+    return self.static_pool.get(self.dp(.ty, d).*).function_type;
 }
 
-// 1 when the declaration's function type starts with the induced `*Self` (methods except `init`)
 pub fn self_off(self: *Resolver, d: Decl.Index) usize {
     return @intFromBool(self.dp(.kind, d).* == .trait_member and self.dp(.name, d).* != .init);
-}
-
-pub fn same_params(self: *Resolver, a: StaticPool.Index, b: StaticPool.Index) bool {
-    const sp = &self.static_pool;
-    if (a == b) return true;
-    if (a == .none or b == .none or sp.tag(a) != .function_type or sp.tag(b) != .function_type) return false;
-    return std.mem.eql(StaticPool.Index, sp.get(a).function_type.params, sp.get(b).function_type.params);
 }
 
 pub fn self_ptr(self: *Resolver, t: StaticPool.Index) StaticPool.Index {
@@ -1839,24 +1169,23 @@ pub fn self_ptr(self: *Resolver, t: StaticPool.Index) StaticPool.Index {
 pub fn deref(self: *Resolver, t0: StaticPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
     const t = sp.apply_vars(&self.abstract_pool, t0);
-    if (sp.get(t) != .ptr_type) return t;
-    const c = sp.get(t).ptr_type.child;
+    if (!sp.is_ptr(t)) return t;
+    const c = sp.pointee(t);
     return if (sp.class(c).is_nominal or sp.class(c).is_variant) c else t;
 }
 
-fn fresh_var(self: *Resolver, origin: NodeId) StaticPool.Index {
+pub fn fresh_var(self: *Resolver, origin: NodeId) StaticPool.Index {
     return self.static_pool.intern(.{ .abstract_type = self.abstract_pool.fresh(origin) });
 }
 
-fn fn_ret(self: *Resolver, d: Decl.Index) StaticPool.Index {
-    self.h05_ensure_signature(d);
-    const t = self.dp(.ty, d).*;
-    return if (t != .none and self.static_pool.tag(t) == .function_type) self.static_pool.get(t).function_type.ret else .poison_type;
+pub fn fn_ret(self: *Resolver, d: Decl.Index) StaticPool.Index {
+    const t = types.decl_type(self, d);
+    return if (self.static_pool.tag(t) == .function_type) self.static_pool.get(t).function_type.ret else .poison_type;
 }
 
-fn method(self: *Resolver, node: NodeId, m: Decl.Index) StaticPool.Index {
+pub fn method(self: *Resolver, node: NodeId, m: Decl.Index) StaticPool.Index {
     self.node_decl[node] = m;
-    return self.decl_type(m);
+    return types.decl_type(self, m);
 }
 
 // the function a declaration stands for (`fun f = my_templ(..)` stands for the realization)
@@ -1865,162 +1194,80 @@ pub fn real(self: *Resolver, d: Decl.Index) Decl.Index {
     return if (v != .none and self.static_pool.tag(v) == .function_value) self.static_pool.get(v).function else d;
 }
 
-pub fn has_where(self: *Resolver, d: Decl.Index) bool {
-    for (self.params_of(self.value_node(d))) |pn| if (self.param(pn).where != 0) return true;
+pub fn group_head(self: *Resolver, first: Decl.Index, d: Decl.Index) Decl.Index {
+    const t = self.dp(.ty, self.real(d)).*;
+    var h = first;
+    while (h != d and !calls.same_params(self, self.dp(.ty, self.real(h)).*, t)) h = self.dp(.next_overload, h).*;
+    return h;
+}
+
+pub fn template(self: *Resolver, d: Decl.Index) Decl.Kind {
+    const n = self.dp(.node, d).*;
+    if (self.nk(n) != .assign_typed or self.nk(self.arg(n, 1)) != .def_fun) return .variable;
+    return switch (self.nk(self.arg(self.arg(n, 0), 0))) {
+        .type_type => .record,
+        .type_variant => .variant,
+        .type_trait => .trait,
+        else => .variable,
+    };
+}
+
+fn elem_ptr(self: *Resolver, t0: StaticPool.Index) bool {
+    const sp = &self.static_pool;
+    if (t0 == .poison_type or t0 == .none) return false;
+    const t = sp.apply_vars(&self.abstract_pool, t0);
+    return sp.is_ptr(t) and sp.get(sp.pointee(t)) != .array_type;
+}
+
+pub fn integer(self: *Resolver, ctx: *FnCtx, n: NodeId) bool {
+    const t = self.operand(ctx, n, if (self.nk(n) == .neg_num) .i64_type else .u64_type);
+    if (t == .poison_type or self.static_pool.class(t).is_integer) return true;
+    _ = self.report(.type_mismatch, n, t, .u64_type);
     return false;
 }
 
-pub fn length_generic(self: *Resolver, ty: StaticPool.Index) bool {
-    const sp = &self.static_pool;
-    if (ty == .none or sp.tag(ty) != .function_type) return false;
-    for (0..sp.get(ty).function_type.params.len) |i| {
-        const p = sp.get(ty).function_type.params[i];
-        if (sp.has_vars(sp.apply_vars(&self.abstract_pool, p)) or sp.tag(p) == .meta_type) return true;
+pub fn signature_mentions(self: *Resolver, f: NodeId, v: NodeId) bool {
+    const header = self.arg(f, 0);
+    if (self.nk(header) != .partial__fun_def_header_ret or self.mentions(self.arg(header, 1), v)) return true;
+    for (self.params_of(f)) |pn| if (self.mentions(self.param(pn).ty, v)) return true;
+    return false;
+}
+
+pub fn mentions(self: *Resolver, n: NodeId, v: NodeId) bool {
+    const params = self.params_of(v);
+    const s = self.subtree(n);
+    for (s[0]..s[1]) |i| {
+        if (self.nk(@intCast(i)) != .identifier) continue;
+        const nm = self.name_of(@intCast(i));
+        for (params, 0..) |pn, j| if (self.param_name(pn, j) == nm) return true;
     }
     return false;
 }
 
-// parameters a function is realized for: unlengthed arrays (per length) and `type` parameters (per type)
-fn generic_slot(self: *Resolver, p: StaticPool.Index) bool {
-    return self.static_pool.has_vars(p) or self.static_pool.tag(p) == .meta_type;
-}
-
-// the static length an argument gives an unlengthed parameter (`&[5]u32` for `&[]u32`), or none
-fn arg_len(self: *Resolver, t0: StaticPool.Index, p0: StaticPool.Index) StaticPool.Index {
-    const sp = &self.static_pool;
-    var t = sp.apply_vars(&self.abstract_pool, t0);
-    var p = p0;
-    if (t == .poison_type) return .none;
-    if (sp.get(p) == .ptr_type) {
-        if (sp.get(t) != .ptr_type or (sp.get(p).ptr_type.mutable and !sp.get(t).ptr_type.mutable)) return .none;
-        t = sp.get(t).ptr_type.child;
-        p = sp.get(p).ptr_type.child;
-    }
-    if (sp.get(t) != .array_type or sp.get(p) != .array_type or sp.get(t).array_type.elem != sp.get(p).array_type.elem) return .none;
-    const len = sp.get(t).array_type.len;
-    return if (sp.tag(len) == .int_value or len == StaticPool.dyn_len) len else .none;
-}
-
-// unlengthed arrays that are not inferred per value become runtime-length slices
-fn dynify(self: *Resolver, t: StaticPool.Index) StaticPool.Index {
-    const sp = &self.static_pool;
-    if (t == .none or !sp.has_vars(t)) return t;
-    var buf: [64]StaticPool.Index = undefined;
-    return switch (sp.get(t)) {
-        .array_type => |a| sp.intern(.{ .array_type = .{ .len = if (sp.tag(sp.apply_vars(&self.abstract_pool, a.len)) == .type_var) StaticPool.dyn_len else a.len, .elem = self.dynify(a.elem) } }),
-        .ptr_type => |p| sp.intern(.{ .ptr_type = .{ .child = self.dynify(p.child), .mutable = p.mutable } }),
-        .function_type => |f| blk: {
-            const n = f.params.len;
-            for (0..n) |i| buf[i] = self.dynify(sp.get(t).function_type.params[i]);
-            break :blk sp.intern(.{ .function_type = .{ .category = f.category, .params = buf[0..n], .ret = self.dynify(sp.get(t).function_type.ret) } });
-        },
-        else => t,
-    };
-}
-
-fn bind_args(self: *Resolver, params: []const NodeId, args: []const NodeId, map: []u32, partial: bool) bool {
-    if (args.len > params.len or params.len > 64) return false;
-    var bound: u64 = 0;
-    for (args, 0..) |a, i| {
-        var p: usize = i;
-        if (self.nk(a) == .partial__fun_call_assigned_param) {
-            const name = self.name_of(self.arg(a, 0));
-            p = for (params, 0..) |pn, j| {
-                if (self.param_name(pn, j) == name) break j;
-            } else return false;
-        }
-        if (bound >> @intCast(p) & 1 != 0) return false;
-        bound |= @as(u64, 1) << @intCast(p);
-        map[i] = @intCast(p);
-    }
-    if (!partial) for (params, 0..) |pn, j| if (bound >> @intCast(j) & 1 == 0 and self.param(pn).default == 0) return false;
-    return true;
-}
-
-fn link(self: *Resolver, id: NodeId, d: Decl.Index, t: StaticPool.Index) void {
-    if (id == 0) return;
-    self.node_decl[id] = d;
-    self.node_type[id] = t;
-}
-
-fn named(self: *Resolver, a: NodeId, t: StaticPool.Index) StaticPool.Index {
-    if (self.nk(a) == .partial__fun_call_assigned_param) self.node_type[self.arg(a, 0)] = t;
-    return t;
-}
-
-fn bad_args(self: *Resolver, node: NodeId, params: []const NodeId, args: []const NodeId) StaticPool.Index {
-    for (args) |a| if (self.nk(a) == .partial__fun_call_assigned_param) {
-        const name = self.name_of(self.arg(a, 0));
-        for (params, 0..) |pn, j| {
-            if (self.param_name(pn, j) == name) break;
-        } else return self.report(.unknown_named_argument, a, name, .none);
-    };
-    return self.report(.wrong_arity, node, args.len, params.len);
-}
-
-fn static_of(self: *Resolver, ctx: *FnCtx, n: NodeId) StaticPool.Index {
-    const loop = switch (self.nk(n)) {
-        .stcwhile, .stcwhile_with_repeat_stmt, .stcfor_seq, .stcfor_var_in_seq, .stcloop, .stcloop_with_repeat_stmt => true,
-        else => false,
-    };
-    return if (loop and self.node_value[n] != .none) self.node_value[n] else self.h08_eval_static(ctx, n);
-}
-
-// the node tables of one checked body or type definition, as realizations share their nodes
-fn snapshot(self: *Resolver, decl: Decl.Index, root: NodeId) void {
-    const lo = self.subtree_lo(root);
-    const hi = self.subtree_hi(root) + 1;
-    self.bodies.push(.{ .decl = decl, .lo = lo, .len = hi - lo, .start = self.body_nodes.len() });
-    self.body_nodes.pool.ty.append(self.node_type[lo..hi]);
-    self.body_nodes.pool.decl.append(self.node_decl[lo..hi]);
-    self.body_nodes.pool.value.append(self.node_value[lo..hi]);
-}
-
-fn subtree_hi(self: *const Resolver, n: NodeId) NodeId {
+pub fn children(self: *const Resolver, n: NodeId) []const NodeId {
+    const slots: *const [2]NodeId = @ptrCast(&self.tree.ast_nodes.pool.args.buf[n]);
     return switch (ParseTree.Node.nk_childc[@intFromEnum(self.nk(n))]) {
-        .one => @max(n, self.subtree_hi(self.arg(n, 0))),
-        .two => @max(n, self.subtree_hi(self.arg(n, 0)), self.subtree_hi(self.arg(n, 1))),
-        .many => blk: {
-            var hi = n;
-            for (self.kids(n)) |c| hi = @max(hi, self.subtree_hi(c));
-            break :blk hi;
-        },
-        else => n,
+        .one => slots[0..1],
+        .two => slots,
+        .many => self.kids(n),
+        else => &.{},
     };
 }
 
-fn subtree_lo(self: *const Resolver, n: NodeId) NodeId {
-    return switch (ParseTree.Node.nk_childc[@intFromEnum(self.nk(n))]) {
-        .one => @min(n, self.subtree_lo(self.arg(n, 0))),
-        .two => @min(n, self.subtree_lo(self.arg(n, 0)), self.subtree_lo(self.arg(n, 1))),
-        .many => blk: {
-            var lo = n;
-            for (self.kids(n)) |c| lo = @min(lo, self.subtree_lo(c));
-            break :blk lo;
-        },
-        else => n,
-    };
+pub fn subtree(self: *const Resolver, n: NodeId) [2]NodeId {
+    var s: [2]NodeId = .{ n, n + 1 };
+    for (self.children(n)) |c| {
+        const x = self.subtree(c);
+        s = .{ @min(s[0], x[0]), @max(s[1], x[1]) };
+    }
+    return s;
 }
 
 pub fn arg_value(self: *const Resolver, a: NodeId) NodeId {
     return if (self.nk(a) == .partial__fun_call_assigned_param) self.arg(a, 1) else a;
 }
 
-fn open_type_var(self: *Resolver, t: StaticPool.Index) bool {
-    const sp = &self.static_pool;
-    if (t == .none or !sp.has_vars(t)) return false;
-    return switch (sp.get(t)) {
-        .abstract_type => true,
-        .array_type => |a| self.open_type_var(a.elem),
-        .ptr_type => |p| self.open_type_var(p.child),
-        .function_type => |f| for (f.params) |p| {
-            if (self.open_type_var(p)) break true;
-        } else self.open_type_var(f.ret),
-        else => false,
-    };
-}
-
-fn concrete(self: *Resolver, t: StaticPool.Index) bool {
+pub fn concrete(self: *Resolver, t: StaticPool.Index) bool {
     return t != .none and self.static_pool.tag(self.static_pool.apply_vars(&self.abstract_pool, t)) != .type_var;
 }
 
@@ -2029,9 +1276,12 @@ fn is_numeric(self: *Resolver, t: StaticPool.Index) bool {
 }
 
 fn numeric(self: *Resolver, node: NodeId, t: StaticPool.Index, result: StaticPool.Index) StaticPool.Index {
-    if (t == .poison_type) return t;
     if (self.is_numeric(t) or self.static_pool.tag(t) == .type_var) return if (result == .none) t else result;
-    return self.report(.type_mismatch, node, t, .none);
+    return self.mismatch(node, t, .none);
+}
+
+pub fn mismatch(self: *Resolver, n: NodeId, t: StaticPool.Index, want: StaticPool.Index) StaticPool.Index {
+    return if (t == .poison_type) t else self.report(.type_mismatch, n, t, want);
 }
 
 fn operand(self: *Resolver, ctx: *FnCtx, n: NodeId, hint: StaticPool.Index) StaticPool.Index {
@@ -2042,7 +1292,10 @@ fn operand(self: *Resolver, ctx: *FnCtx, n: NodeId, hint: StaticPool.Index) Stat
 fn pair(self: *Resolver, ctx: *FnCtx, node: NodeId, l: NodeId, r: NodeId, hint: StaticPool.Index) StaticPool.Index {
     const swap = self.is_literal(l) and !self.is_literal(r);
     const t1 = self.operand(ctx, if (swap) r else l, hint);
+    const add = self.nk(node) == .binary_add;
+    if ((add or !swap and self.nk(node) == .binary_sub) and self.elem_ptr(t1)) return if (self.integer(ctx, if (swap) l else r)) t1 else .poison_type;
     const t2 = self.operand(ctx, if (swap) l else r, t1);
+    if (add and self.elem_ptr(t2) and self.static_pool.class(t1).is_integer) return t2;
     if (t1 == .poison_type or t2 == .poison_type) return .poison_type;
     if (self.static_pool.tag(t1) == .meta_type and self.static_pool.tag(t2) == .meta_type) return t1;
     var j = self.static_pool.join(&self.abstract_pool, t1, t2);
@@ -2050,37 +1303,16 @@ fn pair(self: *Resolver, ctx: *FnCtx, node: NodeId, l: NodeId, r: NodeId, hint: 
     return if (j.ty == .none) self.report(.type_mismatch, node, t1, t2) else j.ty;
 }
 
-// a branch of if / match: unit blocks and nested ifs / matches are runit, a plain unit value is not
-fn branch(self: *Resolver, ctx: *FnCtx, node: NodeId, expected: StaticPool.Index) StaticPool.Index {
-    var t = self.static_pool.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, node, expected));
-    if (t == .unit_type and switch (self.nk(node)) {
-        .block, .if_then, .if_else, .stcif_then, .stcif_else, .match, .stcmatch => true,
-        else => false,
-    }) t = .runit_type;
-    if (!self.concrete(expected) or t == .never_type or t == .runit_type or t == .poison_type) return t;
-    if (t == .unit_type and expected != .unit_type) return self.report(.runit_mixing, node, t, expected);
-    return self.h10_expect(ctx, node, t, expected);
-}
-
-fn merge(self: *Resolver, node: NodeId, acc: StaticPool.Index, t: StaticPool.Index, expected: StaticPool.Index) StaticPool.Index {
-    if (self.concrete(expected)) return expected;
-    if (acc == .none) return t;
-    const j = self.static_pool.join(&self.abstract_pool, acc, t);
-    if (j.ty != .none) return j.ty;
-    if (expected == .none) return if (acc == .unit_type or t == .unit_type) .unit_type else self.report(.type_mismatch, node, acc, t);
-    return self.report(if (acc == .unit_type or t == .unit_type) .runit_mixing else .type_mismatch, node, acc, t);
-}
-
 fn need_deinit(self: *Resolver, node: NodeId, t0: StaticPool.Index) void {
     const t = self.static_pool.apply_vars(&self.abstract_pool, t0);
     if (t != .poison_type and self.static_pool.lookup_member(t, .deinit) == .none)
-        Doctor.h21_report(self, .no_deinit, node, @intFromEnum(t), 0);
+        self.doc.h21_report(.no_deinit, node, t, 0);
 }
 
 fn writable(self: *Resolver, node: NodeId) Access {
     return switch (self.nk(node)) {
         .capture => self.writable(self.arg(node, 0)),
-        .identifier, .identifier_self, .identifier_init, .identifier_deinit, .identifier_main => blk: {
+        .identifier, .identifier_self => blk: {
             const d = self.node_decl[node];
             if (d == .none) break :blk .ok;
             const f = self.dp(.flags, d).*;
@@ -2097,7 +1329,7 @@ fn writable(self: *Resolver, node: NodeId) Access {
 }
 
 // writing through a parent: `*T` allows it, `&T` never, anything else if the parent itself is writable
-fn through(self: *Resolver, parent: NodeId, or_place: bool) Access {
+pub fn through(self: *Resolver, parent: NodeId, or_place: bool) Access {
     const sp = &self.static_pool;
     const pt = self.node_type[parent];
     if (pt == .none or pt == .poison_type) return .ok;
@@ -2110,44 +1342,12 @@ fn field_mut(self: *Resolver, pt: StaticPool.Index, name: NamePool.Index) bool {
     const sp = &self.static_pool;
     if (pt == .none or pt == .poison_type) return true;
     var t = sp.apply_vars(&self.abstract_pool, pt);
-    if (sp.get(t) == .ptr_type) t = sp.get(t).ptr_type.child;
+    t = sp.pointee(t);
     if (sp.tag(t) == .variant_case_type) t = sp.get(t).variant_case_type.payload;
+    if (t != .none and sp.tag(t) == .template_type) if (self.template_field(sp.get(t).template_type, name)) |f| return self.param(f).is_mut;
     if (t == .none or sp.tag(t) != .record_type) return false;
     for (sp.get(t).custom_type.field_names, 0..) |n, i| if (n == name) return self.param(self.fields_of(t)[i]).is_mut;
     return false;
-}
-
-// what `??` / `?<-` unwrap: the payload of a case, or of the first case that has one
-pub fn payload_of(self: *Resolver, t0: StaticPool.Index) StaticPool.Index {
-    const sp = &self.static_pool;
-    const t = sp.apply_vars(&self.abstract_pool, t0);
-    const case = switch (sp.tag(t)) {
-        .variant_case_type => t,
-        .variant_type => for (sp.get(t).variant_type.cases) |c| {
-            if (sp.get(c).variant_case_type.payload != .none) break c;
-        } else return .none,
-        else => return .none,
-    };
-    const p = sp.get(case).variant_case_type.payload;
-    if (p == .none) return .none;
-    const f = sp.get(p).custom_type.field_types;
-    return if (f.len == 1) f[0] else p;
-}
-
-// `<- name` binds the value, `<- a, b` destructures a record in field order
-fn bind_label(self: *Resolver, label: NodeId, t: StaticPool.Index) void {
-    const sp = &self.static_pool;
-    if (self.nk(label) != .partial__destructure) {
-        self.node_decl[label] = self.h02_declare_local(self.name_of(label), label, .arrow_binder, t);
-        _ = self.set(label, t);
-        return;
-    }
-    const rt = sp.apply_vars(&self.abstract_pool, t);
-    for (self.kids(label), 0..) |id, i| {
-        const ft = if (sp.tag(rt) == .record_type and i < sp.get(rt).custom_type.field_types.len) sp.get(rt).custom_type.field_types[i] else if (t == .poison_type) t else self.report(.type_mismatch, id, t, .none);
-        self.node_decl[id] = self.h02_declare_local(self.name_of(id), id, .arrow_binder, ft);
-        _ = self.set(id, ft);
-    }
 }
 
 fn scalar(self: *Resolver, t: StaticPool.Index) bool {
@@ -2170,163 +1370,53 @@ fn check_init(self: *Resolver, node: NodeId, d: Decl.Index) void {
     if (self.uninit == 0) return;
     const bit = self.init_bit(d);
     if (self.uninit & bit == 0) return;
-    Doctor.h21_report(self, .use_before_initialization, node, @intFromEnum(self.dp(.name, d).*), 0);
+    self.doc.h21_report(.use_before_initialization, node, self.dp(.name, d).*, 0);
     self.uninit &= ~bit;
 }
 
-fn is_ptr_array(self: *Resolver, t0: StaticPool.Index) bool {
-    const sp = &self.static_pool;
-    const t = if (t0 == .none) t0 else sp.apply_vars(&self.abstract_pool, t0);
-    return t != .none and sp.get(t) == .ptr_type and sp.get(sp.get(t).ptr_type.child) == .array_type;
+pub const Loop = struct { cond: NodeId = 0, repeat: NodeId = 0, head: NodeId = 0, seq: NodeId = 0, variable: NodeId = 0, body: NodeId };
+
+pub fn node_info(self: *const Resolver, b: Body, comptime field: @EnumLiteral(), n: NodeId) @FieldType(NodeInfo, @tagName(field)) {
+    if (n -% b.lo < b.len) return @field(self.body_nodes.pool, @tagName(field)).buf[b.start + n - b.lo];
+    return @field(self, if (field == .ty) "node_type" else "node_" ++ @tagName(field))[n];
 }
 
-fn case_base(self: *Resolver, variant: StaticPool.Index, st: StaticPool.Index) ?u64 {
-    const sp = &self.static_pool;
-    if (variant == st) return 0;
-    if (st == .none or sp.tag(st) != .variant_union_type) return null;
-    var base: u64 = 0;
-    for (sp.get(st).variant_union_type) |m| {
-        if (m == variant) return base;
-        base += sp.get(m).variant_type.cases.len;
-    }
-    return null;
-}
-
-fn case_count(self: *Resolver, st: StaticPool.Index) usize {
-    const sp = &self.static_pool;
-    if (st == .bool_type) return 2;
-    if (sp.tag(st) == .variant_type) return sp.get(st).variant_type.cases.len;
-    if (sp.tag(st) != .variant_union_type) return 65;
-    var n: usize = 0;
-    for (sp.get(st).variant_union_type) |m| n += sp.get(m).variant_type.cases.len;
-    return n;
-}
-
-fn case_bit(self: *Resolver, case: StaticPool.Index, st: StaticPool.Index) u64 {
-    const c = self.static_pool.get(case).variant_case_type;
-    const bit = (self.case_base(c.variant, st) orelse return 0) + c.case;
-    return if (bit < 64) @as(u64, 1) << @intCast(bit) else 0;
-}
-
-fn member_bits(self: *Resolver, member: StaticPool.Index, st: StaticPool.Index) u64 {
-    const base = self.case_base(member, st) orelse return 0;
-    const n = self.static_pool.get(member).variant_type.cases.len;
-    return if (base + n > 64) 0 else (@as(u64, std.math.maxInt(u64)) >> @intCast(64 - n)) << @intCast(base);
-}
-
-// the integer values a pattern covers as closed intervals, for exhaustiveness over integer scrutinees
-fn intervals(self: *Resolver, ctx: *FnCtx, p: NodeId, out: *std.ArrayList([2]i128)) void {
-    const k = self.nk(p);
-    if (k == .partial__match_case_pattern_or) return for (self.kids(p)) |alt| self.intervals(ctx, alt, out);
-    const lo_n: NodeId = switch (k) {
-        .gen_incl, .gen_excl, .gen_lowerbound => self.arg(p, 0),
-        else => 0,
+pub fn field_of(self: *Resolver, rec: StaticPool.Index, a: NodeId, i: usize) ?u32 {
+    if (self.nk(a) != .partial__fun_call_assigned_param) return @intCast(i);
+    return switch (self.static_pool.lookup_member(rec, self.name_of(self.arg(a, 0)))) {
+        .field => |f| f.index,
+        else => null,
     };
-    const hi_n: NodeId = switch (k) {
-        .gen_incl, .gen_excl => self.arg(p, 1),
-        .gen_upperbound_incl, .gen_upperbound_excl => self.arg(p, 0),
-        else => 0,
+}
+
+pub fn narrowed(self: *const Resolver, target: NodeId) NodeId {
+    const inner = if (self.nk(target) == .type_ptr or self.nk(target) == .type_ptrmut) self.arg(target, 0) else target;
+    return if (self.nk(inner) == .type_array) self.range(self.arg(inner, 0)).lo else 0;
+}
+
+pub fn loop_parts(self: *const Resolver, n: NodeId) Loop {
+    const a0 = self.arg(n, 0);
+    const a1 = self.arg(n, 1);
+    return switch (self.nk(n)) {
+        .@"while", .stcwhile => .{ .cond = a0, .body = a1 },
+        .while_with_repeat_stmt, .stcwhile_with_repeat_stmt => .{ .cond = self.arg(a0, 0), .repeat = a1, .head = a0, .body = self.arg(a0, 1) },
+        .loop, .stcloop => .{ .body = a0 },
+        .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => .{ .repeat = a0, .body = a1 },
+        .for_var_in_seq, .stcfor_var_in_seq => .{ .head = a0, .seq = self.arg(a0, 0), .variable = a1, .body = self.arg(a0, 1) },
+        else => .{ .head = n, .seq = a0, .body = a1 },
     };
-    const single = !is_range_kind(k);
-    const lo = if (single) self.static_int(ctx, p) else if (lo_n == 0) std.math.minInt(i128) else self.static_int(ctx, lo_n);
-    const hi = if (single) lo else if (hi_n == 0) std.math.maxInt(i128) else (self.static_int(ctx, hi_n) orelse return) - @intFromBool(k == .gen_excl or k == .gen_upperbound_excl);
-    if (lo != null and hi != null) out.append(self.alloc, .{ lo.?, hi.? }) catch @panic("OOM");
 }
 
-fn static_int(self: *Resolver, ctx: *FnCtx, n: NodeId) ?i128 {
-    const sp = &self.static_pool;
-    const v = self.try_static(ctx, n) orelse return null;
-    if (sp.tag(v) != .int_value) return null;
-    const i = sp.get(v).int;
-    return if (sp.get(i.ty) == .int_type and sp.get(i.ty).int_type.signedness == .signed) @as(i64, @bitCast(i.bits)) else i.bits;
-}
+pub const Range = struct { lo: NodeId, hi: NodeId, incl: bool };
 
-fn covers(self: *Resolver, st: StaticPool.Index, ivs: [][2]i128) bool {
-    const sp = &self.static_pool;
-    if (st == .none or sp.get(st) != .int_type) return false;
-    const t = sp.get(st).int_type;
-    const bits: u7 = @intCast(t.bits);
-    const one: i128 = 1;
-    var cur: i128 = if (t.signedness == .signed) -(one << (bits - 1)) else 0;
-    const max: i128 = if (t.signedness == .signed) (one << (bits - 1)) - 1 else (one << bits) - 1;
-    std.mem.sort([2]i128, ivs, {}, struct {
-        fn lt(_: void, a: [2]i128, b: [2]i128) bool {
-            return a[0] < b[0];
-        }
-    }.lt);
-    for (ivs) |iv| {
-        if (iv[0] > cur) return false;
-        if (iv[1] >= max) return true;
-        cur = @max(cur, iv[1] + 1);
-    }
-    return false;
-}
-
-fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
-    const sp = &self.static_pool;
-    switch (self.nk(p)) {
-        .identifier => {
-            const name = self.name_of(p);
-            if (name != .underscore) self.node_decl[p] = self.h02_declare_local(name, p, .pattern_binder, st);
-            _ = self.set(p, st);
-            return .{ .all = true };
-        },
-        .partial__match_case_pattern_or => {
-            var r = Pat{};
-            for (self.kids(p)) |alt| {
-                const s = self.pattern(ctx, alt, st);
-                r = .{ .mask = r.mask | s.mask, .all = r.all or s.all };
-            }
-            return r;
-        },
-        .partial__match_case_pattern_typecast => {
-            const t = self.h07_lower_type(ctx, self.arg(p, 0));
-            const v = self.arg(p, 1);
-            self.node_decl[v] = self.h02_declare_local(self.name_of(v), v, .pattern_binder, t);
-            _ = self.set(v, t);
-            if (t != st and t != .poison_type and st != .poison_type and sp.coerce(&self.abstract_pool, t, st) == .incompatible) _ = self.report(.type_mismatch, p, t, st);
-            return .{ .all = t == st, .mask = if (t != .poison_type and sp.tag(t) == .variant_type) self.member_bits(t, st) else 0 };
-        },
-        .labelarrow => {
-            const r = self.pattern(ctx, self.arg(p, 0), st);
-            const ct = self.node_type[self.arg(p, 0)];
-            const pt = self.payload_of(ct);
-            self.bind_label(self.arg(p, 1), if (pt == .none) ct else pt);
-            return r;
-        },
-        .fun_call => {
-            const callee = self.arg(p, 0);
-            const ct = self.h09_check_expr(ctx, callee, .none);
-            const target = self.set(p, if (sp.tag(ct) == .meta_type) self.h08_eval_static(ctx, callee) else ct);
-            if (target == .poison_type) { // binders still exist, as poison
-                for (self.kids(self.arg(p, 1))) |a| _ = self.pattern(ctx, self.arg_value(a), target);
-                return .{};
-            }
-            if (target != st and sp.coerce(&self.abstract_pool, target, st) == .incompatible) _ = self.report(.type_mismatch, p, target, st);
-            const is_case = sp.tag(target) == .variant_case_type;
-            const rec = if (is_case) sp.get(target).variant_case_type.payload else target;
-            const args = self.kids(self.arg(p, 1));
-            var map: [64]u32 = undefined;
-            if (rec == .none or sp.tag(rec) != .record_type or !self.bind_args(self.fields_of(rec), args, &map, true)) {
-                if (args.len > 0) _ = self.report(.wrong_arity, p, args.len, 0);
-                return .{ .mask = if (is_case and args.len == 0) self.case_bit(target, st) else 0 };
-            }
-            var all = true;
-            for (args, 0..) |a, i| all = self.pattern(ctx, self.arg_value(a), self.named(a, sp.get(rec).custom_type.field_types[map[i]])).all and all;
-            return if (is_case) .{ .mask = if (all) self.case_bit(target, st) else 0 } else .{ .all = all };
-        },
-        else => { // literals, ranges and constant paths (`Toggle.On`)
-            const t = self.h09_check_expr(ctx, p, st);
-            if (is_range_kind(self.nk(p))) {
-                const e = sp.apply_vars(&self.abstract_pool, t);
-                if (t != .poison_type and st != .poison_type and sp.get(e) == .array_type and sp.coerce(&self.abstract_pool, sp.get(e).array_type.elem, st) == .incompatible) _ = self.report(.type_mismatch, p, sp.get(e).array_type.elem, st);
-                return .{};
-            }
-            _ = self.h10_expect(ctx, p, t, st);
-            if (sp.tag(t) == .variant_case_type) return .{ .mask = self.case_bit(t, st) };
-            return .{ .mask = if (st == .bool_type and self.nk(p) == .boolean_true) 1 else if (st == .bool_type and self.nk(p) == .boolean_false) 2 else 0 };
-        },
-    }
+pub fn range(self: *const Resolver, n: NodeId) Range {
+    const k = self.nk(n);
+    const two = k == .gen_incl or k == .gen_excl;
+    return .{
+        .lo = if (two or k == .gen_lowerbound) self.arg(n, 0) else 0,
+        .hi = if (two) self.arg(n, 1) else if (k == .gen_lowerbound) 0 else self.arg(n, 0),
+        .incl = k == .gen_incl or k == .gen_upperbound_incl,
+    };
 }
 
 pub fn literal_core(self: *const Resolver, node: NodeId, neg: *bool) NodeId {
@@ -2343,13 +1433,10 @@ pub fn literal_core(self: *const Resolver, node: NodeId, neg: *bool) NodeId {
 
 pub fn is_literal(self: *const Resolver, node: NodeId) bool {
     var neg = false;
-    return switch (self.nk(self.literal_core(node, &neg))) {
-        .int, .float, .char, .string => true,
-        else => false,
-    };
+    return class(self.nk(self.literal_core(node, &neg))).literal;
 }
 
-fn unescape(raw: []const u8, buf: []u8) []const u8 {
+pub fn unescape(raw: []const u8, buf: []u8) []const u8 {
     if (raw.len > buf.len) return raw;
     var n: usize = 0;
     var i: usize = 0;
@@ -2369,374 +1456,4 @@ fn unescape(raw: []const u8, buf: []u8) []const u8 {
         n += 1;
     }
     return buf[0..n];
-}
-
-// the static value of a literal: ints as u64 (i64 when negated), floats as f64
-pub fn literal_value(self: *Resolver, node: NodeId, negated: bool) StaticPool.Index {
-    const sp = &self.static_pool;
-    var neg = negated;
-    const n = self.literal_core(node, &neg);
-    var buf: [4096]u8 = undefined;
-    switch (self.nk(n)) {
-        .boolean_true => return .bool_true,
-        .boolean_false => return .bool_false,
-        .string => return sp.intern(.{ .string = unescape(self.text(n), &buf) }),
-        .float => {
-            const f = std.fmt.parseFloat(f64, self.text(n)) catch return self.report(.type_mismatch, n, .none, .none);
-            return sp.intern(.{ .float = .{ .ty = .f64_type, .value = if (neg) -f else f } });
-        },
-        else => {
-            const bits: u64 = if (self.nk(n) == .char) unescape(self.text(n), &buf)[0] else std.fmt.parseInt(u64, self.text(n), 0) catch return self.report(.type_mismatch, n, .none, .u64_type);
-            return sp.intern(.{ .int = if (neg) .{ .ty = .i64_type, .bits = 0 -% bits } else .{ .ty = .u64_type, .bits = bits } });
-        },
-    }
-}
-
-// untyped literals take the expected type when they fit, otherwise u32 / i32, then u64 / i64, floats f32
-fn literal_type(self: *Resolver, node: NodeId, expected: StaticPool.Index) StaticPool.Index {
-    const sp = &self.static_pool;
-    var neg = false;
-    const n = self.literal_core(node, &neg);
-    const k = self.nk(n);
-    if (k == .boolean_true or k == .boolean_false) return .bool_type;
-    const v = self.literal_value(n, neg);
-    var target = if (expected == .none) expected else sp.apply_vars(&self.abstract_pool, expected);
-    if (k == .string and target != .none and sp.get(target) == .ptr_type and sp.get(target).ptr_type.child == .u8_type) return target;
-    if (k == .string and target != .none and sp.get(target) == .array_type and sp.get(target).array_type.elem == .u8_type and
-        sp.tag(sp.get(target).array_type.len) == .int_value and sp.get(sp.get(target).array_type.len).int.bits >= sp.get(v).string.len) return target;
-    if (v == .poison_type or k == .string) return sp.type_of(v);
-    if (target != .none and sp.tag(target) == .variant_type) target = sp.single_payload(target); // `Opt8 x = 42`
-    const c = if (target == .none) StaticPool.Class{} else sp.class(target);
-    if (k == .float) return if (c.is_float) target else .f32_type;
-    if ((c.is_integer or c.is_float) and sp.fits(v, target)) return target;
-    return if (neg) (if (sp.fits(v, .i32_type)) .i32_type else .i64_type) else if (sp.fits(v, .u32_type)) .u32_type else .u64_type;
-}
-
-fn retype(self: *Resolver, v: StaticPool.Index, ty: StaticPool.Index) StaticPool.Index {
-    const sp = &self.static_pool;
-    if (v == .none or ty == .none or sp.tag(v) != .int_value) return v;
-    if (sp.class(ty).is_integer) return sp.intern(.{ .int = .{ .ty = ty, .bits = sp.get(v).int.bits } });
-    if (!sp.class(ty).is_float) return v;
-    const i = sp.get(v).int;
-    const signed = sp.get(i.ty) == .int_type and sp.get(i.ty).int_type.signedness == .signed;
-    return sp.intern(.{ .float = .{ .ty = ty, .value = if (signed) @floatFromInt(@as(i64, @bitCast(i.bits))) else @floatFromInt(i.bits) } });
-}
-
-fn aggregate(self: *Resolver, vals: []const StaticPool.Index) StaticPool.Index {
-    const sp = &self.static_pool;
-    const len = sp.intern(.{ .int = .{ .ty = .u64_type, .bits = vals.len } });
-    const ty = sp.intern(.{ .array_type = .{ .len = len, .elem = if (vals.len > 0) sp.type_of(vals[0]) else .unit_type } });
-    return sp.intern(.{ .aggregate = .{ .ty = ty, .elems = vals } });
-}
-
-fn fold(self: *Resolver, node: NodeId, k: NodeKind, l: StaticPool.Index, r: StaticPool.Index) StaticPool.Index {
-    const sp = &self.static_pool;
-    if (l == .poison_type or r == .poison_type) return .poison_type;
-    const a = sp.get(l);
-    const b = sp.get(r);
-    const B = struct {
-        fn of(x: bool) StaticPool.Index {
-            return if (x) .bool_true else .bool_false;
-        }
-    };
-    if (a == .int and b == .int) {
-        const signed = for ([_]StaticPool.Index{ a.int.ty, b.int.ty }) |t| {
-            if (sp.get(t) == .int_type and sp.get(t).int_type.signedness == .signed) break true;
-        } else false;
-        const x = a.int.bits;
-        const y = b.int.bits;
-        const sx: i64 = @bitCast(x);
-        const sy: i64 = @bitCast(y);
-        const sh: u6 = @truncate(y);
-        if ((k == .binary_div or k == .binary_mod) and y == 0) return self.report(.static_eval_failed, node, l, r);
-        const res: u64 = switch (k) {
-            .binary_add => x +% y,
-            .binary_sub => x -% y,
-            .binary_mul => x *% y,
-            .binary_div => if (signed) @bitCast(@divTrunc(sx, sy)) else x / y,
-            .binary_mod => if (signed) @bitCast(@rem(sx, sy)) else x % y,
-            .binary_shift_left => x << sh,
-            .binary_shift_right => if (signed) @bitCast(sx >> sh) else x >> sh,
-            .binary_num_or => x | y,
-            .binary_num_xor => x ^ y,
-            .binary_num_and => x & y,
-            .binary_pow => blk: {
-                var p: u64 = 1;
-                for (0..@min(y, 64)) |_| p *%= x;
-                break :blk p;
-            },
-            .binary_eq => return B.of(x == y),
-            .binary_neq => return B.of(x != y),
-            .binary_less => return B.of(if (signed) sx < sy else x < y),
-            .binary_greater => return B.of(if (signed) sx > sy else x > y),
-            .binary_less_eq => return B.of(if (signed) sx <= sy else x <= y),
-            .binary_greater_eq => return B.of(if (signed) sx >= sy else x >= y),
-            else => return self.report(.not_static, node, l, r),
-        };
-        return sp.intern(.{ .int = .{ .ty = a.int.ty, .bits = res } });
-    }
-    if ((a == .float or a == .int) and (b == .float or b == .int)) {
-        const ty = if (a == .float) a.float.ty else b.float.ty;
-        const x = sp.get(self.retype(l, ty)).float.value;
-        const y = sp.get(self.retype(r, ty)).float.value;
-        const res: f64 = switch (k) {
-            .binary_add => x + y,
-            .binary_sub => x - y,
-            .binary_mul => x * y,
-            .binary_div => x / y,
-            .binary_eq => return B.of(x == y),
-            .binary_neq => return B.of(x != y),
-            .binary_less => return B.of(x < y),
-            .binary_greater => return B.of(x > y),
-            .binary_less_eq => return B.of(x <= y),
-            .binary_greater_eq => return B.of(x >= y),
-            else => return self.report(.not_static, node, l, r),
-        };
-        return sp.intern(.{ .float = .{ .ty = ty, .value = res } });
-    }
-    // bools, types and every other static value compare by identity (they are interned)
-    return switch (k) {
-        .binary_eq => B.of(l == r),
-        .binary_neq => B.of(l != r),
-        .binary_logic_and => B.of(l == .bool_true and r == .bool_true),
-        .binary_logic_or => B.of(l == .bool_true or r == .bool_true),
-        .binary_logic_xor => B.of((l == .bool_true) != (r == .bool_true)),
-        else => self.report(.not_static, node, l, r),
-    };
-}
-
-// a static sequence as an aggregate: ranges with static bounds, or any static array
-fn static_loop(self: *Resolver, ctx: *FnCtx, node: NodeId) StaticPool.Index {
-    const sp = &self.static_pool;
-    const k = self.nk(node);
-    const a0 = self.arg(node, 0);
-    const a1 = self.arg(node, 1);
-    self.h03_push_scope();
-    defer self.h04_pop_scope();
-    var cond_n: NodeId = 0;
-    var body: NodeId = a0;
-    var repeat: NodeId = 0;
-    var repeat_first = false;
-    var seq: StaticPool.Index = .none;
-    var it: Decl.Index = .none;
-    switch (k) {
-        .@"while", .stcwhile => {
-            cond_n = a0;
-            body = a1;
-        },
-        .while_with_repeat_stmt, .stcwhile_with_repeat_stmt => {
-            cond_n = self.arg(a0, 0);
-            body = self.arg(a0, 1);
-            repeat = a1;
-        },
-        .loop, .stcloop => {},
-        .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => {
-            repeat = a0;
-            body = a1;
-            repeat_first = true;
-        },
-        else => {
-            const has_var = k == .for_var_in_seq or k == .stcfor_var_in_seq;
-            const f = if (has_var) a0 else node;
-            seq = self.static_seq(ctx, self.arg(f, 0));
-            if (seq == .poison_type) return seq;
-            body = self.arg(f, 1);
-            it = self.h02_declare_local(if (has_var) self.name_of(a1) else .dollar_it, node, .loop_variable, .none);
-        },
-    }
-    var vals: std.ArrayList(StaticPool.Index) = .empty;
-    defer vals.deinit(self.alloc);
-    var i: usize = 0;
-    while (true) : (i += 1) {
-        if (seq != .none) {
-            if (i >= sp.get(seq).aggregate.elems.len) break;
-            self.dp(.value, it).* = sp.get(seq).aggregate.elems[i];
-        }
-        if (repeat_first and self.h08_eval_static(ctx, repeat) == .poison_type) return .poison_type;
-        if (cond_n != 0) {
-            const c = self.h08_eval_static(ctx, cond_n);
-            if (c == .poison_type) return c;
-            if (c != .bool_true) break;
-        }
-        const v = self.h08_eval_static(ctx, body);
-        if (v == .poison_type) return v;
-        switch (self.interpreter.unwind) {
-            .brk => {
-                self.interpreter.unwind = .none;
-                break;
-            },
-            .ret => return v,
-            .cont => self.interpreter.unwind = .none,
-            .none => vals.append(self.alloc, v) catch @panic("OOM"),
-        }
-        if (!repeat_first and repeat != 0 and self.h08_eval_static(ctx, repeat) == .poison_type) return .poison_type;
-    }
-    return self.aggregate(vals.items);
-}
-
-fn static_construct(self: *Resolver, ctx: *FnCtx, target: StaticPool.Index, args: []const NodeId) StaticPool.Index {
-    const sp = &self.static_pool;
-    const is_case = sp.tag(target) == .variant_case_type;
-    const rec = if (is_case) sp.get(target).variant_case_type.payload else target;
-    if (rec == .none) return sp.intern(.{ .variant_value = .{ .case = target, .payload = .none } });
-    const fields = self.fields_of(rec);
-    var vals: std.ArrayList(StaticPool.Index) = .empty;
-    defer vals.deinit(self.alloc);
-    vals.appendNTimes(self.alloc, .none, fields.len) catch @panic("OOM");
-    for (args, 0..) |a, i| {
-        const fi = if (self.nk(a) == .partial__fun_call_assigned_param) switch (sp.lookup_member(rec, self.name_of(self.arg(a, 0)))) {
-            .field => |f| f.index,
-            else => return self.report(.unknown_named_argument, a, self.name_of(self.arg(a, 0)), rec),
-        } else i;
-        vals.items[fi] = self.retype(self.h08_eval_static(ctx, self.arg_value(a)), sp.get(rec).custom_type.field_types[fi]);
-    }
-    for (fields, 0..) |f, i| if (vals.items[i] == .none) {
-        const d = self.param(f).default;
-        vals.items[i] = if (d != 0) self.retype(self.h08_eval_static(ctx, d), sp.get(rec).custom_type.field_types[i]) else return self.report(.not_static, f, 0, 0);
-    };
-    const agg = sp.intern(.{ .aggregate = .{ .ty = rec, .elems = vals.items } });
-    return if (is_case) sp.intern(.{ .variant_value = .{ .case = target, .payload = agg } }) else agg;
-}
-
-fn static_seq(self: *Resolver, ctx: *FnCtx, seq: NodeId) StaticPool.Index {
-    const sp = &self.static_pool;
-    const k = self.nk(seq);
-    if (!is_range_kind(k)) {
-        const v = self.h08_eval_static(ctx, seq);
-        return if (v == .poison_type or sp.tag(v) == .aggregate_value) v else self.report(.not_static, seq, v, 0);
-    }
-    if (k == .gen_lowerbound) return self.report(.not_static, seq, 0, 0);
-    const two = k == .gen_incl or k == .gen_excl;
-    const lo = if (two) self.h08_eval_static(ctx, self.arg(seq, 0)) else sp.intern(.{ .int = .{ .ty = .u64_type, .bits = 0 } });
-    const hi = self.h08_eval_static(ctx, self.arg(seq, if (two) 1 else 0));
-    if (sp.tag(lo) != .int_value or sp.tag(hi) != .int_value) return if (lo == .poison_type or hi == .poison_type) .poison_type else self.report(.not_static, seq, 0, 0);
-    const end = sp.get(hi).int.bits + @intFromBool(k == .gen_incl or k == .gen_upperbound_incl);
-    var vals: std.ArrayList(StaticPool.Index) = .empty;
-    defer vals.deinit(self.alloc);
-    var i = sp.get(lo).int.bits;
-    while (i < end) : (i += 1) {
-        if (self.interpreter.step_budget == 0) return self.report(.static_eval_failed, seq, 0, 0);
-        self.interpreter.step_budget -= 1;
-        vals.append(self.alloc, sp.intern(.{ .int = .{ .ty = sp.get(lo).int.ty, .bits = i } })) catch @panic("OOM");
-    }
-    return self.aggregate(vals.items);
-}
-
-fn static_match(self: *Resolver, ctx: *FnCtx, pat: NodeId, v: StaticPool.Index) bool {
-    const sp = &self.static_pool;
-    switch (self.nk(pat)) {
-        .identifier => {
-            const name = self.name_of(pat);
-            if (name != .underscore) self.dp(.value, self.h02_declare_local(name, pat, .pattern_binder, sp.type_of(v))).* = v;
-            return true;
-        },
-        .partial__match_case_pattern_or => {
-            for (self.kids(pat)) |alt| if (self.static_match(ctx, alt, v)) return true;
-            return false;
-        },
-        else => {
-            const pv = self.try_static(ctx, pat) orelse return false;
-            return pv == v or (sp.tag(pv) == .int_value and sp.tag(v) == .int_value and sp.get(pv).int.bits == sp.get(v).int.bits);
-        },
-    }
-}
-
-// static evaluation that leaves no diagnostics behind when the node turns out not to be static
-fn try_static(self: *Resolver, ctx: *FnCtx, node: NodeId) ?StaticPool.Index {
-    const mark = self.doc.diagnostics.len();
-    const ty = self.node_type[node];
-    const v = self.h08_eval_static(ctx, node);
-    if (self.doc.diagnostics.len() == mark and v != .poison_type) return v;
-    inline for (@typeInfo(Doctor.Diagnosis).@"struct".fields) |f| @field(self.doc.diagnostics.pool, f.name).head = mark;
-    self.node_type[node] = ty;
-    self.node_value[node] = .none;
-    self.interpreter.unwind = .none;
-    return null;
-}
-
-fn memo(self: *Resolver, key: StaticPool.AbstractKey, v: StaticPool.Index) void {
-    self.static_pool.realized_abstracts.put(self.alloc, key, v) catch @panic("OOM");
-}
-
-// a trait body: one row for the body (its value is the self type), then one row per function member,
-// contiguous, so member i is row + 1 + i. static members (`stc u32 MASK = ..`) are plain locals of the body.
-fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.Index, self_ty: StaticPool.Index, supers: []const StaticPool.Index, of: Decl.Index) StaticPool.Index {
-    const sp = &self.static_pool;
-    const b = self.push_decl(if (self_ty == .none) self.dp(.name, of).* else .empty, body, .trait, .trait_type, .{});
-    if (self.realized_args.get(of)) |a| self.realized_args.put(self.alloc, b, a) catch @panic("OOM");
-    const tr = if (reserved != .none) reserved else sp.reserve_nominal(b);
-    self.dp(.value, b).* = if (self_ty != .none) self_ty else tr;
-    var names: [64]NamePool.Index = undefined;
-    var n: usize = 0;
-    for (self.kids(body)) |s| {
-        var flags = Decl.Flags{};
-        const m = self.unwrap_mods(s, &flags);
-        const parts = self.stmt_parts(m);
-        if (parts.ids.len != 1 or !is_fn(self.decl_kind(parts.type, parts.value))) continue;
-        names[n] = self.name_of(parts.ids[0]);
-        self.node_decl[parts.ids[0]] = self.push_decl(names[n], m, .trait_member, .none, flags);
-        n += 1;
-    }
-    for (self.kids(body)) |s| {
-        var flags = Decl.Flags{};
-        const parts = self.stmt_parts(self.unwrap_mods(s, &flags));
-        if (parts.ids.len != 1 or !is_fn(self.decl_kind(parts.type, parts.value))) _ = self.h11_check_assign(ctx, s);
-    }
-    var types: [64]StaticPool.Index = undefined;
-    for (0..n) |i| types[i] = self.decl_type(@enumFromInt(@intFromEnum(b) + 1 + i));
-    sp.complete_nominal(tr, .{ .trait_type = .{ .decl = b, .member_names = names[0..n], .member_types = types[0..n], .supers = supers } });
-    return tr;
-}
-
-fn decl_type(self: *Resolver, d: Decl.Index) StaticPool.Index {
-    self.h05_ensure_signature(d);
-    const t = self.dp(.ty, d).*;
-    return if (t == .none) .poison_type else t;
-}
-
-// implof: every member of the trait and its supers exists with the same signature (`typeof self` read as the type),
-// members with a default implementation may be left out
-fn conform(self: *Resolver, ty: StaticPool.Index, own: StaticPool.Index, trait: StaticPool.Index, node: NodeId) void {
-    const sp = &self.static_pool;
-    for (0..sp.get(trait).trait_type.member_names.len) |i| {
-        const tt = sp.get(trait).trait_type;
-        if (self.nk(self.value_node(@enumFromInt(@intFromEnum(tt.decl) + 1 + i))) == .def_fun) continue;
-        const name = tt.member_names[i];
-        const want = tt.member_types[i];
-        const m = if (own == .none) StaticPool.Member.none else sp.lookup_member(own, name);
-        if (m != .trait_method) {
-            Doctor.h21_report(self, .trait_member_missing, node, @intFromEnum(name), @intFromEnum(trait));
-            continue;
-        }
-        const have = sp.apply_vars(&self.abstract_pool, sp.get(own).trait_type.member_types[m.trait_method.index]);
-        const w = sp.apply_vars(&self.abstract_pool, want);
-        if (!self.same_sig(have, w, trait, ty)) Doctor.h21_report(self, .trait_signature_mismatch, node, @intFromEnum(name), @intFromEnum(trait));
-    }
-    for (0..sp.get(trait).trait_type.supers.len) |i| self.conform(ty, own, sp.get(trait).trait_type.supers[i], node);
-}
-
-fn same_sig(self: *Resolver, have: StaticPool.Index, want: StaticPool.Index, trait: StaticPool.Index, ty: StaticPool.Index) bool {
-    const sp = &self.static_pool;
-    if (have == want or have == .poison_type or want == .poison_type) return true;
-    if (sp.tag(have) != .function_type or sp.tag(want) != .function_type) return false;
-    const h = sp.get(have).function_type;
-    const w = sp.get(want).function_type;
-    if (h.params.len != w.params.len) return false;
-    for (h.params, w.params) |a, b| if (!self.same_as(a, b, trait, ty)) return false;
-    return self.same_as(h.ret, w.ret, trait, ty);
-}
-
-// a == b with the trait read as the implementing type anywhere inside (pointers, arrays, function types)
-fn same_as(self: *Resolver, a: StaticPool.Index, b: StaticPool.Index, trait: StaticPool.Index, ty: StaticPool.Index) bool {
-    const sp = &self.static_pool;
-    if (a == b or a == .poison_type or (b == trait and a == ty)) return true;
-    if (sp.tag(a) != sp.tag(b)) return false;
-    return switch (sp.get(a)) {
-        .ptr_type => |p| p.mutable == sp.get(b).ptr_type.mutable and self.same_as(p.child, sp.get(b).ptr_type.child, trait, ty),
-        .array_type => |x| x.len == sp.get(b).array_type.len and self.same_as(x.elem, sp.get(b).array_type.elem, trait, ty),
-        .function_type => |f| f.params.len == sp.get(b).function_type.params.len and for (0..f.params.len) |i| {
-            if (!self.same_as(sp.get(a).function_type.params[i], sp.get(b).function_type.params[i], trait, ty)) break false;
-        } else self.same_as(sp.get(a).function_type.ret, sp.get(b).function_type.ret, trait, ty),
-        else => false,
-    };
 }

@@ -1,0 +1,195 @@
+fun bump = (*u32 p) { p.* += 1; }
+fun first = (*[3]u32 a) -> *u32: ret a[0].&;
+
+type Counter = *(mut u32 n = 0, mut u32 total = 0) !{
+    fun add = (u32 x) { self.n += 1; self.total += x; }
+    fun mean = () -> u32: ret self.total / self.n;
+}
+
+stcfun ptrs = () -> u32 {
+    mut u32 x = 5;
+    p = x.&;
+    bump(p);
+    bump(x.&);
+    p.* = p.* * 10;
+
+    mut [3]u32 a = [1, 2, 3];
+    first(a.&).* = 100;
+    q = a[2].&;
+    q.* += 7;
+    ret x + a[0] + a[2];
+}
+
+stcfun methods = () -> u32 {
+    mut Counter c;
+    c.add(4);
+    c.add(8);
+    Counter.add(c.&, 6);
+    ret c.mean() * 100 + c.n;
+}
+
+# a trait value dispatches on its concrete type
+trait Shape = !{ fun area = () -> u32; }
+type Sq = *(u32 s) implof Shape !{ fun area = () -> u32: ret self.s * self.s; }
+type Rc = *(u32 w, u32 h) implof Shape !{ fun area = () -> u32: ret self.w * self.h; }
+
+fun measure = (Shape s) -> u32: ret s.area();
+
+stcfun traits = () -> u32 {
+    Sq a = Sq(s = 3);
+    Rc b = Rc(w = 2, h = 5);
+    ret measure(a) + measure(b);
+}
+
+# anything with $has_next and $next is iterable
+type Range = *(mut u32 at, u32 end) !{
+    $has_next = () -> bool: ret self.at < self.end;
+    $next = () -> u32 {
+        self.at += 1;
+        ret self.at - 1;
+    }
+}
+
+stcfun iterate = () -> u32 {
+    mut u32 s = 0;
+    mut Range r = Range(at = 2, end = 6);
+    for x in r: s += x;
+    ret s * 100 + r.at;
+}
+
+# a place source is resolved once
+stcfun iterate_once = () -> u32 {
+    mut u32 c = 0;
+    mut [2]Range rs = [Range(at = 0, end = 2), Range(at = 5, end = 7)];
+    mut u32 s = 0;
+    for x in rs[tick(c.&)]: s += x;
+    ret c * 100 + s;
+}
+
+type Log = *(mut u32 v) !{ $deinit = () { self.v = 99; } }
+
+stcfun defers = () -> u32 {
+    mut u32 out = 1;
+    {
+        defer out = out * 10;
+        out += 2;
+    }
+
+    mut u32 seen = 0;
+    {
+        mut Log l = Log(v = 5);
+        lp = l.&;
+        defer seen = lp.v;
+        defer deinit l;
+    }
+    ret out * 1000 + seen;
+}
+
+fun total = (&[]u32 xs) -> u32 {
+    mut u32 s = 0;
+    for x in xs: s += x;
+    ret s;
+}
+
+fun width = (type T) -> u64: ret sizeof T;
+
+stcfun generic = (u32 n) -> u64 {
+    mut [4]u32 a = [1, 2, 3, 4];
+    t = if n > 8: u64 else: u16;
+    ret (total(a.&) as u64) * 100 + width(t);
+}
+
+# array values narrow by copy, pointer targets narrow to views into the same memory
+stcfun narrowing = () -> u32 {
+    [5]u32 a = [10, 20, 30, 40, 50];
+    [3]u32 mid = a as [1..<4]u32;
+    [2]u32 head = a as [2]u32;
+
+    mut [4]u32 b = [1, 2, 3, 4];
+    v = b.& as *[2..<4]u32;
+    v.*[0] = 9;
+
+    *u32 p = b[0].&;
+    (p + 1).* = 7;
+    [2]u32 w = (p + 1) as [2]u32;
+    ret mid[0] + (mid.$len as u32) * 1000 + head[1] * 10000 + b[2] * 1000000 + w[0] * 10000000 + b[1] * 100000000;
+}
+
+# a parameter narrows like a local
+stcfun window = ([5]u8 a) -> u8 {
+    [2]u8 s = a as [3..<5]u8;
+    ret s[0] + s[1] * 10;
+}
+
+# the offset may lead
+stcfun leading = () -> u32 {
+    [3]u32 b = [1, 2, 3];
+    *u32 p = b[0].&;
+    ret (2 + p).* + (1 + p).* * 10 + ((p + 2) + -1).* * 100;
+}
+
+# strings are thawed into cells like any other array
+stcfun text = () -> u32 {
+    mut [5]u8 s = "hello";
+    s[0] = 72;
+    [3]u8 mid = s as [1..<4]u8;
+    *u8 q = s.&;
+    ret (q.* as u32) + (mid[0] as u32) * 1000;
+}
+
+fun tick = (*u32 p) -> u32 {
+    p.* += 1;
+    ret 0;
+}
+
+# a place is resolved once, the operand first
+stcfun once = () -> u32 {
+    mut u32 c = 0;
+    mut [2]u32 a = [0, 0];
+    a[tick(c.&)] += 5;
+    a[tick(c.&)]++;
+    ret c * 100 + a[0];
+}
+
+stcfun stepping = () -> u32 {
+    [3]u32 a = [1, 2, 3];
+    mut *u32 p = a[0].&;
+    p += 1;
+    p++;
+    ret p.*;
+}
+
+type Pair = *[2]u32;
+
+# a narrowing through an alias keeps the whole prefix
+stcfun aliased = () -> u32 {
+    [4]u32 a = [7, 8, 9, 10];
+    Pair p = a.& as Pair;
+    ret p.*[1];
+}
+
+fun at_runtime = (*[4]u32 b) -> u32 {
+    [2]u32 tail = b.* as [2..]u32;
+    *u32 p = b.*[0].&;
+    ret tail[1] + (p + 3).* + (b as *[1..=2]u32).*[1] + (1 + p).* + (b as Pair).*[1];
+}
+
+stc u32 PT = ptrs(); #= PT 180
+stc u32 NW = narrowing(); #= NW 779203020
+stc u32 ME = methods(); #= ME 603
+stc u32 TR = traits(); #= TR 19
+stc u32 IT = iterate(); #= IT 1406
+stc u32 IO = iterate_once(); #= IO 101
+stc u32 DF = defers(); #= DF 30099
+stc u64 GE = generic(9); #= GE 1008
+stc u8 WI = window([0, 1, 2, 3, 4]); #= WI 43
+stc u32 LE = leading(); #= LE 223
+stc u32 TX = text(); #= TX 101072
+stc u32 ON = once(); #= ON 206
+stc u32 SP = stepping(); #= SP 3
+stc u32 AL = aliased(); #= AL 8
+
+$main = () {
+    mut [4]u32 x = [1, 2, 3, 4];
+    u32 r = at_runtime(x.&);
+}

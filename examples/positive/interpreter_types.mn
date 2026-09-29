@@ -1,0 +1,124 @@
+stcfun Word = (u32 bits) -> type {
+    t = if bits <= 8: u8 else: if bits <= 16: u16 else: u32;
+    ret t;
+}
+
+stcfun Grid = (u32 n) -> type {
+    mut u32 k = n * 2;
+    t = Word(k * 4);
+    ret [k]t;
+}
+
+stcfun Pair = (u32 bits) -> type {
+    t = Word(bits);
+    ret *(t lo, t hi);
+}
+
+stcfun Opt = (bool wide) -> variant {
+    t = if wide: u64 else: u8;
+    ret ++(Some(t), None);
+}
+
+variant X = +(A, B);
+variant Y = +(C(u8));
+
+stcfun Joined = (bool y) -> variant {
+    t = if y: Y else: X;
+    ret X || t;
+}
+
+# local type declarations bind when execution reaches them
+stcfun Rec = (u32 bits) -> type {
+    mut u32 b = bits;
+    b += 1;
+    type T = Word(b);
+    type R = *(T x, T y);
+    ret R;
+}
+
+stcfun Tagged = (u32 bits) -> variant {
+    mut u32 b = bits;
+    type T = Word(b);
+    variant V = +(Some(T), None);
+    ret V;
+}
+
+stcfun widest = () -> u64 {
+    mut u64 best = 0;
+    for b in [4, 12, 20]: best = if sizeof Word(b) > best: sizeof Word(b) else: best;
+    ret best;
+}
+
+stcfun unwrapped = (bool wide) -> u64 {
+    Q = Opt(wide);
+    o = Q.Some(7);
+    ret o ?? 0;
+}
+
+stcfun code = (type T) -> u32: ret match T { u8 => 1, u16 => 2, u32 => 4, _ => 8 }
+
+stcfun cases = (bool wide) -> u32 {
+    Q = Opt(wide);
+    n = Q.None;
+    ret (if n == Q.None: 10 else: 0) + (if Q == Opt(wide): 100 else: 0);
+}
+
+trait Speak = !{ fun speak = () -> u32; }
+type Dog = *(u8 age) implof Speak !{ fun speak = () -> u32: ret 1; }
+
+stcfun speaks = (bool dog) -> bool {
+    t = if dog: Dog else: u8;
+    ret t oftype Speak;
+}
+
+type Wide = *(u32 w);
+
+# every if in a stcfun is static, the branch not taken is never checked
+stcfun describe = (type T) -> u32 {
+    T x;
+    ret if T == Wide: x.w + 1 else: (sizeof T) as u32;
+}
+
+stc u32 DW = describe(Wide); #= DW 1
+stc u32 DU = describe(u64); #= DU 8
+
+# every evaluated definition is a new nominal type
+stcfun fresh = () -> bool: ret *(u8 a) == *(u8 a);
+
+# computed types in type positions resolve at execution
+stcfun typed = (u32 bits) -> u64 {
+    mut u32 b = bits;
+    type T = Word(b);
+
+    T v = 300;
+    [b]T buf;
+    mut [b]T full;
+    full[b - 1] = 7;
+    ret (v as u64) + buf.$len * 1000 + ((1000 as T) as u64) * 1000000 + (full[b - 1] as u64) * 1000000000;
+}
+
+type G = Grid(3); #= G [6]u32
+type P = Pair(12); #= P *(u16 lo, u16 hi)
+type O = Opt(true); #= O ++(Some, None)
+type J = Joined(true); #= J +(A, B) || +(C)
+type R8 = Rec(7); #= R8 *(u8 x, u8 y)
+type R9 = Rec(8); #= R9 *(u16 x, u16 y)
+type TV = Tagged(3); #= TV +(Some, None)
+
+stc u64 TS = sizeof Tagged(200); #= TS 8
+stc u64 S1 = sizeof Opt(true); #= S1 16
+stc u64 S0 = sizeof Opt(false); #= S0 2
+stc u64 W = widest(); #= W 4
+stc u64 U = unwrapped(true); #= U 7
+stc u32 C = code(u32) + code(i64) * 10; #= C 84
+stc u32 N = cases(true); #= N 110
+stc bool SP = speaks(true); #= SP true
+stc bool SU = speaks(false); #= SU false
+stc bool FR = fresh(); #= FR false
+stc u64 T8 = typed(8); #= T8 7232008044
+stc u64 T9 = typed(9); #= T9 8000009300
+
+$main = () {
+    O o = O.Some(5);
+    P p = P(lo = 1, hi = 2);
+}

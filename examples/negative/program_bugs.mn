@@ -1,6 +1,8 @@
 variant Tok = +(Num(i64 v), Plus, End) tagof u8;
-stcfun Opt = (type T): ++(Some(T), None) tagof u8;
-stcfun Stack = (type T, u32 CAP): *(mut [CAP]T items, mut u32 len = 0) !{
+
+variant Opt = (type T): ++(Some(T), None) tagof u8;
+
+type Stack = (type T, u32 CAP): *(mut [CAP]T items, mut u32 len = 0) !{
     fun push = (T v) { self.items[self.len] = v; self.len += 1; }
     fun pop = () -> Opt(T) {
         if self.len == 0: ret Opt(T).None;
@@ -8,14 +10,17 @@ stcfun Stack = (type T, u32 CAP): *(mut [CAP]T items, mut u32 len = 0) !{
         ret Opt(T).Some("x"); #! type_mismatch
     }
 }
+
 type S = Stack(i64, 8);
+
 fun scan = (&[]u8 src) -> Tok {
     i32 i = 0;
-    while i < src.len { #! type_mismatch
+    while i < src.$len { #! type_mismatch
         i += 1; #! assign_to_immutable
     }
     ret Tok.Num(v = src); #! type_mismatch
 }
+
 fun eval = (S st) -> i64 {
     st.len = 5; #! assign_to_immutable
     mut S own = st;
@@ -28,7 +33,8 @@ fun eval = (S st) -> i64 {
     }
     ret own.peek(); #! unknown_member
 }
-main = () -> i32 {
+
+$main = () -> i32 {
     S st;
     ret eval(st, 1); #! wrong_arity
 }

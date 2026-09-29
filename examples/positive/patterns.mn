@@ -2,31 +2,38 @@ variant Shape = +(Circle(f32 r), Rect(f32 w, f32 h), Dot) tagof u8;
 variant Status = +(Ok, Err(Shape)) tagof u8;
 type Person = *([8]u8 name, u32 age);
 variant Code = +(Ok = 0, Bad(u8)) tagof self;
+
 fun area = (Shape s) -> f32: ret match s {
     Shape.Circle(r) => 3.14 * r * r, #: r f32
     Shape.Rect(w, h) => w * h, #: h f32
     Shape.Dot => 0.0,
 }
+
 fun nested = (Status st) -> f32: ret match st {
     Status.Err(Shape.Rect(ww, hh)) => ww + hh, #: ww f32
     Status.Err(inner) => area(inner), #: inner +(Circle, Rect, Dot)
     Status.Ok => 0.0,
 }
+
 fun by_field = (Person p) -> u32: ret match p {
     Person(name = n, age = 30) => 1, #: n [8]u8
     Person(age = a) => a, #: a u32
 }
+
 fun ranges = (i32 x) -> u8: ret match x {
     ..<0 => 0,
     0..=9 | 20..<30 => 1,
     _ => 2,
 }
+
 fun codes = (Code c) -> u8: ret match c {
     Code.Bad <- raw => raw, #: raw u8
     Code.Ok => 0,
 }
+
 fun bools = (bool b) -> u8: ret match b { true => 1, false => 0 }
-main = () {
+
+$main = () {
     total = area(Shape.Rect(w = 2.0, h = 3.0)) + nested(Status.Ok); #: total f32
     k = ranges(-3); #: k u8
 }

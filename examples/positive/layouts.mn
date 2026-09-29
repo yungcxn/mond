@@ -9,10 +9,12 @@ variant S = +(Some(u8), None = 0xFF) tagof self; stc u64 ss = sizeof S; #= ss 1
 variant T16 = +(A(u16), B) tagof u16; stc u64 st = sizeof T16; #= st 4
 variant U = E || P; stc u64 su = sizeof U; #= su 8
 variant W = +(A(u64), B(u8)); stc u64 sw = sizeof W; #= sw 16
+
 stc u64 sarr = sizeof [4]u32; #= sarr 16
 stc u64 s2d = sizeof [2][3]u16; #= s2d 12
 stc u64 sb = sizeof bool; #= sb 1
 stc u64 sf = sizeof f64; #= sf 8
 stc u64 sfn = sizeof (i32) -> i32; #= sfn 8
 stc u64 su8 = sizeof u8; #= su8 1
-main = () {}
+
+$main = () {}

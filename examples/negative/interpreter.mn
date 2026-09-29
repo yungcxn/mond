@@ -1,0 +1,48 @@
+stcfun divide = (u32 a, u32 b) -> u32: ret a / b; #! static_eval_failed
+
+stc u32 D = divide(1, 0);
+
+stcfun oob = (u32 i) -> u32 { [3]u32 a = [1, 2, 3]; ret a[i]; } #! static_eval_failed
+
+stc u32 O = oob(5);
+
+stcfun spin = () -> u32 { mut u32 x = 0; loop x += 1; ret x; } #! static_eval_failed
+
+stc u32 S = spin();
+
+variant V = +(A, B(u8));
+
+stcfun unwrapped = (V v) -> u8: ret v??; #! static_eval_failed
+
+stc u8 U = unwrapped(V.A);
+
+fun down = (u32 n) -> u32: ret if n == 0: 0 else: 1 + down(n - 1); #! static_eval_failed
+
+stc u32 DN = down(100000);
+stc u32 OK = down(10); #= OK 10
+
+stcfun shifted = (u32 n) -> u32: ret 1 << n; #! static_eval_failed
+stc u32 SH = shifted(32);
+
+# stcfuns are memoized per argument, so they must not change outside state
+stc u32 counter = 0;
+stcfun bump = () -> u32 { counter += 1; ret counter; } #! impure_stcfun
+stc u32 BU = bump();
+
+# a rejected argument or body is reported once, never run
+stcfun inc = (u32 x) -> u32: ret x + 1;
+stc u32 IN = inc(true); #! type_mismatch
+
+stcfun stride = () -> u32 {
+    mut [8]u32 x = [1, 2, 3, 4, 5, 6, 7, 8];
+    *[4]u32 b = x.& as *[4]u32;
+    c = b + 1; #! type_mismatch
+    ret c.*[0];
+}
+
+stc u32 ST = stride();
+
+fun lim = (u32 x stcwhere x < 10) -> u32: ret x;
+stc u32 LI = lim(20); #! stcwhere_violated
+
+$main = () {}

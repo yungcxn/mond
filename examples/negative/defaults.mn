@@ -1,6 +1,8 @@
 fun d = (i32 a = "s") {} #! type_mismatch
 fun w = (i32 a where a + 1) {} #! type_mismatch
 fun e = (i32 a where a > 0 else "s") {} #! type_mismatch
+
 type T = *(i32 a = true); #! type_mismatch
 type U = *(mut i32 a where a > 0 else a = "s"); #! type_mismatch
+
 fun ok = (i32 a = 1 where a > 0 else ret) {}

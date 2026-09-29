@@ -1,2 +1,2 @@
-main = () {}
-main = (i32 argc, &[]&u8 argv) {} #! duplicate_declaration
+$main = () {}
+$main = (i32 argc, &[]&u8 argv) {} #! duplicate_declaration

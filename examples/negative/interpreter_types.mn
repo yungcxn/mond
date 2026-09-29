@@ -1,0 +1,14 @@
+stcfun Word = (u32 bits) -> type: ret if bits <= 8: u8 else: u32;
+stcfun Bad = () -> type { t = 5; ret [2]t; } #! not_a_type
+
+type B = Bad();
+
+stcfun Wrong = (u32 b) -> u64 { mut u32 c = b; type T = Word(c); T v = "text"; ret 0; } #! type_mismatch
+
+stc u64 W = Wrong(3);
+
+stcfun Cast = (u32 b) -> u64 { mut u32 c = b; type T = Word(c); ret "x" as T; } #! invalid_cast
+
+stc u64 C = Cast(3);
+
+$main = () {}

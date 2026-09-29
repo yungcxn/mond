@@ -1,7 +1,9 @@
 fun r = () -> i32 { ret "s"; } #! type_mismatch
 fun v = () -> i32 { ret; } #! ret_type_mismatch
 fun takes = (i32 a) {}
+
 type Rec = *(i32 a);
+
 fun f = (i32 n) {
     bool b = 1; #! type_mismatch
     i32 s = "str"; #! type_mismatch
@@ -28,4 +30,5 @@ fun f = (i32 n) {
     bool cmp = n == "s"; #! type_mismatch
     i32 neg_bool = -true; #! type_mismatch
 }
+
 fun inf = (): ret [inf(),]; #! infinite_type

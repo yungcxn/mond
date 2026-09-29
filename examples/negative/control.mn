@@ -1,5 +1,7 @@
 fun unit_fn = () {}
+
 variant V = +(A, B, C);
+
 fun f = (bool c, V v, i32 n) {
     brk; #! brk_outside_loop
     cont; #! cont_outside_loop

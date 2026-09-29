@@ -6,9 +6,11 @@ fun signed_ret = (): ret -1; #: signed_ret () -> i32
 fun rec = (u64 n) -> u64: ret if n <= 1: 1 else: n * rec(n - 1); #: rec (u64) -> u64
 fun mutual_a = (u32 n) -> u32: ret if n == 0: 0 else: mutual_b(n - 1);
 fun mutual_b = (u32 n): ret if n == 0: 1 else: mutual_a(n - 1); #: mutual_b (u32) -> u32
+
 type Pair = *(i32 a, i32 b);
 variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
-main = () -> i32 {
+
+$main = () -> i32 {
     x = 5; #: x u32
     y = -5; #: y i32
     z = 5000000000; #: z u64

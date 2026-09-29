@@ -14,10 +14,13 @@ pub const Index = enum(u32) {
     deinit,
     main,
     len,
+    has_next,
+    next,
+    tag,
     none = std.math.maxInt(u32),
     _,
 
-    pub const first_dynamic: u32 = @intFromEnum(Index.len) + 1;
+    pub const first_dynamic: u32 = @intFromEnum(Index.tag) + 1;
 };
 
 alloc: std.mem.Allocator,

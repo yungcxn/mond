@@ -1,9 +1,12 @@
 fun unit_fn = () {}
 fun apply = ((i32) -> i32 f, i32 x) -> i32: ret f(x);
+
 variant V = +(A, B);
 variant W = +(A, B);
 variant O = +(Some(u8), None) tagof u8;
+
 fun q = () -> bool: 5; #! type_mismatch
+
 fun f = (&i32 ro) {
     [3]u8 a = [1, 2]; #! type_mismatch
     *i32 p = ro; #! type_mismatch

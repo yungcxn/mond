@@ -1,15 +1,20 @@
-stcfun Bad = (type T): *(T x) !{
+type Bad = (type T): *(T x) !{
     fun f = () -> T: ret "s"; #! type_mismatch type_mismatch
 }
+
 type A = Bad(i32);
 type B = Bad(u8);
 type C = Bad(i32);
-fun sum = (&[]u32 a) -> u32: ret a.len; #! type_mismatch type_mismatch
+
+fun sum = (&[]u32 a) -> u32: ret a.$len; #! type_mismatch type_mismatch
+
 fun use = () {
     u32 x = sum([1, 2].&);
     u32 y = sum([1, 2, 3].&);
     u32 z = sum([4, 5].&);
 }
-stcfun Boxed = (type T): *(T v) !{ fun get = () -> T: ret self.v + 1; } #! type_mismatch
+
+type Boxed = (type T): *(T v) !{ fun get = () -> T: ret self.v + 1; } #! type_mismatch
+
 type BB = Boxed(bool);
 type BI = Boxed(i32);

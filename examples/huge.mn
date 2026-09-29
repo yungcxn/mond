@@ -11,7 +11,7 @@
 #   3.  functions (every definition form, defaults, named args, where / where-else / stcwhere,
 #       overloading, lambdas, currying, inlfun, stcfun with two parameter tuples, function types)
 #   4.  types (plain, packed, mutable fields, defaults, where-else fields, assertsize, generics,
-#       init / deinit, methods, `with` copies)
+#       $init / $deinit, methods, `with` copies)
 #   5.  traits (plain, generic, trait-implementing traits, implof lists)
 #   6.  variants (enum-like, tagged unions, self-tagged, untagged unification with ||)
 #   7.  pattern matching (literals, or-patterns with `|`, ranges, payload destructuring,
@@ -96,7 +96,7 @@ u8 char_null     = '\0';
 &u8 plain_str    = "hello mond";
 &u8 escaped_str  = "tab:\t newline:\n quote:\" backslash:\\ done";
 &u8 empty_str    = "";
-[]u8 slice_str   = "strings are u8 arrays";
+[]u8 text_str   = "strings are u8 arrays";
 
 # --- booleans ---
 bool yes         = true;
@@ -317,7 +317,7 @@ fun call_greet = () {
 fun scaled = (f32 value, f32 = 2.0): ret value * $1;
 
 # where-else: predicate per parameter, else-branch handles the violation
-fun safe_div = (f32 a, f32 b where b != 0.0 else ret 0x7FC00000) -> f32 {
+fun safe_div = (f32 a, f32 b where b != 0.0 else ret 0x7FC00000 asbits f32) -> f32 {
     ret a / b;
 }
 
@@ -340,7 +340,7 @@ fun absolute = (i32 x) -> i32: ret if x < 0: -x else: x;
 fun absolute = (f32 x) -> f32: ret if x < 0.0: -x else: x;
 
 # overloading by array length through pointers (0-copy)
-fun arr_sum = (&[]u32 arr)  -> u32: ret arr_sum(arr as &[arr.len-1]u32) + arr.*[arr.len-1];
+fun arr_sum = (&[]u32 arr)  -> u32: ret arr_sum(arr as &[arr.$len-1]u32) + arr.*[arr.$len-1];
 fun arr_sum = (&[1]u32 arr) -> u32: ret arr.*[0];
 fun arr_sum = (&[0]u32 arr) -> u32: ret 0;
 
@@ -445,19 +445,19 @@ type Line = *(Vec2 from, Vec2 to);
 type Polygon = *([8]Vec2 points, u8 count);
 type Tree = *(i32 value, mut *Tree left, mut *Tree right);
 
-# generic types through static functions
-stcfun Vec2T  = (type T): *(mut T x, mut T y);
-stcfun Matrix = (type T, u32 ROWS, u32 COLS): *(mut [ROWS][COLS]T cells);
-stcfun Slice  = (type T): *(*T ptr, u64 len);
+# generic types through a parameter preamble
+type Vec2T  = (type T): *(mut T x, mut T y);
+type Matrix = (type T, u32 ROWS, u32 COLS): *(mut [ROWS][COLS]T cells);
+type Chunk  = (type T): *(*T ptr, u64 len);
 
 type Vec2i   = Vec2T(i32);
 type Mat4    = Matrix(f32, 4, 4);
-type ByteBuf = Slice(u8);
+type ByteBuf = Chunk(u8);
 
 # types with methods (anonymous trait body)
 type Counter = *(mut u32 count = 0, u32 step = 1) !{
-    init = (u32 step): ret Counter(step = step);
-    deinit = () {}
+    $init = (u32 step): ret Counter(step = step);
+    $deinit = () {}
 
     fun tick = () { self.count += self.step; }
     fun reset = () { self.count = 0; }
@@ -495,7 +495,7 @@ fun type_tour = () {
     older_peter = peter with (age = 99) with (address = "Retirement Home");
 
     # methods
-    mut Counter c = Counter.init(2);
+    mut Counter c = Counter.$init(2);
     c.tick();
     c.tick();
     u32 v = c.value();
@@ -538,20 +538,20 @@ trait Describable = !{
 
 trait Bark = !{ fun bark = (); }
 
-# generic traits through static functions
-stcfun SubtractableT = (type T): !{
+# generic traits through a parameter preamble
+trait SubtractableT = (type T): !{
     fun sub = (T other);
 }
 
-stcfun Comparable = (type T): !{
+trait Comparable = (type T): !{
     fun cmp = (T other) -> i32;
     fun lt = (T other) -> bool: ret self.cmp(other) < 0;
     fun eq = (T other) -> bool: ret self.cmp(other) == 0;
 }
 
-stcfun Iterable = (type T): !{
-    fun next = () -> T;
-    fun has_next = () -> bool;
+trait Iterable = (type T): !{
+    $next = () -> T;
+    $has_next = () -> bool;
 }
 
 # a trait that builds on other traits
@@ -585,11 +585,11 @@ type Id = *(u32 raw) assertsize 4 implof Comparable(Id) !{
 
 # real example: a byte stream implementing the builtin `Iterable`
 type ByteStream = *(*u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
-    init = (*u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
-    deinit = () {}
+    $init = (*u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
+    $deinit = () {}
 
-    fun next = () -> u8: ret self.buf[self.cursor++];
-    fun has_next = () -> bool: ret self.cursor < self.len;
+    $next = () -> u8: ret self.buf[self.cursor++];
+    $has_next = () -> bool: ret self.cursor < self.len;
     fun peek = () -> u8: ret self.buf[self.cursor];
     fun skip = (u32 n = 1) { self.cursor += n; }
 
@@ -597,11 +597,11 @@ type ByteStream = *(*u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
 }
 
 # generic stream
-stcfun Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iterable(Child) !{
-    init = (*Child in_buf, u32 len): ret Stream(Child)(buf = in_buf, cursor = 0, len = len);
+type Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iterable(Child) !{
+    $init = (*Child in_buf, u32 len): ret Stream(Child)(buf = in_buf, cursor = 0, len = len);
 
-    fun next = () -> Child: ret self.buf[self.cursor++];
-    fun has_next = () -> bool: ret self.cursor < self.len;
+    $next = () -> Child: ret self.buf[self.cursor++];
+    $has_next = () -> bool: ret self.cursor < self.len;
 
     pub fun pop = () -> Opt(Child): ret if self.cursor >= self.len: Opt(Child).None else: self.buf[self.cursor++];
 }
@@ -697,8 +697,8 @@ variant FamilyMember = +(
 ) tagof u8;
 
 # generic builtins-alikes
-stcfun Opt    = (type T): ++(Some(T), None) tagof u8;
-stcfun Result = (type T, type E): +(Ok(T), Err(E)) tagof u8;
+variant Opt    = (type T): ++(Some(T), None) tagof u8;
+variant Result = (type T, type E): +(Ok(T), Err(E)) tagof u8;
 
 # variants with methods
 variant Shape = +(Circle(f32 r), Rect(f32 w, f32 h), Tri(f32 a, f32 b, f32 c)) tagof u8 !{
@@ -1008,12 +1008,12 @@ fun for_tour = () {
     }
 
     # computed bounds
-    for i in 0..<arr3.len: arr3[i] *= 2;
+    for i in 0..<arr3.$len: arr3[i] *= 2;
     # generators bind tighter than binary operators, so a computed lower bound needs parens
-    for i in (arr3.len - 1)..=arr3.len * 2: print("%d", i);
+    for i in (arr3.$len - 1)..=arr3.$len * 2: print("%d", i);
 
     # for as value produces an array
-    mut [arr3.len]u32 arr4;
+    mut [arr3.$len]u32 arr4;
     arr4 = for arr3: $it * 2;
     []i32 squares = for i in 1..=8: i * i;
 
@@ -1090,15 +1090,15 @@ fun void_exit = (bool b) {
 # ============================================================================================== #
 
 type File = *(i32 fd, mut bool open = true) !{
-    init = (&u8 path): ret File(fd = sys_open(path));
-    deinit = () { if self.open: self.close(); }
+    $init = (&u8 path): ret File(fd = sys_open(path));
+    $deinit = () { if self.open: self.close(); }
     fun close = () { sys_close(self.fd); self.open = false; }
     fun write = (&u8 data) -> u64: ret sys_write(self.fd, data);
 }
 
 fun resource_tour = () {
     # plain defer
-    log = File.init("/tmp/log.txt");
+    log = File.$init("/tmp/log.txt");
     defer log.close();
 
     # defer a whole block
@@ -1112,12 +1112,12 @@ fun resource_tour = () {
     defer depth = 0;
 
     # explicit deinit
-    tmp = File.init("/tmp/scratch");
+    tmp = File.$init("/tmp/scratch");
     tmp.write("scratch data");
     deinit tmp;
 
     # deinit deferred right at the construction site
-    data = File.init("/tmp/data.bin") defer deinit;
+    data = File.$init("/tmp/data.bin") defer deinit;
     data.write("payload");
 
     # do: evaluate for side effects only
@@ -1139,7 +1139,7 @@ fun calc_something = () -> i32: ret 42;
 type DivMod = *(i32 quot, i32 rem);
 fun divmod = (i32 a, i32 b) -> DivMod: ret DivMod(a / b, a % b);
 fun find_byte = (&[]u8 hay, u8 needle) -> Opt8 {
-    for i in 0..<hay.len: if hay.*[i] == needle: ret Opt8.Some(i as u8);
+    for i in 0..<hay.$len: if hay.*[i] == needle: ret Opt8.Some(i as u8);
     ret Opt8.None;
 }
 
@@ -1189,7 +1189,7 @@ fun array_tour = () {
     # fixed length
     mut [4]u8 arr = [1, 2, 3, 4];
     arr[0] = 42;
-    arr[arr.len - 1] += 1;
+    arr[arr.$len - 1] += 1;
 
     # induced length
     []u8 induced_len = [5, 6, 7, 8, 9];
@@ -1211,10 +1211,10 @@ fun array_tour = () {
     &[4]u8 arr_ptr = arr.&;
     u8 via_ptr = arr_ptr.*[2];
     u8 via_auto = arr_ptr[2];
-    u64 len_auto = arr_ptr.len;
+    u64 len_auto = arr_ptr.$len;
 
     # strings
-    []u8 str = "Hello, world!";                                               # str.len == 13
+    []u8 str = "Hello, world!";                                               # str.$len == 13
     &u8 cstr = "Hello, world!";                                                  # with \0
     u8 h = str[0];
 
@@ -1263,7 +1263,7 @@ variant Op = +(
 variant VmError = +(StackOverflow, StackUnderflow, DivByZero, BadJump(u32 target)) tagof u8;
 
 # a status is either fine or carries an error
-stcfun Status = (type E): +(Ok, Err(E)) tagof u8;
+variant Status = (type E): +(Ok, Err(E)) tagof u8;
 type VmStatus = Status(VmError);
 type Arith64  = (i64, i64) -> i64;
 
@@ -1277,7 +1277,7 @@ type Vm = *(
     &[]Op program,
     mut bool running = true,
 ) !{
-    init = (&[]Op program): ret Vm(stack = empty_stack, program = program);
+    $init = (&[]Op program): ret Vm(stack = empty_stack, program = program);
 
     fun push = (i64 v) -> VmStatus {
         if self.sp >= VM_STACK_SIZE: ret VmStatus.Err(VmError.StackOverflow);
@@ -1298,7 +1298,7 @@ type Vm = *(
 
     # arms assign, so they are separated by `;` (a `,` would continue the assigned values)
     fun step = () -> VmStatus {
-        if self.pc >= self.program.len: ret VmStatus.Err(VmError.BadJump(self.pc));
+        if self.pc >= self.program.$len: ret VmStatus.Err(VmError.BadJump(self.pc));
         Op op = self.program.*[self.pc++];
 
         match op {
@@ -1360,7 +1360,7 @@ fun vm_demo = () {
         Op.Halt,
     ];
 
-    mut Vm vm = Vm.init(program.&) defer deinit;
+    mut Vm vm = Vm.$init(program.&) defer deinit;
     match vm.run() {
         VmStatus.Ok => print("vm finished"),
         VmStatus.Err(VmError.DivByZero) => print("division by zero"),
@@ -1382,14 +1382,14 @@ fun is_digit = (u8 c) -> bool: ret c >= '0' and c <= '9';
 fun is_alpha = (u8 c) -> bool: ret c >= 'a' and c <= 'z' or c >= 'A' and c <= 'Z' or c == '_';
 fun is_space = (u8 c) -> bool: ret match c { ' ' | '\t' | '\n' | '\r' => true, _ => false }
 
-fun tokenize = (*u8 src, u32 len) -> []Tok {
-    mut ByteStream bs = ByteStream.init(src, len) defer deinit;
+fun tokenize = (*u8 src, u32 len) -> [1024]Tok {
+    mut ByteStream bs = ByteStream.$init(src, len) defer deinit;
     mut [1024]Tok out;
     mut u32 count = 0;
 
-    while bs.has_next() {
+    while bs.$has_next() {
         u32 start = bs.cursor;
-        u8 c = bs.next();
+        u8 c = bs.$next();
 
         if is_space(c): cont;
 
@@ -1401,11 +1401,11 @@ fun tokenize = (*u8 src, u32 len) -> []Tok {
             '(' => TokKind.LParen,
             ')' => TokKind.RParen,
             '0'..='9' => {
-                while bs.has_next() and is_digit(bs.peek()): bs.skip();
+                while bs.$has_next() and is_digit(bs.peek()): bs.skip();
                 TokKind.Number;
             },
             _ => {
-                while bs.has_next() and is_alpha(bs.peek()): bs.skip();
+                while bs.$has_next() and is_alpha(bs.peek()): bs.skip();
                 TokKind.Ident;
             },
         }
@@ -1414,7 +1414,7 @@ fun tokenize = (*u8 src, u32 len) -> []Tok {
     }
 
     out[count++] = Tok(kind = TokKind.End, start = len, end = len);
-    ret out[0..<count];
+    ret out;
 }
 
 
@@ -1422,7 +1422,7 @@ fun tokenize = (*u8 src, u32 len) -> []Tok {
 # 12.3 a generic ring buffer
 # ---------------------------------------------------------------------------------------------- #
 
-stcfun RingBuffer = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0): *(
+type RingBuffer = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0): *(
     mut [CAP]T items,
     mut u32 head = 0,
     mut u32 tail = 0,
@@ -1450,8 +1450,8 @@ stcfun RingBuffer = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0
     }
 
     # Iterable(T)
-    fun next = () -> T: ret self.pop() ??;
-    fun has_next = () -> bool: ret !self.is_empty();
+    $next = () -> T: ret self.pop() ??;
+    $has_next = () -> bool: ret !self.is_empty();
 }
 
 type EventQueue = RingBuffer(Event, 64);
@@ -1475,9 +1475,9 @@ fun ring_demo = () {
 # 12.4 binary tree with pointers + recursion
 # ---------------------------------------------------------------------------------------------- #
 
-stcfun Node = (type K, type V): *(K key, mut V value, mut Opt(*Node(K, V)) left, mut Opt(*Node(K, V)) right);
+type Node = (type K, type V): *(K key, mut V value, mut Opt(*Node(K, V)) left, mut Opt(*Node(K, V)) right);
 
-stcfun TreeMap = (type K where K oftype Comparable(K), type V): *(mut Opt(*Node(K, V)) root, mut u64 size = 0) !{
+type TreeMap = (type K where K oftype Comparable(K), type V): *(mut Opt(*Node(K, V)) root, mut u64 size = 0) !{
     fun insert_at = (* *Node(K, V) slot, K key, V value) -> bool {
         match slot.*.*.key.cmp(key) {
             0 => {
@@ -1554,7 +1554,7 @@ fun traffic_demo = () {
 ### MAIN ###
 # ============================================================================================== #
 
-main = (i32 argc, &[]&u8 argv) -> i32 {
+$main = (i32 argc, &[]&u8 argv) -> i32 {
     if argc < 2 {
         print("usage: %s <demo>", argv.*[0]);
         ret 1;

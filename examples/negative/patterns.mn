@@ -1,6 +1,7 @@
 variant V = +(A, B(u8));
 variant W = +(X, Y);
 type R = *(i32 a, i32 b);
+
 fun f = (V v, i32 n, R r) {
     match v { W.X => 1, _ => 2 } #! type_mismatch
     match n { "s" => 1, _ => 2 } #! type_mismatch

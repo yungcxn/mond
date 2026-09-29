@@ -1,7 +1,8 @@
 fun apply = ((i32) -> i32 f, i32 x) -> i32: ret f(x);
 fun compose = ((i32) -> i32 f, (i32) -> i32 g): (i32 x): f(g(x)); #: compose ((i32) -> i32, (i32) -> i32) -> (i32) -> i32
 fun counter = (i32 start): (i32 step): start + step; #: counter (i32) -> (i32) -> i32
-main = () {
+
+$main = () {
     i32 base = 10;
     add_base = (i32 x): x + base; #: add_base (i32) -> i32
     r = apply(add_base, 5); #: r i32

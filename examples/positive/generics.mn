@@ -1,20 +1,25 @@
-stcfun Box = (type T): *(T value);
-stcfun Pair = (type A, type B): *(A first, B second);
-stcfun Opt = (type T): ++(Some(T), None) tagof u8;
-stcfun Matrix = (type T, u32 R, u32 C): *([R][C]T cells);
+type Box = (type T): *(T value);
+type Pair = (type A, type B): *(A first, B second);
+variant Opt = (type T): ++(Some(T), None) tagof u8;
+type Matrix = (type T, u32 R, u32 C): *([R][C]T cells);
+
 stcfun apply2 = (type T): (T a, (T) -> T f) -> T: ret f(f(a));
-stcfun Stack = (type T, u32 CAP stcwhere CAP > 0): *(mut [CAP]T items, mut u32 len = 0) !{
+
+type Stack = (type T, u32 CAP stcwhere CAP > 0): *(mut [CAP]T items, mut u32 len = 0) !{
     fun push = (T item) { self.items[self.len] = item; self.len += 1; } #: push (**([4]u8 items, u32 len), u8) -> ()
     fun top = () -> T: ret self.items[self.len - 1]; #: top (**([4]u8 items, u32 len)) -> u8
 }
+
 type BI = Box(i32); #= BI *(i32 value)
 type PB = Pair(u8, bool); #= PB *(u8 first, bool second)
 type OI = Opt(i32); #= OI ++(Some, None)
 type M = Matrix(f32, 2, 3); #= M *([2][3]f32 cells)
 type S4 = Stack(u8, 4); #= S4 *([4]u8 items, u32 len)
+
 fun same = (Box(i32) a) -> Box(i32): ret a; #: same (*(i32 value)) -> *(i32 value)
 fun twice = apply2(i32); #: twice (i32, (i32) -> i32) -> i32
-main = () {
+
+$main = () {
     b = Box(i32)(value = 3); #: b *(i32 value)
     BI b2 = same(b); #: b2 *(i32 value)
     v = b2.value; #: v i32

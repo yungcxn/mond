@@ -3,6 +3,7 @@ fun pick = (u32 x where x == 0) -> u32: ret 0; #! no_matching_overload
 fun pick = (u32 x where x == 1) -> u32: ret 1;
 fun small = (type T stcwhere sizeof T <= 8) -> u64: ret sizeof T;
 fun limited = (u32 x stcwhere x < 10) -> u32: ret x;
+
 fun f = (bool c, u32 n) {
     if c: 1 else: "s"; #! type_mismatch
     calc() <- x;

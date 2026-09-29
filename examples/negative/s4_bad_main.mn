@@ -1,1 +1,1 @@
-main = (&u8 x) -> &u8: ret x; #! type_mismatch
+$main = (&u8 x) -> &u8: ret x; #! type_mismatch

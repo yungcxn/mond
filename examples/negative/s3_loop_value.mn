@@ -1,4 +1,4 @@
-main = (i32 argc, &[]&u8 argv) -> i32 {
+$main = (i32 argc, &[]&u8 argv) -> i32 {
     []u32 w = while argc > 0: 1; #! uninferable_type
     []u32 f = for i in 0..<3: i;
     ret 0;

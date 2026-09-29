@@ -12,16 +12,18 @@ const Node = ParseTree.Node;
 
 // *** rule templates *** //
 
-pub fn templ_binary(kind: Node.Kind, prec: u8) fn (parser: *Parser, lhs: NodeId) anyerror!NodeId {
+pub fn templ_binary(comptime kind: Node.Kind, comptime prec: u8) fn (parser: *Parser, lhs: NodeId) anyerror!NodeId {
     return struct {
         pub fn eval(p: *Parser, lhs: NodeId) anyerror!NodeId {
-            const parent = p.tree.push_node(kind);
-            const def: Node.LayoutStruct(kind) = .{
-                .lhs = lhs,
-                .rhs = try any(p, .forbid_assign, prec + 1),
-            };
-            p.tree.set_children(parent, def);
-            return parent;
+            return p.tree.push_node_with(kind, .{ .lhs = lhs, .rhs = try any(p, .forbid_assign, prec + 1) });
+        }
+    }.eval;
+}
+
+pub fn templ_prefix(comptime kind: Node.Kind, comptime prec: u8) fn (parser: *Parser) anyerror!NodeId {
+    return struct {
+        pub fn eval(p: *Parser) anyerror!NodeId {
+            return p.tree.push_node_with(kind, .{ .subnode = try any(p, .forbid_assign, prec) });
         }
     }.eval;
 }
@@ -57,7 +59,9 @@ pub fn expr(p: *Parser, prec: u8) anyerror!NodeId {
     if (p.prev_eq_tok(.@"pct_}")) return parent;
 
     while (p.tok_cursor < p.tokens.len()) {
-        const post_f = lookahead.post[@intFromEnum(try p.peek_tok())] orelse break;
+        const tok = try p.peek_tok();
+        if (prec >= lookahead.prec_unary and (tok == .kw_as or tok == .kw_asbits)) break;
+        const post_f = lookahead.post[@intFromEnum(tok)] orelse break;
 
         p.tok_cursor += 1;
         parent = try post_f(p, parent);
@@ -96,7 +100,7 @@ pub fn paren(p: *Parser) anyerror!NodeId {
     const parent = try any(p, .forbid_assign, 0);
 
     switch (try p.peek_tok()) {
-        .@"pct_,", .@"xpct_=", .kw_where, .identifier, .kw_self, .kw_main, .kw_deinit, .kw_init => {
+        .@"pct_,", .@"xpct_=", .kw_where, .identifier, .kw_self => {
             return ee_def_fun(p, try partial.ee_fun_header(p, parent));
         },
         .@"pct_)" => {
@@ -174,87 +178,12 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
     return parent;
 }
 
-pub fn typeof(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.typeof);
-    const def: Node.LayoutStruct(.typeof) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_unary) };
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
-pub fn sizeof(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.sizeof);
-    const def: Node.LayoutStruct(.sizeof) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_unary) };
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
-pub fn neg_num(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.neg_num);
-    const def: Node.LayoutStruct(.neg_num) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_unary) };
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
-pub fn neg_logic(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.neg_logic);
-    const def: Node.LayoutStruct(.neg_logic) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_unary) };
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
-pub fn inc_prefix(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.inc_prefix);
-    const def: Node.LayoutStruct(.inc_prefix) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_unary) };
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
-pub fn dec_prefix(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.dec_prefix);
-    const def: Node.LayoutStruct(.dec_prefix) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_unary) };
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
-pub fn gen_upperbound_incl(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.gen_upperbound_incl);
-    const def: Node.LayoutStruct(.gen_upperbound_incl) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")) };
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
-pub fn gen_upperbound_excl(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.gen_upperbound_excl);
-    const def: Node.LayoutStruct(.gen_upperbound_excl) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")) };
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
 pub fn true_(p: *Parser) anyerror!NodeId {
     return p.tree.push_node(.boolean_true);
 }
 
 pub fn false_(p: *Parser) anyerror!NodeId {
     return p.tree.push_node(.boolean_false);
-}
-
-pub fn do(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.do);
-    const def: Node.LayoutStruct(.do) = .{ .subnode = try any(p, .forbid_assign, 0) };
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
-pub fn deinit(p: *Parser) anyerror!NodeId {
-    if (lookahead.pre[@intFromEnum(try p.peek_tok())] != null) {
-        const parent = p.tree.push_node(.deinit);
-        const def: Node.LayoutStruct(.deinit) = .{ .subnode = try any(p, .forbid_assign, 0) };
-        p.tree.set_children(parent, def);
-        return parent;
-    }
-
-    const parent = p.tree.push_node(.identifier_deinit);
-    return parent;
 }
 
 pub fn cont(p: *Parser) anyerror!NodeId {
@@ -422,20 +351,6 @@ fn ee_match(p: *Parser, comptime match_kind: Node.Kind) anyerror!NodeId {
     def.matched = try any(p, .forbid_assign, 0);
     def.match_body = try partial.match_body(p);
 
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
-pub fn type_ptr(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.type_ptr);
-    const def: Node.LayoutStruct(.type_ptr) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_unary) };
-    p.tree.set_children(parent, def);
-    return parent;
-}
-
-pub fn type_ptrmut(p: *Parser) anyerror!NodeId {
-    const parent = p.tree.push_node(.type_ptrmut);
-    const def: Node.LayoutStruct(.type_ptrmut) = .{ .subnode = try any(p, .forbid_assign, lookahead.prec_unary) };
     p.tree.set_children(parent, def);
     return parent;
 }
@@ -634,138 +549,88 @@ pub fn trait(p: *Parser) anyerror!NodeId {
 }
 
 pub fn unify_variants(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.unify_variants);
-    const def: Node.LayoutStruct(.unify_variants) = .{
-        .left_type = lhs,
-        .right_type = try any(p, .forbid_assign, 0),
-    };
-
-    p.tree.set_children(parent, def);
-    return parent;
+    return p.tree.push_node_with(.unify_variants, .{ .left_type = lhs, .right_type = try any(p, .forbid_assign, 0) });
 }
 
 pub fn fun_call(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.fun_call);
-    const def: Node.LayoutStruct(.fun_call) = .{
+    return p.tree.push_node_with(.fun_call, .{
         .callable = lhs,
         .fun_param_tuple = try partial.fun_call_param_tuple(p),
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn array_index(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.array_index);
-    const def: Node.LayoutStruct(.array_index) = .{
-        .indexable = lhs,
-        .index = try any(p, .forbid_assign, 0),
-    };
+    const index = try any(p, .forbid_assign, 0);
     try p.eat_assert_tok(.@"pct_]");
-    p.tree.set_children(parent, def);
-    return parent;
+    return p.tree.push_node_with(.array_index, .{ .indexable = lhs, .index = index });
 }
 
 pub fn member(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.member);
     const name = switch (try p.pop_tok()) {
         .identifier => try identifier(p),
         .kw_self => p.tree.push_node(.identifier_self),
-        .kw_init => p.tree.push_node(.identifier_init),
-        .kw_deinit => p.tree.push_node(.identifier_deinit),
-        .kw_main => p.tree.push_node(.identifier_main),
         else => return error.IllegalMemberName,
     };
-    const def: Node.LayoutStruct(.member) = .{
-        .parent = lhs,
-        .member = name,
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    return p.tree.push_node_with(.member, .{ .parent = lhs, .member = name });
 }
 
 pub fn dereference(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.dereference);
-    const def: Node.LayoutStruct(.dereference) = .{
+    return p.tree.push_node_with(.dereference, .{
         .subnode = lhs,
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn address_of(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.address_of);
-    const def: Node.LayoutStruct(.address_of) = .{
+    return p.tree.push_node_with(.address_of, .{
         .subnode = lhs,
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn inc_postfix(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.inc_postfix);
-    const def: Node.LayoutStruct(.inc_postfix) = .{
+    return p.tree.push_node_with(.inc_postfix, .{
         .subnode = lhs,
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn dec_postfix(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.dec_postfix);
-    const def: Node.LayoutStruct(.dec_postfix) = .{
+    return p.tree.push_node_with(.dec_postfix, .{
         .subnode = lhs,
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn gen_lowerbound(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.gen_lowerbound);
-    const def: Node.LayoutStruct(.gen_lowerbound) = .{
+    return p.tree.push_node_with(.gen_lowerbound, .{
         .subnode = lhs,
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn gen_incl(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.gen_incl);
-    const def: Node.LayoutStruct(.gen_incl) = .{
+    return p.tree.push_node_with(.gen_incl, .{
         .lower = lhs,
         .upper = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")),
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn gen_excl(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.gen_excl);
-    const def: Node.LayoutStruct(.gen_excl) = .{
+    return p.tree.push_node_with(.gen_excl, .{
         .lower = lhs,
         .upper = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")),
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn oftype(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.oftype);
-    const def: Node.LayoutStruct(.oftype) = .{
+    return p.tree.push_node_with(.oftype, .{
         .value = lhs,
         .type = try any(p, .forbid_assign, lookahead.prec_unary),
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn as(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.as);
-    const def: Node.LayoutStruct(.as) = .{
-        .value = lhs,
-        .type = try any(p, .forbid_assign, lookahead.prec_unary),
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    return p.tree.push_node_with(.as, .{ .value = lhs, .type = try any(p, .forbid_assign, lookahead.prec_unary) });
+}
+
+pub fn asbits(p: *Parser, lhs: NodeId) anyerror!NodeId {
+    return p.tree.push_node_with(.asbits, .{ .value = lhs, .type = try any(p, .forbid_assign, lookahead.prec_unary) });
 }
 
 pub fn labelarrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
@@ -819,35 +684,21 @@ pub fn defer_(p: *Parser) anyerror!NodeId {
 
 pub fn inlined_defer_deinit(p: *Parser, lhs: NodeId) anyerror!NodeId {
     try p.eat_assert_tok(.kw_deinit);
-    const parent = p.tree.push_node(.inlined_defer_deinit);
-    const def: Node.LayoutStruct(.inlined_defer_deinit) = .{
+    return p.tree.push_node_with(.inlined_defer_deinit, .{
         .subnode = lhs,
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn with(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const parent = p.tree.push_node(.with);
     try p.eat_assert_tok(.@"pct_(");
-    const def: Node.LayoutStruct(.with) = .{
+    return p.tree.push_node_with(.with, .{
         .value = lhs,
         .fun_call_param_tuple = try partial.fun_call_param_tuple(p),
-    };
-    p.tree.set_children(parent, def);
-    return parent;
+    });
 }
 
 pub fn identifier_self(p: *Parser) anyerror!NodeId {
     return p.tree.push_node(.identifier_self);
-}
-
-pub fn identifier_init(p: *Parser) anyerror!NodeId {
-    return p.tree.push_node(.identifier_init);
-}
-
-pub fn identifier_main(p: *Parser) anyerror!NodeId {
-    return p.tree.push_node(.identifier_main);
 }
 
 pub fn identifier(p: *Parser) anyerror!NodeId {

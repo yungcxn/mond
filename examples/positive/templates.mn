@@ -1,0 +1,97 @@
+type Box = (type T): *(mut T value, mut u32 count) !{
+    fun get_count = () -> u32: ret self.count;
+    fun get = () -> T: ret self.value;
+}
+
+variant Opt = (type T): ++(Some(T), None) tagof u8;
+
+trait Source = (type T): !{
+    fun left = () -> u32;
+    fun take = () -> T;
+}
+
+type Counter = *(mut u32 n) implof Source(u8) !{
+    fun left = () -> u32: ret self.n;
+    fun take = () -> u8 {
+        self.n -= 1;
+        ret 1;
+    }
+}
+
+stcfun Grid = (u32 n): ret *([n]u8 cells);
+
+# members that do not depend on T are usable on the unrealized Box
+fun count_of = (Box b) -> u32: ret b.count + b.get_count();
+fun bump = (*Box b) { b.count += 1; }
+fun remaining = (*Source s) -> u32: ret s.left();
+fun pass = (Grid g) -> u32: ret 1;
+
+# an opaque stcfun type needs a match before its members are reachable
+fun first = (Grid g) -> u8: ret match g {
+    Grid(4) h => h.cells[0],
+    Grid(2) h => h.cells[1],
+    _ => 0,
+}
+
+fun twice = (Box b) -> u32: ret count_of(b) * 2;
+
+# cases of other realizations are dead arms, not errors
+fun unwrap_or = (Opt o) -> u32: ret match o {
+    Opt(u8).Some(x) => x as u32,
+    Opt(u16).Some(x) => (x as u32) * 10,
+    _ => 0,
+}
+
+# a static test on a template waits for the realization
+fun narrow_count = (Box b) -> u32: ret stcif b oftype Box(u8): b.count else: b.count * 2;
+
+fun small = (Box b stcwhere sizeof b <= 8) -> u32: ret b.count;
+
+type Wrap = (type T): *(T inner, u32 k);
+
+# a realization of a template may realize others with its own type
+fun wrapped = (Box b) -> u32 {
+    w = Wrap(typeof b)(inner = b, k = 4);
+    ret w.k + w.inner.count;
+}
+
+stcfun realized = () -> bool {
+    Box(u8) b = Box(u8)(value = 1, count = 2);
+    ret b oftype Box;
+}
+
+stcfun at_compile = () -> u32 {
+    mut Box(u16) b = Box(u16)(value = 1, count = 3);
+    bump(b.&);
+
+    mut Counter k = Counter(n = 5);
+
+    Grid(2) two = Grid(2)(cells = [5, 6]);
+    Grid(3) three = Grid(3)(cells = [7, 8, 9]);
+    ret twice(b) * 100 + remaining(k.&) + (first(two) as u32) * 10000 + (first(three) as u32);
+}
+
+stc u32 CT = count_of(Box(u64)(value = 5, count = 20)); #= CT 40
+stc u32 AC = at_compile(); #= AC 61605
+stc bool RZ = realized(); #= RZ true
+stc u32 UW = unwrap_or(Opt(u16).Some(4)) + unwrap_or(Opt(u8).Some(3)); #= UW 43
+stc u32 WR = wrapped(Box(u16)(value = 1, count = 5)); #= WR 9
+stc u32 NT = narrow_count(Box(u8)(value = 1, count = 3)) + narrow_count(Box(u16)(value = 1, count = 3)) * 10; #= NT 63
+
+$main = () {
+    mut Box(i32) a = Box(i32)(value = 1, count = 7);
+    Box(u8) c = Box(u8)(value = 2, count = 9);
+    u32 x = count_of(a) + count_of(c) + twice(c); #: x u32
+    bump(a.&);
+
+    mut Counter k = Counter(n = 3);
+    u32 left = remaining(k.&);
+
+    Grid(4) g = Grid(4)(cells = [1, 2, 3, 4]);
+    u32 p = pass(g);
+    u8 f = first(g);
+
+    Opt(u8) o = Opt(u8).Some(1);
+    u32 u = unwrap_or(o) + unwrap_or(Opt(u16).Some(2));
+    u32 s = small(c) + narrow_count(c);
+}

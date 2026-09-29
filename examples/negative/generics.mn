@@ -1,5 +1,6 @@
-stcfun Box = (type T): *(T value);
-stcfun Pair = (type A, type B): *(A a, B b);
+type Box = (type T): *(T value);
+type Pair = (type A, type B): *(A a, B b);
+
 fun f = (u32 n) {
     Box(i32) b = Box(i32)(value = "s"); #! type_mismatch
     Pair(u8) p; #! wrong_arity

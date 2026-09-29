@@ -57,8 +57,8 @@ type Person = *([10]u8 name, mut i32 age = 18, mut &u8 address);
 # no c-alignment
 type Packed = **(u8 a, u16 b, u32 c);
 
-# static functions returning types expose abstract types
-stcfun Vec2D = (type T): *(T x, T y);
+# templates expose their realizations as abstract types
+type Vec2D = (type T): *(T x, T y);
 
 # using them
 Person alice = Person(name = "Alice", age = 20, address = "123 Main St");
@@ -102,8 +102,8 @@ trait Addable = !{
     fun add = ((typeof self) other);
 }
 
-# abstract traits through static functions
-stcfun SubtractableT = (type T): !{
+# templated traits
+trait SubtractableT = (type T): !{
     fun sub = (T other);
 }
 
@@ -121,29 +121,29 @@ type AddableVec2D = *(mut i32 x, mut i32 y) implof Addable, SubtractableT(Addabl
 }
 
 # real example, `Iterable` is a builtin
-stcfun Iterable = (type T): !{
-    fun next = () -> T;
-    fun has_next = () -> bool;
+trait Iterable = (type T): !{
+    $next = () -> T;
+    $has_next = () -> bool;
 }
 
 type ByteStream = *(*u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
-    init = (*u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
-    deinit = () {} # could be left out
+    $init = (*u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
+    $deinit = () {} # could be left out
 
     # for Iterable(u8)
-    fun next = () -> u8: ret self.buf[self.cursor++];
-    fun has_next = () -> bool: ret self.cursor < self.len;
+    $next = () -> u8: ret self.buf[self.cursor++];
+    $has_next = () -> bool: ret self.cursor < self.len;
 
     pub fun pop = () -> Opt8: ret if self.cursor >= self.len: Opt8.None else: self.buf[self.cursor++];
 }
 
-# real example with static function:
-stcfun Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iterable(Child) !{
-    init = (*Child in_buf, u32 len): ret Stream(Child)(buf = in_buf, cursor = 0, len = len);
-    deinit = () {} # could be left out
+# a real template
+type Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iterable(Child) !{
+    $init = (*Child in_buf, u32 len): ret Stream(Child)(buf = in_buf, cursor = 0, len = len);
+    $deinit = () {} # could be left out
 
-    fun next = () -> Child: ret self.buf[self.cursor++];
-    fun has_next = () -> bool: ret self.cursor < self.len;
+    $next = () -> Child: ret self.buf[self.cursor++];
+    $has_next = () -> bool: ret self.cursor < self.len;
 
     pub fun pop = () -> Opt(Child): ret if self.cursor >= self.len: Opt(Child).None else: self.buf[self.cursor++];
 }
@@ -205,7 +205,7 @@ variant CommonCode = +(
 ) tagof self;
 
 # the other builtin for any type
-stcfun Opt = (type T): ++(Some(T), None) tagof u8;
+variant Opt = (type T): ++(Some(T), None) tagof u8;
 
 # use A): 
 Direction dir = Direction.North;                            # Direction.North is a value, not a type
@@ -268,13 +268,13 @@ variant FamilyMember = +(
 ### WHERE, WHERE-ELSE, MIGHTY OVERLOADING ###
 
 # where-else function:
-fun safe_div = (f32 a, f32 b where b != 0.0 else ret 0x7FC00000) -> f32 {
+fun safe_div = (f32 a, f32 b where b != 0.0 else ret 0x7FC00000 asbits f32) -> f32 {
     ret a / b;
 }
 
 # same as:
 fun safe_div2 = (f32 a, f32 b) -> f32 {
-    if b == 0.0: ret 0x7FC00000;
+    if b == 0.0: ret 0x7FC00000 asbits f32;
     ret a / b;
 }
 
@@ -290,7 +290,7 @@ fun add = (i32 a, i32 b) -> i32 { ret a + b; }
 fun add = (f32 a, f32 b) -> f32 { ret a + b; }
 
 # true overloading through different array lengths --- pointer allow here 0-copy + free type cast
-fun recv_sum = (&[]u8 arr)  -> u32: ret recv_sum(arr as &[arr.len-1]u8) + arr.*[arr.len-1];
+fun recv_sum = (&[]u8 arr)  -> u32: ret recv_sum(arr as &[arr.$len-1]u8) + arr.*[arr.$len-1];
 fun recv_sum = (&[1]u8 arr) -> u32: ret arr.*[0];
 fun recv_sum = (&[0]u8 arr) -> u32: ret 0;
 
@@ -299,7 +299,7 @@ fun safe_div_ovl = (f32 a where a == 1, f32 b where b == 1): ret 1;
 fun safe_div_ovl = (f32 a where a == 1, f32 b): ret b;
 fun safe_div_ovl = (f32 a, f32 b where b == 1): ret a;
 fun safe_div_ovl = (f32 a, f32 b where b != 0.0): ret a / b;
-fun safe_div_ovl = (f32 a, f32 b): ret 0x7FC00000;
+fun safe_div_ovl = (f32 a, f32 b): ret 0x7FC00000 asbits f32;
 
 # same as:
 fun safe_div_ovl2 = (f32 a, f32 b) -> f32 {
@@ -307,7 +307,7 @@ fun safe_div_ovl2 = (f32 a, f32 b) -> f32 {
     if a == 1: ret b;
     if b == 1: ret a;
     if b != 0.0: ret a / b;
-    ret 0x7FC00000;
+    ret 0x7FC00000 asbits f32;
 }
 
 
@@ -339,9 +339,9 @@ fun test2 = () {
     mut [4]u8 arr = [1, 2, 3, 4];
     arr[0] = 42;
 
-    []u8 induced_len = [5, 6, 7, 8, 9];                                       # induced_len.len == 5
+    []u8 induced_len = [5, 6, 7, 8, 9];                                       # induced_len.$len == 5
 
-    []u8 str = "Hello, world!";                                                      # str.len == 13
+    []u8 str = "Hello, world!";                                                      # str.$len == 13
     &u8 str2 = "Hello, world!";                                                      # with \0
     # *u8 str3 = "Hello, world!"; is illegal, as string literals are immutable
 }
@@ -358,7 +358,7 @@ fun test2 = () {
 ### CONTROL FLOW AND SUGARS ###
 fun calc_something = () -> i32: ret 42;
 
-main = () {
+$main = () {
     # no statements exist in this languages -> from if to loop everything is an expression.
 
     # if-else unassigned
@@ -445,7 +445,7 @@ main = () {
     }
 
     # for assigned
-    mut [arr3.len]u32 arr4;
+    mut [arr3.$len]u32 arr4;
     arr4 = for arr3: $it * 2;
 
     # stcfor - allows emitting length info -> no predefinition needed

@@ -1,11 +1,15 @@
-stcfun Cmp = (type T): !{ fun cmp = (T other) -> i32; }
+trait Cmp = (type T): !{ fun cmp = (T other) -> i32; }
+
 type Good = *(i32 v) implof Cmp(Good) !{ fun cmp = (Good other) -> i32: ret 0; }
 type WrongArg = *(i32 v) implof Cmp(Good) !{ fun cmp = (WrongArg other) -> i32: ret 0; } #! trait_signature_mismatch
 type NoImpl = *(i32 v) implof Cmp(NoImpl) !{ } #! trait_member_missing
 type Plain = *(i32 v);
 trait Show = !{ fun show = () -> &u8; }
+
 fun print_it = (Show s) -> &u8: ret s.show();
+
 stcfun max_of = (type T where T oftype Cmp(T)): (T a, T b) -> T: ret a; #! stcwhere_violated
+
 fun f = () {
     &u8 x = print_it(Good(v = 1)); #! type_mismatch
     Good g = max_of(Good)(Good(v = 1), Good(v = 2));

@@ -1,5 +1,6 @@
 type A = B; #! declaration_cycle
 type B = A;
+
 i32 x = y; #! declaration_cycle
 i32 y = z;
 i32 z = x;

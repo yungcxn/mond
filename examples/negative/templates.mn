@@ -1,0 +1,44 @@
+type Box = (type T): *(T value, u32 count) !{ fun get = () -> T: ret self.value; }
+
+stcfun Grid = (u32 n): ret *([n]u8 cells);
+stcfun Old = (type T): *(T value); #! missing_ret
+type New = (type T): ret *(T value); #! redundant_ret
+
+type Wrong = (type T): +(A(T), B); #! type_mismatch
+
+fun value_of = (Box b) -> u32: ret b.value; #! generic_member
+fun get_of = (Box b) -> u32: ret b.get(); #! generic_member
+fun cells_of = (Grid g) -> u8: ret g.cells[0]; #! generic_member
+fun partial = (Grid g) -> u8: ret match g { Grid(4) h => h.cells[0] } #! non_exhaustive_match
+fun count_of = (Box b) -> u32: ret b.count;
+fun mixed = (type T, Box b) -> u32: ret b.value; #! generic_member
+fun mixed_opened = (type T, Grid g) -> u8: ret match g { Grid(2) h => h.cells[1], _ => 0 }
+fun make = () -> Box: ret Box(u8)(value = 1, count = 2); #! unrealized_template
+type Holder = *(Box inner); #! unrealized_template
+fun boxes = ([2]Box b) -> u32: ret 1; #! unrealized_template
+fun call_box = ((Box) -> u32 f) -> u32: ret 1; #! unrealized_template
+fun bare = (u32 v) -> u32: ret match v { Box x => 1, _ => 0 }; #! unrealized_template
+fun foreign = (Opt(u8) o) -> u32: ret match o { Opt(u16).Some(x) => 1, _ => 0 }; #! type_mismatch
+fun set_count = (&Box b) { b.count = 1; } #! write_through_immutable_pointer
+fun mut_count = (*Box b) -> u32: ret b.count;
+
+variant Opt = (type T): ++(Some(T), None);
+stcfun size = (type T) -> u64: ret sizeof T;
+stcfun vsize = (variant T) -> u64: ret sizeof T;
+stc u64 SB = size(Box); #! type_mismatch
+stc u64 S5 = size(5); #! type_mismatch
+stc u64 VU = vsize(u8); #! type_mismatch
+
+$main = () {
+    Box(i32) a = Box(i32)(value = 1, count = 2);
+    u32 t = count_of(a);
+    u32 m = mixed(u8, a);
+    Grid(2) g = Grid(2)(cells = [3, 4]);
+    u8 o = mixed_opened(u8, g);
+    u32 n = count_of(7); #! type_mismatch
+    Box loose = a; #! unrealized_template
+    &Box(i32) ro = a.&;
+    u32 mt = mut_count(ro); #! type_mismatch
+    u64 sz = sizeof Box; #! unrealized_template
+    f = count_of; #! unrealized_template
+}

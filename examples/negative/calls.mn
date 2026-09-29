@@ -4,8 +4,10 @@ fun ov = (i32 a) {}
 fun ov = (f32 a) {}
 fun same = (i32 a) {}
 fun same = (i32 b) {}
+
 type Rec = *(i32 a);
 variant V = +(A, B(u8));
+
 fun f = () {
     two(1); #! wrong_arity
     two(1, 2, 3); #! wrong_arity

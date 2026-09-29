@@ -3,8 +3,10 @@ fun print = (&u8 fmt, i64 v);
 
 variant Tok = +(Num(i64 v), Plus, Minus, Star, LParen, RParen, End) tagof u8;
 variant Op = +(Push(i64 v), Add, Sub, Mul) tagof u8;
-stcfun Opt = (type T): ++(Some(T), None) tagof u8;
-stcfun Stack = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0): *(mut [CAP]T items, mut u32 len = 0) !{
+
+variant Opt = (type T): ++(Some(T), None) tagof u8;
+
+type Stack = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0): *(mut [CAP]T items, mut u32 len = 0) !{
     stc u32 MASK = CAP - 1;
     fun push = (T v) -> bool {
         if self.len >= CAP: ret false;
@@ -19,10 +21,12 @@ stcfun Stack = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0): *(
     }
     fun is_empty = () -> bool: ret self.len == 0;
 }
+
 type Stack16 = Stack(i64, 16); #= Stack16 *([16]i64 items, u32 len)
 type OpList = Stack(Op, 64);
 
 trait Eval = !{ fun eval = () -> i64; }
+
 type Program = *(mut OpList ops) implof Eval !{
     fun eval = () -> i64 {
         mut Stack16 st;
@@ -58,7 +62,7 @@ stc u32 DIGITS = 6; #= DIGITS 6
 fun digits = (&[]u8 src, u32 at) -> i64 {
     mut i64 v = 0;
     mut u32 i = at;
-    while i < src.len and is_digit(src.*[i]) {
+    while i < src.$len and is_digit(src.*[i]) {
         v = v * 10 + (src.*[i] - '0') as i64;
         i += 1;
     }
@@ -69,11 +73,11 @@ fun compile = (&[]u8 src) -> Program {
     mut Program p;
     mut u32 i = 0;
     Tok pending = Tok.End;
-    while i < src.len {
+    while i < src.$len {
         u8 c = src.*[i];
         if is_digit(c) {
             do p.ops.push(Op.Push(digits(src, i)));
-            while i < src.len and is_digit(src.*[i]): i += 1;
+            while i < src.$len and is_digit(src.*[i]): i += 1;
             cont;
         }
         t = tok_of(c); #: t +(Num, Plus, Minus, Star, LParen, RParen, End)
@@ -82,7 +86,7 @@ fun compile = (&[]u8 src) -> Program {
     ret p;
 }
 
-main = (i32 argc, &[]&u8 argv) -> i32 {
+$main = (i32 argc, &[]&u8 argv) -> i32 {
     Program prog = compile("12+30".&);
     result = prog.eval(); #: result i64
     print("result %d", result);
