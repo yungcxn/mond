@@ -242,11 +242,19 @@ pub fn has_where(self: *Resolver, d: Decl.Index) bool {
     return false;
 }
 
-pub fn same_params(self: *Resolver, a: StaticPool.Index, b: StaticPool.Index) bool {
+// one dispatch group: the same parameter types under the same names
+pub fn same_params(self: *Resolver, a0: Decl.Index, b0: Decl.Index) bool {
     const sp = &self.static_pool;
-    if (a == b) return true;
-    if (a == .none or b == .none or sp.tag(a) != .function_type or sp.tag(b) != .function_type) return false;
-    return std.mem.eql(StaticPool.Index, sp.get(a).function_type.params, sp.get(b).function_type.params);
+    const a = self.real(a0);
+    const b = self.real(b0);
+    const ta = self.dp(.ty, a).*;
+    const tb = self.dp(.ty, b).*;
+    if (ta != tb and (ta == .none or tb == .none or sp.tag(ta) != .function_type or sp.tag(tb) != .function_type or !std.mem.eql(StaticPool.Index, sp.get(ta).function_type.params, sp.get(tb).function_type.params))) return false;
+    const pa = self.params_of(self.value_node(a));
+    const pb = self.params_of(self.value_node(b));
+    if (pa.len != pb.len) return false;
+    for (pa, pb, 0..) |x, y, i| if (self.param_name(x, i) != self.param_name(y, i)) return false;
+    return true;
 }
 
 pub fn bind_args(self: *Resolver, params: []const NodeId, args: []const NodeId, map: []u32, partial: bool) bool {

@@ -14,7 +14,6 @@ fun dflt = (u32 a, u32 b = a * 2, u32 c = a + b) -> u32: ret a * 10000 + b * 100
 
 fun named = (u32 x, u32 y = 1, u32 z = 2) -> u32: ret x * 100 + y * 10 + z;
 
-# BUG: a named argument does not choose between overloads of the same arity, only the first candidate is tried (`pair(0, c = 1)` and `h(1, d = 9)` report wrong_arity), so only the first of such a pair is called by name
 fun pair = (u32 a, u32 b) -> u32: ret 1;
 fun pair = (u32 a, u32 c) -> u32: ret 2;
 
@@ -139,6 +138,8 @@ stc u64 OP = optional(); #= OP 115125210203
 stc u32 DC = defaults_chain(); #= DC 5010207
 stc u32 NA = named_args(); #= NA 113208547
 stc u32 PN1 = pair(0, b = 1); #= PN1 1
+stc u32 PN7 = pair(0, c = 1); #= PN7 2
+stc u32 PN8 = triple(1, d = 9); #= PN8 4194
 stc u32 PN2 = flag(1, on = 3); #= PN2 103
 stc u32 PN3 = by_kind(1.5, c = 4); #= PN3 2004
 stc u32 PN4 = by_kind(1, b = 4); #= PN4 1004
@@ -155,4 +156,7 @@ stc u32 SZ = sizes(); #= SZ 108
 stc u32 BT = by_argument_type(); #= BT 250251
 stc u32 TC = through_calls(); #= TC 21
 
-$main = () {}
+$main = () {
+    u32 x = pair(0, c = 1); #: x u32
+    u32 y = pair(0, b = 1) + guarded(5);
+}

@@ -120,7 +120,7 @@ fn group(self: *HighLowerer, first: Decl.Index) void {
         var h = first;
         while (h != c) : (h = self.r.dp(.next_overload, h).*) {
             const rh = self.r.real(h);
-            if (!self.body_of.contains(rh) or !self.r.same_params(self.r.dp(.ty, rh).*, self.r.dp(.ty, rc).*)) continue;
+            if (!self.body_of.contains(rh) or !self.r.same_params(rh, rc)) continue;
             put(self.alloc, &self.head_of, rc, rh);
             var last = rh;
             while (self.next_of.get(last)) |n| last = n;

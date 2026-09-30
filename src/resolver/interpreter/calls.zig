@@ -126,10 +126,9 @@ fn invoke(ip: *Interpreter, n: NodeId, d0: Decl.Index, all: []const NodeId, self
     };
     r.h05_ensure_signature(d);
     if (r.length_generic(r.dp(.ty, d).*)) d = realize(ip, n, d, args, base) orelse return .poison;
-    const ty = r.dp(.ty, d).*;
     var c = d;
     while (c != .none) : (c = r.dp(.next_overload, c).*) {
-        if (c != d and !r.same_params(r.dp(.ty, r.real(c)).*, ty)) continue;
+        if (c != d and !r.same_params(c, d)) continue;
         if (attempt(ip, n, r.real(c), args, base, self)) |v| return v;
     }
     return ip.fail(n, .no_matching_overload, args.len, 0);

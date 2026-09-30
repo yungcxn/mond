@@ -283,12 +283,11 @@ fn s2_check_globals(self: *Resolver) void {
     while (heads.next()) |h| {
         var c = h.*;
         while (c != .none) : (c = self.dp(.next_overload, c).*) {
-            const ct = self.dp(.ty, self.real(c)).*;
             if (self.group_head(h.*, c) != c) continue;
             var size: u32 = 0;
             var fallback = false;
             var m = c;
-            while (m != .none) : (m = self.dp(.next_overload, m).*) if (calls.same_params(self, self.dp(.ty, self.real(m)).*, ct)) {
+            while (m != .none) : (m = self.dp(.next_overload, m).*) if (calls.same_params(self, m, c)) {
                 size += 1;
                 fallback = fallback or !calls.dispatches(self, self.real(m));
             };
@@ -1199,9 +1198,8 @@ pub fn real(self: *Resolver, d: Decl.Index) Decl.Index {
 }
 
 pub fn group_head(self: *Resolver, first: Decl.Index, d: Decl.Index) Decl.Index {
-    const t = self.dp(.ty, self.real(d)).*;
     var h = first;
-    while (h != d and !calls.same_params(self, self.dp(.ty, self.real(h)).*, t)) h = self.dp(.next_overload, h).*;
+    while (h != d and !calls.same_params(self, h, d)) h = self.dp(.next_overload, h).*;
     return h;
 }
 
