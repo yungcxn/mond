@@ -377,7 +377,7 @@ stc i64 Z7 = unzigzag(zigzag(-123456789)); #= Z7 -123456789
 stc i64 Z8 = unzigzag(18446744073709551615); #= Z8 -9223372036854775808
 stc i64 Z9 = unzigzag(4); #= Z9 2
 
-# BUG: a stcfun with a `&[]T` parameter rejects `.&` arguments from a static call (type_mismatch), so the check helpers are plain funs
+# LIMIT: a stcfun parameter is a static value and a pointer is not one (`not_static`), so the check helpers are plain funs
 fun delta_case = (&[]i64 xs) -> i64 {
     mut [64]u8 buf;
     mut [16]i64 back;

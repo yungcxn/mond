@@ -1542,7 +1542,7 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
     const callee = self.arg(n, 0);
     const args = self.r.kids(self.arg(n, 1));
     if (self.realized(n)) |f| return self.fn_value(f);
-    const d = self.realized(callee) orelse self.decl(n);
+    const d = self.decl(n);
     if (d != .none and Resolver.is_fn(self.r.dp(.kind, d).*)) return self.direct(d, callee, args, t);
     const ct = self.ty(callee);
     if (self.sp.tag(ct) == .meta_type or self.sp.tag(ct) == .variant_case_type) return self.construct(t, args);

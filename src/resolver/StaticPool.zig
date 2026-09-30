@@ -1043,7 +1043,10 @@ pub fn coerce(self: *StaticPool, vars: *AbstractPool, from0: Index, to0: Index) 
     if (from == .poison_type or to == .poison_type) return .poison;
     if (from == .never_type) return .never_to_any;
     if (from == .unit_type and to == .runit_type) return .unit_to_runit;
-    if (self.has_vars(from) or self.has_vars(to)) return if (self.unify(vars, from, to) == .ok) .unified else .incompatible;
+    if (self.has_vars(from) or self.has_vars(to)) {
+        const ptrs = self.is_ptr(from) and self.is_ptr(to) and (self.tag(from) == .ptr_mut_type or self.tag(to) == .ptr_type);
+        return if (self.unify(vars, if (ptrs) self.pointee(from) else from, if (ptrs) self.pointee(to) else to) == .ok) .unified else .incompatible;
+    }
     const f = self.get(from);
     const t = self.get(to);
     if (f == .int_type and t == .int_type) {

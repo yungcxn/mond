@@ -133,6 +133,13 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
         self.template_of.put(self.alloc, d, generic) catch @panic("OOM");
         const fv = sp.intern(.{ .function = d });
         memo(self, key, fv);
+        const outer = self.static_scope.get(generic);
+        if (outer) |k| {
+            self.static_scope.put(self.alloc, d, k) catch @panic("OOM");
+            self.open_scope(true, .none, 0);
+            bind_static(self, k.generic_tuple, k.args_tuple);
+        }
+        defer if (outer != null) self.h04_pop_scope();
         self.h05_ensure_signature(d);
         self.realized_args.put(self.alloc, d, args) catch @panic("OOM");
         const ft = sp.get(self.dp(.ty, d).*).function_type;
@@ -157,13 +164,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
     defer self.h04_pop_scope();
     const v = self.value_node(generic);
     const params = self.params_of(v);
-    for (params, 0..) |pn, i| {
-        const pt = self.sig(generic).params[i];
-        const p = self.param(pn);
-        const d = self.h02_declare_local(self.name_at(p, i), pn, .static_parameter, pt);
-        calls.link(self, p.name, d, pt);
-        self.dp(.value, d).* = retype(self, argv[i], pt);
-    }
+    bind_static(self, generic, args);
     for (params) |pn| {
         const w = self.param(pn).where;
         if (w != 0 and h08_eval_static(self, &ctx, w) == .bool_false) _ = self.report(.stcwhere_violated, w, generic, args);
@@ -182,6 +183,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
         const d = self.push_decl(self.dp(.name, generic).*, unit, .function, .none, .{});
         const fv = sp.intern(.{ .function = d });
         memo(self, key, fv);
+        self.static_scope.put(self.alloc, d, key) catch @panic("OOM");
         self.h05_ensure_signature(d);
         self.h06_check_body(d);
         return fv;
@@ -209,6 +211,21 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
     if (made != .none and @intFromEnum(made) >= first) self.template_of.put(self.alloc, made, generic) catch @panic("OOM");
     memo(self, key, r);
     return r;
+}
+
+// the static parameters of a stcfun as locals holding the arguments of one realization
+fn bind_static(self: *Resolver, generic: Decl.Index, args: StaticPool.Index) void {
+    const sp = &self.static_pool;
+    var argv: [64]StaticPool.Index = undefined;
+    const argc = sp.get(args).aggregate.elems.len;
+    @memcpy(argv[0..argc], sp.get(args).aggregate.elems);
+    for (self.params_of(self.value_node(generic)), 0..) |pn, i| {
+        const pt = if (sp.has_vars(self.sig(generic).params[i])) sp.type_of(argv[i]) else self.sig(generic).params[i];
+        const p = self.param(pn);
+        const d = self.h02_declare_local(self.name_at(p, i), pn, .static_parameter, pt);
+        calls.link(self, p.name, d, pt);
+        self.dp(.value, d).* = retype(self, argv[i], pt);
+    }
 }
 
 pub fn is_template(self: *Resolver, d: Decl.Index) bool {

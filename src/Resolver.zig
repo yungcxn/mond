@@ -168,6 +168,8 @@ body_nodes: SoD(NodeInfo),
 body_of: std.AutoHashMapUnmanaged(Decl.Index, u32) = .empty,
 template_of: std.AutoHashMapUnmanaged(Decl.Index, Decl.Index) = .empty,
 realized_args: std.AutoHashMapUnmanaged(Decl.Index, StaticPool.Index) = .empty,
+// functions produced by a stcfun: the realization whose static parameters they see
+static_scope: std.AutoHashMapUnmanaged(Decl.Index, StaticPool.AbstractKey) = .empty,
 init_tracked: DynBuf(Decl.Index),
 uninit: u64 = 0,
 deferrals: u32 = 0,
@@ -223,7 +225,7 @@ pub inline fn init(alloc: std.mem.Allocator, tree: *ParseTree, src_bytes: []cons
 
 pub inline fn deinit(self: *Resolver) void {
     inline for (.{ &self.name_pool, &self.static_pool, &self.abstract_pool, &self.decls, &self.bodies, &self.body_nodes, &self.interpreter, &self.init_tracked, &self.loop_exits, &self.local_names, &self.local_decls, &self.local_scope_marks, &self.doc.diagnostics }) |x| x.deinit();
-    inline for (.{ &self.body_of, &self.template_of, &self.realized_args, &self.globals }) |m| m.deinit(self.alloc);
+    inline for (.{ &self.body_of, &self.template_of, &self.realized_args, &self.static_scope, &self.globals }) |m| m.deinit(self.alloc);
     inline for (.{ self.node_type, self.node_decl, self.node_value }) |x| self.alloc.free(x);
 }
 
@@ -794,8 +796,12 @@ pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) St
     for (parts.ids, 0..) |id, i| {
         const d = if (existing[i] != .none) existing[i] else self.declare(id, n, .variable, if (ty == .none) .poison_type else ty, flags);
         if (existing[i] != .none) self.uninit &= ~self.init_bit(d) else if (values.len == 0 and !self.dp(.flags, d).is_global and self.scalar(self.dp(.ty, d).*)) self.track(d);
-        if (values.len > 0 and self.node_type[values[@min(i, values.len - 1)]] != .poison_type and (existing[i] == .none or (self.interpreter.depth > 0 and !ctx.interpreted)) and (self.dp(.flags, d).is_stc or ctx.in_static))
+        if (values.len > 0 and self.node_type[values[@min(i, values.len - 1)]] != .poison_type and (existing[i] == .none or (self.interpreter.depth > 0 and !ctx.interpreted)) and (self.dp(.flags, d).is_stc or ctx.in_static)) {
             self.dp(.value, d).* = statics.retype(self, statics.static_of(self, ctx, values[@min(i, values.len - 1)]), self.dp(.ty, d).*);
+            // an unlengthed static takes the length of its value
+            const v = self.dp(.value, d).*;
+            if (v != .none and sp.tag(v) == .aggregate_value and sp.has_vars(self.dp(.ty, d).*)) _ = sp.unify(&self.abstract_pool, self.dp(.ty, d).*, sp.type_of(v));
+        }
     }
     return .unit_type;
 }

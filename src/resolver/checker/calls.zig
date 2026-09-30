@@ -21,7 +21,8 @@ pub fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
     }
     const callee = self.arg(node, 0);
     const ct = self.h09_check_expr(ctx, callee, .none);
-    const d = if (self.nk(callee) == .fun_call) .none else self.node_decl[callee];
+    // a stcfun call producing a function is called like that function
+    const d = if (self.nk(callee) != .fun_call) self.node_decl[callee] else if (self.node_decl[self.arg(callee, 0)] != .none and self.dp(.kind, self.node_decl[self.arg(callee, 0)]).* == .static_function) self.node_decl[callee] else .none;
     // `x.m(..)` binds x as the self argument, `Type.m(x.&, ..)` passes it like any other argument
     const recv = if (self.nk(callee) == .member and sp.tag(self.node_type[self.arg(callee, 0)]) != .meta_type) self.arg(callee, 0) else 0;
     if (ct != .poison_type and d != .none and is_fn(self.dp(.kind, d).*)) return call_decl(self, ctx, node, d, args, recv);
@@ -68,7 +69,11 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
                 continue;
             }
             if (sp.tag(p) != .meta_type) {
-                if (self.check(ctx, self.arg_value(a), p) == .poison_type) bad = true;
+                if (sp.has_vars(p)) {
+                    const at = self.h09_check_expr(ctx, self.arg_value(a), p);
+                    if (at != .poison_type and statics.arg_len(self, at, p) == .none) _ = self.report(.type_mismatch, self.arg_value(a), at, p);
+                    bad = bad or at == .poison_type or statics.arg_len(self, at, p) == .none;
+                } else if (self.check(ctx, self.arg_value(a), p) == .poison_type) bad = true;
                 continue;
             }
             const at = self.h09_check_expr(ctx, self.arg_value(a), p);
