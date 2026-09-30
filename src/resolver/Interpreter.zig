@@ -356,6 +356,7 @@ pub fn arith(ip: *Interpreter, n: NodeId, k: Kind, a: Value, b: Value) Value {
     if (a.is(.poison_type) or b.is(.poison_type)) return .poison;
     if (b.is_ref() and Value.is_int(a.ty) and k == .binary_add) return ip.arith(n, k, b, a);
     if (a.is_ref() and Value.is_int(b.ty) and (k == .binary_add or k == .binary_sub)) return .ref(a.ty, if (k == .binary_add) a.at() +% @as(u32, @truncate(b.bits)) else a.at() -% @as(u32, @truncate(b.bits)));
+    if (a.is_ref() != b.is_ref()) return ip.arith(n, k, ip.deref(a), ip.deref(b));
     const x: Value = if (a.is_heap()) .pooled(ip.pool(a)) else a;
     const y: Value = if (b.is_heap()) .pooled(ip.pool(b)) else b;
     return Value.binary(k, x, y, ip.hint(n)) catch |e| ip.fail(n, if (e == error.Invalid) .static_eval_failed else .not_static, ip.pool(x), ip.pool(y));

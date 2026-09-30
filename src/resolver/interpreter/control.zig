@@ -162,7 +162,9 @@ pub fn loop(ip: *Interpreter, n: NodeId) Value {
 
 pub fn match(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
-    const v = ip.eval(r.arg(n, 0));
+    const x = ip.eval(r.arg(n, 0));
+    const t = if (ip.framed()) ip.info(.ty, r.arg(n, 0)) else x.ty;
+    const v = if (x.is_ref() and r.deref(t) != t) ip.deref(x) else x;
     if (v.is(.poison_type) or ip.unwind != .none) return v;
     const scoped = !ip.framed();
     if (scoped) r.h03_push_scope();
