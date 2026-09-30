@@ -1,4 +1,4 @@
-type Node = *(i32 val, mut Opt(*Node) next);
+type Node = *(mut i32 val, mut Opt(*Node) next);
 variant Opt = (type T): ++(Some(T), None) tagof u8;
 
 fun swap = (*i32 a, *i32 b) {
@@ -181,9 +181,9 @@ stcfun array_of_pointers = () -> i32 {
 
 stcfun comparisons = () -> u32 {
     [4]i32 a = [1, 2, 3, 4];
-    *i32 p = a[0].&;
-    *i32 q = a[3].&;
-    *i32 r = a[0].&;
+    &i32 p = a[0].&;
+    &i32 q = a[3].&;
+    &i32 r = a[0].&;
     ret (p == r) as u32 + (p != q) as u32 * 10 + (q == p) as u32 * 100;
 }
 

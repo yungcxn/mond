@@ -1,15 +1,9 @@
-# BUG: all of these are accepted without a diagnostic, but hand out write access to something read only
-#   *i32 p = imm.&;  *i32 p = param.&;               a mutable pointer to an immutable variable
-#   *i32 p = ip.x.&;  *i32 p = mp.x.&;               a mutable pointer to a non mut field, also `ip.y.&` for a mut field of an immutable value
-#   takes_mut(rp.y.&);  takes_mut(rq.minner.y.&);    a mutable pointer taken through a `&P` / `&Q`
-#   *P d = ip.&;  *P d = rq.minner.&;                a mutable pointer to an immutable record
-#   ip.bump();  rp.bump();  rp.set_arr();            a method that writes `self` called on an immutable variable or through `&P`
-#   *u8 s = "text".&;                                a mutable pointer to a string literal
-#   *i32 t = (imm + 1).&;                            the address of a temporary
-#   for x in arr { *i32 p = x.&; }                   a mutable pointer to the loop copy
-# the written-through cases below are the ones that are rejected
-
-type P = *(i32 x, mut i32 y, mut [3]i32 arr, [3]i32 farr);
+type P = *(i32 x, mut i32 y, mut [3]i32 arr, [3]i32 farr) !{
+    fun bump = () { self.y += 1; }
+    fun set_arr = () { self.arr[0] = 1; }
+    fun get = () -> i32: ret self.x + self.y;
+    fun bump_twice = () { self.bump(); self.bump(); }
+}
 type Q = *(P inner, mut P minner);
 
 fun takes_mut = (*i32 p) { p.* = 1; }
@@ -52,10 +46,10 @@ fun f = (&P rp, *P wp, &Q rq, *Q wq, &[3]i32 ra, *[3]i32 wa, &i32 ri, *i32 wi) {
     f3 = (): counter += 1;
     *i32 c1 = widen(ri);
     takes_mut(ri); #! type_mismatch
-    takes_mut(ri.*.&);
+    takes_mut(ri.*.&); #! type_mismatch
     takes_ro(wi);
     takes_mut_p(rp); #! type_mismatch
-    takes_mut_p(rq.minner.&);
+    takes_mut_p(rq.minner.&); #! type_mismatch
     takes_mut_p(wp);
     *P d1 = rp; #! type_mismatch
     *P d2 = reborrow(wp);

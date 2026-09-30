@@ -107,7 +107,8 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
             if (rt != .poison_type and p0 != .poison_type and rt != child and !sp.implements(rt, child) and sp.coerce(&self.abstract_pool, rt, p0) == .incompatible)
                 _ = self.report(.type_mismatch, recv, rt, p0);
         } else if (args.len > 0) {
-            _ = self.check(ctx, self.arg_value(args[0]), p0);
+            // a method that does not write `self` takes a read only one as well
+            _ = self.check(ctx, self.arg_value(args[0]), if (sp.is_ptr(p0)) sp.intern(.{ .ptr_type = .{ .child = sp.pointee(p0), .mutable = false } }) else p0);
             args = args[1..];
         } else return self.report(.wrong_arity, node, 0, 1);
     }
@@ -141,6 +142,19 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
     }
     if (ambiguous) _ = self.report(.ambiguous_overload, node, best, 0);
     var callee = self.real(best);
+    if (off == 1 and self.dp(.flags, callee).writes) {
+        const r = if (recv != 0) recv else self.arg_value(all_args[0]);
+        const rt = sp.apply_vars(&self.abstract_pool, self.node_type[r]);
+        const place = switch (self.nk(r)) {
+            .identifier, .identifier_self, .member, .array_index, .dereference, .capture => true,
+            else => false,
+        };
+        if (recv == 0) {
+            if (sp.tag(rt) == .ptr_type) _ = self.report(.type_mismatch, r, rt, self.sig(callee).params[0]);
+        } else if (sp.is_ptr(rt)) {
+            if (sp.tag(rt) == .ptr_type) self.write_access(r, .through_ptr);
+        } else if (place) self.write_access(r, self.writable(r));
+    }
     const pnodes = self.params_of(self.value_node(callee));
     _ = bind_args(self, pnodes, args, &map, false);
     check_stcwhere(self, ctx, node, callee, pnodes, args, map[0..args.len]);

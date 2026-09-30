@@ -97,7 +97,9 @@ pub const Decl = struct {
         is_stc: bool = false,
         is_global: bool = false,
         is_view: bool = false,
-        _pad: u3 = 0,
+        // methods: the body writes through `self`, the `self` local: something writes through it
+        writes: bool = false,
+        _pad: u2 = 0,
     };
 
     //   unresolved -> resolving_signature -> signature_ready -> checking_body -> done   (or failed)
@@ -487,6 +489,8 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     const mark = self.doc.diagnostics.len();
     const outer = self.init_enter();
     defer self.init_leave(outer);
+    // a local function sees which enclosing locals are not written yet
+    if (kind == .function and !self.dp(.flags, decl).is_global) self.uninit = outer.uninit;
     const off = self.self_off(decl);
     var ctx = FnCtx{ .decl = decl, .ret_type = sp.get(ty).function_type.ret, .self_type = self.owner_of(decl), .abstract = abstract };
     self.open_scope(self.dp(.flags, decl).is_global, if (off == 1) ctx.self_type else .none, v);
@@ -512,6 +516,7 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     }
     self.check_unit(&ctx, self.arg(v, 1));
     self.h04_pop_scope();
+    if (off == 1 and self.dp(.flags, @enumFromInt(first)).writes) self.dp(.flags, decl).writes = true;
     self.dp(.state, decl).* = if (self.errors_since(mark, v)) .failed else .done;
     if (!abstract) statics.snapshot(self, decl, v, first);
 }
@@ -634,7 +639,10 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             if (self.nk(a0) == .identifier) self.uninit &= ~self.init_bit(self.h01_lookup(self.name_of(a0)));
             const exp = sp.apply_vars(ap, expected);
             const st = self.h09_check_expr(ctx, a0, if (sp.is_ptr(exp)) sp.pointee(exp) else .none);
-            break :blk if (st == .poison_type) st else self.self_ptr(st);
+            // write access only to what could be written directly
+            const mutable = self.writable(a0) == .ok;
+            if (mutable and exp != .none and sp.tag(exp) == .ptr_mut_type) self.wrote(a0);
+            break :blk if (st == .poison_type) st else sp.intern(.{ .ptr_type = .{ .child = st, .mutable = mutable } });
         },
         .array, .array_empty => blk: {
             const exp = sp.apply_vars(ap, expected);
@@ -705,6 +713,11 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         .deinit, .inlined_defer_deinit => blk: {
             const st = self.h09_check_expr(ctx, a0, if (k == .deinit) .none else expected);
             self.need_deinit(node, st);
+            // a deinitialized local has to be written again before it is read
+            if (k == .deinit and self.nk(a0) == .identifier and self.node_decl[a0] != .none and !self.dp(.flags, self.node_decl[a0]).is_global) {
+                const bit = self.init_bit(self.node_decl[a0]);
+                if (bit != 0) self.uninit |= bit else self.track(self.node_decl[a0]);
+            }
             break :blk if (k == .deinit) .unit_type else st;
         },
         .selftag_unwrap, .selftag_unwrap_fallback, .selftag_arrow, .labelarrow => control.h17_check_unwrap(self, ctx, node, expected),
@@ -836,12 +849,32 @@ fn h18_check_place(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
     // self is mutable in methods; stc locals are compile-time variables and writable too
     const t = self.h09_check_expr(ctx, node, .none);
     if (t == .poison_type and self.errors_since(0, node)) return t;
-    switch (self.writable(node)) {
-        .ok => {},
+    self.write_access(node, self.writable(node));
+    return t;
+}
+
+pub fn write_access(self: *Resolver, node: NodeId, a: Access) void {
+    switch (a) {
+        .ok => self.wrote(node),
         .immutable => self.doc.h21_report(.assign_to_immutable, node, 0, 0),
         .through_ptr => self.doc.h21_report(.write_through_immutable_pointer, node, 0, 0),
     }
-    return t;
+}
+
+// a write into a place rooted at `self` (not through a pointer it holds) makes its method one that writes self
+fn wrote(self: *Resolver, place: NodeId) void {
+    var n = place;
+    while (self.nk(n) != .identifier_self) switch (self.nk(n)) {
+        .capture => n = self.arg(n, 0),
+        .member, .array_index, .dereference => {
+            const p = self.arg(n, 0);
+            if (self.nk(p) != .identifier_self and (self.nk(n) == .dereference or self.static_pool.is_ptr(self.node_type[p]))) return;
+            n = p;
+        },
+        else => return,
+    };
+    const d = self.node_decl[n];
+    if (d != .none and self.dp(.kind, d).* == .self) self.dp(.flags, d).writes = true;
 }
 
 // ------------------------------------------------------------------------------------------ //
@@ -855,7 +888,7 @@ fn h18_check_place(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
 pub const max_nesting = 256;
 pub const Param = struct { ty: NodeId = 0, name: NodeId = 0, default: NodeId = 0, where: NodeId = 0, @"else": NodeId = 0, is_mut: bool = false, stc: bool = false };
 pub const Parts = struct { type: NodeId = 0, ids: []const NodeId = &.{}, value: NodeId = 0 };
-const Access = enum { ok, immutable, through_ptr };
+pub const Access = enum { ok, immutable, through_ptr };
 
 const dollar_names = blk: {
     @setEvalBranchQuota(100_000);
@@ -1317,7 +1350,7 @@ fn need_deinit(self: *Resolver, node: NodeId, t0: StaticPool.Index) void {
         self.doc.h21_report(.no_deinit, node, t, 0);
 }
 
-fn writable(self: *Resolver, node: NodeId) Access {
+pub fn writable(self: *Resolver, node: NodeId) Access {
     return switch (self.nk(node)) {
         .capture => self.writable(self.arg(node, 0)),
         .identifier, .identifier_self => blk: {

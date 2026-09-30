@@ -124,7 +124,7 @@ stcfun window = ([5]u8 a) -> u8 {
 # the offset may lead
 stcfun leading = () -> u32 {
     [3]u32 b = [1, 2, 3];
-    *u32 p = b[0].&;
+    &u32 p = b[0].&;
     ret (2 + p).* + (1 + p).* * 10 + ((p + 2) + -1).* * 100;
 }
 
@@ -153,13 +153,13 @@ stcfun once = () -> u32 {
 
 stcfun stepping = () -> u32 {
     [3]u32 a = [1, 2, 3];
-    mut *u32 p = a[0].&;
+    mut &u32 p = a[0].&;
     p += 1;
     p++;
     ret p.*;
 }
 
-type Pair = *[2]u32;
+type Pair = &[2]u32;
 
 # a narrowing through an alias keeps the whole prefix
 stcfun aliased = () -> u32 {

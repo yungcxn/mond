@@ -238,8 +238,8 @@ fun operator_tour = () {
 
     # pointers: `.&` takes an address, `.*` dereferences, `*T` is mutable pointee, `&T` immutable
     mut i32 target = 5;
-    *i32 mptr = target.&;
-    &i32 iptr = target.&;
+    mut *i32 mptr = target.&;
+    mut &i32 iptr = target.&;
     mptr.* = 6;
     mptr.* += 1;
     i32 read_back = iptr.*;
@@ -1098,7 +1098,7 @@ type File = *(i32 fd, mut bool open = true) !{
 
 fun resource_tour = () {
     # plain defer
-    log = File.$init("/tmp/log.txt");
+    mut File log = File.$init("/tmp/log.txt");
     defer log.close();
 
     # defer a whole block
@@ -1478,7 +1478,7 @@ fun ring_demo = () {
 type Node = (type K, type V): *(K key, mut V value, mut Opt(*Node(K, V)) left, mut Opt(*Node(K, V)) right);
 
 type TreeMap = (type K where K oftype Comparable(K), type V): *(mut Opt(*Node(K, V)) root, mut u64 size = 0) !{
-    fun insert_at = (* *Node(K, V) slot, K key, V value) -> bool {
+    fun insert_at = (& *Node(K, V) slot, K key, V value) -> bool {
         match slot.*.*.key.cmp(key) {
             0 => {
                 slot.*.*.value = value;
