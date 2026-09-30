@@ -1,0 +1,259 @@
+variant Wd = +(Sun, Mon, Tue, Wed, Thu, Fri, Sat) tagof u8;
+
+fun is_leap = (i32 y) -> bool: ret (y % 4 == 0 and y % 100 != 0) or y % 400 == 0;
+
+fun month_len = (i32 y, u32 m) -> u32: ret match m {
+    2 => if is_leap(y): 29 else: 28,
+    4 | 6 | 9 | 11 => 30,
+    _ => 31,
+}
+
+fun wd_from = (u32 n) -> Wd: ret match n % 7 {
+    0 => Wd.Sun,
+    1 => Wd.Mon,
+    2 => Wd.Tue,
+    3 => Wd.Wed,
+    4 => Wd.Thu,
+    5 => Wd.Fri,
+    _ => Wd.Sat,
+}
+
+fun wd_short = (Wd w) -> u32: ret match w {
+    Wd.Sun => 7,
+    Wd.Mon => 1,
+    Wd.Tue => 2,
+    Wd.Wed => 3,
+    Wd.Thu => 4,
+    Wd.Fri => 5,
+    Wd.Sat => 6,
+}
+
+type Date = *(i32 y, u32 m, u32 d) !{
+    fun valid = () -> bool: ret self.m >= 1 and self.m <= 12 and self.d >= 1 and self.d <= month_len(self.y, self.m);
+
+    fun day_of_year = () -> u32 {
+        mut u32 n = self.d;
+        for k in 1..<self.m: n += month_len(self.y, k);
+        ret n;
+    }
+
+    fun sakamoto = () -> u32 {
+        [12]i32 t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+        i32 y = if self.m < 3: self.y - 1 else: self.y;
+        i32 w = (y + y / 4 - y / 100 + y / 400 + t[self.m - 1] + self.d as i32) % 7;
+        ret ((w + 7) % 7) as u32;
+    }
+
+    fun zeller = () -> u32 {
+        mut i32 m = self.m as i32;
+        mut i32 y = self.y;
+        if m < 3 {
+            m += 12;
+            y -= 1;
+        }
+        i32 k = y % 100;
+        i32 j = y / 100;
+        i32 h = (self.d as i32 + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 + 5 * j) % 7;
+        ret ((h + 6) % 7) as u32;
+    }
+
+    fun days = () -> i64 {
+        i64 y = (self.y as i64) - (if self.m <= 2: 1 else: 0);
+        i64 era = (if y >= 0: y else: y - 399) / 400;
+        i64 yoe = y - era * 400;
+        i64 mp = (if self.m > 2: self.m - 3 else: self.m + 9) as i64;
+        i64 doy = (153 * mp + 2) / 5 + (self.d as i64) - 1;
+        i64 doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        ret era * 146097 + doe - 719468;
+    }
+
+    fun weekday = () -> Wd: ret wd_from(self.sakamoto());
+
+    fun cmp = (Date o) -> i32 {
+        if self.y != o.y: ret if self.y < o.y: -1 else: 1;
+        if self.m != o.m: ret if self.m < o.m: -1 else: 1;
+        if self.d != o.d: ret if self.d < o.d: -1 else: 1;
+        ret 0;
+    }
+
+    fun tomorrow = () -> Date {
+        if self.d < month_len(self.y, self.m): ret Date(self.y, self.m, self.d + 1);
+        if self.m < 12: ret Date(self.y, self.m + 1, 1);
+        ret Date(self.y + 1, 1, 1);
+    }
+
+    fun pack = () -> i64: ret (self.y as i64) * 10000 + (self.m as i64) * 100 + (self.d as i64);
+}
+
+fun from_days = (i64 z0) -> Date {
+    i64 z = z0 + 719468;
+    i64 era = (if z >= 0: z else: z - 146096) / 146097;
+    i64 doe = z - era * 146097;
+    i64 yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    i64 doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    i64 mp = (5 * doy + 2) / 153;
+    i64 d = doy - (153 * mp + 2) / 5 + 1;
+    i64 m = if mp < 10: mp + 3 else: mp - 9;
+    i64 y = yoe + era * 400 + (if m <= 2: 1 else: 0);
+    ret Date(y as i32, m as u32, d as u32);
+}
+
+fun days_between = (Date a, Date b) -> i64: ret b.days() - a.days();
+
+fun add_days = (Date a, i64 n) -> Date: ret from_days(a.days() + n);
+
+fun easter = (i32 y) -> Date {
+    i32 a = y % 19;
+    i32 b = y / 100;
+    i32 c = y % 100;
+    i32 d = b / 4;
+    i32 e = b % 4;
+    i32 f = (b + 8) / 25;
+    i32 g = (b - f + 1) / 3;
+    i32 h = (19 * a + b - d - g + 15) % 30;
+    i32 i = c / 4;
+    i32 k = c % 4;
+    i32 l = (32 + 2 * e + 2 * i - h - k) % 7;
+    i32 m = (a + 11 * h + 22 * l) / 451;
+    i32 month = (h + l - 7 * m + 114) / 31;
+    i32 day = (h + l - 7 * m + 114) % 31 + 1;
+    ret Date(y, month as u32, day as u32);
+}
+
+fun nth_weekday = (i32 y, u32 m, u32 wd, u32 n) -> Date {
+    u32 first = Date(y, m, 1).sakamoto();
+    u32 delta = (wd + 7 - first) % 7;
+    ret Date(y, m, 1 + delta + (n - 1) * 7);
+}
+
+stc bool L1 = is_leap(2000); #= L1 true
+stc bool L2 = is_leap(1900); #= L2 false
+stc bool L3 = is_leap(2024); #= L3 true
+stc bool L4 = is_leap(2023); #= L4 false
+stc bool L5 = is_leap(2100); #= L5 false
+stc bool L6 = is_leap(0); #= L6 true
+stc bool L7 = is_leap(-4); #= L7 true
+stc bool L8 = is_leap(-100); #= L8 false
+stc bool L9 = is_leap(-400); #= L9 true
+
+stcfun leaps_between = (i32 a, i32 b) -> u32 {
+    mut u32 n = 0;
+    for y in a..=b: if is_leap(y): n += 1;
+    ret n;
+}
+
+stcfun year_len = (i32 y) -> u32 {
+    mut u32 n = 0;
+    for m in 1..=12: n += month_len(y, m);
+    ret n;
+}
+
+stc u32 LC1 = leaps_between(1900, 2100); #= LC1 49
+stc u32 LC2 = leaps_between(1601, 2000); #= LC2 97
+stc u32 LC3 = leaps_between(2001, 2000); #= LC3 0
+stc u32 YL1 = year_len(2024); #= YL1 366
+stc u32 YL2 = year_len(1900); #= YL2 365
+stc u32 ML1 = month_len(2024, 2); #= ML1 29
+stc u32 ML2 = month_len(2023, 2); #= ML2 28
+stc u32 ML3 = month_len(2023, 4); #= ML3 30
+stc u32 ML4 = month_len(2023, 12); #= ML4 31
+
+stc bool V1 = Date(2024, 2, 29).valid(); #= V1 true
+stc bool V2 = Date(2023, 2, 29).valid(); #= V2 false
+stc bool V3 = Date(2023, 13, 1).valid(); #= V3 false
+stc bool V4 = Date(2023, 0, 10).valid(); #= V4 false
+stc bool V5 = Date(2023, 4, 31).valid(); #= V5 false
+stc bool V6 = Date(2023, 12, 31).valid(); #= V6 true
+
+stc u32 DY1 = Date(2024, 12, 31).day_of_year(); #= DY1 366
+stc u32 DY2 = Date(2023, 12, 31).day_of_year(); #= DY2 365
+stc u32 DY3 = Date(2024, 3, 1).day_of_year(); #= DY3 61
+stc u32 DY4 = Date(2023, 3, 1).day_of_year(); #= DY4 60
+stc u32 DY5 = Date(2023, 1, 1).day_of_year(); #= DY5 1
+
+stc i64 D1 = Date(1970, 1, 1).days(); #= D1 0
+stc i64 D2 = Date(2000, 1, 1).days(); #= D2 10957
+stc i64 D3 = Date(2024, 2, 29).days(); #= D3 19782
+stc i64 D4 = Date(1969, 12, 31).days(); #= D4 -1
+stc i64 D5 = Date(1, 1, 1).days(); #= D5 -719162
+stc i64 D6 = Date(9999, 12, 31).days(); #= D6 2932896
+stc i64 D7 = Date(0, 3, 1).days(); #= D7 -719468
+stc i64 D8 = Date(-1, 12, 31).days(); #= D8 -719529
+
+stc u32 W1 = wd_short(Date(2000, 1, 1).weekday()); #= W1 6
+stc u32 W2 = wd_short(Date(1970, 1, 1).weekday()); #= W2 4
+stc u32 W3 = wd_short(Date(2024, 2, 29).weekday()); #= W3 4
+stc u32 W4 = wd_short(Date(1900, 1, 1).weekday()); #= W4 1
+stc u32 W5 = wd_short(Date(2023, 12, 25).weekday()); #= W5 1
+stc u32 W6 = wd_short(Date(1999, 12, 31).weekday()); #= W6 5
+stc u32 W7 = wd_short(Date(2100, 3, 1).weekday()); #= W7 1
+stc u32 W8 = wd_short(Date(1600, 2, 29).weekday()); #= W8 2
+
+stc i64 B1 = days_between(Date(2000, 1, 1), Date(2000, 12, 31)); #= B1 365
+stc i64 B2 = days_between(Date(2001, 1, 1), Date(2001, 12, 31)); #= B2 364
+stc i64 B3 = days_between(Date(2024, 3, 1), Date(2024, 2, 1)); #= B3 -29
+stc i64 B4 = days_between(Date(1970, 1, 1), Date(2038, 1, 19)); #= B4 24855
+stc i64 B5 = days_between(Date(2020, 5, 5), Date(2020, 5, 5)); #= B5 0
+stc i64 B6 = days_between(Date(1900, 1, 1), Date(2000, 1, 1)); #= B6 36524
+
+stc i64 A1 = add_days(Date(2024, 2, 28), 1).pack(); #= A1 20240229
+stc i64 A2 = add_days(Date(2023, 2, 28), 1).pack(); #= A2 20230301
+stc i64 A3 = add_days(Date(2023, 12, 31), 1).pack(); #= A3 20240101
+stc i64 A4 = add_days(Date(2000, 1, 1), -1).pack(); #= A4 19991231
+stc i64 A5 = add_days(Date(2024, 1, 31), 366).pack(); #= A5 20250131
+stc i64 A6 = add_days(Date(1970, 1, 1), 1000000).pack(); #= A6 47071129
+stc i64 A7 = from_days(-719529).pack(); #= A7 -8769
+stc i64 A8 = Date(2023, 12, 31).tomorrow().pack(); #= A8 20240101
+stc i64 A9 = Date(2024, 2, 29).tomorrow().pack(); #= A9 20240301
+
+stcfun roundtrip_ok = (i64 start, i64 count) -> u32 {
+    mut u32 ok = 0;
+    for k in 0..<count {
+        i64 z = start + (k as i64) * 7;
+        Date d = from_days(z);
+        if d.valid() and d.days() == z: ok += 1;
+    }
+    ret ok;
+}
+
+stcfun weekday_agree = (i64 start, i64 count) -> u32 {
+    mut u32 ok = 0;
+    for k in 0..<count {
+        Date d = from_days(start + (k as i64) * 11);
+        u32 a = d.sakamoto();
+        u32 b = d.zeller();
+        i64 c = ((d.days() + 4) % 7 + 7) % 7;
+        if a == b and a as i64 == c: ok += 1;
+    }
+    ret ok;
+}
+
+stcfun step_days = (i64 start, u32 n) -> i64 {
+    mut Date d = from_days(start);
+    for 0..<n: d = d.tomorrow();
+    ret d.days() - start;
+}
+
+stc u32 RT1 = roundtrip_ok(-800000, 300); #= RT1 300
+stc u32 RT2 = roundtrip_ok(10000, 300); #= RT2 300
+stc u32 WA1 = weekday_agree(-30000, 250); #= WA1 250
+stc u32 WA2 = weekday_agree(700000, 250); #= WA2 250
+stc i64 SD1 = step_days(19000, 800); #= SD1 800
+stc i32 CD1 = Date(2020, 5, 5).cmp(Date(2020, 5, 6)); #= CD1 -1
+stc i32 CD2 = Date(2021, 1, 1).cmp(Date(2020, 12, 31)); #= CD2 1
+stc i32 CD3 = Date(2020, 6, 1).cmp(Date(2020, 5, 31)); #= CD3 1
+stc i32 CD4 = Date(2020, 6, 1).cmp(Date(2020, 6, 1)); #= CD4 0
+
+stc i64 EA1 = easter(2000).pack(); #= EA1 20000423
+stc i64 EA2 = easter(2024).pack(); #= EA2 20240331
+stc i64 EA3 = easter(2025).pack(); #= EA3 20250420
+stc i64 EA4 = easter(1961).pack(); #= EA4 19610402
+stc i64 EA5 = easter(2038).pack(); #= EA5 20380425
+stc i64 EA6 = easter(1818).pack(); #= EA6 18180322
+
+stc i64 NW1 = nth_weekday(2023, 11, 4, 4).pack(); #= NW1 20231123
+stc i64 NW2 = nth_weekday(2024, 9, 1, 1).pack(); #= NW2 20240902
+stc i64 NW3 = nth_weekday(2024, 2, 4, 5).pack(); #= NW3 20240229
+stc i64 NW4 = nth_weekday(2000, 1, 6, 1).pack(); #= NW4 20000101
+
+$main = () {}

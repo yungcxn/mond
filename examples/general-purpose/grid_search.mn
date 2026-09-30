@@ -1,0 +1,216 @@
+variant Found = +(Steps(u32 n), Blocked) tagof u8;
+
+type Maze = *(&[]u8 src, u32 w, u32 h) !{
+    fun at = (i32 r, i32 c) -> u8 {
+        if r < 0 or c < 0 or r >= self.h as i32 or c >= self.w as i32: ret '#';
+        ret self.src.*[(r as u32) * (self.w + 1) + c as u32];
+    }
+
+    fun open = (i32 r, i32 c) -> bool: ret self.at(r, c) != '#';
+
+    fun find = (u8 ch) -> i32 {
+        for r in 0..<self.h {
+            for c in 0..<self.w {
+                if self.at(r as i32, c as i32) == ch: ret (r * self.w + c) as i32;
+            }
+        }
+        ret -1;
+    }
+
+    fun bfs = () -> Found {
+        i32 start = self.find('S');
+        i32 goal = self.find('E');
+        if start < 0 or goal < 0: ret Found.Blocked;
+        mut [100]i32 dist;
+        for i in 0..<100: dist[i] = -1;
+        mut [100]u32 queue;
+        mut u32 head = 0;
+        mut u32 tail = 0;
+        queue[0] = start as u32;
+        tail = 1;
+        dist[start] = 0;
+        [4]i32 dr = [-1, 1, 0, 0];
+        [4]i32 dc = [0, 0, -1, 1];
+        while head < tail {
+            u32 cur = queue[head];
+            head += 1;
+            i32 r = (cur / self.w) as i32;
+            i32 c = (cur % self.w) as i32;
+            if cur == goal as u32: ret Found.Steps(dist[cur] as u32);
+            for d in 0..<4 {
+                i32 nr = r + dr[d];
+                i32 nc = c + dc[d];
+                if !self.open(nr, nc): cont;
+                u32 idx = (nr as u32) * self.w + nc as u32;
+                if dist[idx] >= 0: cont;
+                dist[idx] = dist[cur] + 1;
+                queue[tail] = idx;
+                tail += 1;
+            }
+        }
+        ret Found.Blocked;
+    }
+
+    fun astar = (*u32 expanded) -> Found {
+        i32 start = self.find('S');
+        i32 goal = self.find('E');
+        if start < 0 or goal < 0: ret Found.Blocked;
+        u32 gr = (goal as u32) / self.w;
+        u32 gc = (goal as u32) % self.w;
+        mut [100]u32 g;
+        mut [100]bool open_set;
+        mut [100]bool closed;
+        g[start] = 0;
+        open_set[start] = true;
+        [4]i32 dr = [-1, 1, 0, 0];
+        [4]i32 dc = [0, 0, -1, 1];
+        loop {
+            mut i32 best = -1;
+            mut u32 best_f = 1000000;
+            for i in 0..<100 {
+                if !open_set[i]: cont;
+                u32 r = i as u32 / self.w;
+                u32 c = i as u32 % self.w;
+                u32 dr_abs = if r > gr: r - gr else: gr - r;
+                u32 dc_abs = if c > gc: c - gc else: gc - c;
+                u32 f = g[i] + dr_abs + dc_abs;
+                if f < best_f {
+                    best_f = f;
+                    best = i as i32;
+                }
+            }
+            if best < 0: ret Found.Blocked;
+            expanded.* += 1;
+            if best == goal: ret Found.Steps(g[best]);
+            open_set[best] = false;
+            closed[best] = true;
+            i32 r = (best as u32 / self.w) as i32;
+            i32 c = (best as u32 % self.w) as i32;
+            for d in 0..<4 {
+                i32 nr = r + dr[d];
+                i32 nc = c + dc[d];
+                if !self.open(nr, nc): cont;
+                u32 idx = (nr as u32) * self.w + nc as u32;
+                if closed[idx]: cont;
+                u32 cand = g[best] + 1;
+                if !open_set[idx] or cand < g[idx] {
+                    g[idx] = cand;
+                    open_set[idx] = true;
+                }
+            }
+        }
+        ret Found.Blocked;
+    }
+
+    fun regions = (*u32 largest) -> u32 {
+        mut [100]bool seen;
+        mut u32 count = 0;
+        largest.* = 0;
+        for r in 0..<self.h {
+            for c in 0..<self.w {
+                u32 idx = r * self.w + c;
+                if seen[idx] or !self.open(r as i32, c as i32): cont;
+                count += 1;
+                mut u32 size = 0;
+                mut [100]u32 stack;
+                mut u32 top = 1;
+                stack[0] = idx;
+                seen[idx] = true;
+                while top > 0 {
+                    top -= 1;
+                    u32 cur = stack[top];
+                    size += 1;
+                    i32 cr = (cur / self.w) as i32;
+                    i32 cc = (cur % self.w) as i32;
+                    [4]i32 dr = [-1, 1, 0, 0];
+                    [4]i32 dc = [0, 0, -1, 1];
+                    for d in 0..<4 {
+                        i32 nr = cr + dr[d];
+                        i32 nc = cc + dc[d];
+                        if !self.open(nr, nc): cont;
+                        u32 ni = (nr as u32) * self.w + nc as u32;
+                        if seen[ni]: cont;
+                        seen[ni] = true;
+                        stack[top] = ni;
+                        top += 1;
+                    }
+                }
+                if size > largest.*: largest.* = size;
+            }
+        }
+        ret count;
+    }
+
+    fun count_paths = () -> u64 {
+        mut [100]u64 ways;
+        ways[0] = if self.open(0, 0): 1 else: 0;
+        for r in 0..<self.h {
+            for c in 0..<self.w {
+                if r == 0 and c == 0: cont;
+                u32 idx = r * self.w + c;
+                if !self.open(r as i32, c as i32) {
+                    ways[idx] = 0;
+                    cont;
+                }
+                mut u64 w = 0;
+                if r > 0: w += ways[idx - self.w];
+                if c > 0: w += ways[idx - 1];
+                ways[idx] = w;
+            }
+        }
+        ret ways[self.h * self.w - 1];
+    }
+}
+
+fun show = (Found f) -> i32: ret match f {
+    Found.Steps(n) => n as i32,
+    Found.Blocked => -1,
+}
+
+fun maze_bfs = (&[]u8 s, u32 w, u32 h) -> i32: ret show(Maze(src = s, w = w, h = h).bfs());
+
+fun maze_astar = (&[]u8 s, u32 w, u32 h) -> i32 {
+    mut u32 n = 0;
+    Found f = Maze(src = s, w = w, h = h).astar(n.&);
+    ret show(f) * 1000 + n as i32;
+}
+
+fun maze_regions = (&[]u8 s, u32 w, u32 h) -> u32 {
+    mut u32 largest = 0;
+    u32 n = Maze(src = s, w = w, h = h).regions(largest.&);
+    ret n * 1000 + largest;
+}
+
+fun maze_paths = (&[]u8 s, u32 w, u32 h) -> u64: ret Maze(src = s, w = w, h = h).count_paths();
+
+stc i32 B1 = maze_bfs("S..\n.#.\n..E\n".&, 3, 3); #= B1 4
+stc i32 B2 = maze_bfs("S.#.\n#.#.\n..#E\n".&, 4, 3); #= B2 -1
+stc i32 B3 = maze_bfs("S#E\n".&, 3, 1); #= B3 -1
+stc i32 B4 = maze_bfs("SE\n".&, 2, 1); #= B4 1
+stc i32 B5 = maze_bfs("S.......\n#######.\n........\n.#######\n........\n#######.\n.......E\n".&, 8, 7); #= B5 27
+stc i32 B6 = maze_bfs("S...\n....\n....\n...E\n".&, 4, 4); #= B6 6
+stc i32 B7 = maze_bfs(".....\n".&, 5, 1); #= B7 -1
+stc i32 B8 = maze_bfs("S.#E\n..#.\n###.\n".&, 4, 3); #= B8 -1
+stc i32 B9 = maze_bfs("#####\n#S.E#\n#####\n".&, 5, 3); #= B9 2
+
+stc i32 A1 = maze_astar("S..\n.#.\n..E\n".&, 3, 3); #= A1 4008
+stc i32 A2 = maze_astar("S...\n....\n....\n...E\n".&, 4, 4); #= A2 6016
+stc i32 A3 = maze_astar("S.......\n#######.\n........\n.#######\n........\n#######.\n.......E\n".&, 8, 7); #= A3 27028
+stc i32 A4 = maze_astar("S#E\n".&, 3, 1); #= A4 -999
+stc i32 A5 = maze_astar("S.#...\n..#.#.\n.##.#.\n....#E\n".&, 6, 4); #= A5 14017
+stc i32 A6 = maze_astar("SE\n".&, 2, 1); #= A6 1002
+
+stc u32 RG1 = maze_regions("..#..\n..#..\n###..\n.#...\n".&, 5, 4); #= RG1 3009
+stc u32 RG2 = maze_regions("####\n####\n".&, 4, 2); #= RG2 0
+stc u32 RG3 = maze_regions("....\n....\n".&, 4, 2); #= RG3 1008
+stc u32 RG4 = maze_regions(".#.#.\n#.#.#\n.#.#.\n".&, 5, 3); #= RG4 8001
+
+stc u64 PC1 = maze_paths("....\n....\n....\n....\n".&, 4, 4); #= PC1 20
+stc u64 PC2 = maze_paths("...\n.#.\n...\n".&, 3, 3); #= PC2 2
+stc u64 PC3 = maze_paths("...\n###\n...\n".&, 3, 3); #= PC3 0
+stc u64 PC4 = maze_paths("#..\n...\n...\n".&, 3, 3); #= PC4 0
+stc u64 PC5 = maze_paths("..........\n..........\n..........\n..........\n..........\n..........\n..........\n..........\n..........\n..........\n".&, 10, 10); #= PC5 48620
+stc u64 PC6 = maze_paths(".\n".&, 1, 1); #= PC6 1
+stc u64 PC7 = maze_paths("..\n.#\n".&, 2, 2); #= PC7 0
+
+$main = () {}

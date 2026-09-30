@@ -1,0 +1,89 @@
+# BUG: all of these are accepted without a diagnostic
+#   mut u32 z; g = (): z + 1;                        a closure reading a variable that was never initialised
+#   mut Res r = Res(id = 1); deinit r; w = r.id;     a value used after `deinit`
+#   do s.push(1)  with s: &Stack(u8, 4)              a mutating method called through a read only pointer
+# the analysis is also conservative in `if c and { z = 1; true; }: use(z)`, where z is initialised when the branch runs
+
+variant Opt = (type T): ++(Some(T), None) tagof u8;
+type Pair = (type A, type B): *(mut A first, mut B second);
+type Stack = (type T, u32 N): *(mut [N]T items, mut u32 len = 0) !{
+    fun peek = () -> T: ret self.items[0];
+}
+type Cell = *(mut u8 v);
+
+fun make = () -> Cell: ret Cell(v = 1);
+
+fun through_ref = (&Stack(u8, 4) s) {
+    s.len = 1; #! write_through_immutable_pointer
+    s.items[0] = 5; #! write_through_immutable_pointer
+}
+
+fun through_nested = (&Pair(Pair(u8, u8), u8) p) {
+    p.first.first = 1; #! write_through_immutable_pointer
+    p.second = 2; #! write_through_immutable_pointer
+}
+
+fun through_variant = (&Opt(Stack(u8, 2)) o) {
+    o.* = Opt(Stack(u8, 2)).None; #! write_through_immutable_pointer
+}
+
+fun through_slice = (&[]Stack(u8, 2) xs) {
+    xs.*[0].len = 1; #! write_through_immutable_pointer
+}
+
+fun through_array = (&[3]Stack(u8, 2) arr, *[3]Stack(u8, 2) rw) {
+    arr[0].len = 3; #! write_through_immutable_pointer
+    arr[0].items[1] = 2; #! write_through_immutable_pointer
+    rw[0].len = 3;
+    rw[0].items[1] = 2;
+}
+
+fun copies = (Stack(u8, 4) s, [3]u8 vals, Opt(Pair(u8, u8)) o) {
+    for x in vals { x = 1; } #! assign_to_immutable
+    for i in 0..<3 { i = 2; } #! assign_to_immutable
+    make().v = 5; #! assign_to_immutable
+    s.peek() = 3; #! assign_to_immutable
+    match o {
+        Opt(Pair(u8, u8)).Some(p) => p.first = 1, #! assign_to_immutable
+        _ => {},
+    }
+    Opt(u8) e = Opt(u8).None;
+    e = Opt(u8).Some(1); #! assign_to_immutable
+    mut Opt(u8) m = Opt(u8).None;
+    m = Opt(u8).Some(1);
+    { defer e = Opt(u8).None; } #! assign_to_immutable
+    for i in 0..<3 { u8 inner = 1; }
+    u8 after = inner; #! undefined_name
+}
+
+fun branches = (bool c, bool d, u32 k) -> u32 {
+    mut u32 n;
+    mut u32 m;
+    if c: n = 1;
+    if d { m = 2; } else { ret 0; }
+    x1 = n + m; #! use_before_initialization
+    mut u32 a;
+    mut u32 b;
+    x2 = a + b; #! use_before_initialization use_before_initialization
+    mut u32 w;
+    while c { w = 1; brk; }
+    x3 = w; #! use_before_initialization
+    mut u32 v;
+    match k { 0 => v = 1, 1 => v = 2, _ => {} }
+    x4 = v; #! use_before_initialization
+    mut u32 s;
+    loop { if k > 1 { s = 1; brk; } }
+    x5 = s;
+    mut u32 t;
+    match k { 0 => t = 1, _ => t = 2 }
+    x6 = t;
+    mut u32 z;
+    ret z; #! use_before_initialization
+}
+
+fun calls = () {
+    mut [2]Stack(u8, 2) two;
+    through_slice(two.&);
+}
+
+$main = () {}

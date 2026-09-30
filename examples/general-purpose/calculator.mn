@@ -1,0 +1,141 @@
+variant Tok = +(Num(i64 v), Plus, Minus, Star, Slash, Pct, Caret, LParen, RParen, End) tagof u8;
+variant Res = +(Ok(i64 v), DivZero, Syntax(u32 at), Overflow) tagof u8;
+
+fun is_digit = (u8 c) -> bool: ret c >= '0' and c <= '9';
+
+type Lexer = *(&[]u8 src, mut u32 at, mut [32]Tok toks, mut u32 n) !{
+    fun emit = (Tok t) {
+        self.toks[self.n] = t;
+        self.n += 1;
+    }
+
+    fun run = () -> bool {
+        while self.at < self.src.$len {
+            u8 c = self.src.*[self.at];
+            self.at += 1;
+            match c {
+                ' ' | '\t' => {},
+                '+' => self.emit(Tok.Plus),
+                '-' => self.emit(Tok.Minus),
+                '*' => self.emit(Tok.Star),
+                '/' => self.emit(Tok.Slash),
+                '%' => self.emit(Tok.Pct),
+                '^' => self.emit(Tok.Caret),
+                '(' => self.emit(Tok.LParen),
+                ')' => self.emit(Tok.RParen),
+                '0'..='9' => {
+                    mut i64 v = (c - '0') as i64;
+                    while self.at < self.src.$len and is_digit(self.src.*[self.at]) {
+                        v = v * 10 + (self.src.*[self.at] - '0') as i64;
+                        self.at += 1;
+                    }
+                    self.emit(Tok.Num(v));
+                },
+                _ => ret false,
+            }
+        }
+        self.emit(Tok.End);
+        ret true;
+    }
+}
+
+type Parser = *(mut [32]Tok toks, mut u32 at, mut u32 bad) !{
+    fun peek = () -> Tok: ret self.toks[self.at];
+    fun bump = () { self.at += 1; }
+
+    fun primary = () -> i64 {
+        Tok t = self.peek();
+        match t {
+            Tok.Num(v) => {
+                self.bump();
+                ret v;
+            },
+            Tok.Minus => {
+                self.bump();
+                ret -self.power();
+            },
+            Tok.LParen => {
+                self.bump();
+                i64 v = self.expr(0);
+                if self.peek() == Tok.RParen: self.bump() else: self.bad = self.at + 1;
+                ret v;
+            },
+            _ => {
+                self.bad = self.at + 1;
+                ret 0;
+            },
+        }
+    }
+
+    fun power = () -> i64 {
+        i64 base = self.primary();
+        if self.peek() == Tok.Caret {
+            self.bump();
+            i64 e = self.power();
+            mut i64 r = 1;
+            for 0..<e: r *= base;
+            ret r;
+        }
+        ret base;
+    }
+
+    fun prec = (Tok t) -> u32: ret match t {
+        Tok.Plus | Tok.Minus => 1,
+        Tok.Star | Tok.Slash | Tok.Pct => 2,
+        _ => 0,
+    }
+
+    fun expr = (u32 min) -> i64 {
+        mut i64 lhs = self.power();
+        loop {
+            Tok op = self.peek();
+            u32 p = self.prec(op);
+            if p == 0 or p < min: brk;
+            self.bump();
+            i64 rhs = self.expr(p + 1);
+            lhs = match op {
+                Tok.Plus => lhs + rhs,
+                Tok.Minus => lhs - rhs,
+                Tok.Star => lhs * rhs,
+                Tok.Slash => if rhs == 0: ret 0 else: lhs / rhs,
+                _ => if rhs == 0: ret 0 else: lhs % rhs,
+            };
+        }
+        ret lhs;
+    }
+}
+
+fun calc = (&[]u8 src) -> Res {
+    [32]Tok blank;
+    mut Lexer lx = Lexer(src = src, at = 0, toks = blank, n = 0);
+    if !lx.run(): ret Res.Syntax(lx.at);
+    mut Parser p = Parser(toks = lx.toks, at = 0, bad = 0);
+    i64 v = p.expr(0);
+    if p.bad != 0: ret Res.Syntax(p.bad);
+    if p.peek() != Tok.End: ret Res.Syntax(p.at + 1);
+    ret Res.Ok(v);
+}
+
+fun show = (Res r) -> i64: ret match r {
+    Res.Ok(v) => v,
+    Res.DivZero => -1,
+    Res.Syntax(at) => -1000 - at as i64,
+    Res.Overflow => -2,
+}
+
+stc i64 C1 = show(calc("1 + 2 * 3".&)); #= C1 7
+stc i64 C2 = show(calc("(1 + 2) * 3".&)); #= C2 9
+stc i64 C3 = show(calc("10 - 4 - 3".&)); #= C3 3
+stc i64 C4 = show(calc("2 ^ 3 ^ 2".&)); #= C4 512
+stc i64 C5 = show(calc("-2 ^ 2".&)); #= C5 -4
+stc i64 C6 = show(calc("100 / 7 % 4".&)); #= C6 2
+stc i64 C7 = show(calc("((((5))))".&)); #= C7 5
+stc i64 C8 = show(calc("2 * (3 + 4) * (5 - 1)".&)); #= C8 56
+stc i64 C9 = show(calc("7 +".&)); #= C9 -1003
+stc i64 CA = show(calc("(1 + 2".&)); #= CA -1005
+stc i64 CB = show(calc("1 $ 2".&)); #= CB -1003
+stc i64 CC = show(calc("1 2".&)); #= CC -1002
+stc i64 CD = show(calc("12345 * 6789".&)); #= CD 83810205
+stc i64 CE = show(calc("--3".&)); #= CE 3
+
+$main = () {}

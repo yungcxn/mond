@@ -1,0 +1,182 @@
+fun gcd = (u64 a, u64 b) -> u64: ret if b == 0: a else: gcd(b, a % b);
+fun lcm = (u64 a, u64 b) -> u64: ret a / gcd(a, b) * b;
+
+fun is_prime = (u32 n) -> bool {
+    if n < 2: ret false;
+    mut u32 d = 2;
+    while d * d <= n {
+        if n % d == 0: ret false;
+        d += 1;
+    }
+    ret true;
+}
+
+fun count_primes = (u32 limit) -> u32 {
+    mut u32 c = 0;
+    for n in 0..<limit: if is_prime(n): c += 1;
+    ret c;
+}
+
+fun sieve = (u32 limit) -> u32 {
+    mut [128]bool composite;
+    mut u32 c = 0;
+    for i in 2..<limit {
+        if composite[i]: cont;
+        c += 1;
+        mut u32 j = i * i;
+        while j < limit {
+            composite[j] = true;
+            j += i;
+        }
+    }
+    ret c;
+}
+
+# LIMIT: & binds looser than ==, so masks are parenthesized
+fun pow_mod = (u64 base, u64 exp, u64 m) -> u64 {
+    mut u64 r = 1;
+    mut u64 b = base % m;
+    mut u64 e = exp;
+    while e > 0 {
+        if (e & 1) == 1: r = r * b % m;
+        b = b * b % m;
+        e = e >> 1; # LIMIT: no compound shift assignment
+    }
+    ret r;
+}
+
+fun isqrt = (u64 n) -> u64 {
+    mut u64 lo = 0;
+    mut u64 hi = n + 1;
+    while hi - lo > 1 {
+        u64 mid = (lo + hi) / 2;
+        if mid * mid <= n: lo = mid else: hi = mid;
+    }
+    ret lo;
+}
+
+fun fib_iter = (u32 n) -> u64 {
+    mut u64 a = 0;
+    mut u64 b = 1;
+    for 0..<n {
+        u64 t = a + b;
+        a = b;
+        b = t;
+    }
+    ret a;
+}
+
+fun fib_rec = (u32 n) -> u64: ret if n < 2: n as u64 else: fib_rec(n - 1) + fib_rec(n - 2);
+
+fun collatz_len = (u64 start) -> u32 {
+    mut u64 x = start;
+    mut u32 steps = 0;
+    while x != 1 {
+        x = if x % 2 == 0: x / 2 else: 3 * x + 1;
+        steps += 1;
+    }
+    ret steps;
+}
+
+fun digit_sum = (u64 n) -> u32 {
+    mut u64 x = n;
+    mut u32 s = 0;
+    while x > 0 {
+        s += (x % 10) as u32;
+        x /= 10;
+    }
+    ret s;
+}
+
+fun reverse_digits = (u64 n) -> u64 {
+    mut u64 x = n;
+    mut u64 r = 0;
+    while x > 0 {
+        r = r * 10 + x % 10;
+        x /= 10;
+    }
+    ret r;
+}
+
+fun is_palindrome = (u64 n) -> bool: ret n == reverse_digits(n);
+
+fun is_perfect = (u32 n) -> bool {
+    mut u32 s = 0;
+    for d in 1..<n: if n % d == 0: s += d;
+    ret n > 1 and s == n;
+}
+
+fun factorial = (u64 n) -> u64: ret if n <= 1: 1 else: n * factorial(n - 1);
+
+fun binomial = (u64 n, u64 k) -> u64 {
+    mut u64 r = 1;
+    for i in 0..<k: r = r * (n - i) / (i + 1);
+    ret r;
+}
+
+fun prime_factors = (u64 n) -> u64 {
+    mut u64 x = n;
+    mut u64 d = 2;
+    mut u64 out = 0;
+    while x > 1 {
+        while x % d == 0 {
+            out = out * 10 + d;
+            x /= d;
+        }
+        d += 1;
+    }
+    ret out;
+}
+
+fun to_base = (u64 n, u64 base) -> u64 {
+    mut u64 x = n;
+    mut u64 place = 1;
+    mut u64 out = 0;
+    while x > 0 {
+        out += x % base * place;
+        place *= 10;
+        x /= base;
+    }
+    ret out;
+}
+
+fun triangular = (u32 n) -> u32: ret n * (n + 1) / 2;
+fun abs_diff = (i32 a, i32 b) -> u32: ret (if a > b: a - b else: b - a) as u32;
+fun sign = (i32 x) -> i32: ret if x > 0: 1 else: if x < 0: -1 else: 0;
+fun clamp = (i32 x, i32 lo, i32 hi) -> i32: ret if x < lo: lo else: if x > hi: hi else: x;
+fun max3 = (i32 a, i32 b, i32 c) -> i32: ret if a > b: (if a > c: a else: c) else: (if b > c: b else: c);
+
+stc u64 G = gcd(1071, 462); #= G 21
+stc u64 G1 = gcd(17, 5); #= G1 1
+stc u64 G0 = gcd(0, 9); #= G0 9
+stc u64 L = lcm(4, 6); #= L 12
+stc u32 PC = count_primes(100); #= PC 25
+stc u32 SV = sieve(100); #= SV 25
+stc bool P97 = is_prime(97); #= P97 true
+stc bool P91 = is_prime(91); #= P91 false
+stc bool P1 = is_prime(1); #= P1 false
+stc u64 PM = pow_mod(2, 62, 1000000007); #= PM 145586002
+stc u64 PM0 = pow_mod(7, 0, 13); #= PM0 1
+stc u64 IS = isqrt(1000000); #= IS 1000
+stc u64 IS2 = isqrt(99); #= IS2 9
+stc u64 FI = fib_iter(50); #= FI 12586269025
+stc u64 FR = fib_rec(20); #= FR 6765
+stc u32 CL = collatz_len(97); #= CL 118
+stc u32 DS = digit_sum(987654321); #= DS 45
+stc u64 RD = reverse_digits(12345); #= RD 54321
+stc bool PAL = is_palindrome(12321); #= PAL true
+stc bool NPAL = is_palindrome(12345); #= NPAL false
+stc bool PF = is_perfect(28); #= PF true
+stc bool NPF = is_perfect(27); #= NPF false
+stc u64 FA = factorial(15); #= FA 1307674368000
+stc u64 BI = binomial(20, 10); #= BI 184756
+stc u64 PFS = prime_factors(360); #= PFS 222335
+stc u64 B2 = to_base(37, 2); #= B2 100101
+stc u64 B8 = to_base(511, 8); #= B8 777
+stc u32 TR = triangular(100); #= TR 5050
+stc u32 AD = abs_diff(-7, 5); #= AD 12
+stc i32 SG = sign(-9) * 100 + sign(0) * 10 + sign(4); #= SG -99
+stc i32 CLP = clamp(15, 0, 10) + clamp(-5, 0, 10) + clamp(5, 0, 10); #= CLP 15
+stc i32 M3 = max3(3, 9, 4) * 100 + max3(9, 3, 4) * 10 + max3(1, 2, 3); #= M3 993
+
+$main = () {}

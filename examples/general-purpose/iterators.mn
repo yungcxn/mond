@@ -1,0 +1,139 @@
+type Fib = *(mut u64 a = 0, mut u64 b = 1) !{
+    $has_next = () -> bool: ret true;
+    $next = () -> u64 {
+        u64 r = self.a;
+        self.a = self.b;
+        self.b = r + self.b;
+        ret r;
+    }
+}
+
+type Step = *(mut i32 at, i32 end, i32 by) !{
+    $has_next = () -> bool: ret if self.by > 0: self.at < self.end else: self.at > self.end;
+    $next = () -> i32 {
+        i32 v = self.at;
+        self.at += self.by;
+        ret v;
+    }
+}
+
+type Bytes = *(&[]u8 data, mut u64 at) !{
+    $has_next = () -> bool: ret self.at < self.data.$len;
+    $next = () -> u8 {
+        u8 v = self.data.*[self.at];
+        self.at += 1;
+        ret v;
+    }
+}
+
+type Take = (type I): *(mut I inner, mut u32 left) !{
+    $has_next = () -> bool: ret self.left > 0 and self.inner.$has_next();
+    $next = () -> u64 {
+        self.left -= 1;
+        ret self.inner.$next();
+    }
+}
+
+type Countdown = *(mut u32 n) !{
+    $has_next = () -> bool: ret self.n > 0;
+    $next = () -> u32 {
+        self.n -= 1;
+        ret self.n;
+    }
+}
+
+type Evens = *(mut u32 at, u32 end) !{
+    $has_next = () -> bool {
+        while self.at < self.end and self.at % 2 == 1: self.at += 1;
+        ret self.at < self.end;
+    }
+    $next = () -> u32 {
+        u32 v = self.at;
+        self.at += 1;
+        ret v;
+    }
+}
+
+stcfun fib_sum = () -> u64 {
+    mut Take(Fib) t = Take(Fib)(inner = Fib(), left = 12);
+    mut u64 s = 0;
+    for x in t: s = s * 3 + x;
+    ret s;
+}
+
+stcfun steps = () -> i32 {
+    mut Step up = Step(at = 0, end = 10, by = 3);
+    mut Step down = Step(at = 5, end = -4, by = -4);
+    mut i32 s = 0;
+    for x in up: s = s * 10 + x;
+    for x in down: s = s * 10 + x;
+    ret s;
+}
+
+stcfun bytes_sum = () -> u32 {
+    mut Bytes b = Bytes(data = "abc".&, at = 0);
+    mut u32 s = 0;
+    for c in b: s = s * 256 + c as u32;
+    ret s;
+}
+
+stcfun resumable = () -> u32 {
+    mut Countdown c = Countdown(n = 10);
+    mut u32 first = 0;
+    for x in c {
+        first = first * 10 + x;
+        if x == 7: brk;
+    }
+    mut u32 second = 0;
+    for x in c: second = second * 10 + x;
+    ret first * 100000 + second;
+}
+
+stcfun nested = () -> u32 {
+    mut u32 total = 0;
+    mut Countdown outer = Countdown(n = 4);
+    for i in outer {
+        mut Countdown inner = Countdown(n = i);
+        for j in inner: total += i * 10 + j;
+    }
+    ret total;
+}
+
+stcfun skipping = () -> u32 {
+    mut Evens e = Evens(at = 1, end = 12);
+    mut u32 s = 0;
+    for x in e: s = s * 10 + x % 10;
+    ret s;
+}
+
+stcfun empty_iteration = () -> u32 {
+    mut Countdown c = Countdown(n = 0);
+    mut u32 s = 7;
+    for x in c: s += 1;
+    ret s;
+}
+
+stcfun manual = () -> u32 {
+    mut Countdown c = Countdown(n = 3);
+    mut u32 s = 0;
+    while c.$has_next(): s = s * 10 + c.$next();
+    ret s;
+}
+
+stcfun collected = () -> [5]u32 {
+    mut Countdown c = Countdown(n = 5);
+    [5]u32 out = for x in c: x * x;
+    ret out;
+}
+
+stc u64 FS = fib_sum(); #= FS 106184
+stc i32 ST = steps(); #= ST 369507
+stc u32 BS = bytes_sum(); #= BS 6382179
+stc u32 RS = resumable(); #= RS 105243210
+stc u32 NE = nested(); #= NE 144
+stc u32 SK = skipping(); #= SK 24680
+stc u32 EI = empty_iteration(); #= EI 7
+stc u32 MA = manual(); #= MA 210
+stc [5]u32 CO = collected(); #= CO [16, 9, 4, 1, 0]
+
+$main = () {}

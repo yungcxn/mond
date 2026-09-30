@@ -1,0 +1,128 @@
+type Cell = *(mut u32 v, mut [2]u32 pair);
+
+fun bump_copy = ([3]u32 a) -> u32 {
+    mut [3]u32 b = a;
+    b[0] += 100;
+    ret b[0];
+}
+
+fun fill_by_value = (Cell c) -> u32 {
+    mut Cell d = c;
+    d.v = 99;
+    d.pair[1] = 77;
+    ret d.v + d.pair[1];
+}
+
+fun build = (u32 n) -> [4]u32 {
+    mut [4]u32 out;
+    for i in 0..<4: out[i] = n + i;
+    ret out;
+}
+
+fun build_cell = (u32 n) -> Cell {
+    mut Cell c;
+    c.v = n;
+    c.pair[0] = n * 2;
+    ret c;
+}
+
+fun identity = ([2][2]u32 g) -> [2][2]u32: ret g;
+
+fun transpose2 = ([2][2]u32 g) -> [2][2]u32 {
+    mut [2][2]u32 t;
+    for i in 0..<2: for j in 0..<2: t[j][i] = g[i][j];
+    ret t;
+}
+
+stcfun copy_on_call = () -> u32 {
+    [3]u32 a = [1, 2, 3];
+    u32 r = bump_copy(a);
+    ret r * 10 + a[0];
+}
+
+stcfun record_copy = () -> u32 {
+    Cell c = Cell(v = 1, pair = [2, 3]);
+    u32 r = fill_by_value(c);
+    ret r * 100 + c.v * 10 + c.pair[1];
+}
+
+stcfun returned_arrays = () -> u32 {
+    a = build(10);
+    b = build(20);
+    ret a[0] * 1000000 + a[3] * 10000 + b[0] * 100 + b[3];
+}
+
+stcfun returned_records = () -> u32 {
+    Cell a = build_cell(3);
+    Cell b = build_cell(4);
+    ret a.v * 1000 + a.pair[0] * 100 + b.v * 10 + b.pair[0];
+}
+
+stcfun nested_copy = () -> u32 {
+    mut [2][2]u32 g = [[1, 2], [3, 4]];
+    mut [2][2]u32 h = g;
+    h[0][0] = 9;
+    t = transpose2(g);
+    i = identity(h);
+    g[1][1] = 8;
+    ret t[0][1] * 100000 + t[1][1] * 10000 + i[0][0] * 1000 + h[1][1] * 100 + g[1][1] * 10 + g[0][0];
+}
+
+stcfun array_equality = () -> u32 {
+    [3]u32 a = [1, 2, 3];
+    [3]u32 b = [1, 2, 3];
+    [3]u32 c = [1, 2, 4];
+    ret (a == b) as u32 + (a == c) as u32 * 10 + (a != c) as u32 * 100;
+}
+
+stcfun record_equality = () -> u32 {
+    Cell a = Cell(v = 1, pair = [2, 3]);
+    Cell b = Cell(v = 1, pair = [2, 3]);
+    Cell c = a with (v = 5);
+    ret (a == b) as u32 + (a == c) as u32 * 10 + (a != c) as u32 * 100;
+}
+
+stcfun array_in_array_swap = () -> u32 {
+    mut [3][2]u32 rows = [[1, 2], [3, 4], [5, 6]];
+    row = rows[0];
+    rows[0] = rows[2];
+    rows[2] = row;
+    ret rows[0][0] * 100000 + rows[0][1] * 10000 + rows[1][0] * 1000 + rows[2][0] * 100 + rows[2][1] * 10 + row[0];
+}
+
+# BUG: a `for` as the body of a value `for` (`for i in 0..<3: for j in 0..<2: i * 2 + j`) does not produce an array element, the outer array is typed () or [2]u32 mismatches u32, so rows are built as array literals
+stcfun loop_value_arrays = () -> u32 {
+    grid = for i in 0..<3: [i * 3, i * 3 + 1, i * 3 + 2];
+    ret grid[0][0] * 100000 + grid[1][2] * 10000 + grid[2][1] * 1000 + grid[2][2] * 100 + grid.$len as u32;
+}
+
+stcfun element_alias = () -> u32 {
+    mut [3]u32 a = [1, 2, 3];
+    u32 old = a[1];
+    a[1] = 20;
+    mut [3]u32 snapshot = a;
+    a[1] = 30;
+    ret old * 1000 + snapshot[1] * 10 + a[1] * 100;
+}
+
+stcfun struct_array_copy = () -> u32 {
+    mut [2]Cell cs = [Cell(v = 1, pair = [1, 1]), Cell(v = 2, pair = [2, 2])];
+    mut [2]Cell dup = cs;
+    dup[0].v = 100;
+    dup[1].pair[0] = 200;
+    ret cs[0].v * 1000000 + cs[1].pair[0] * 10000 + dup[0].v * 10 + dup[1].pair[0];
+}
+
+stc u32 CC = copy_on_call(); #= CC 1011
+stc u32 RC = record_copy(); #= RC 17613
+stc u32 RA = returned_arrays(); #= RA 10132023
+stc u32 RR = returned_records(); #= RR 3648
+stc u32 NC = nested_copy(); #= NC 349481
+stc u32 AE = array_equality(); #= AE 101
+stc u32 RE = record_equality(); #= RE 101
+stc u32 AS = array_in_array_swap(); #= AS 563121
+stc u32 LV = loop_value_arrays(); #= LV 57803
+stc u32 EA = element_alias(); #= EA 5200
+stc u32 SC = struct_array_copy(); #= SC 1021200
+
+$main = () {}

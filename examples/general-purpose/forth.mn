@@ -1,0 +1,374 @@
+type Forth = *(
+    &[]u8 src,
+    mut [8]i64 st,
+    mut u32 sp,
+    mut [4]u32 dname,
+    mut [4]u32 dnend,
+    mut [4]u32 dbody,
+    mut [4]u32 dend,
+    mut u32 nd,
+    mut u32 err,
+    mut u32 depth,
+) !{
+    fun fail = (u32 c) {
+        if self.err == 0: self.err = c;
+    }
+
+    fun push = (i64 v) {
+        if self.sp == 8 {
+            self.fail(4);
+            ret;
+        }
+        self.st[self.sp] = v;
+        self.sp += 1;
+    }
+
+    fun pop = () -> i64 {
+        if self.sp == 0 {
+            self.fail(1);
+            ret 0;
+        }
+        self.sp -= 1;
+        ret self.st[self.sp];
+    }
+
+    fun skip = (u32 i) -> u32 {
+        mut u32 k = i;
+        while k as u64 < self.src.$len and self.src.*[k] == ' ': k += 1;
+        ret k;
+    }
+
+    fun tok_end = (u32 i) -> u32 {
+        mut u32 k = i;
+        while k as u64 < self.src.$len and self.src.*[k] != ' ': k += 1;
+        ret k;
+    }
+
+    fun is = (u32 s, u32 e, &[]u8 w) -> bool {
+        if (e - s) as u64 != w.$len: ret false;
+        # LIMIT: `for k in 0..<(e - s) {` (header ending in a parenthesised group before the block) is IllegalForFormat
+        u32 n = e - s;
+        for k in 0..<n {
+            if self.src.*[s + k] != w.*[k]: ret false;
+        }
+        ret true;
+    }
+
+    fun is_num = (u32 s, u32 e) -> bool {
+        mut u32 k = s;
+        if self.src.*[k] == '-' and e - s > 1: k += 1;
+        while k < e {
+            u8 c = self.src.*[k];
+            if c < '0' or c > '9': ret false;
+            k += 1;
+        }
+        ret true;
+    }
+
+    fun parse = (u32 s, u32 e) -> i64 {
+        mut u32 k = s;
+        if self.src.*[k] == '-': k += 1;
+        mut i64 v = 0;
+        while k < e {
+            v = v * 10 + (self.src.*[k] - '0') as i64;
+            k += 1;
+        }
+        ret if self.src.*[s] == '-': -v else: v;
+    }
+
+    fun same = (u32 s, u32 e, u32 d) -> bool {
+        u32 ds = self.dname[d];
+        u32 de = self.dnend[d];
+        if de - ds != e - s: ret false;
+        u32 n = e - s;
+        for k in 0..<n {
+            if self.src.*[s + k] != self.src.*[ds + k]: ret false;
+        }
+        ret true;
+    }
+
+    fun find = (u32 s, u32 e) -> u32 {
+        mut u32 d = self.nd;
+        while d > 0 {
+            d -= 1;
+            if self.same(s, e, d): ret d;
+        }
+        ret 99;
+    }
+
+    fun skip_to = (u32 from, u32 to, bool stop_else) -> u32 {
+        mut u32 depth = 0;
+        mut u32 i = from;
+        loop {
+            i = self.skip(i);
+            if i >= to: ret to;
+            u32 e = self.tok_end(i);
+            if self.is(i, e, "if".&) {
+                depth += 1;
+            } else if self.is(i, e, "then".&) {
+                if depth == 0: ret i;
+                depth -= 1;
+            } else if depth == 0 and stop_else and self.is(i, e, "else".&) {
+                ret i;
+            }
+            i = e;
+        }
+        ret to;
+    }
+
+    fun define = (u32 e, u32 to) -> u32 {
+        if self.depth > 0 or self.nd == 4 {
+            self.fail(5);
+            ret to;
+        }
+        u32 ns = self.skip(e);
+        if ns >= to {
+            self.fail(5);
+            ret to;
+        }
+        u32 ne = self.tok_end(ns);
+        mut u32 i = ne;
+        loop {
+            i = self.skip(i);
+            if i >= to {
+                self.fail(5);
+                ret to;
+            }
+            u32 te = self.tok_end(i);
+            if self.is(i, te, ";".&) {
+                self.dname[self.nd] = ns;
+                self.dnend[self.nd] = ne;
+                self.dbody[self.nd] = ne;
+                self.dend[self.nd] = i;
+                self.nd += 1;
+                ret te;
+            }
+            i = te;
+        }
+        ret to;
+    }
+
+    fun call = (u32 d) {
+        if self.depth == 6 {
+            self.fail(6);
+            ret;
+        }
+        self.depth += 1;
+        self.run(self.dbody[d], self.dend[d]);
+        self.depth -= 1;
+    }
+
+    fun builtin = (u32 s, u32 e) -> bool {
+        if self.is(s, e, "+".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(a + b);
+        } else if self.is(s, e, "-".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(a - b);
+        } else if self.is(s, e, "*".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(a * b);
+        } else if self.is(s, e, "/".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            if b == 0: self.fail(3) else: self.push(a / b);
+        } else if self.is(s, e, "mod".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            if b == 0: self.fail(3) else: self.push(a % b);
+        } else if self.is(s, e, "/mod".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            if b == 0 {
+                self.fail(3);
+            } else {
+                self.push(a % b);
+                self.push(a / b);
+            }
+        } else if self.is(s, e, "dup".&) {
+            i64 a = self.pop();
+            self.push(a);
+            self.push(a);
+        } else if self.is(s, e, "drop".&) {
+            do self.pop();
+        } else if self.is(s, e, "swap".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(b);
+            self.push(a);
+        } else if self.is(s, e, "over".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(a);
+            self.push(b);
+            self.push(a);
+        } else if self.is(s, e, "rot".&) {
+            i64 c = self.pop();
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(b);
+            self.push(c);
+            self.push(a);
+        } else if self.is(s, e, "negate".&) {
+            self.push(-self.pop());
+        } else if self.is(s, e, "abs".&) {
+            i64 a = self.pop();
+            self.push(if a < 0: -a else: a);
+        } else if self.is(s, e, "min".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(if a < b: a else: b);
+        } else if self.is(s, e, "max".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(if a > b: a else: b);
+        } else if self.is(s, e, "=".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(if a == b: -1 else: 0);
+        } else if self.is(s, e, "<".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(if a < b: -1 else: 0);
+        } else if self.is(s, e, ">".&) {
+            i64 b = self.pop();
+            i64 a = self.pop();
+            self.push(if a > b: -1 else: 0);
+        } else if self.is(s, e, "0=".&) {
+            self.push(if self.pop() == 0: -1 else: 0);
+        } else if self.is(s, e, "depth".&) {
+            self.push(self.sp as i64);
+        } else {
+            ret false;
+        }
+        ret true;
+    }
+
+    fun run = (u32 from, u32 to) {
+        mut u32 i = from;
+        while self.err == 0 {
+            i = self.skip(i);
+            if i >= to: brk;
+            u32 e = self.tok_end(i);
+            mut u32 next = e;
+            u32 d = self.find(i, e);
+            if d != 99 {
+                self.call(d);
+            } else if self.is_num(i, e) {
+                self.push(self.parse(i, e));
+            } else if self.is(i, e, ":".&) {
+                next = self.define(e, to);
+            } else if self.is(i, e, "if".&) {
+                if self.pop() == 0 {
+                    u32 p = self.skip_to(e, to, true);
+                    if p >= to {
+                        self.fail(5);
+                    } else {
+                        u32 pe = self.tok_end(p);
+                        next = if self.is(p, pe, "else".&): pe else: p;
+                    }
+                }
+            } else if self.is(i, e, "else".&) {
+                u32 p = self.skip_to(e, to, false);
+                if p >= to: self.fail(5) else: next = p;
+            } else if self.is(i, e, "then".&) {
+            } else if !self.builtin(i, e) {
+                self.fail(2);
+            }
+            i = next;
+        }
+    }
+}
+
+fun exec = (&[]u8 src) -> [8]i64 {
+    [8]i64 blank;
+    [4]u32 z1;
+    [4]u32 z2;
+    [4]u32 z3;
+    [4]u32 z4;
+    mut Forth f = Forth(src = src, st = blank, sp = 0, dname = z1, dnend = z2, dbody = z3, dend = z4, nd = 0, err = 0, depth = 0);
+    f.run(0, src.$len as u32);
+    mut [8]i64 out;
+    out[0] = f.err as i64;
+    out[1] = f.sp as i64;
+    for i in 0..<6: out[i + 2] = f.st[i];
+    ret out;
+}
+
+fun top = (&[]u8 src) -> i64 {
+    [8]i64 blank;
+    [4]u32 z1;
+    [4]u32 z2;
+    [4]u32 z3;
+    [4]u32 z4;
+    mut Forth f = Forth(src = src, st = blank, sp = 0, dname = z1, dnend = z2, dbody = z3, dend = z4, nd = 0, err = 0, depth = 0);
+    f.run(0, src.$len as u32);
+    if f.err != 0 {
+        i64 code = f.err as i64;
+        ret -1000 - code;
+    }
+    if f.sp == 0: ret -1;
+    ret f.st[f.sp - 1];
+}
+
+stc i64 F1 = top("1 2 +".&); #= F1 3
+stc i64 F2 = top("10 3 -".&); #= F2 7
+stc i64 F3 = top("17 5 /".&); #= F3 3
+stc i64 F4 = top("-17 5 /".&); #= F4 -3
+stc i64 F5 = top("17 5 mod".&); #= F5 2
+stc i64 F6 = top("5 dup *".&); #= F6 25
+stc i64 F7 = top("1 2 swap -".&); #= F7 1
+stc i64 F8 = top("1 2 over + +".&); #= F8 4
+stc i64 F9 = top("1 2 3 rot".&); #= F9 1
+stc i64 F10 = top("-4 abs".&); #= F10 4
+stc i64 F11 = top("3 9 max".&); #= F11 9
+stc i64 F12 = top("4 4 =".&); #= F12 -1
+stc i64 F13 = top("3 4 <".&); #= F13 -1
+stc i64 F14 = top("0 0=".&); #= F14 -1
+stc i64 F15 = top("1 2 3 depth".&); #= F15 3
+stc i64 F16 = top("1 +".&); #= F16 -1001
+stc i64 F17 = top("+".&); #= F17 -1001
+stc i64 F18 = top("1 0 /".&); #= F18 -1003
+stc i64 F19 = top("foo".&); #= F19 -1002
+stc i64 F20 = top("-".&); #= F20 -1001
+stc i64 F21 = top("  5   6  +  ".&); #= F21 11
+stc i64 F22 = top("".&); #= F22 -1
+stc i64 F23 = top("-x".&); #= F23 -1002
+stc i64 F24 = top("99999999999 99999999999 *".&); #= F24 1864711849423024129
+stc i64 F25 = top("1 dup dup dup dup dup dup dup dup".&); #= F25 -1004
+stc i64 F26 = top(": sq dup * ; 7 sq".&); #= F26 49
+stc i64 F27 = top(": sq dup * ; : cube dup sq * ; 3 cube".&); #= F27 27
+stc i64 F28 = top(": a 1 ; : a 2 ; a".&); #= F28 2
+stc i64 F29 = top("1 : g".&); #= F29 -1005
+stc i64 F30 = top("2 : x 3 ; x x *".&); #= F30 9
+stc i64 F31 = top(": 2x dup + ; 4 2x 2x".&); #= F31 16
+stc i64 F32 = top(": r r ; r".&); #= F32 -1006
+stc i64 F33 = top(": f f ; 1 f".&); #= F33 -1006
+stc i64 F34 = top("0 if 10 then 20".&); #= F34 20
+stc i64 F35 = top("1 if 10 else 20 then".&); #= F35 10
+stc i64 F36 = top("0 if 10 else 20 then".&); #= F36 20
+stc i64 F37 = top("1 if 2 if 3 else 4 then else 5 then".&); #= F37 3
+stc i64 F38 = top("1 if 0 if 3 else 4 then else 5 then".&); #= F38 4
+stc i64 F39 = top("0 if 2 if 3 else 4 then else 5 then".&); #= F39 5
+stc i64 F40 = top("0 if 1".&); #= F40 -1005
+stc i64 F41 = top("1 if 5".&); #= F41 5
+stc i64 F42 = top(": abs2 dup 0 < if negate then ; -9 abs2 9 abs2".&); #= F42 9
+stc i64 F43 = top(": fact dup 1 > if dup 1 - fact * then ; 5 fact".&); #= F43 120
+stc i64 F44 = top(": fib dup 2 < if else dup 1 - fib swap 2 - fib + then ; 6 fib".&); #= F44 8
+stc i64 F45 = top(": fact dup 1 > if dup 1 - fact * then ; 8 fact".&); #= F45 -1006
+stc i64 F46 = top(": sum dup 0= if drop 0 else dup 1 - sum + then ; 5 sum".&); #= F46 15
+stc i64 F47 = top(": sum dup 0= if drop 0 else dup 1 - sum + then ; 6 sum".&); #= F47 -1006
+stc i64 F48 = top("-7 2 /mod".&); #= F48 -3
+stc [8]i64 F49 = exec("1 2 3".&); #= F49 [0, 3, 1, 2, 3, 0, 0, 0]
+stc [8]i64 F50 = exec("".&); #= F50 [0, 0, 0, 0, 0, 0, 0, 0]
+stc [8]i64 F51 = exec("1 2 +".&); #= F51 [0, 1, 3, 2, 0, 0, 0, 0]
+stc [8]i64 F52 = exec("1 2 3 rot".&); #= F52 [0, 3, 2, 3, 1, 0, 0, 0]
+stc [8]i64 F53 = exec("5 3 /mod 4".&); #= F53 [0, 3, 2, 1, 4, 0, 0, 0]
+stc [8]i64 F54 = exec("1 +".&); #= F54 [1, 1, 1, 0, 0, 0, 0, 0]
+stc [8]i64 F55 = exec("1 dup dup dup dup dup dup dup dup".&); #= F55 [4, 8, 1, 1, 1, 1, 1, 1]
+stc [8]i64 F56 = exec(": sq dup * ; 2 sq 3 sq".&); #= F56 [0, 2, 4, 9, 3, 0, 0, 0]
+
+$main = () {}

@@ -1,0 +1,156 @@
+# BUG: `match self { .. }` and `self == Case` in a variant method are not dereferenced when executed (non_exhaustive_match / false), `self.*` is used in every method
+variant Light = +(Red, Green, Yellow) tagof u8 !{
+    fun next = () -> Light: ret match self.* {
+        Light.Red => Light.Green,
+        Light.Green => Light.Yellow,
+        Light.Yellow => Light.Red,
+    }
+    fun seconds = () -> u32: ret match self.* { Light.Red => 30, Light.Green => 25, Light.Yellow => 5 }
+    fun stop = () -> bool: ret self.* == Light.Red;
+}
+
+variant Level = +(Low = 3, Mid = 7, High = 20) tagof u8;
+
+variant Coin = +(Nickel = 5, Dime = 10, Quarter = 25) tagof u8;
+
+variant Vend = +(Idle, Has(u32 cents), Dispensing(u8 slot, u32 change), Broken) tagof u8 !{
+    fun insert = (Coin c) -> Vend: ret match self.* {
+        Vend.Idle => Vend.Has(c.$tag as u32),
+        Vend.Has(n) => Vend.Has(n + c.$tag as u32),
+        _ => self.*,
+    }
+    fun press = (u8 which) -> Vend: ret match self.* {
+        Vend.Has(n) => if n >= 30: Vend.Dispensing(slot = which, change = n - 30) else: self.*,
+        Vend.Dispensing(s, ch) => Vend.Broken,
+        _ => self.*,
+    }
+    fun refund = () -> u32: ret match self.* {
+        Vend.Has(n) => n,
+        Vend.Dispensing(_, ch) => ch,
+        _ => 0,
+    }
+}
+
+variant Small = +(A, B);
+variant Big = +(C, D(u8), E);
+variant Joined = Small || Big;
+
+variant Cmd = +(Move(i32 dx, i32 dy), Turn(bool left), Say(u8 ch), Stop) tagof u8;
+
+variant Tri = +(No, Maybe(Opt2), Yes) tagof u8;
+variant Opt2 = +(Some(u8), None = 0xFF) tagof self;
+
+fun classify = (Joined j) -> u32: ret match j {
+    Small.A => 1,
+    Small.B => 2,
+    Big.C => 3,
+    Big.D(n) => 4 + n as u32 * 10,
+    Big.E => 5,
+}
+
+fun group = (Joined j) -> u32: ret match j {
+    Small s => 100,
+    Big b => 200,
+}
+
+fun run_cmds = (&[]Cmd cmds) -> i32 {
+    mut i32 x = 0;
+    mut i32 y = 0;
+    mut i32 dir = 0;
+    for c in cmds.* {
+        match c {
+            Cmd.Move(dx, dy) => {
+                x += dx;
+                y += dy;
+            },
+            Cmd.Turn(left) => dir = (dir + if left: 3 else: 1) % 4,
+            Cmd.Say(ch) => x += ch as i32,
+            Cmd.Stop => brk,
+        }
+    }
+    ret x * 10000 + y * 100 + dir;
+}
+
+fun tri_score = (Tri t) -> u32: ret match t {
+    Tri.No => 0,
+    Tri.Maybe(Opt2.Some(v)) => 10 + v as u32,
+    Tri.Maybe(_) => 5,
+    Tri.Yes => 100,
+}
+
+stcfun cycle = () -> u32 {
+    mut Light l = Light.Red;
+    mut u32 total = 0;
+    mut u32 stops = 0;
+    for 0..<7 {
+        total += l.seconds();
+        if l.stop(): stops += 1;
+        l = l.next();
+    }
+    ret total * 100 + stops * 10 + l.seconds() / 5;
+}
+
+# LIMIT: the compile time interpreter cannot cast a variant value to an integer (not_static), so `as` on tagged cases is only checked and called from $main
+fun casts = (Level a, Coin c) -> u32: ret a as u32 * 100 + c as u32;
+
+stcfun tags = () -> u32 {
+    ret Level.Mid.$tag as u32 * 100 + Coin.Dime.$tag as u32 * 10 + Light.Yellow.$tag as u32;
+}
+
+# LIMIT: a method called on a case constant (`Light.Green.next()`) is reported impure_stcfun, the receiver has to be a variable
+stcfun equality = () -> u32 {
+    Light a = Light.Green;
+    Light g = Light.Green;
+    Light b = g.next();
+    Vend v = Vend.Has(50);
+    ret (a == Light.Green) as u32 + (a == b) as u32 * 10 + (a != b) as u32 * 100 + (v == Vend.Has(50)) as u32 * 1000 + (v == Vend.Has(40)) as u32 * 10000 + (v != Vend.Idle) as u32 * 100000;
+}
+
+stcfun vending = () -> u32 {
+    mut Vend v = Vend.Idle;
+    v = v.insert(Coin.Quarter);
+    u32 mid = v.refund();
+    v = v.press(3);
+    u32 early = v.refund();
+    v = v.insert(Coin.Dime);
+    v = v.insert(Coin.Nickel);
+    v = v.insert(Coin.Nickel);
+    v = v.press(4);
+    u32 change = v.refund();
+    slot = match v { Vend.Dispensing(s, _) => s as u32, _ => 99 };
+    v = v.press(1);
+    ret mid * 1000000 + early * 10000 + change * 100 + slot + v.refund() * 100000000 + (v == Vend.Broken) as u32 * 10;
+}
+
+stcfun unions = () -> u32 {
+    Joined a = Small.B;
+    Joined b = Big.D(7);
+    Joined c = Big.E;
+    ret classify(a) * 10000 + classify(b) * 100 + classify(c) + group(a) * 100000 + group(c);
+}
+
+stcfun commands = () -> i32 {
+    [7]Cmd prog = [Cmd.Move(3, 4), Cmd.Turn(false), Cmd.Turn(false), Cmd.Move(-1, 1), Cmd.Turn(true), Cmd.Stop, Cmd.Move(100, 100)];
+    ret run_cmds(prog.&);
+}
+
+stcfun nested = () -> u32 {
+    ret tri_score(Tri.No) + tri_score(Tri.Maybe(Opt2.Some(7))) * 10 + tri_score(Tri.Maybe(Opt2.None)) * 1000 + tri_score(Tri.Yes) * 10000;
+}
+
+stcfun sizes = () -> u64 {
+    ret sizeof Light * 100000 + sizeof Vend * 1000 + sizeof Cmd * 10 + sizeof Joined;
+}
+
+stc u32 CY = cycle(); #= CY 15035
+stc u32 TA = tags(); #= TA 802
+stc u32 EQ = equality(); #= EQ 101101
+stc u32 VE = vending(); #= VE 25251514
+stc u32 UN = unions(); #= UN 10027605
+stc i32 CM = commands(); #= CM 20501
+stc u32 NE = nested(); #= NE 1005170
+stc u64 SZ = sizes(); #= SZ 112122
+
+$main = () {
+    u32 c = casts(Level.High, Coin.Dime);
+}

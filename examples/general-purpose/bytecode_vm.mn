@@ -1,0 +1,211 @@
+variant Op = +(
+    Push(i64), Pop, Dup, Swap, Over,
+    Add, Sub, Mul, Div, Mod,
+    Lt, Eq,
+    Load(u32), Store(u32),
+    Jmp(u32), Jz(u32), Call(u32), Ret,
+    Halt,
+) tagof u8;
+
+variant Fault = +(None, StackUnderflow, StackOverflow, DivByZero, BadJump(u32), OutOfSteps) tagof u8;
+
+type Vm = *(
+    &[]Op code,
+    mut [16]i64 stack,
+    mut [8]i64 mem,
+    mut [8]u32 calls,
+    mut u32 sp,
+    mut u32 cp,
+    mut u32 pc,
+    mut u32 steps,
+    mut Fault fault = Fault.None,
+) !{
+    fun push = (i64 v) {
+        if self.sp == 16 {
+            self.fault = Fault.StackOverflow;
+            ret;
+        }
+        self.stack[self.sp] = v;
+        self.sp += 1;
+    }
+
+    fun pop = () -> i64 {
+        if self.sp == 0 {
+            self.fault = Fault.StackUnderflow;
+            ret 0;
+        }
+        self.sp -= 1;
+        ret self.stack[self.sp];
+    }
+
+    fun jump = (u32 to) {
+        if to as u64 >= self.code.$len: self.fault = Fault.BadJump(to) else: self.pc = to;
+    }
+
+    fun step = () -> bool {
+        if self.steps == 400 {
+            self.fault = Fault.OutOfSteps;
+            ret false;
+        }
+        self.steps += 1;
+        Op op = self.code.*[self.pc];
+        self.pc += 1;
+        match op {
+            Op.Push(v) => self.push(v),
+            Op.Pop => do self.pop(),
+            Op.Dup => {
+                i64 a = self.pop();
+                self.push(a);
+                self.push(a);
+            },
+            Op.Swap => {
+                i64 b = self.pop();
+                i64 a = self.pop();
+                self.push(b);
+                self.push(a);
+            },
+            Op.Over => {
+                i64 b = self.pop();
+                i64 a = self.pop();
+                self.push(a);
+                self.push(b);
+                self.push(a);
+            },
+            Op.Add => { i64 b = self.pop(); i64 a = self.pop(); self.push(a + b); },
+            Op.Sub => { i64 b = self.pop(); i64 a = self.pop(); self.push(a - b); },
+            Op.Mul => { i64 b = self.pop(); i64 a = self.pop(); self.push(a * b); },
+            Op.Div => {
+                i64 b = self.pop();
+                i64 a = self.pop();
+                if b == 0: self.fault = Fault.DivByZero else: self.push(a / b);
+            },
+            Op.Mod => {
+                i64 b = self.pop();
+                i64 a = self.pop();
+                if b == 0: self.fault = Fault.DivByZero else: self.push(a % b);
+            },
+            Op.Lt => { i64 b = self.pop(); i64 a = self.pop(); self.push((a < b) as i64); },
+            Op.Eq => { i64 b = self.pop(); i64 a = self.pop(); self.push((a == b) as i64); },
+            Op.Load(slot) => self.push(self.mem[slot]),
+            Op.Store(slot) => self.mem[slot] = self.pop(),
+            Op.Jmp(to) => self.jump(to),
+            Op.Jz(to) => if self.pop() == 0: self.jump(to),
+            Op.Call(to) => {
+                self.calls[self.cp] = self.pc;
+                self.cp += 1;
+                self.jump(to);
+            },
+            Op.Ret => {
+                if self.cp == 0: ret false;
+                self.cp -= 1;
+                self.pc = self.calls[self.cp];
+            },
+            Op.Halt => ret false,
+        }
+        ret self.fault == Fault.None;
+    }
+
+    fun run = () -> Fault {
+        while self.step() {}
+        ret self.fault;
+    }
+}
+
+fun exec = (&[]Op code) -> i64 {
+    [16]i64 stack;
+    [8]i64 mem;
+    [8]u32 calls;
+    mut Vm vm = Vm(code = code, stack = stack, mem = mem, calls = calls, sp = 0, cp = 0, pc = 0, steps = 0);
+    Fault f = vm.run();
+    ret match f {
+        Fault.None => if vm.sp == 0: 0 else: vm.stack[vm.sp - 1],
+        Fault.StackUnderflow => -101,
+        Fault.StackOverflow => -102,
+        Fault.DivByZero => -103,
+        Fault.BadJump(to) => -1000 - to as i64,
+        Fault.OutOfSteps => -105,
+    };
+}
+
+fun steps_of = (&[]Op code) -> u32 {
+    [16]i64 stack;
+    [8]i64 mem;
+    [8]u32 calls;
+    mut Vm vm = Vm(code = code, stack = stack, mem = mem, calls = calls, sp = 0, cp = 0, pc = 0, steps = 0);
+    do vm.run();
+    ret vm.steps;
+}
+
+stcfun factorial = (i64 n) -> i64 {
+    [17]Op prog = [
+        Op.Push(n), Op.Store(0), Op.Push(1), Op.Store(1),
+        Op.Load(0), Op.Jz(15), Op.Load(1), Op.Load(0), Op.Mul, Op.Store(1),
+        Op.Load(0), Op.Push(1), Op.Sub, Op.Store(0), Op.Jmp(4),
+        Op.Load(1), Op.Halt,
+    ];
+    ret exec(prog.&);
+}
+
+stcfun fibonacci = (i64 n) -> i64 {
+    [21]Op prog = [
+        Op.Push(n), Op.Store(0), Op.Push(0), Op.Store(1), Op.Push(1), Op.Store(2),
+        Op.Load(0), Op.Jz(19),
+        Op.Load(1), Op.Load(2), Op.Dup, Op.Store(1), Op.Add, Op.Store(2),
+        Op.Load(0), Op.Push(1), Op.Sub, Op.Store(0), Op.Jmp(6),
+        Op.Load(1), Op.Halt,
+    ];
+    ret exec(prog.&);
+}
+
+stcfun squares = (i64 n) -> i64 {
+    [11]Op prog = [
+        Op.Push(n), Op.Call(5), Op.Push(1), Op.Add, Op.Halt,
+        Op.Dup, Op.Mul, Op.Ret, Op.Halt, Op.Halt, Op.Halt,
+    ];
+    ret exec(prog.&);
+}
+
+stcfun nested_calls = () -> i64 {
+    [12]Op prog = [
+        Op.Push(3), Op.Call(4), Op.Call(4), Op.Halt,
+        Op.Push(2), Op.Mul, Op.Call(8), Op.Ret,
+        Op.Push(1), Op.Add, Op.Ret, Op.Halt,
+    ];
+    ret exec(prog.&);
+}
+
+stcfun collatz_steps = (i64 n) -> i64 {
+    [30]Op prog = [
+        Op.Push(n), Op.Store(0), Op.Push(0), Op.Store(1),
+        Op.Load(0), Op.Push(1), Op.Eq, Op.Jz(10), Op.Load(1), Op.Halt,
+        Op.Load(0), Op.Push(2), Op.Mod, Op.Jz(20),
+        Op.Load(0), Op.Push(3), Op.Mul, Op.Push(1), Op.Add, Op.Jmp(23),
+        Op.Load(0), Op.Push(2), Op.Div,
+        Op.Store(0), Op.Load(1), Op.Push(1), Op.Add, Op.Store(1), Op.Jmp(4), Op.Halt,
+    ];
+    ret exec(prog.&);
+}
+
+stc i64 F5 = factorial(5); #= F5 120
+stc i64 F0 = factorial(0); #= F0 1
+stc i64 F12 = factorial(12); #= F12 479001600
+stc i64 FI = fibonacci(30); #= FI 832040
+stc i64 FI0 = fibonacci(0); #= FI0 0
+stc i64 SQ = squares(12); #= SQ 145
+stc i64 NC = nested_calls(); #= NC 15
+stc i64 CZ = collatz_steps(6); #= CZ 8
+stc i64 U1 = exec([Op.Add,].&); #= U1 -101
+stc i64 U2 = exec([Op.Push(1), Op.Add].&); #= U2 -101
+stc i64 DZ = exec([Op.Push(1), Op.Push(0), Op.Div].&); #= DZ -103
+stc i64 DM = exec([Op.Push(1), Op.Push(0), Op.Mod].&); #= DM -103
+stc i64 BJ = exec([Op.Jmp(9),].&); #= BJ -1009
+stc i64 SP = exec([Op.Jmp(0),].&); #= SP -105
+stc i64 EM = exec([Op.Halt,].&); #= EM 0
+stc i64 OV = exec([Op.Push(1), Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup, Op.Dup].&); #= OV -102
+stc i64 CM = exec([Op.Push(2), Op.Push(3), Op.Lt, Op.Push(3), Op.Push(2), Op.Lt, Op.Push(4), Op.Push(4), Op.Eq, Op.Add, Op.Add, Op.Halt].&); #= CM 2
+stc i64 SW = exec([Op.Push(1), Op.Push(2), Op.Swap, Op.Sub, Op.Halt].&); #= SW 1
+stc i64 OVR = exec([Op.Push(1), Op.Push(2), Op.Over, Op.Add, Op.Add, Op.Halt].&); #= OVR 4
+stc i64 RE = exec([Op.Ret,].&); #= RE 0
+stc u32 ST = steps_of([Op.Push(1), Op.Pop, Op.Halt].&); #= ST 3
+
+$main = () {}

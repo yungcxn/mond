@@ -1,0 +1,223 @@
+variant Dec = +(Ok(u32 cp, u32 len), Bad) tagof u8;
+
+fun encode = (u32 cp, *[]u8 out, u32 at) -> u32 {
+    if cp < 0x80 {
+        out.*[at] = cp as u8;
+        ret 1;
+    }
+    if cp < 0x800 {
+        out.*[at] = (0xC0 | (cp >> 6)) as u8;
+        out.*[at + 1] = (0x80 | (cp & 0x3F)) as u8;
+        ret 2;
+    }
+    if cp >= 0xD800 and cp <= 0xDFFF: ret 0;
+    if cp < 0x10000 {
+        out.*[at] = (0xE0 | (cp >> 12)) as u8;
+        out.*[at + 1] = (0x80 | ((cp >> 6) & 0x3F)) as u8;
+        out.*[at + 2] = (0x80 | (cp & 0x3F)) as u8;
+        ret 3;
+    }
+    if cp > 0x10FFFF: ret 0;
+    out.*[at] = (0xF0 | (cp >> 18)) as u8;
+    out.*[at + 1] = (0x80 | ((cp >> 12) & 0x3F)) as u8;
+    out.*[at + 2] = (0x80 | ((cp >> 6) & 0x3F)) as u8;
+    out.*[at + 3] = (0x80 | (cp & 0x3F)) as u8;
+    ret 4;
+}
+
+fun is_cont = (&[]u8 s, u64 at) -> bool: ret at < s.$len and (s.*[at] & 0xC0) == 0x80;
+
+fun decode = (&[]u8 s, u32 at) -> Dec {
+    if at >= s.$len: ret Dec.Bad;
+    u32 b0 = s.*[at] as u32;
+    if b0 < 0x80: ret Dec.Ok(b0, 1);
+    if b0 < 0xC2 or b0 > 0xF4: ret Dec.Bad;
+    u32 need = if b0 < 0xE0: 1 else: (if b0 < 0xF0: 2 else: 3);
+    mut u32 cp = if need == 1: b0 & 0x1F else: (if need == 2: b0 & 0x0F else: b0 & 0x07);
+    for k in 1..=need {
+        if !is_cont(s, (at + k) as u64): ret Dec.Bad;
+        cp = (cp << 6) | ((s.*[at + k] as u32) & 0x3F);
+    }
+    if need == 2 and cp < 0x800: ret Dec.Bad;
+    # LIMIT: an `if` condition ending in a parenthesised group before `:` is parsed as a lambda (IllegalIfFormat), so the group goes into a variable
+    bool out_of_range = cp < 0x10000 or cp > 0x10FFFF;
+    if need == 3 and out_of_range: ret Dec.Bad;
+    if cp >= 0xD800 and cp <= 0xDFFF: ret Dec.Bad;
+    ret Dec.Ok(cp, need + 1);
+}
+
+fun show = (Dec d) -> u64: ret match d {
+    Dec.Ok(cp, len) => (cp as u64) * 10 + len as u64,
+    Dec.Bad => 99999999999,
+}
+
+fun validate = (&[]u8 s) -> bool {
+    mut u32 at = 0;
+    while at < s.$len {
+        match decode(s, at) {
+            Dec.Ok(_, len) => at += len,
+            Dec.Bad => ret false,
+        }
+    }
+    ret true;
+}
+
+fun count_cps = (&[]u8 s) -> i32 {
+    mut u32 at = 0;
+    mut i32 n = 0;
+    while at < s.$len {
+        match decode(s, at) {
+            Dec.Ok(_, len) => at += len,
+            Dec.Bad => ret -1,
+        }
+        n += 1;
+    }
+    ret n;
+}
+
+type Chars = *(&[]u8 src, mut u32 at, mut u32 bad) !{
+    $has_next = () -> bool: ret self.at < self.src.$len;
+    $next = () -> u32 {
+        match decode(self.src, self.at) {
+            Dec.Ok(cp, len) => {
+                self.at += len;
+                ret cp;
+            },
+            Dec.Bad => {
+                self.at += 1;
+                self.bad += 1;
+                ret 0xFFFD;
+            },
+        }
+    }
+}
+
+fun utf16_len = (u32 cp) -> u32 {
+    bool surrogate = cp >= 0xD800 and cp <= 0xDFFF;
+    ret if cp > 0x10FFFF or surrogate: 0 else: (if cp >= 0x10000: 2 else: 1);
+}
+
+fun utf16_pair = (u32 cp) -> u32: ret if cp < 0x10000: cp else: (((0xD800 + ((cp - 0x10000) >> 10)) << 16) | (0xDC00 + ((cp - 0x10000) & 0x3FF)));
+
+fun from_utf16 = (u32 hi, u32 lo) -> u32: ret 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+
+fun enc_bytes = (u32 cp) -> u64 {
+    mut [4]u8 b;
+    u32 n = encode(cp, b.&, 0);
+    mut u64 h = 0;
+    for i in 0..<n: h = h * 256 + b[i] as u64;
+    ret h * 10 + n as u64;
+}
+
+fun rt = (u32 cp) -> u64 {
+    mut [4]u8 b;
+    u32 n = encode(cp, b.&, 0);
+    if n == 0: ret 1;
+    match decode(b.&, 0) {
+        Dec.Ok(c, len) => ret if c == cp and len == n: 0 else: 2,
+        Dec.Bad => ret 3,
+    }
+}
+
+fun sweep = (u32 step) -> u64 {
+    mut u64 bad = 0;
+    mut u64 good = 0;
+    mut u32 cp = 0;
+    while cp <= 0x10FFFF {
+        u64 r = rt(cp);
+        if r == 0: good += 1 else: bad += r * 1000000;
+        cp += step;
+    }
+    ret bad + good;
+}
+
+fun dec_seq = (&[]u8 s) -> u64: ret show(decode(s, 0));
+
+stc u64 E1 = enc_bytes(0x24); #= E1 361
+stc u64 E2 = enc_bytes(0xA2); #= E2 498262
+stc u64 E3 = enc_bytes(0x20AC); #= E3 148445883
+stc u64 E4 = enc_bytes(0x10348); #= E4 40360052564
+stc u64 E5 = enc_bytes(0x7F); #= E5 1271
+stc u64 E6 = enc_bytes(0x80); #= E6 497922
+stc u64 E7 = enc_bytes(0x7FF); #= E7 572792
+stc u64 E8 = enc_bytes(0x800); #= E8 147211523
+stc u64 E9 = enc_bytes(0xFFFF); #= E9 157121913
+stc u64 EA = enc_bytes(0x10000); #= EA 40360019204
+stc u64 EB = enc_bytes(0x10FFFF); #= EB 41030614394
+stc u64 EC = enc_bytes(0x110000); #= EC 0
+stc u64 ED = enc_bytes(0xD800); #= ED 0
+stc u64 EE = enc_bytes(0xDFFF); #= EE 0
+stc u64 EF = enc_bytes(0xD7FF); #= EF 155729273
+stc u64 EG = enc_bytes(0xE000); #= EG 156304643
+stc u64 EH = enc_bytes(0); #= EH 1
+stc u64 EI = enc_bytes(0xFFFFFFFF); #= EI 0
+
+stc u64 D1 = dec_seq([0xE2, 0x82, 0xAC].&); #= D1 83643
+stc u64 D2 = dec_seq([0xF0, 0x9F, 0x98, 0x80].&); #= D2 1285124
+stc u64 D3 = dec_seq([0x41, 0x80].&); #= D3 651
+stc u64 D4 = dec_seq([0xC0, 0x80].&); #= D4 99999999999
+stc u64 D5 = dec_seq([0xC1, 0xBF].&); #= D5 99999999999
+stc u64 D6 = dec_seq([0xC2, 0x80].&); #= D6 1282
+stc u64 D7 = dec_seq([0xE0, 0x80, 0x80].&); #= D7 99999999999
+stc u64 D8 = dec_seq([0xE0, 0x9F, 0xBF].&); #= D8 99999999999
+stc u64 D9 = dec_seq([0xE0, 0xA0, 0x80].&); #= D9 20483
+stc u64 DA = dec_seq([0xED, 0xA0, 0x80].&); #= DA 99999999999
+stc u64 DB = dec_seq([0xED, 0x9F, 0xBF].&); #= DB 552953
+stc u64 DC = dec_seq([0xEE, 0x80, 0x80].&); #= DC 573443
+stc u64 DD = dec_seq([0xF0, 0x80, 0x80, 0x80].&); #= DD 99999999999
+stc u64 DE = dec_seq([0xF0, 0x90, 0x80, 0x80].&); #= DE 655364
+stc u64 DF = dec_seq([0xF4, 0x8F, 0xBF, 0xBF].&); #= DF 11141114
+stc u64 DG = dec_seq([0xF4, 0x90, 0x80, 0x80].&); #= DG 99999999999
+stc u64 DH = dec_seq([0xF5, 0x80, 0x80, 0x80].&); #= DH 99999999999
+stc u64 DI = dec_seq([0x80,].&); #= DI 99999999999
+stc u64 DJ = dec_seq([0xE2, 0x82].&); #= DJ 99999999999
+stc u64 DK = dec_seq([0xE2, 0x28, 0xA1].&); #= DK 99999999999
+stc u64 DL = dec_seq([0xFF,].&); #= DL 99999999999
+stc u64 DM = dec_seq([0xC3,].&); #= DM 99999999999
+stc u64 DN = dec_seq([0xF0, 0x9F, 0x98].&); #= DN 99999999999
+
+stc u64 S1 = sweep(977); #= S1 2001139
+stc u64 S2 = sweep(65521); #= S2 18
+
+stc bool V1 = validate("hello".&); #= V1 true
+stc bool V2 = validate("".&); #= V2 true
+stc bool V3 = validate([0x68, 0xC3, 0xA9, 0x6C, 0x6C, 0x6F].&); #= V3 true
+stc bool V4 = validate([0x68, 0xC3].&); #= V4 false
+stc bool V5 = validate([0x68, 0xC3, 0x28].&); #= V5 false
+stc bool V6 = validate([0xED, 0xA0, 0x80, 0xED, 0xB0, 0x80].&); #= V6 false
+stc bool V7 = validate([0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80, 0x41].&); #= V7 true
+
+stc i32 N1 = count_cps("hello".&); #= N1 5
+stc i32 N2 = count_cps("".&); #= N2 0
+stc i32 N3 = count_cps([0x68, 0xC3, 0xA9, 0x6C, 0x6C, 0x6F].&); #= N3 5
+stc i32 N4 = count_cps([0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80, 0x41].&); #= N4 3
+stc i32 N5 = count_cps([0x41, 0xFF, 0x42].&); #= N5 -1
+stc i32 N6 = count_cps("héllo €".&); #= N6 7
+stc u64 N7 = "héllo €".$len; #= N7 10
+
+fun chars_sum = (&[]u8 s) -> u64 {
+    mut Chars it = Chars(src = s, at = 0, bad = 0);
+    mut u64 sum = 0;
+    for cp in it: sum = sum * 3 + cp as u64;
+    ret sum * 10 + it.bad as u64;
+}
+
+stc u64 I1 = chars_sum([0x68, 0xC3, 0xA9, 0x6C].&); #= I1 17430
+stc u64 I2 = chars_sum([0x41, 0xFF, 0x42, 0xE2, 0x82].&); #= I2 20373823
+stc u64 I3 = chars_sum("".&); #= I3 0
+stc u64 I4 = chars_sum([0xF0, 0x9F, 0x98, 0x80].&); #= I4 1285120
+stc u64 I5 = chars_sum([0x80, 0x80].&); #= I5 2621322
+
+stc u32 U1 = utf16_len(0x41); #= U1 1
+stc u32 U2 = utf16_len(0xFFFF); #= U2 1
+stc u32 U3 = utf16_len(0x10000); #= U3 2
+stc u32 U4 = utf16_len(0xD800); #= U4 0
+stc u32 U5 = utf16_len(0x110000); #= U5 0
+stc u32 U6 = utf16_pair(0x1F600); #= U6 3627933184
+stc u32 U7 = utf16_pair(0x10000); #= U7 3623934976
+stc u32 U8 = utf16_pair(0x10FFFF); #= U8 3690979327
+stc u32 U9 = utf16_pair(0x20AC); #= U9 8364
+stc u32 UA = from_utf16(0xD83D, 0xDE00); #= UA 128512
+stc u32 UB = from_utf16(0xDBFF, 0xDFFF); #= UB 1114111
+
+$main = () {}

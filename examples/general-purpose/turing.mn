@@ -1,0 +1,169 @@
+variant Move = +(L, R, S) tagof u8;
+
+type Rule = *(u8 w, Move m, u8 next);
+
+type Tm = *(&[]Rule rules, u32 nsym, mut [64]u8 tape, mut u32 head, mut u32 state, mut u32 steps, mut u32 fault) !{
+    fun halted = () -> bool: ret self.state >= 250 or self.fault != 0;
+
+    fun step = () {
+        Rule r = self.rules.*[self.state * self.nsym + self.tape[self.head] as u32];
+        self.tape[self.head] = r.w;
+        match r.m {
+            Move.L => if self.head == 0: self.fault = 1 else: self.head -= 1,
+            Move.R => if self.head == 63: self.fault = 2 else: self.head += 1,
+            Move.S => {},
+        }
+        self.state = r.next as u32;
+        self.steps += 1;
+    }
+
+    fun run = (u32 limit) -> bool {
+        while !self.halted() and self.steps < limit: self.step();
+        ret self.halted();
+    }
+
+    fun ones = () -> u32 {
+        mut u32 n = 0;
+        for c in self.tape {
+            if c == 1: n += 1;
+        }
+        ret n;
+    }
+}
+
+fun bb_table = (u32 n) -> [12]Rule {
+    if n == 2 {
+        ret [
+            Rule(1, Move.R, 1), Rule(1, Move.L, 1),
+            Rule(1, Move.L, 0), Rule(1, Move.R, 255),
+            Rule(0, Move.S, 255), Rule(0, Move.S, 255), Rule(0, Move.S, 255), Rule(0, Move.S, 255),
+            Rule(0, Move.S, 255), Rule(0, Move.S, 255), Rule(0, Move.S, 255), Rule(0, Move.S, 255),
+        ];
+    }
+    if n == 3 {
+        ret [
+            Rule(1, Move.R, 1), Rule(1, Move.L, 2),
+            Rule(1, Move.L, 0), Rule(1, Move.R, 1),
+            Rule(1, Move.L, 1), Rule(1, Move.R, 255),
+            Rule(0, Move.S, 255), Rule(0, Move.S, 255), Rule(0, Move.S, 255), Rule(0, Move.S, 255),
+            Rule(0, Move.S, 255), Rule(0, Move.S, 255),
+        ];
+    }
+    ret [
+        Rule(1, Move.R, 1), Rule(1, Move.L, 1),
+        Rule(1, Move.L, 0), Rule(0, Move.L, 2),
+        Rule(1, Move.R, 255), Rule(1, Move.L, 3),
+        Rule(1, Move.R, 3), Rule(0, Move.R, 0),
+        Rule(0, Move.S, 255), Rule(0, Move.S, 255), Rule(0, Move.S, 255), Rule(0, Move.S, 255),
+    ];
+}
+
+fun bb = (u32 n, u32 limit) -> [4]u32 {
+    [12]Rule table = bb_table(n);
+    mut [64]u8 tape;
+    mut Tm m = Tm(rules = table.&, nsym = 2, tape = tape, head = 32, state = 0, steps = 0, fault = 0);
+    do m.run(limit);
+    ret [m.steps, m.ones(), m.state, m.fault];
+}
+
+fun increment = (&[]u8 bits) -> [2]u64 {
+    [3]Rule table = [Rule(2, Move.S, 255), Rule(2, Move.S, 255), Rule(1, Move.L, 0)];
+    mut [64]u8 tape;
+    for i in 0..<bits.$len: tape[8 + i] = if bits.*[i] == '1': 2 else: 1;
+    mut Tm m = Tm(rules = table.&, nsym = 3, tape = tape, head = 7 + bits.$len as u32, state = 0, steps = 0, fault = 0);
+    do m.run(200);
+    mut u64 v = 0;
+    for c in m.tape {
+        if c == 1: v = v * 2;
+        if c == 2: v = v * 2 + 1;
+    }
+    ret [v, m.steps as u64];
+}
+
+fun palindrome = (&[]u8 s, u32 limit) -> [2]u32 {
+    [18]Rule table = [
+        Rule(0, Move.S, 250), Rule(0, Move.R, 1), Rule(0, Move.R, 4),
+        Rule(0, Move.L, 2), Rule(1, Move.R, 1), Rule(2, Move.R, 1),
+        Rule(0, Move.S, 250), Rule(0, Move.L, 3), Rule(0, Move.S, 251),
+        Rule(0, Move.R, 0), Rule(1, Move.L, 3), Rule(2, Move.L, 3),
+        Rule(0, Move.L, 5), Rule(1, Move.R, 4), Rule(2, Move.R, 4),
+        Rule(0, Move.S, 250), Rule(0, Move.S, 251), Rule(0, Move.L, 3),
+    ];
+    mut [64]u8 tape;
+    for i in 0..<s.$len: tape[8 + i] = if s.*[i] == 'a': 1 else: 2;
+    mut Tm m = Tm(rules = table.&, nsym = 3, tape = tape, head = 8, state = 0, steps = 0, fault = 0);
+    do m.run(limit);
+    ret [m.state, m.steps];
+}
+
+fun unary_add = (u32 a, u32 b) -> u32 {
+    [9]Rule table = [
+        Rule(0, Move.S, 255), Rule(1, Move.R, 0), Rule(1, Move.R, 1),
+        Rule(0, Move.L, 2), Rule(1, Move.R, 1), Rule(0, Move.S, 255),
+        Rule(0, Move.S, 255), Rule(0, Move.S, 255), Rule(0, Move.S, 255),
+    ];
+    mut [64]u8 tape;
+    for i in 0..<a: tape[4 + i] = 1;
+    tape[4 + a] = 2;
+    for i in 0..<b: tape[5 + a + i] = 1;
+    mut Tm m = Tm(rules = table.&, nsym = 3, tape = tape, head = 4, state = 0, steps = 0, fault = 0);
+    do m.run(300);
+    ret m.ones();
+}
+
+fun runaway = (u32 limit) -> [3]u32 {
+    [2]Rule table = [Rule(1, Move.R, 0), Rule(1, Move.R, 0)];
+    mut [64]u8 tape;
+    mut Tm m = Tm(rules = table.&, nsym = 2, tape = tape, head = 16, state = 0, steps = 0, fault = 0);
+    do m.run(limit);
+    ret [m.steps, m.fault, m.head];
+}
+
+stc [4]u32 T1 = bb(2, 100); #= T1 [6, 4, 255, 0]
+stc [4]u32 T2 = bb(3, 100); #= T2 [13, 6, 255, 0]
+stc [4]u32 T3 = bb(4, 200); #= T3 [107, 13, 255, 0]
+stc [4]u32 T4 = bb(4, 106); #= T4 [106, 12, 2, 0]
+stc [4]u32 T5 = bb(4, 107); #= T5 [107, 13, 255, 0]
+stc [4]u32 T6 = bb(3, 5); #= T6 [5, 4, 0, 0]
+stc [4]u32 T7 = bb(3, 0); #= T7 [0, 0, 0, 0]
+stc [4]u32 T8 = bb(2, 1); #= T8 [1, 1, 1, 0]
+stc [4]u32 T9 = bb(4, 50); #= T9 [50, 7, 0, 0]
+stc [2]u64 T10 = increment("0".&); #= T10 [1, 1]
+stc [2]u64 T11 = increment("1".&); #= T11 [2, 2]
+stc [2]u64 T12 = increment("10".&); #= T12 [3, 1]
+stc [2]u64 T13 = increment("11".&); #= T13 [4, 3]
+stc [2]u64 T14 = increment("101".&); #= T14 [6, 2]
+stc [2]u64 T15 = increment("1011".&); #= T15 [12, 3]
+stc [2]u64 T16 = increment("1111".&); #= T16 [16, 5]
+stc [2]u64 T17 = increment("1111111".&); #= T17 [128, 8]
+stc [2]u64 T18 = increment("0111".&); #= T18 [8, 4]
+stc [2]u64 T19 = increment("100000".&); #= T19 [33, 1]
+stc [2]u64 T20 = increment("11111111".&); #= T20 [256, 9]
+stc [2]u32 T21 = palindrome("".&, 400); #= T21 [250, 1]
+stc [2]u32 T22 = palindrome("a".&, 400); #= T22 [250, 3]
+stc [2]u32 T23 = palindrome("b".&, 400); #= T23 [250, 3]
+stc [2]u32 T24 = palindrome("aa".&, 400); #= T24 [250, 6]
+stc [2]u32 T25 = palindrome("ab".&, 400); #= T25 [251, 4]
+stc [2]u32 T26 = palindrome("aba".&, 400); #= T26 [250, 10]
+stc [2]u32 T27 = palindrome("abb".&, 400); #= T27 [251, 5]
+stc [2]u32 T28 = palindrome("abba".&, 400); #= T28 [250, 15]
+stc [2]u32 T29 = palindrome("abab".&, 400); #= T29 [251, 6]
+stc [2]u32 T30 = palindrome("aabaa".&, 400); #= T30 [250, 21]
+stc [2]u32 T31 = palindrome("aabab".&, 400); #= T31 [251, 7]
+stc [2]u32 T32 = palindrome("abbaabba".&, 400); #= T32 [250, 45]
+stc [2]u32 T33 = palindrome("abbbabba".&, 400); #= T33 [251, 43]
+stc [2]u32 T34 = palindrome("bab".&, 400); #= T34 [250, 10]
+stc [2]u32 T35 = palindrome("bbabb".&, 400); #= T35 [250, 21]
+stc [2]u32 T36 = palindrome("baab".&, 400); #= T36 [250, 15]
+stc [2]u32 T37 = palindrome("aaaaaaaaaaaa".&, 400); #= T37 [250, 91]
+stc [2]u32 T38 = palindrome("abba".&, 10); #= T38 [4, 10]
+stc u32 T39 = unary_add(0, 0); #= T39 0
+stc u32 T40 = unary_add(1, 0); #= T40 1
+stc u32 T41 = unary_add(0, 1); #= T41 1
+stc u32 T42 = unary_add(3, 2); #= T42 5
+stc u32 T43 = unary_add(5, 5); #= T43 10
+stc u32 T44 = unary_add(10, 7); #= T44 17
+stc [3]u32 T45 = runaway(10); #= T45 [10, 0, 26]
+stc [3]u32 T46 = runaway(100); #= T46 [48, 2, 63]
+
+$main = () {}

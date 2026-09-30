@@ -1,0 +1,84 @@
+type Matrix = (type T, u32 R, u32 C): *(mut [R]([C]T) rows) !{
+    fun at = (u32 r, u32 c) -> T: ret self.rows[r][c];
+    fun set = (u32 r, u32 c, T v) { self.rows[r][c] = v; }
+    fun trace = () -> T {
+        n = if R < C: R else: C;
+        mut T t = self.rows[0][0];
+        for i in 1..<n: t = t + self.rows[i][i];
+        ret t;
+    }
+    fun cells = () -> u32: ret R * C;
+    fun rowsum = (u32 r) -> T {
+        mut T s = self.rows[r][0];
+        for j in 1..<C: s = s + self.rows[r][j];
+        ret s;
+    }
+}
+
+# BUG: a stcfun parameter type `Matrix(T, R, C)` built from static value params never equals the same realization made by the caller (type_mismatch with identical printed types), so the operand and result realizations are passed as type parameters
+stcfun matmul = (type MA, type MB, type MO): (MA a, MB b) -> MO {
+    type T = typeof a.rows[0][0];
+    mut MO out;
+    rs = a.rows.$len as u32;
+    cs = b.rows[0].$len as u32;
+    inner = b.rows.$len as u32;
+    for i in 0..<rs {
+        for j in 0..<cs {
+            mut T acc = a.at(i, 0) * b.at(0, j);
+            for k in 1..<inner: acc = acc + a.at(i, k) * b.at(k, j);
+            out.set(i, j, acc);
+        }
+    }
+    ret out;
+}
+
+stcfun transpose = (type MA, type MO): (MA m) -> MO {
+    mut MO out;
+    for i in 0..<m.rows.$len as u32: for j in 0..<m.rows[0].$len as u32: out.set(j, i, m.at(i, j));
+    ret out;
+}
+
+stcfun products = () -> u32 {
+    Matrix(u32, 2, 3) a = Matrix(u32, 2, 3)(rows = [[1, 2, 3], [4, 5, 6]]);
+    Matrix(u32, 3, 2) b = Matrix(u32, 3, 2)(rows = [[7, 8], [9, 10], [11, 12]]);
+    p = matmul(Matrix(u32, 2, 3), Matrix(u32, 3, 2), Matrix(u32, 2, 2))(a, b);
+    ret p.at(0, 0) * 1000000 + p.at(0, 1) * 10000 + p.at(1, 0) * 100 + p.at(1, 1);
+}
+
+stcfun identity = (type M): () -> M {
+    mut M out;
+    for i in 0..<out.rows.$len as u32: out.set(i, i, 1);
+    ret out;
+}
+
+stcfun shapes = () -> u32 {
+    Matrix(u32, 2, 3) a = Matrix(u32, 2, 3)(rows = [[1, 2, 3], [4, 5, 6]]);
+    t = transpose(Matrix(u32, 2, 3), Matrix(u32, 3, 2))(a);
+    id = identity(Matrix(u32, 3, 3))();
+    same = matmul(Matrix(u32, 2, 3), Matrix(u32, 3, 3), Matrix(u32, 2, 3))(a, id);
+    ret t.at(2, 1) * 100000 + t.at(0, 1) * 10000 + id.trace() * 1000 + same.at(1, 2) * 100 + a.cells() * 10 + t.rowsum(2);
+}
+
+stcfun negatives = () -> i64 {
+    Matrix(i64, 2, 2) m = Matrix(i64, 2, 2)(rows = [[-3, 4], [5, -7]]);
+    sq = matmul(Matrix(i64, 2, 2), Matrix(i64, 2, 2), Matrix(i64, 2, 2))(m, m);
+    ret sq.trace() * 1000 + m.trace();
+}
+
+stc u32 PR = products(); #= PR 58654054
+stc u32 SH = shapes(); #= SH 643669
+
+stc i64 NG = negatives(); #= NG 97990
+stc u64 SZ = sizeof Matrix(u16, 3, 5); #= SZ 30
+stc u64 SF = sizeof Matrix(f32, 4, 4); #= SF 64
+
+$main = () {
+    # BUG: a runtime call of a stcfun with more static than runtime args (`f(A, B)(m)`) panics the lowerer (HighLowerer.direct params index out of bounds), only stcfun contexts call `matmul` and `transpose`
+    Matrix(u32, 2, 2) m = Matrix(u32, 2, 2)(rows = [[1, 2], [3, 4]]);
+    t = m.trace(); #: t u32
+    c = m.cells(); #: c u32
+    r = m.rows; #: r [2][2]u32
+    row = m.rows[1]; #: row [2]u32
+    f = Matrix(f32, 1, 1)(rows = [[1.5,],]);
+    ft = f.trace(); #: ft f32
+}

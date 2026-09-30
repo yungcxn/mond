@@ -1,0 +1,203 @@
+stcfun wrap_u8 = () -> u32 {
+    u8 a = 250;
+    u8 b = a + 10;
+    u8 c = 3 - a;
+    u8 d = a * 2;
+    ret b as u32 * 1000000 + c as u32 * 1000 + d as u32;
+}
+
+stcfun wrap_i8 = () -> i32 {
+    i8 c = -128;
+    i8 d = c - 1;
+    i8 e = c * -1;
+    ret d as i32 * 1000 + e as i32;
+}
+
+stcfun wrap_u16 = () -> u32 {
+    u16 a = 65535;
+    u16 b = a + 2;
+    u16 c = 0;
+    u16 d = c - 1;
+    ret b as u32 * 100000 + d as u32 % 100000;
+}
+
+stcfun wrap_u32 = () -> u64 {
+    u32 a = 4294967295;
+    u32 b = a + 1;
+    u32 c = a * a;
+    u32 d = 0 - 1;
+    ret b as u64 * 1000000000000 + c as u64 * 10 + (d == a) as u64;
+}
+
+stcfun wrap_u64 = () -> u64 {
+    u64 a = 18446744073709551615;
+    u64 b = a + 1;
+    u64 c = a * 3;
+    ret b + c;
+}
+
+stcfun wrap_i64 = () -> i64 {
+    i64 hi = 9223372036854775807;
+    i64 lo = -9223372036854775807 - 1;
+    ret (hi + 1 == lo) as i64 * 10 + (lo - 1 == hi) as i64;
+}
+
+stcfun signed_div = () -> i32 {
+    ret 7 / -2 * 100 + -7 / -2 * 10 + 7 / 2;
+}
+
+stcfun signed_mod = () -> i32 {
+    ret 7 % -3 * 100 + -7 % -3 * 10 + 7 % 3;
+}
+
+stcfun unsigned_div = () -> u32 {
+    ret 7 / 2 * 100 + 0 / 5 * 10 + 9 % 4;
+}
+
+stcfun shifts = () -> u32 {
+    u32 a = 1 << 31;
+    u32 b = 0x80000000 >> 31;
+    i32 c = -16;
+    i32 d = c >> 2;
+    u8 e = 0xF0;
+    u8 f = e >> 4;
+    u8 g = e << 1;
+    ret a / 65536 + b * 10 + (d + 100) as u32 * 100000 + f as u32 * 1000 + g as u32 * 10000000;
+}
+
+stcfun char_arith = () -> u32 {
+    u8 a = 'a';
+    u8 z = 'z';
+    u8 up = a - 32;
+    ret up as u32 * 1000 + (z - a) as u32 + ('0' + 7) as u32 * 100000;
+}
+
+stcfun int_float = () -> f64 {
+    i32 n = -7;
+    f64 x = n as f64 / 2.0;
+    f64 y = (7 as f64) / (2 as f64);
+    f32 z = 16777217 as f32;
+    ret x * 100.0 + y * 10.0 + (z as f64 - 16777216.0);
+}
+
+stcfun float_int = () -> i64 {
+    a = 3.99 as i32;
+    b = -3.99 as i32;
+    c = 0.5 as u8;
+    d = -1.5 as u8;
+    e = 300.7 as u8;
+    ret a as i64 * 10000 + b as i64 * 1000 + c as i64 * 100 + d as i64 * 10 + e as i64;
+}
+
+stcfun width_casts = () -> i64 {
+    u32 big = 0x1_2345_6789 as u32;
+    u8 low = 0x1FF as u8;
+    i8 neg = 200 as i8;
+    i16 wide = neg as i16;
+    u16 wrap = wide as u16;
+    i64 ext = (-1 as i32) as i64;
+    u64 uext = (-1 as i32) as u64;
+    ret big as i64 + low as i64 * 1000 + wide as i64 * 10 + wrap as i64 + ext + (uext == 18446744073709551615) as i64;
+}
+
+stcfun bool_ops = () -> u32 {
+    bool t = true;
+    bool f = false;
+    ret (t and f) as u32 + (t or f) as u32 * 2 + (t xor f) as u32 * 4 + (t xor t) as u32 * 8 + (!t) as u32 * 16 + (t && !f) as u32 * 32;
+}
+
+stcfun short_circuit = () -> u32 {
+    mut u32 calls = 0;
+    hit = () -> bool { calls += 1; ret true; }
+    bool a = false and hit();
+    bool b = true or hit();
+    bool c = true and hit();
+    bool d = false or hit();
+    ret calls * 1000 + a as u32 + b as u32 * 2 + c as u32 * 4 + d as u32 * 8;
+}
+
+stcfun precedence = () -> i64 {
+    i64 a = 1 + 2 * 3 - 4 / 2 % 3;
+    i64 b = (1 + 2) * (3 - 4) / 2;
+    i64 c = 1 << 2 + 3;
+    i64 d = 2 * 3 << 1;
+    i64 e = 10 - 2 - 3;
+    i64 f = 2 * 3 % 4;
+    i64 g = (5 > 3) as i64 + (2 == 2) as i64;
+    i64 h = 6 & 3 | 8 ^ 2;
+    ret a * 1000000 + b * 100000 + c * 1000 + d * 100 + e * 10 + f + g * 10000000 + h * 100000000;
+}
+
+stcfun incdec = () -> i32 {
+    mut i32 x = 5;
+    i32 a = x++;
+    i32 b = ++x;
+    i32 c = x--;
+    i32 d = --x;
+    ret a * 10000 + b * 1000 + c * 100 + d * 10 + x;
+}
+
+stcfun compound = () -> i32 {
+    mut i32 x = 100;
+    x += 5;
+    x -= 3;
+    x *= 2;
+    x /= 7;
+    x %= 11;
+    ret x;
+}
+
+stcfun negations = () -> i32 {
+    i32 a = 5;
+    i32 b = -a;
+    i32 c = - -a;
+    i32 d = -(a - 10);
+    i32 e = -(-5);
+    ret b * 10000 + c * 1000 + d * 100 + e;
+}
+
+# LIMIT: only 0x 0b 0o literals accept `_` separators, `1_000` lexes as the literal 1 followed by the identifier _000
+stcfun literals = () -> u64 {
+    u64 a = 0xFF + 0b101 + 0o17 + 1000;
+    u64 b = 0xDEAD_BEEF;
+    u64 c = '\n' as u64 + '\t' as u64 + '\0' as u64 + '\\' as u64;
+    ret a * 1000000000000 + b % 1000000 + c;
+}
+
+stcfun minmax = () -> i64 {
+    i64 min = -9223372036854775807 - 1;
+    i64 neg = -(min + 1);
+    ret neg;
+}
+
+stcfun cmp_signed = () -> u32 {
+    i8 a = -1;
+    u8 b = a as u8;
+    ret (a < 0) as u32 + (b > 100) as u32 * 10 + (a as i32 == -1) as u32 * 100 + (b as i32 == 255) as u32 * 1000;
+}
+
+stc u32 W1 = wrap_u8(); #= W1 4009244
+stc i32 W2 = wrap_i8(); #= W2 126872
+stc u32 W3 = wrap_u16(); #= W3 165535
+stc u64 W4 = wrap_u32(); #= W4 11
+stc u64 W5 = wrap_u64(); #= W5 18446744073709551613
+stc i64 W6 = wrap_i64(); #= W6 11
+stc i32 SD = signed_div(); #= SD -267
+stc i32 SM = signed_mod(); #= SM 91
+stc u32 UD = unsigned_div(); #= UD 301
+stc u32 SF = shifts(); #= SF 2249647778
+stc u32 CA = char_arith(); #= CA 5565025
+stc f64 IF = int_float(); #= IF -315
+stc i64 FI = float_int(); #= FI 27255
+stc i64 WC = width_casts(); #= WC 592070969
+stc u32 BO = bool_ops(); #= BO 38
+stc u32 SC = short_circuit(); #= SC 2014
+stc i64 PR = precedence(); #= PR 1024933252
+stc i32 ID = incdec(); #= ID 57755
+stc i32 CP = compound(); #= CP 7
+stc i32 NG = negations(); #= NG -44495
+stc u64 LT = literals(); #= LT 1275000000928670
+stc i64 MM = minmax(); #= MM 9223372036854775807
+stc u32 CS = cmp_signed(); #= CS 1111
+
+$main = () {}

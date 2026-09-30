@@ -1,0 +1,284 @@
+type Big = *(mut [16]u32 l, mut u32 n) !{
+    fun fix = () {
+        mut u32 k = 16;
+        while k > 1 and self.l[k - 1] == 0: k -= 1;
+        self.n = k;
+    }
+
+    fun set = (u64 v) {
+        for i in 0..<16: self.l[i] = 0;
+        self.l[0] = (v % 1000000000) as u32;
+        self.l[1] = ((v / 1000000000) % 1000000000) as u32;
+        self.l[2] = (v / 1000000000000000000) as u32;
+        self.fix();
+    }
+
+    fun add = (Big o) {
+        mut u64 carry = 0;
+        for i in 0..<16 {
+            u64 t = (self.l[i] as u64) + (o.l[i] as u64) + carry;
+            self.l[i] = (t % 1000000000) as u32;
+            carry = t / 1000000000;
+        }
+        self.fix();
+    }
+
+    fun sub = (Big o) {
+        mut u32 borrow = 0;
+        for i in 0..<16 {
+            u32 sub_by = o.l[i] + borrow;
+            if self.l[i] >= sub_by {
+                self.l[i] -= sub_by;
+                borrow = 0;
+            } else {
+                self.l[i] = self.l[i] + 1000000000 - sub_by;
+                borrow = 1;
+            }
+        }
+        self.fix();
+    }
+
+    fun mul_small = (u32 m) {
+        mut u64 carry = 0;
+        for i in 0..<16 {
+            u64 t = (self.l[i] as u64) * (m as u64) + carry;
+            self.l[i] = (t % 1000000000) as u32;
+            carry = t / 1000000000;
+        }
+        self.fix();
+    }
+
+    fun divmod_small = (u32 d) -> u32 {
+        mut u64 rem = 0;
+        mut u32 i = 16;
+        while i > 0 {
+            i -= 1;
+            u64 cur = rem * 1000000000 + (self.l[i] as u64);
+            self.l[i] = (cur / (d as u64)) as u32;
+            rem = cur % (d as u64);
+        }
+        self.fix();
+        ret rem as u32;
+    }
+
+    fun mul = (Big o) -> Big {
+        mut Big r;
+        for i in 0..<16 {
+            mut u64 carry = 0;
+            # LIMIT: a parenthesised range end (`0..<(16 - i)`) reports IllegalForFormat, so the parentheses are dropped
+            for j in 0..<16 - i {
+                u64 t = (r.l[i + j] as u64) + (self.l[i] as u64) * (o.l[j] as u64) + carry;
+                r.l[i + j] = (t % 1000000000) as u32;
+                carry = t / 1000000000;
+            }
+        }
+        r.fix();
+        ret r;
+    }
+
+    fun cmp = (Big o) -> i32 {
+        if self.n != o.n: ret if self.n > o.n: 1 else: -1;
+        mut u32 i = self.n;
+        while i > 0 {
+            i -= 1;
+            if self.l[i] != o.l[i]: ret if self.l[i] > o.l[i]: 1 else: -1;
+        }
+        ret 0;
+    }
+
+    fun is_zero = () -> bool: ret self.n == 1 and self.l[0] == 0;
+
+    fun digit_sum = () -> u32 {
+        mut u32 s = 0;
+        for i in 0..<self.n {
+            mut u32 x = self.l[i];
+            while x > 0 {
+                s += x % 10;
+                x /= 10;
+            }
+        }
+        ret s;
+    }
+
+    fun dec_len = () -> u32 {
+        mut u32 top = self.l[self.n - 1];
+        mut u32 d = 0;
+        while top > 0 {
+            d += 1;
+            top /= 10;
+        }
+        ret if d == 0: 1 else: (self.n - 1) * 9 + d;
+    }
+
+    fun low18 = () -> u64: ret (self.l[1] as u64) * 1000000000 + (self.l[0] as u64);
+    fun mid18 = () -> u64: ret (self.l[3] as u64) * 1000000000 + (self.l[2] as u64);
+}
+
+fun from_u64 = (u64 v) -> Big {
+    mut Big b;
+    b.set(v);
+    ret b;
+}
+
+fun factorial = (u32 n) -> Big {
+    mut Big b = from_u64(1);
+    for k in 2..=n: b.mul_small(k);
+    ret b;
+}
+
+fun fib = (u32 n) -> Big {
+    mut Big a = from_u64(0);
+    mut Big b = from_u64(1);
+    for 0..<n {
+        Big t = a;
+        a = b;
+        b.add(t);
+    }
+    ret a;
+}
+
+fun pow2 = (u32 n) -> Big {
+    mut Big b = from_u64(1);
+    for 0..<n: b.mul_small(2);
+    ret b;
+}
+
+fun power = (u32 base, u32 e) -> Big {
+    mut Big b = from_u64(1);
+    for 0..<e: b.mul_small(base);
+    ret b;
+}
+
+stcfun fact_low = (u32 n) -> u64: ret factorial(n).low18();
+stcfun fact_mid = (u32 n) -> u64: ret factorial(n).mid18();
+stcfun fact_len = (u32 n) -> u32: ret factorial(n).dec_len();
+stcfun fact_sum = (u32 n) -> u32: ret factorial(n).digit_sum();
+
+stc u64 F0 = fact_low(0); #= F0 1
+stc u64 F1 = fact_low(1); #= F1 1
+stc u64 F20 = fact_low(20); #= F20 432902008176640000
+stc u32 F20L = fact_len(20); #= F20L 19
+stc u64 F30 = fact_low(30); #= F30 58636308480000000
+stc u64 F30M = fact_mid(30); #= F30M 265252859812191
+stc u32 F30L = fact_len(30); #= F30L 33
+stc u32 F30S = fact_sum(30); #= F30S 117
+stc u32 F52S = fact_sum(52); #= F52S 279
+stc u32 F52L = fact_len(52); #= F52L 68
+
+stcfun fib_low = (u32 n) -> u64: ret fib(n).low18();
+stcfun fib_mid = (u32 n) -> u64: ret fib(n).mid18();
+
+stc u64 B0 = fib_low(0); #= B0 0
+stc u64 B1 = fib_low(1); #= B1 1
+stc u64 B90 = fib_low(90); #= B90 880067194370816120
+stc u64 B100 = fib_low(100); #= B100 224848179261915075
+stc u64 B100M = fib_mid(100); #= B100M 354
+stc u32 B100L = fib(100).dec_len(); #= B100L 21
+stc u32 B200L = fib(200).dec_len(); #= B200L 42
+stc u32 B300S = fib(300).digit_sum(); #= B300S 315
+
+stcfun pow_low = (u32 n) -> u64: ret pow2(n).low18();
+stcfun pow_mid = (u32 n) -> u64: ret pow2(n).mid18();
+
+stc u64 P10 = pow_low(10); #= P10 1024
+stc u64 P64 = pow_low(64); #= P64 446744073709551616
+stc u64 P100 = pow_low(100); #= P100 229401496703205376
+stc u32 P100L = pow2(100).dec_len(); #= P100L 31
+stc u32 P200S = pow2(200).digit_sum(); #= P200S 256
+stc u32 P200L = pow2(200).dec_len(); #= P200L 61
+stc u32 P400S = power(2, 400).digit_sum(); #= P400S 547
+stc u32 T100 = power(10, 100).dec_len(); #= T100 101
+stc u32 T100S = power(10, 100).digit_sum(); #= T100S 1
+stc u64 S3 = power(3, 40).low18(); #= S3 157665459056928801
+
+stcfun cmp3 = () -> i32 {
+    Big a = factorial(25);
+    Big b = pow2(83);
+    Big c = factorial(25);
+    ret a.cmp(b) * 100 + b.cmp(a) * 10 + a.cmp(c);
+}
+
+stcfun cmp_small = () -> i32 {
+    Big z = from_u64(0);
+    Big one = from_u64(1);
+    ret z.cmp(one) * 10 + one.cmp(z) + (z.is_zero() as i32) * 100 + (one.is_zero() as i32) * 1000;
+}
+
+stc i32 CM = cmp3(); #= CM 90
+stc i32 CS = cmp_small(); #= CS 91
+
+stcfun sq_check = () -> u64 {
+    Big a = fib(80);
+    Big p = a.mul(a);
+    ret p.low18();
+}
+
+stcfun mul_big = () -> u64 {
+    Big a = factorial(20);
+    Big b = pow2(70);
+    Big p = a.mul(b);
+    ret (p.mid18() % 1000000) * 100 + (p.dec_len() as u64);
+}
+
+stcfun mul_zero = () -> u32 {
+    Big a = factorial(30);
+    Big z = from_u64(0);
+    Big p = a.mul(z);
+    ret p.n * 10 + (p.is_zero() as u32);
+}
+
+stc u64 SQ = sq_check(); #= SQ 114299087489259225
+stc u64 MB = mul_big(); #= MB 6454540
+stc u32 MZ = mul_zero(); #= MZ 11
+
+stcfun sub_back = () -> u64 {
+    mut Big a = fib(120);
+    Big b = fib(119);
+    a.sub(b);
+    Big c = fib(118);
+    ret a.cmp(c) as u64 + 10 * a.low18();
+}
+
+stcfun sub_borrow = () -> u64 {
+    mut Big a = power(10, 27);
+    a.sub(from_u64(1));
+    ret a.digit_sum() as u64 * 1000 + a.dec_len() as u64;
+}
+
+stcfun sub_self = () -> u32 {
+    mut Big a = factorial(22);
+    a.sub(a);
+    ret a.n * 10 + a.is_zero() as u32;
+}
+
+stc u64 SB = sub_back(); #= SB 1114739846236917590
+stc u64 SBR = sub_borrow(); #= SBR 243027
+stc u32 SF = sub_self(); #= SF 11
+
+stcfun div_digits = () -> u64 {
+    mut Big a = pow2(100);
+    u32 r7 = a.divmod_small(7);
+    u32 r1 = a.divmod_small(1);
+    ret (r7 as u64) * 1000000 + (r1 as u64) * 100000 + (a.digit_sum() as u64);
+}
+
+stcfun div_rem = () -> u32 {
+    mut Big a = pow2(100);
+    ret a.divmod_small(1000000007);
+}
+
+stcfun div_to_zero = () -> u32 {
+    mut Big a = factorial(12);
+    mut u32 steps = 0;
+    while !a.is_zero() {
+        do a.divmod_small(10);
+        steps += 1;
+    }
+    ret steps;
+}
+
+stc u64 DD = div_digits(); #= DD 2000155
+stc u32 DR = div_rem(); #= DR 976371285
+stc u32 DZ = div_to_zero(); #= DZ 9
+
+$main = () {}

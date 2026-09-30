@@ -1,0 +1,485 @@
+variant Val = +(Nil, Int(i64 v), Bool(bool b), Sym(u32 id), Pair(u32 at), Err(u32 code)) tagof u8;
+
+fun iv = (Val v) -> i64: ret match v {
+    Val.Int(n) => n,
+    _ => 0,
+}
+
+fun is_err = (Val v) -> bool: ret match v {
+    Val.Err(c) => true,
+    _ => false,
+}
+
+fun is_false = (Val v) -> bool: ret match v {
+    Val.Bool(b) => !b,
+    _ => false,
+}
+
+type Lisp = *(
+    &[]u8 src,
+    mut u32 pos,
+    mut [40]Val cars,
+    mut [40]Val cdrs,
+    mut u32 ncell,
+    mut [12]u32 sb,
+    mut [12]u32 se,
+    mut u32 nsym,
+    mut [8]u32 en,
+    mut [8]Val ev,
+    mut u32 nenv,
+    mut [64]u8 out,
+    mut u32 nout,
+) !{
+    fun cons = (Val a, Val b) -> Val {
+        if self.ncell == 40: ret Val.Err(7);
+        self.cars[self.ncell] = a;
+        self.cdrs[self.ncell] = b;
+        self.ncell += 1;
+        ret Val.Pair(self.ncell - 1);
+    }
+
+    fun ws = () {
+        while self.pos as u64 < self.src.$len and self.src.*[self.pos] == ' ': self.pos += 1;
+    }
+
+    fun sym_is = (u32 id, &[]u8 w) -> bool {
+        u32 n = self.se[id] - self.sb[id];
+        if n as u64 != w.$len: ret false;
+        for k in 0..<n {
+            if self.src.*[self.sb[id] + k] != w.*[k]: ret false;
+        }
+        ret true;
+    }
+
+    fun intern = (u32 s, u32 e) -> Val {
+        for id in 0..<self.nsym {
+            u32 n = self.se[id] - self.sb[id];
+            mut bool same = n == e - s;
+            for k in 0..<n {
+                if same and self.src.*[self.sb[id] + k] != self.src.*[s + k]: same = false;
+            }
+            if same: ret Val.Sym(id);
+        }
+        if self.nsym == 12: ret Val.Err(7);
+        self.sb[self.nsym] = s;
+        self.se[self.nsym] = e;
+        self.nsym += 1;
+        ret Val.Sym(self.nsym - 1);
+    }
+
+    fun atom = (u32 s, u32 e) -> Val {
+        mut u32 k = s;
+        if self.src.*[k] == '-' and e - s > 1: k += 1;
+        mut bool digits = true;
+        for j in k..<e {
+            u8 c = self.src.*[j];
+            if c < '0' or c > '9': digits = false;
+        }
+        if !digits: ret self.intern(s, e);
+        mut i64 v = 0;
+        for j in k..<e: v = v * 10 + (self.src.*[j] - '0') as i64;
+        ret Val.Int(if self.src.*[s] == '-': -v else: v);
+    }
+
+    fun read_list = () -> Val {
+        self.ws();
+        if self.pos as u64 >= self.src.$len: ret Val.Err(8);
+        if self.src.*[self.pos] == ')' {
+            self.pos += 1;
+            ret Val.Nil;
+        }
+        Val item = self.read();
+        if is_err(item): ret item;
+        Val rest = self.read_list();
+        if is_err(rest): ret rest;
+        ret self.cons(item, rest);
+    }
+
+    fun read = () -> Val {
+        self.ws();
+        if self.pos as u64 >= self.src.$len: ret Val.Err(8);
+        u8 c = self.src.*[self.pos];
+        if c == '(' {
+            self.pos += 1;
+            ret self.read_list();
+        }
+        if c == ')' {
+            self.pos += 1;
+            ret Val.Err(9);
+        }
+        u32 s = self.pos;
+        while self.pos as u64 < self.src.$len and self.src.*[self.pos] != ' ' and self.src.*[self.pos] != '(' and self.src.*[self.pos] != ')': self.pos += 1;
+        ret self.atom(s, self.pos);
+    }
+
+    fun nth = (Val list, u32 n) -> Val {
+        mut Val cur = list;
+        mut u32 k = 0;
+        loop {
+            match cur {
+                Val.Pair(at) => {
+                    if k == n: ret self.cars[at];
+                    cur = self.cdrs[at];
+                    k += 1;
+                },
+                _ => ret Val.Err(4),
+            }
+        }
+        ret Val.Nil;
+    }
+
+    fun len = (Val list) -> u32 {
+        mut Val cur = list;
+        mut u32 k = 0;
+        loop {
+            match cur {
+                Val.Pair(at) => {
+                    cur = self.cdrs[at];
+                    k += 1;
+                },
+                _ => ret k,
+            }
+        }
+        ret k;
+    }
+
+    fun lookup = (u32 id) -> Val {
+        if self.sym_is(id, "true".&): ret Val.Bool(true);
+        if self.sym_is(id, "false".&): ret Val.Bool(false);
+        if self.sym_is(id, "nil".&): ret Val.Nil;
+        mut u32 k = self.nenv;
+        while k > 0 {
+            k -= 1;
+            if self.en[k] == id: ret self.ev[k];
+        }
+        ret Val.Err(2);
+    }
+
+    fun eval_let = (Val args) -> Val {
+        u32 saved = self.nenv;
+        mut Val binds = self.nth(args, 0);
+        loop {
+            match binds {
+                Val.Pair(at) => {
+                    Val b = self.cars[at];
+                    Val name = self.nth(b, 0);
+                    Val val = self.eval(self.nth(b, 1));
+                    if is_err(val) {
+                        self.nenv = saved;
+                        ret val;
+                    }
+                    match name {
+                        Val.Sym(id) => {
+                            if self.nenv == 8 {
+                                self.nenv = saved;
+                                ret Val.Err(7);
+                            }
+                            self.en[self.nenv] = id;
+                            self.ev[self.nenv] = val;
+                            self.nenv += 1;
+                        },
+                        _ => {
+                            self.nenv = saved;
+                            ret Val.Err(4);
+                        },
+                    }
+                    binds = self.cdrs[at];
+                },
+                _ => brk,
+            }
+        }
+        Val r = self.eval(self.nth(args, 1));
+        self.nenv = saved;
+        ret r;
+    }
+
+    fun eval_logic = (Val args, bool is_and) -> Val {
+        mut Val cur = args;
+        mut Val last = Val.Bool(is_and);
+        loop {
+            match cur {
+                Val.Pair(at) => {
+                    last = self.eval(self.cars[at]);
+                    if is_err(last): ret last;
+                    if is_false(last) == is_and: ret last;
+                    cur = self.cdrs[at];
+                },
+                _ => ret last,
+            }
+        }
+        ret last;
+    }
+
+    fun prim = (u32 id, &[]Val a, u32 n) -> Val {
+        if self.sym_is(id, "cons".&) {
+            if n != 2: ret Val.Err(4);
+            ret self.cons(a.*[0], a.*[1]);
+        }
+        if self.sym_is(id, "list".&) {
+            mut Val r = Val.Nil;
+            mut u32 k = n;
+            while k > 0 {
+                k -= 1;
+                r = self.cons(a.*[k], r);
+            }
+            ret r;
+        }
+        if self.sym_is(id, "car".&) or self.sym_is(id, "cdr".&) {
+            if n != 1: ret Val.Err(4);
+            ret match a.*[0] {
+                Val.Pair(at) => if self.sym_is(id, "car".&): self.cars[at] else: self.cdrs[at],
+                _ => Val.Err(3),
+            };
+        }
+        if self.sym_is(id, "null?".&) {
+            if n != 1: ret Val.Err(4);
+            ret match a.*[0] {
+                Val.Nil => Val.Bool(true),
+                _ => Val.Bool(false),
+            };
+        }
+        if self.sym_is(id, "length".&) {
+            if n != 1: ret Val.Err(4);
+            ret match a.*[0] {
+                Val.Nil | Val.Pair(_) => Val.Int(self.len(a.*[0]) as i64),
+                _ => Val.Err(3),
+            };
+        }
+        if self.sym_is(id, "not".&) {
+            if n != 1: ret Val.Err(4);
+            ret Val.Bool(is_false(a.*[0]));
+        }
+        bool arith = self.sym_is(id, "+".&) or self.sym_is(id, "*".&) or self.sym_is(id, "-".&) or self.sym_is(id, "/".&) or self.sym_is(id, "mod".&) or self.sym_is(id, "<".&) or self.sym_is(id, ">".&) or self.sym_is(id, "=".&);
+        if !arith: ret Val.Err(2);
+        for k in 0..<n {
+            match a.*[k] {
+                Val.Int(_) => {},
+                _ => ret Val.Err(3),
+            }
+        }
+        if self.sym_is(id, "+".&) {
+            mut i64 s = 0;
+            for k in 0..<n: s += iv(a.*[k]);
+            ret Val.Int(s);
+        }
+        if self.sym_is(id, "*".&) {
+            mut i64 s = 1;
+            for k in 0..<n: s *= iv(a.*[k]);
+            ret Val.Int(s);
+        }
+        if self.sym_is(id, "-".&) {
+            if n == 0: ret Val.Err(4);
+            if n == 1: ret Val.Int(-iv(a.*[0]));
+            mut i64 s = iv(a.*[0]);
+            for k in 1..<n: s -= iv(a.*[k]);
+            ret Val.Int(s);
+        }
+        if n != 2: ret Val.Err(4);
+        i64 x = iv(a.*[0]);
+        i64 y = iv(a.*[1]);
+        if self.sym_is(id, "/".&) {
+            if y == 0: ret Val.Err(6);
+            ret Val.Int(x / y);
+        }
+        if self.sym_is(id, "mod".&) {
+            if y == 0: ret Val.Err(6);
+            ret Val.Int(x % y);
+        }
+        if self.sym_is(id, "<".&): ret Val.Bool(x < y);
+        if self.sym_is(id, ">".&): ret Val.Bool(x > y);
+        ret Val.Bool(x == y);
+    }
+
+    fun eval_list = (u32 at) -> Val {
+        Val head = self.cars[at];
+        Val args = self.cdrs[at];
+        match head {
+            Val.Sym(id) => {
+                if self.sym_is(id, "quote".&): ret self.nth(args, 0);
+                if self.sym_is(id, "if".&) {
+                    Val c = self.eval(self.nth(args, 0));
+                    if is_err(c): ret c;
+                    if !is_false(c): ret self.eval(self.nth(args, 1));
+                    if self.len(args) < 3: ret Val.Nil;
+                    ret self.eval(self.nth(args, 2));
+                }
+                if self.sym_is(id, "let".&): ret self.eval_let(args);
+                if self.sym_is(id, "and".&): ret self.eval_logic(args, true);
+                if self.sym_is(id, "or".&): ret self.eval_logic(args, false);
+                u32 n = self.len(args);
+                if n > 6: ret Val.Err(4);
+                mut [6]Val vals;
+                for k in 0..<n {
+                    Val r = self.eval(self.nth(args, k));
+                    if is_err(r): ret r;
+                    vals[k] = r;
+                }
+                ret self.prim(id, vals.&, n);
+            },
+            _ => ret Val.Err(5),
+        }
+    }
+
+    fun eval = (Val v) -> Val {
+        ret match v {
+            Val.Sym(id) => self.lookup(id),
+            Val.Pair(at) => self.eval_list(at),
+            _ => v,
+        };
+    }
+
+    fun put = (u8 c) {
+        self.out[self.nout] = c;
+        self.nout += 1;
+    }
+
+    fun put_int = (i64 v) {
+        if v < 0 {
+            self.put('-');
+            self.put_int(-v);
+            ret;
+        }
+        if v >= 10: self.put_int(v / 10);
+        self.put('0' + (v % 10) as u8);
+    }
+
+    fun print = (Val v) {
+        match v {
+            Val.Nil => {
+                self.put('(');
+                self.put(')');
+            },
+            Val.Int(n) => self.put_int(n),
+            Val.Bool(b) => {
+                self.put('#');
+                self.put(if b: 't' else: 'f');
+            },
+            Val.Sym(id) => {
+                for k in self.sb[id]..<self.se[id]: self.put(self.src.*[k]);
+            },
+            Val.Err(c) => {
+                self.put('!');
+                self.put('0' + c as u8);
+            },
+            Val.Pair(at) => {
+                self.put('(');
+                self.print(self.cars[at]);
+                mut Val rest = self.cdrs[at];
+                loop {
+                    match rest {
+                        Val.Pair(nx) => {
+                            self.put(' ');
+                            self.print(self.cars[nx]);
+                            rest = self.cdrs[nx];
+                        },
+                        Val.Nil => brk,
+                        _ => {
+                            self.put(' ');
+                            self.put('.');
+                            self.put(' ');
+                            self.print(rest);
+                            brk;
+                        },
+                    }
+                }
+                self.put(')');
+            },
+        }
+    }
+
+    fun run = () -> Val {
+        Val form = self.read();
+        if is_err(form): ret form;
+        self.ws();
+        if (self.pos as u64) < self.src.$len: ret Val.Err(1);
+        ret self.eval(form);
+    }
+}
+
+fun evals_to = (&[]u8 src, &[]u8 want) -> bool {
+    [40]Val c1;
+    [40]Val c2;
+    [12]u32 b1;
+    [12]u32 b2;
+    [8]u32 e1;
+    [8]Val e2;
+    [64]u8 buf;
+    mut Lisp l = Lisp(src = src, pos = 0, cars = c1, cdrs = c2, ncell = 0, sb = b1, se = b2, nsym = 0, en = e1, ev = e2, nenv = 0, out = buf, nout = 0);
+    Val r = l.run();
+    l.print(r);
+    if l.nout as u64 != want.$len: ret false;
+    for i in 0..<l.nout {
+        if l.out[i] != want.*[i]: ret false;
+    }
+    ret true;
+}
+
+fun cells_after_read = (&[]u8 src) -> u32 {
+    [40]Val c1;
+    [40]Val c2;
+    [12]u32 b1;
+    [12]u32 b2;
+    [8]u32 e1;
+    [8]Val e2;
+    [64]u8 buf;
+    mut Lisp l = Lisp(src = src, pos = 0, cars = c1, cdrs = c2, ncell = 0, sb = b1, se = b2, nsym = 0, en = e1, ev = e2, nenv = 0, out = buf, nout = 0);
+    do l.read();
+    ret l.ncell;
+}
+
+stc bool L1 = evals_to("42".&, "42".&); #= L1 true
+stc bool L2 = evals_to("(+ 1 2)".&, "3".&); #= L2 true
+stc bool L3 = evals_to("(+ 1 2 3 4)".&, "10".&); #= L3 true
+stc bool L4 = evals_to("(- 10)".&, "-10".&); #= L4 true
+stc bool L5 = evals_to("(- 10 3 2)".&, "5".&); #= L5 true
+stc bool L6 = evals_to("(/ 17 5)".&, "3".&); #= L6 true
+stc bool L7 = evals_to("(mod -17 5)".&, "-2".&); #= L7 true
+stc bool L8 = evals_to("(/ 1 0)".&, "!6".&); #= L8 true
+stc bool L9 = evals_to("(< 1 2)".&, "#t".&); #= L9 true
+stc bool L10 = evals_to("(= 3 3)".&, "#t".&); #= L10 true
+stc bool L11 = evals_to("(not 0)".&, "#f".&); #= L11 true
+stc bool L12 = evals_to("(if (< 1 2) 10 20)".&, "10".&); #= L12 true
+stc bool L13 = evals_to("(if false 1)".&, "()".&); #= L13 true
+stc bool L14 = evals_to("(let ((x 5)) (* x x))".&, "25".&); #= L14 true
+stc bool L15 = evals_to("(let ((x 5) (y (+ x 1))) (* x y))".&, "30".&); #= L15 true
+stc bool L16 = evals_to("(let ((x 1)) (let ((x 2)) x))".&, "2".&); #= L16 true
+stc bool L17 = evals_to("(let ((x 1)) (+ (let ((x 10)) x) x))".&, "11".&); #= L17 true
+stc bool L18 = evals_to("(let ((x 1)) y)".&, "!2".&); #= L18 true
+stc bool L19 = evals_to("(let ((x 1) (y 2) (z 3) (w 4) (v 5) (u 6) (t 7) (s 8) (r 9)) r)".&, "!7".&); #= L19 true
+stc bool L20 = evals_to("(quote (1 2 3))".&, "(1 2 3)".&); #= L20 true
+stc bool L21 = evals_to("(list 1 2 3)".&, "(1 2 3)".&); #= L21 true
+stc bool L22 = evals_to("(cons 1 2)".&, "(1 . 2)".&); #= L22 true
+stc bool L23 = evals_to("(cons 1 (list 2 3))".&, "(1 2 3)".&); #= L23 true
+stc bool L24 = evals_to("(cdr (list 5 6))".&, "(6)".&); #= L24 true
+stc bool L25 = evals_to("(car (cdr (list 5 6 7)))".&, "6".&); #= L25 true
+stc bool L26 = evals_to("(car nil)".&, "!3".&); #= L26 true
+stc bool L27 = evals_to("(null? nil)".&, "#t".&); #= L27 true
+stc bool L28 = evals_to("(length (list 1 2 3 4))".&, "4".&); #= L28 true
+stc bool L29 = evals_to("(length (cons 1 2))".&, "1".&); #= L29 true
+stc bool L30 = evals_to("(and 1 2 3)".&, "3".&); #= L30 true
+stc bool L31 = evals_to("(and 1 false 3)".&, "#f".&); #= L31 true
+stc bool L32 = evals_to("(or)".&, "#f".&); #= L32 true
+stc bool L33 = evals_to("(and false (/ 1 0))".&, "#f".&); #= L33 true
+stc bool L34 = evals_to("(foo 1)".&, "!2".&); #= L34 true
+stc bool L35 = evals_to("x".&, "!2".&); #= L35 true
+stc bool L36 = evals_to("(+ 1 (quote a))".&, "!3".&); #= L36 true
+stc bool L37 = evals_to("(+ 1 2".&, "!8".&); #= L37 true
+stc bool L38 = evals_to("(+ 1 2))".&, "!1".&); #= L38 true
+stc bool L39 = evals_to(")".&, "!9".&); #= L39 true
+stc bool L40 = evals_to("".&, "!8".&); #= L40 true
+stc bool L41 = evals_to("(+ 1 2) 3".&, "!1".&); #= L41 true
+stc bool L42 = evals_to("(list 1 2 3 4 5 6 7)".&, "!4".&); #= L42 true
+stc bool L43 = evals_to("(quote (a b (c d)))".&, "(a b (c d))".&); #= L43 true
+stc bool L44 = evals_to("(let ((a 3) (b 4)) (if (< a b) (list a b) (list b a)))".&, "(3 4)".&); #= L44 true
+stc bool L45 = evals_to("(let ((l (list 1 2 3))) (+ (car l) (length l)))".&, "4".&); #= L45 true
+stc bool L46 = evals_to("(+ (* 2 3) (- 10 4) (/ 9 3))".&, "15".&); #= L46 true
+stc bool L47 = evals_to("(list 1 (list 2 (list 3)))".&, "(1 (2 (3)))".&); #= L47 true
+stc bool L48 = evals_to("(let ((x (+ 1 2))) (let ((y (* x x))) (- y x)))".&, "6".&); #= L48 true
+stc bool L49 = evals_to("(* 99999999999 99999999999)".&, "1864711849423024129".&); #= L49 true
+stc bool L50 = evals_to("(+ 1 2)".&, "4".&); #= L50 false
+stc u32 L51 = cells_after_read("42".&); #= L51 0
+stc u32 L52 = cells_after_read("(1 2 3)".&); #= L52 3
+stc u32 L53 = cells_after_read("(1 (2 3)".&); #= L53 2
+stc u32 L54 = cells_after_read("(quote (a b (c d)))".&); #= L54 7
+
+$main = () {}

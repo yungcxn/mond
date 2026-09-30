@@ -1,0 +1,54 @@
+# BUG: accepted without a diagnostic, a default trait method overridden with another signature
+#   trait T = !{ fun opt = (i32 a) -> i32: ret a; }
+#   type X = *(i32 v) implof T !{ fun opt = () -> bool: ret true; }         also a changed parameter type or return type
+
+trait Metric = (type T): !{
+    fun dist = (T other) -> u32;
+    fun near = (T other, u32 r) -> bool: ret self.dist(other) <= r;
+}
+
+trait Convert = (type A, type B): !{
+    fun to = () -> B;
+    fun from = (A a) -> B;
+}
+
+type Pt = *(i32 x) implof Metric(Pt) !{ fun dist = (Pt o) -> u32: ret 0; }
+type Slot = *(u8 p) implof Metric(Slot) !{ fun dist = (Slot o) -> u32: ret 1; }
+type Plain = *(u8 v);
+type Two = *(u8 p) implof Metric(Two, Two) !{ fun dist = (Two o) -> u32: ret 1; } #! wrong_arity
+type Ret = *(u8 p) implof Metric(Ret) !{ fun dist = (Ret o) -> i32: ret 1; } #! trait_signature_mismatch
+type Wrong = *(u8 p) implof Metric(Pt) !{ fun dist = (Wrong o) -> u32: ret 1; } #! trait_signature_mismatch
+type NoTo = *(u8 k) implof Convert(u8, u32) !{ fun from = (u8 a) -> u32: ret 1; } #! trait_member_missing
+type BadFrom = *(u8 k) implof Convert(u8, u32) !{ fun to = () -> u32: ret 1; fun from = (u32 a) -> u32: ret 1; } #! trait_signature_mismatch
+type Half = *(u8 k) implof Convert(u8, u32) !{ fun to = () -> u32: ret 1; fun from = (u8 a) -> u32: ret 1; }
+
+stcfun closest = (type T where T oftype Metric(T)): (T a, T b) -> T: ret a; #! stcwhere_violated stcwhere_violated
+stcfun ghost = (type T where T oftype Metric(T)): (T a) -> u32 {
+    x = a.dist(a);
+    ret a.nope(); #! unknown_member
+}
+stcfun plain_call = (type T): (T a, T b) -> u32: ret a.dist(b); #! unknown_member
+stcfun convert_all = (type T, type A, type B where T oftype Convert(A, B)): (T t, A a) -> u32: ret 7; #! stcwhere_violated
+
+fun dist_of = (Metric(Pt) m) -> u32: ret m.dist(Pt(1));
+
+fun use = () {
+    Pt p1 = closest(Pt)(Pt(1), Pt(2));
+    Slot s1 = closest(Slot)(Slot(1), Slot(2));
+    Plain q1 = closest(Plain)(Plain(1), Plain(2));
+    u8 q2 = closest(u8)(1, 2);
+    u32 g1 = ghost(Pt)(Pt(3));
+    u32 c1 = plain_call(Pt)(Pt(1), Pt(2));
+    u32 c2 = plain_call(u8)(1, 2);
+    u32 d1 = dist_of(Pt(1));
+    u32 d2 = dist_of(Slot(1)); #! type_mismatch
+    u32 d3 = dist_of(Plain(1)); #! type_mismatch
+    u32 v1 = convert_all(Half, u8, u32)(Half(1), 2);
+    u32 v2 = convert_all(Half, u32, u8)(Half(1), 2);
+    Metric(Pt) m = Slot(1); #! type_mismatch
+    bool n = Pt(1).near(Pt(2)); #! wrong_arity
+    bool k = Pt(1).near(Slot(2), 1); #! type_mismatch
+    u32 h = Half(1).from(Half(2)); #! type_mismatch
+}
+
+$main = () {}

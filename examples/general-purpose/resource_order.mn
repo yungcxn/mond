@@ -1,0 +1,135 @@
+type Res = *(u32 id, *u32 log) !{
+    $init = (u32 id, *u32 log) {
+        log.* = log.* * 10 + 1;
+        ret Res(id = id, log = log);
+    }
+    $deinit = () { self.log.* = self.log.* * 10 + self.id; }
+}
+
+stcfun explicit = () -> u32 {
+    mut u32 log = 0;
+    mut Res a = Res.$init(2, log.&);
+    deinit a;
+    ret log;
+}
+
+stcfun deferred = () -> u32 {
+    mut u32 log = 0;
+    {
+        mut Res a = Res.$init(2, log.&);
+        defer deinit a;
+        log = log * 10 + 7;
+    }
+    ret log;
+}
+
+stcfun order = () -> u32 {
+    mut u32 log = 0;
+    {
+        mut Res a = Res.$init(2, log.&);
+        defer deinit a;
+        mut Res b = Res.$init(3, log.&);
+        defer deinit b;
+    }
+    ret log;
+}
+
+stc u32 EX = explicit(); #= EX 12
+stc u32 DF = deferred(); #= DF 172
+stc u32 OR = order(); #= OR 1132
+
+stcfun interleaved = () -> u32 {
+    mut u32 log = 0;
+    {
+        defer log = log * 10 + 9;
+        mut Res a = Res.$init(2, log.&);
+        defer deinit a;
+        defer log = log * 10 + 8;
+        mut Res b = Res.$init(3, log.&);
+        defer deinit b;
+    }
+    ret log;
+}
+
+stcfun early = (bool quit) -> u32 {
+    mut u32 log = 0;
+    mut Res a = Res.$init(4, log.&);
+    defer deinit a;
+    if quit: ret log;
+    log = log * 10 + 6;
+    ret log;
+}
+
+fun with_helper = (*u32 log, u32 id) {
+    mut Res r = Res.$init(id, log);
+    defer deinit r;
+    log.* = log.* * 10 + 5;
+}
+
+stcfun helper = () -> u32 {
+    mut u32 log = 0;
+    with_helper(log.&, 2);
+    with_helper(log.&, 3);
+    ret log;
+}
+
+stcfun loops = () -> u32 {
+    mut u32 log = 0;
+    for i in 1..=3 {
+        mut Res r = Res.$init(i, log.&);
+        defer deinit r;
+        if i == 2: cont;
+        log = log * 10 + 7;
+    }
+    ret log;
+}
+
+stcfun breaks = () -> u32 {
+    mut u32 log = 0;
+    loop {
+        mut Res r = Res.$init(6, log.&);
+        defer deinit r;
+        if log > 0: brk;
+    }
+    ret log;
+}
+
+stc u32 IL = interleaved(); #= IL 113829
+stc u32 E1 = early(true); #= E1 1
+stc u32 E2 = early(false); #= E2 16
+stc u32 HE = helper(); #= HE 152153
+stc u32 LP = loops(); #= LP 17112173
+stc u32 BR = breaks(); #= BR 16
+
+stcfun inline_defer = () -> u32 {
+    mut u32 log = 0;
+    {
+        mut Res a = Res.$init(2, log.&) defer deinit;
+        mut Res b = Res.$init(3, log.&) defer deinit;
+        log = log * 10 + 4;
+    }
+    ret log;
+}
+
+stcfun manual_then_scope = () -> u32 {
+    mut u32 log = 0;
+    {
+        mut Res a = Res.$init(2, log.&);
+        mut Res b = Res.$init(3, log.&);
+        deinit a;
+        log = log * 10 + 4;
+        deinit b;
+    }
+    ret log;
+}
+
+stc u32 ID = inline_defer(); #= ID 11432
+stc u32 MS = manual_then_scope(); #= MS 11243
+
+$main = () {
+    mut u32 log = 0;
+    mut Res r = Res.$init(9, log.&);
+    id = r.id; #: id u32
+    l = log; #: l u32
+    deinit r;
+}

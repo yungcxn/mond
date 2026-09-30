@@ -1,0 +1,226 @@
+fun hex = (u8 c) -> u32: ret match c {
+    '0'..='9' => (c - '0') as u32,
+    'a'..='f' => (c - 'a') as u32 + 10,
+    _ => 99,
+}
+
+fun bit = (u32 i) -> u32: ret 1 << i;
+
+fun popcount = (u32 m) -> u32 {
+    mut u32 n = 0;
+    mut u32 x = m;
+    while x != 0 {
+        n += x & 1;
+        x = x >> 1;
+    }
+    ret n;
+}
+
+type Alloc = *(
+    &[]u8 s,
+    &[]u8 e,
+    u32 n,
+    mut [12]i32 reg,
+    mut [12]bool active,
+    mut [12]bool done,
+    mut u32 spills,
+) !{
+    fun overlaps = (u32 a, u32 b) -> bool: ret self.s.*[a] < self.e.*[b] and self.s.*[b] < self.e.*[a];
+
+    fun pressure = () -> u32 {
+        mut u32 best = 0;
+        for p in 0..<32 {
+            mut u32 live = 0;
+            for i in 0..<self.n {
+                if self.s.*[i] as u32 <= p and p < self.e.*[i] as u32: live += 1;
+            }
+            if live > best: best = live;
+        }
+        ret best;
+    }
+
+    fun next_start = () -> u32 {
+        mut u32 pick = 99;
+        for i in 0..<self.n {
+            # LIMIT: `if a and (b or c): x;` (condition ending in a parenthesised group) is IllegalIfFormat, so the group is hoisted into a local
+            bool better = pick == 99 or self.s.*[i] < self.s.*[pick];
+            if !self.done[i] and better: pick = i;
+        }
+        ret pick;
+    }
+
+    fun used_regs = () -> u32 {
+        mut u32 mask = 0;
+        for j in 0..<self.n {
+            if self.active[j]: mask = mask | bit(self.reg[j] as u32);
+        }
+        ret mask;
+    }
+
+    fun scan = (u32 k) {
+        for i in 0..<self.n: self.reg[i] = -1;
+        for step in 0..<self.n {
+            u32 i = self.next_start();
+            self.done[i] = true;
+            mut u32 count = 0;
+            for j in 0..<self.n {
+                if self.active[j] and self.e.*[j] <= self.s.*[i]: self.active[j] = false;
+                if self.active[j]: count += 1;
+            }
+            if count < k {
+                u32 used = self.used_regs();
+                mut u32 r = 0;
+                while (used & bit(r)) != 0: r += 1;
+                self.reg[i] = r as i32;
+                self.active[i] = true;
+            } else {
+                mut u32 victim = 99;
+                for j in 0..<self.n {
+                    bool later = victim == 99 or self.e.*[j] > self.e.*[victim];
+                    if self.active[j] and later: victim = j;
+                }
+                if self.e.*[victim] > self.e.*[i] {
+                    self.reg[i] = self.reg[victim];
+                    self.reg[victim] = -1;
+                    self.active[victim] = false;
+                    self.active[i] = true;
+                }
+                self.spills += 1;
+            }
+        }
+    }
+}
+
+fun fresh_alloc = (&[]u8 s, &[]u8 e) -> Alloc {
+    [12]i32 reg;
+    [12]bool active;
+    [12]bool done;
+    ret Alloc(s = s, e = e, n = s.$len as u32, reg = reg, active = active, done = done, spills = 0);
+}
+
+fun pressure = (&[]u8 s, &[]u8 e) -> u32 {
+    Alloc a = fresh_alloc(s, e);
+    ret a.pressure();
+}
+
+fun scan = (&[]u8 s, &[]u8 e, u32 k) -> [12]i32 {
+    mut Alloc a = fresh_alloc(s, e);
+    a.scan(k);
+    ret a.reg;
+}
+
+fun spills = (&[]u8 s, &[]u8 e, u32 k) -> u32 {
+    mut Alloc a = fresh_alloc(s, e);
+    a.scan(k);
+    ret a.spills;
+}
+
+fun color = (&[12]u32 adj, u32 n) -> [12]u32 {
+    mut [12]u32 col;
+    mut [12]bool done;
+    for step in 0..<n {
+        mut u32 pick = 99;
+        mut u32 best = 0;
+        for v in 0..<n {
+            u32 deg = popcount(adj.*[v]);
+            bool higher = pick == 99 or deg > best;
+            if !done[v] and higher {
+                pick = v;
+                best = deg;
+            }
+        }
+        done[pick] = true;
+        mut u32 used = 0;
+        for u in 0..<n {
+            if (adj.*[pick] & bit(u)) != 0 and done[u] and u != pick: used = used | bit(col[u]);
+        }
+        mut u32 c = 0;
+        while (used & bit(c)) != 0: c += 1;
+        col[pick] = c;
+    }
+    ret col;
+}
+
+fun interval_graph = (&[]u8 s, &[]u8 e) -> [12]u32 {
+    Alloc a = fresh_alloc(s, e);
+    mut [12]u32 adj;
+    for i in 0..<a.n {
+        for j in 0..<a.n {
+            if i != j and a.overlaps(i, j): adj[i] = adj[i] | bit(j);
+        }
+    }
+    ret adj;
+}
+
+fun edge_graph = (&[]u8 edges, u32 n) -> [12]u32 {
+    mut [12]u32 adj;
+    mut u32 i = 0;
+    while (i as u64) + 1 < edges.$len {
+        if edges.*[i] == ' ' {
+            i += 1;
+            cont;
+        }
+        u32 a = hex(edges.*[i]);
+        u32 b = hex(edges.*[i + 1]);
+        if a < n and b < n and a != b {
+            adj[a] = adj[a] | bit(b);
+            adj[b] = adj[b] | bit(a);
+        }
+        i += 2;
+    }
+    ret adj;
+}
+
+fun color_intervals = (&[]u8 s, &[]u8 e) -> [12]u32 {
+    [12]u32 adj = interval_graph(s, e);
+    ret color(adj.&, s.$len as u32);
+}
+
+fun color_edges = (&[]u8 edges, u32 n) -> [12]u32 {
+    [12]u32 adj = edge_graph(edges, n);
+    ret color(adj.&, n);
+}
+
+stc u32 A1 = pressure([0, 2, 4].&, [3, 5, 6].&); #= A1 2
+stc [12]i32 A2 = scan([0, 2, 4].&, [3, 5, 6].&, 2); #= A2 [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u32 A3 = color_intervals([0, 2, 4].&, [3, 5, 6].&); #= A3 [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 A4 = pressure([0, 1, 2, 3, 4, 5].&, [4, 3, 6, 5, 8, 7].&); #= A4 3
+stc [12]u32 A5 = color_intervals([0, 1, 2, 3, 4, 5].&, [4, 3, 6, 5, 8, 7].&); #= A5 [1, 2, 0, 2, 1, 2, 0, 0, 0, 0, 0, 0]
+stc u32 A6 = pressure([0, 1, 2, 3, 4].&, [10, 9, 8, 7, 6].&); #= A6 5
+stc [12]i32 A7 = scan([0, 1, 2, 3, 4].&, [10, 9, 8, 7, 6].&, 1); #= A7 [-1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 A8 = spills([0, 1, 2, 3, 4].&, [10, 9, 8, 7, 6].&, 1); #= A8 4
+stc [12]i32 A9 = scan([0, 1, 2, 3, 4].&, [10, 9, 8, 7, 6].&, 2); #= A9 [-1, -1, -1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 A10 = spills([0, 1, 2, 3, 4].&, [10, 9, 8, 7, 6].&, 2); #= A10 3
+stc [12]i32 A11 = scan([0, 1, 2, 3, 4].&, [10, 9, 8, 7, 6].&, 3); #= A11 [-1, -1, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+stc u32 A12 = spills([0, 1, 2, 3, 4].&, [10, 9, 8, 7, 6].&, 3); #= A12 2
+stc [12]u32 A13 = color_intervals([0, 1, 2, 3, 4].&, [10, 9, 8, 7, 6].&); #= A13 [0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0]
+stc u32 A14 = pressure([0, 1, 2].&, [1, 2, 3].&); #= A14 1
+stc u32 A15 = pressure([2, 2, 2, 2].&, [7, 7, 7, 7].&); #= A15 4
+stc [12]i32 A16 = scan([2, 2, 2, 2].&, [7, 7, 7, 7].&, 2); #= A16 [0, 1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u32 A17 = color_intervals([2, 2, 2, 2].&, [7, 7, 7, 7].&); #= A17 [0, 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 A18 = pressure([0, 1, 2].&, [10, 3, 4].&); #= A18 3
+stc [12]i32 A19 = scan([0, 1, 2].&, [10, 3, 4].&, 2); #= A19 [-1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 A20 = pressure([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].&, [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].&); #= A20 4
+stc [12]i32 A21 = scan([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].&, [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].&, 2); #= A21 [0, 1, -1, -1, 0, 1, -1, -1, 0, 1, -1, -1]
+stc u32 A22 = spills([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].&, [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].&, 2); #= A22 6
+stc [12]u32 A23 = color_intervals([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].&, [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].&); #= A23 [1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0]
+stc u32 A24 = pressure([5,].&, [9,].&); #= A24 1
+stc u32 A25 = pressure([9, 8, 2, 5, 9, 7, 10].&, [11, 9, 10, 10, 13, 11, 18].&); #= A25 5
+stc [12]i32 A26 = scan([9, 8, 2, 5, 9, 7, 10].&, [11, 9, 10, 10, 13, 11, 18].&, 2); #= A26 [0, 0, -1, 1, -1, -1, 1, 0, 0, 0, 0, 0]
+stc u32 A27 = spills([9, 8, 2, 5, 9, 7, 10].&, [11, 9, 10, 10, 13, 11, 18].&, 2); #= A27 3
+stc u32 A28 = pressure([13, 8, 7, 6, 10, 13, 2, 3, 10, 2].&, [20, 9, 9, 9, 11, 18, 3, 8, 18, 9].&); #= A28 4
+stc [12]u32 A29 = color_intervals([13, 8, 7, 6, 10, 13, 2, 3, 10, 2].&, [20, 9, 9, 9, 11, 18, 3, 8, 18, 9].&); #= A29 [1, 3, 1, 2, 1, 2, 1, 3, 0, 0, 0, 0]
+stc u32 A30 = pressure([6, 11, 12, 9, 7, 2, 5, 1, 0].&, [9, 19, 16, 14, 14, 7, 12, 8, 6].&); #= A30 4
+stc [12]u32 A31 = color_intervals([6, 11, 12, 9, 7, 2, 5, 1, 0].&, [9, 19, 16, 14, 14, 7, 12, 8, 6].&); #= A31 [3, 2, 0, 3, 1, 1, 0, 2, 3, 0, 0, 0]
+stc [12]u32 A32 = color_edges("01 12 23 34 40".&, 5); #= A32 [0, 1, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u32 A33 = color_edges("01 02 03 12 13 23".&, 4); #= A33 [0, 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u32 A34 = color_edges("01 12 23".&, 4); #= A34 [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u32 A35 = color_edges("01 02 03 04".&, 5); #= A35 [0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u32 A36 = color_edges("01 12 23 34 40 05 16 27 38 49 57 68 79 85 96".&, 10); #= A36 [0, 1, 0, 1, 2, 1, 0, 2, 2, 1, 0, 0]
+stc [12]u32 A37 = color_edges("01 02 03 04 05 12 23 34 45 51".&, 6); #= A37 [0, 1, 2, 1, 2, 3, 0, 0, 0, 0, 0, 0]
+stc [12]u32 A38 = color_edges("".&, 3); #= A38 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u32 A39 = color_edges("00 01 11".&, 3); #= A39 [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u32 A40 = color_edges("01 12 20 23".&, 4); #= A40 [1, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u32 A41 = color_edges("01 09".&, 3); #= A41 [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+$main = () {}

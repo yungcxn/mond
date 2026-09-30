@@ -1,0 +1,468 @@
+variant Ty = +(TInt, TBool, TFun(u32 a, u32 b)) tagof u8;
+
+variant Ex = +(
+    Num(i64 v),
+    Lit(bool b),
+    Var(u32 k),
+    Add(u32 a, u32 b),
+    Lt(u32 a, u32 b),
+    Eq(u32 a, u32 b),
+    If(u32 c, u32 t, u32 e),
+    Lam(u32 ty, u32 body),
+    App(u32 f, u32 a),
+    Let(u32 e, u32 body),
+) tagof u8;
+
+variant Res = +(Ok(u32 ty), Err(u32 code)) tagof u8;
+
+variant Val = +(Int(i64 v), Bool(bool b), Clo(u32 body, u32 env)) tagof u8;
+
+stc u32 NONE = 0xFFFFFFFF;
+
+type Stack = (type T, u32 N): *(mut [N]T items, mut u32 n) !{
+    fun push = (T v) {
+        self.items[self.n] = v;
+        self.n += 1;
+    }
+
+    fun pop = () { self.n -= 1; }
+
+    fun peek = (u32 depth) -> T: ret self.items[self.n - 1 - depth];
+}
+
+type Checker = *(
+    mut &[]u8 src,
+    mut u32 pos,
+    mut u32 bad,
+    mut [32]Ty tys,
+    mut u32 nty,
+    mut [64]Ex exs,
+    mut u32 nex,
+    mut Stack(u32, 12) env,
+    mut [64]Val cv,
+    mut [64]u32 cp,
+    mut u32 nc,
+    mut [24]u8 out,
+    mut u32 nout,
+) !{
+    fun ty = (Ty t) -> u32 {
+        self.tys[self.nty] = t;
+        self.nty += 1;
+        ret self.nty - 1;
+    }
+
+    fun ex = (Ex e) -> u32 {
+        self.exs[self.nex] = e;
+        self.nex += 1;
+        ret self.nex - 1;
+    }
+
+    fun same = (u32 x, u32 y) -> bool {
+        match self.tys[x] {
+            Ty.TInt => ret match self.tys[y] {
+                Ty.TInt => true,
+                _ => false,
+            },
+            Ty.TBool => ret match self.tys[y] {
+                Ty.TBool => true,
+                _ => false,
+            },
+            Ty.TFun(a, b) => ret match self.tys[y] {
+                Ty.TFun(c, d) => self.same(a, c) and self.same(b, d),
+                _ => false,
+            },
+        }
+    }
+
+    fun is_int = (u32 t) -> bool: ret match self.tys[t] {
+        Ty.TInt => true,
+        _ => false,
+    }
+
+    fun is_bool = (u32 t) -> bool: ret match self.tys[t] {
+        Ty.TBool => true,
+        _ => false,
+    }
+
+    fun ws = () {
+        while (self.pos as u64) < self.src.$len and self.src.*[self.pos] == ' ': self.pos += 1;
+    }
+
+    fun word = () -> u8 {
+        self.ws();
+        if (self.pos as u64) >= self.src.$len {
+            self.bad = 1;
+            ret 0;
+        }
+        self.pos += 1;
+        ret self.src.*[self.pos - 1];
+    }
+
+    fun number = (u8 first) -> i64 {
+        mut i64 v = (first - '0') as i64;
+        while (self.pos as u64) < self.src.$len and self.src.*[self.pos] >= '0' and self.src.*[self.pos] <= '9' {
+            v = v * 10 + (self.src.*[self.pos] - '0') as i64;
+            self.pos += 1;
+        }
+        ret v;
+    }
+
+    fun parse_ty = () -> u32 {
+        u8 c = self.word();
+        if c == 'I': ret self.ty(Ty.TInt);
+        if c == 'B': ret self.ty(Ty.TBool);
+        if c == '>' {
+            u32 a = self.parse_ty();
+            u32 b = self.parse_ty();
+            ret self.ty(Ty.TFun(a, b));
+        }
+        self.bad = 2;
+        ret self.ty(Ty.TInt);
+    }
+
+    fun parse = () -> u32 {
+        u8 c = self.word();
+        if c >= '0' and c <= '9': ret self.ex(Ex.Num(self.number(c)));
+        if c == 't': ret self.ex(Ex.Lit(true));
+        if c == 'f': ret self.ex(Ex.Lit(false));
+        if c == 'v' {
+            u8 d = self.word();
+            if d < '0' or d > '9': self.bad = 3;
+            ret self.ex(Ex.Var((d - '0') as u32));
+        }
+        if c == '+' or c == '<' or c == '=' {
+            u32 a = self.parse();
+            u32 b = self.parse();
+            if c == '+': ret self.ex(Ex.Add(a, b));
+            if c == '<': ret self.ex(Ex.Lt(a, b));
+            ret self.ex(Ex.Eq(a, b));
+        }
+        if c == '?' {
+            u32 x = self.parse();
+            u32 y = self.parse();
+            u32 z = self.parse();
+            ret self.ex(Ex.If(x, y, z));
+        }
+        if c == '\\' {
+            u32 t = self.parse_ty();
+            u32 b = self.parse();
+            ret self.ex(Ex.Lam(t, b));
+        }
+        if c == '@' {
+            u32 f = self.parse();
+            u32 a = self.parse();
+            ret self.ex(Ex.App(f, a));
+        }
+        if c == 'l' {
+            u32 e = self.parse();
+            u32 b = self.parse();
+            ret self.ex(Ex.Let(e, b));
+        }
+        if self.bad == 0: self.bad = 4;
+        ret self.ex(Ex.Num(0));
+    }
+
+    fun check = (u32 e) -> Res {
+        match self.exs[e] {
+            Ex.Num(_) => ret Res.Ok(self.ty(Ty.TInt)),
+            Ex.Lit(_) => ret Res.Ok(self.ty(Ty.TBool)),
+            Ex.Var(k) => {
+                if k >= self.env.n: ret Res.Err(1);
+                ret Res.Ok(self.env.peek(k));
+            },
+            Ex.Add(a, b) => {
+                Res ra = self.check(a);
+                Res rb = self.check(b);
+                match ra {
+                    Res.Err(c) => ret Res.Err(c),
+                    Res.Ok(ta) => match rb {
+                        Res.Err(c) => ret Res.Err(c),
+                        Res.Ok(tb) => {
+                            if self.is_int(ta) and self.is_int(tb): ret Res.Ok(self.ty(Ty.TInt));
+                            ret Res.Err(2);
+                        },
+                    },
+                }
+            },
+            Ex.Lt(a, b) => {
+                Res ra = self.check(a);
+                Res rb = self.check(b);
+                match ra {
+                    Res.Err(c) => ret Res.Err(c),
+                    Res.Ok(ta) => match rb {
+                        Res.Err(c) => ret Res.Err(c),
+                        Res.Ok(tb) => {
+                            if self.is_int(ta) and self.is_int(tb): ret Res.Ok(self.ty(Ty.TBool));
+                            ret Res.Err(2);
+                        },
+                    },
+                }
+            },
+            Ex.Eq(a, b) => {
+                Res ra = self.check(a);
+                Res rb = self.check(b);
+                match ra {
+                    Res.Err(c) => ret Res.Err(c),
+                    Res.Ok(ta) => match rb {
+                        Res.Err(c) => ret Res.Err(c),
+                        Res.Ok(tb) => {
+                            bool base = self.is_int(ta) or self.is_bool(ta);
+                            if base and self.same(ta, tb): ret Res.Ok(self.ty(Ty.TBool));
+                            ret Res.Err(2);
+                        },
+                    },
+                }
+            },
+            Ex.If(c, t, f) => {
+                Res rc = self.check(c);
+                match rc {
+                    Res.Err(code) => ret Res.Err(code),
+                    Res.Ok(tc) => {
+                        if !self.is_bool(tc): ret Res.Err(3);
+                    },
+                }
+                Res rt = self.check(t);
+                Res rf = self.check(f);
+                match rt {
+                    Res.Err(code) => ret Res.Err(code),
+                    Res.Ok(tt) => match rf {
+                        Res.Err(code) => ret Res.Err(code),
+                        Res.Ok(tf) => {
+                            if self.same(tt, tf): ret Res.Ok(tt);
+                            ret Res.Err(4);
+                        },
+                    },
+                }
+            },
+            Ex.Lam(pt, body) => {
+                self.env.push(pt);
+                Res rb = self.check(body);
+                self.env.pop();
+                match rb {
+                    Res.Err(code) => ret Res.Err(code),
+                    Res.Ok(tb) => ret Res.Ok(self.ty(Ty.TFun(pt, tb))),
+                }
+            },
+            Ex.App(f, a) => {
+                Res rf = self.check(f);
+                Res ra = self.check(a);
+                match rf {
+                    Res.Err(code) => ret Res.Err(code),
+                    Res.Ok(tf) => match ra {
+                        Res.Err(code) => ret Res.Err(code),
+                        Res.Ok(ta) => match self.tys[tf] {
+                            Ty.TFun(pa, pb) => {
+                                if self.same(pa, ta): ret Res.Ok(pb);
+                                ret Res.Err(6);
+                            },
+                            _ => ret Res.Err(5),
+                        },
+                    },
+                }
+            },
+            Ex.Let(bound, body) => {
+                Res rb = self.check(bound);
+                match rb {
+                    Res.Err(code) => ret Res.Err(code),
+                    Res.Ok(tb) => {
+                        self.env.push(tb);
+                        Res r = self.check(body);
+                        self.env.pop();
+                        ret r;
+                    },
+                }
+            },
+        }
+    }
+
+    fun cell = (Val v, u32 parent) -> u32 {
+        self.cv[self.nc] = v;
+        self.cp[self.nc] = parent;
+        self.nc += 1;
+        ret self.nc - 1;
+    }
+
+    fun lookup = (u32 env, u32 k) -> Val {
+        mut u32 at = env;
+        for 0..<k: at = self.cp[at];
+        ret self.cv[at];
+    }
+
+    fun iv = (Val v) -> i64: ret match v {
+        Val.Int(n) => n,
+        Val.Bool(b) => if b: 1 else: 0,
+        _ => 0,
+    }
+
+    fun eval = (u32 e, u32 env) -> Val {
+        match self.exs[e] {
+            Ex.Num(n) => ret Val.Int(n),
+            Ex.Lit(b) => ret Val.Bool(b),
+            Ex.Var(k) => ret self.lookup(env, k),
+            Ex.Add(a, b) => {
+                i64 x = self.iv(self.eval(a, env));
+                i64 y = self.iv(self.eval(b, env));
+                ret Val.Int(x + y);
+            },
+            Ex.Lt(a, b) => {
+                i64 x = self.iv(self.eval(a, env));
+                i64 y = self.iv(self.eval(b, env));
+                ret Val.Bool(x < y);
+            },
+            Ex.Eq(a, b) => {
+                i64 x = self.iv(self.eval(a, env));
+                i64 y = self.iv(self.eval(b, env));
+                ret Val.Bool(x == y);
+            },
+            Ex.If(c, t, f) => {
+                if self.iv(self.eval(c, env)) != 0: ret self.eval(t, env);
+                ret self.eval(f, env);
+            },
+            Ex.Lam(_, body) => ret Val.Clo(body, env),
+            Ex.App(f, a) => {
+                Val fv = self.eval(f, env);
+                Val av = self.eval(a, env);
+                match fv {
+                    Val.Clo(body, cenv) => ret self.eval(body, self.cell(av, cenv)),
+                    _ => ret av,
+                }
+            },
+            Ex.Let(bound, body) => {
+                Val v = self.eval(bound, env);
+                ret self.eval(body, self.cell(v, env));
+            },
+        }
+    }
+
+    fun put = (u8 c) {
+        self.out[self.nout] = c;
+        self.nout += 1;
+    }
+
+    fun print = (u32 t) {
+        match self.tys[t] {
+            Ty.TInt => self.put('I'),
+            Ty.TBool => self.put('B'),
+            Ty.TFun(a, b) => {
+                self.put('(');
+                self.print(a);
+                self.put('>');
+                self.print(b);
+                self.put(')');
+            },
+        }
+    }
+}
+
+fun fresh = (&[]u8 src) -> Checker {
+    [32]Ty tys;
+    [64]Ex exs;
+    [12]u32 items;
+    [64]Val cv;
+    [64]u32 cp;
+    [24]u8 out;
+    ret Checker(src = src, pos = 0, bad = 0, tys = tys, nty = 0, exs = exs, nex = 0, env = Stack(u32, 12)(items = items, n = 0), cv = cv, cp = cp, nc = 0, out = out, nout = 0);
+}
+
+fun type_is = (&[]u8 src, &[]u8 want) -> bool {
+    mut Checker c = fresh(src);
+    u32 e = c.parse();
+    if c.bad != 0: ret false;
+    Res r = c.check(e);
+    match r {
+        Res.Ok(t) => c.print(t),
+        Res.Err(code) => {
+            c.put('!');
+            c.put('0' + code as u8);
+        },
+    }
+    if c.nout as u64 != want.$len: ret false;
+    for i in 0..<c.nout {
+        if c.out[i] != want.*[i]: ret false;
+    }
+    ret true;
+}
+
+fun parse_bad = (&[]u8 src) -> u32 {
+    mut Checker c = fresh(src);
+    do c.parse();
+    c.ws();
+    if c.bad == 0 and (c.pos as u64) < src.$len: ret 9;
+    ret c.bad;
+}
+
+fun run = (&[]u8 src) -> i64 {
+    mut Checker c = fresh(src);
+    u32 e = c.parse();
+    if c.bad != 0: ret -2000 - c.bad as i64;
+    Res r = c.check(e);
+    match r {
+        Res.Err(code) => {
+            i64 k = code as i64;
+            ret -1000 - k;
+        },
+        Res.Ok(_) => {},
+    }
+    ret match c.eval(e, NONE) {
+        Val.Int(n) => n,
+        Val.Bool(b) => if b: 1000001 else: 1000000,
+        Val.Clo(_, _) => 2000000,
+    };
+}
+
+stc bool K1 = type_is("5".&, "I".&); #= K1 true
+stc bool K2 = type_is("t".&, "B".&); #= K2 true
+stc bool K3 = type_is("+ 1 2".&, "I".&); #= K3 true
+stc bool K4 = type_is("< 1 2".&, "B".&); #= K4 true
+stc bool K5 = type_is("= 1 2".&, "B".&); #= K5 true
+stc bool K6 = type_is("= t f".&, "B".&); #= K6 true
+stc bool K7 = type_is("= 1 t".&, "!2".&); #= K7 true
+stc bool K8 = type_is("\\ I v0".&, "(I>I)".&); #= K8 true
+stc bool K9 = type_is("\\ > I I v0".&, "((I>I)>(I>I))".&); #= K9 true
+stc bool K10 = type_is("\\ > I I \\ I @ v1 @ v1 v0".&, "((I>I)>(I>I))".&); #= K10 true
+stc bool K11 = type_is("@ \\ I v0 5".&, "I".&); #= K11 true
+stc bool K12 = type_is("@ \\ I v0 t".&, "!6".&); #= K12 true
+stc bool K13 = type_is("@ 5 5".&, "!5".&); #= K13 true
+stc bool K14 = type_is("v0".&, "!1".&); #= K14 true
+stc bool K15 = type_is("@ \\ > I B @ v0 3 \\ I < v0 9".&, "B".&); #= K15 true
+stc bool K16 = type_is("? t 1 2".&, "I".&); #= K16 true
+stc bool K17 = type_is("? 1 2 3".&, "!3".&); #= K17 true
+stc bool K18 = type_is("? t 1 t".&, "!4".&); #= K18 true
+stc bool K19 = type_is("? t \\ I v0 \\ I 5".&, "(I>I)".&); #= K19 true
+stc bool K20 = type_is("? t \\ I v0 \\ B v0".&, "!4".&); #= K20 true
+stc bool K21 = type_is("l 5 + v0 v0".&, "I".&); #= K21 true
+stc bool K22 = type_is("l \\ I v0 @ v0 3".&, "I".&); #= K22 true
+stc bool K23 = type_is("l 1 l t ? v0 v1 2".&, "I".&); #= K23 true
+stc bool K24 = type_is("@ @ \\ I \\ I + v0 v1 3 4".&, "I".&); #= K24 true
+stc bool K25 = type_is("l \\ > I I \\ I @ v1 @ v1 v0 v0".&, "((I>I)>(I>I))".&); #= K25 true
+stc bool K26 = type_is("@ \\ > I I @ v0 3 \\ I + v0 1".&, "I".&); #= K26 true
+stc bool K27 = type_is("+ 1 2".&, "B".&); #= K27 false
+stc bool K28 = type_is("+ 1".&, "I".&); #= K28 false
+stc u32 K29 = parse_bad("".&); #= K29 1
+stc u32 K30 = parse_bad("\\ X v0".&); #= K30 2
+stc u32 K31 = parse_bad("v".&); #= K31 3
+stc u32 K32 = parse_bad("x".&); #= K32 4
+stc u32 K33 = parse_bad("1 2".&); #= K33 9
+stc u32 K34 = parse_bad("+ 1 2 ".&); #= K34 0
+stc u32 K35 = parse_bad("@ 1".&); #= K35 1
+stc i64 K36 = run("5".&); #= K36 5
+stc i64 K37 = run("+ 20 22".&); #= K37 42
+stc i64 K38 = run("@ \\ I + v0 1 5".&); #= K38 6
+stc i64 K39 = run("? < 1 2 10 20".&); #= K39 10
+stc i64 K40 = run("l 5 + v0 v0".&); #= K40 10
+stc i64 K41 = run("@ @ \\ I \\ I + v0 v1 3 4".&); #= K41 7
+stc i64 K42 = run("@ \\ > I I @ v0 3 \\ I + v0 1".&); #= K42 4
+stc i64 K43 = run("= 3 3".&); #= K43 1000001
+stc i64 K44 = run("\\ I v0".&); #= K44 2000000
+stc i64 K45 = run("l \\ > I I \\ I @ v1 @ v1 v0 @ @ v0 \\ I + v0 3 10".&); #= K45 16
+stc i64 K46 = run("l 10 l \\ I + v0 v1 l 100 @ v1 5".&); #= K46 15
+stc i64 K47 = run("l 1 l 2 + v0 v1".&); #= K47 3
+stc i64 K48 = run("l 7 @ \\ I l 5 + v0 v1 1".&); #= K48 6
+stc i64 K49 = run("@ @ \\ I \\ B < v0 v1 3 4".&); #= K49 -1002
+stc i64 K50 = run("+ 1 t".&); #= K50 -1002
+stc i64 K51 = run("+ 1".&); #= K51 -2001
+stc i64 K52 = run("@ 1 2".&); #= K52 -1005
+stc i64 K53 = run("999999 ".&); #= K53 999999
+stc i64 K54 = run("+ 123456 654321".&); #= K54 777777
+
+$main = () {}

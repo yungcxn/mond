@@ -1,0 +1,103 @@
+fun print = (&u8 fmt);
+fun print = (&u8 fmt, u32 a);
+fun print = (&u8 fmt, i64 a);
+fun print = (&u8 fmt, u32 a, u32 b);
+fun read = (i32 fd, *[]u8 buf, u64 n) -> i64;
+fun write = (i32 fd, &[]u8 buf, u64 n) -> i64;
+
+variant Tok = +(Word(u32 start, u32 len), Num(i64 value), Sym(u8 ch), Space, End) tagof u8;
+
+type Stats = *(mut u32 words = 0, mut u32 nums = 0, mut u32 syms = 0, mut i64 sum = 0, mut u32 longest = 0) !{
+    fun add = (Tok t) {
+        match t {
+            Tok.Word(s, l) => {
+                self.words += 1;
+                if l > self.longest: self.longest = l;
+            },
+            Tok.Num(v) => {
+                self.nums += 1;
+                self.sum += v;
+            },
+            Tok.Sym(c) => self.syms += 1,
+            Tok.Space => self.syms += 0,
+            Tok.End => self.syms += 0,
+        }
+    }
+}
+
+type Line = *(mut [128]u8 bytes, mut u32 len = 0, mut u32 pos = 0) !{
+    fun fill = () -> bool {
+        n = read(0, self.bytes.&, 128);
+        if n <= 0: ret false;
+        self.len = n as u32;
+        self.pos = 0;
+        ret true;
+    }
+    fun peek = () -> u8: ret if self.pos < self.len: self.bytes[self.pos] else: 0;
+    fun bump = () { self.pos += 1; }
+    fun done = () -> bool: ret self.pos >= self.len;
+    # BUG: `self.bytes[from..<to].&` passed to a `&[]u8` parameter panics the checker (has_vars index out of bounds), so the prefix of the whole buffer is written
+    fun echo = (u32 from, u32 to) {
+        do write(1, self.bytes.&, to as u64);
+    }
+}
+
+fun is_alpha = (u8 c) -> bool: ret (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_';
+fun is_digit = (u8 c) -> bool: ret c >= '0' and c <= '9';
+
+fun next = (*Line ln) -> Tok {
+    if ln.done(): ret Tok.End;
+    u8 c = ln.peek();
+    if c == ' ' or c == '\t' or c == '\n' {
+        ln.bump();
+        ret Tok.Space;
+    }
+    if is_digit(c) {
+        mut i64 v = 0;
+        while is_digit(ln.peek()) {
+            v = v * 10 + (ln.peek() - '0') as i64;
+            ln.bump();
+        }
+        ret Tok.Num(v);
+    }
+    if is_alpha(c) {
+        u32 start = ln.pos;
+        while is_alpha(ln.peek()) or is_digit(ln.peek()): ln.bump();
+        ret Tok.Word(start, ln.pos - start);
+    }
+    ln.bump();
+    ret Tok.Sym(c);
+}
+
+fun scan_line = (*Line ln, *Stats st) -> u32 {
+    mut u32 tokens = 0;
+    loop {
+        t = next(ln);
+        match t {
+            Tok.End => brk,
+            Tok.Space => cont,
+            Tok.Word(s, l) => ln.echo(s, s + l),
+            _ => tokens += 0,
+        }
+        st.add(t);
+        tokens += 1;
+    }
+    ret tokens;
+}
+
+$main = (i32 argc, &[]&u8 argv) -> i32 {
+    mut Line line;
+    mut Stats stats;
+    mut u32 lines = 0;
+    mut u32 tokens = 0;
+    while line.fill() {
+        tokens += scan_line(line.&, stats.&);
+        lines += 1;
+    }
+    print("lines=%u tokens=%u\n", lines, tokens);
+    print("words=%u nums=%u\n", stats.words, stats.nums);
+    print("sum=%d\n", stats.sum);
+    longest = stats.longest; #: longest u32
+    t = next(line.&); #: t +(Word, Num, Sym, Space, End)
+    ret if lines > 0: 0 else: 1;
+}

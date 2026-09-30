@@ -1,0 +1,184 @@
+type Re = *(&[]u8 re, &[]u8 t) !{
+    fun class_end = (u32 ri) -> u32 {
+        mut u32 k = ri + 1;
+        if (k as u64) < self.re.$len and self.re.*[k] == '^': k += 1;
+        k += 1;
+        while (k as u64) < self.re.$len and self.re.*[k] != ']': k += 1;
+        ret if (k as u64) < self.re.$len: k + 1 else: 0;
+    }
+
+    fun valid = () -> bool {
+        mut u32 k = 0;
+        while (k as u64) < self.re.$len {
+            u8 c = self.re.*[k];
+            if c == '\\' {
+                if (k as u64) + 1 >= self.re.$len: ret false;
+                k += 2;
+            } else if c == '[' {
+                u32 e = self.class_end(k);
+                if e == 0: ret false;
+                k = e;
+            } else {
+                k += 1;
+            }
+        }
+        ret true;
+    }
+
+    fun atom_len = (u32 ri) -> u32 {
+        u8 c = self.re.*[ri];
+        if c == '\\': ret 2;
+        if c == '[': ret self.class_end(ri) - ri;
+        ret 1;
+    }
+
+    fun atom_match = (u32 ri, u8 ch) -> bool {
+        u8 c = self.re.*[ri];
+        if c == '.': ret true;
+        if c == '\\': ret self.re.*[ri + 1] == ch;
+        if c != '[': ret c == ch;
+        u32 end = self.class_end(ri) - 1;
+        mut u32 k = ri + 1;
+        bool neg = self.re.*[k] == '^';
+        if neg: k += 1;
+        mut bool hit = false;
+        while k < end {
+            u8 lo = self.re.*[k];
+            if k + 2 < end and self.re.*[k + 1] == '-' {
+                u8 hi = self.re.*[k + 2];
+                if ch >= lo and ch <= hi: hit = true;
+                k += 3;
+            } else {
+                if ch == lo: hit = true;
+                k += 1;
+            }
+        }
+        ret hit != neg;
+    }
+
+    fun here = (u32 ri, u32 ti) -> i32 {
+        if (ri as u64) == self.re.$len: ret ti as i32;
+        u8 c = self.re.*[ri];
+        if c == '$' and (ri as u64) + 1 == self.re.$len {
+            ret if (ti as u64) == self.t.$len: ti as i32 else: -1;
+        }
+        u32 al = self.atom_len(ri);
+        u32 after = ri + al;
+        u8 q = if (after as u64) < self.re.$len: self.re.*[after] else: 0;
+        mut u32 room = 0;
+        while ((ti + room) as u64) < self.t.$len and self.atom_match(ri, self.t.*[ti + room]): room += 1;
+        if q == '*' or q == '+' {
+            u32 min = if q == '+': 1 else: 0;
+            mut u32 k = room;
+            loop {
+                if k < min: ret -1;
+                i32 r = self.here(after + 1, ti + k);
+                if r >= 0: ret r;
+                if k == 0: ret -1;
+                k -= 1;
+            }
+        }
+        if q == '?' {
+            if room > 0 {
+                i32 r = self.here(after + 1, ti + 1);
+                if r >= 0: ret r;
+            }
+            ret self.here(after + 1, ti);
+        }
+        if room == 0: ret -1;
+        ret self.here(after, ti + 1);
+    }
+
+    fun span = () -> [2]i32 {
+        if !self.valid(): ret [-2, -2];
+        bool anchored = self.re.$len > 0 and self.re.*[0] == '^';
+        u32 first = if anchored: 1 else: 0;
+        for s in 0..=self.t.$len {
+            if anchored and s > 0: brk;
+            i32 r = self.here(first, s as u32);
+            if r >= 0: ret [s as i32, r];
+        }
+        ret [-1, -1];
+    }
+}
+
+fun find = (&[]u8 re, &[]u8 t) -> [2]i32 {
+    mut Re m = Re(re = re, t = t);
+    ret m.span();
+}
+
+fun test = (&[]u8 re, &[]u8 t) -> bool {
+    [2]i32 s = find(re, t);
+    ret s[0] >= 0;
+}
+
+fun count = (&[]u8 re, &[]u8 t) -> u32 {
+    mut Re m = Re(re = re, t = t);
+    if !m.valid(): ret 0;
+    bool anchored = re.$len > 0 and re.*[0] == '^';
+    u32 first = if anchored: 1 else: 0;
+    mut u32 n = 0;
+    mut u32 s = 0;
+    while (s as u64) <= t.$len {
+        if anchored and s > 0: brk;
+        i32 r = m.here(first, s);
+        if r < 0 {
+            s += 1;
+        } else {
+            n += 1;
+            s = if r as u32 == s: s + 1 else: r as u32;
+        }
+    }
+    ret n;
+}
+
+stc [2]i32 R1 = find("b+".&, "aabbbc".&); #= R1 [2, 5]
+stc [2]i32 R2 = find("abc".&, "xxabcxx".&); #= R2 [2, 5]
+stc [2]i32 R3 = find("a.c".&, "abc".&); #= R3 [0, 3]
+stc [2]i32 R4 = find("^ab".&, "abab".&); #= R4 [0, 2]
+stc [2]i32 R5 = find("ab$".&, "abab".&); #= R5 [2, 4]
+stc [2]i32 R6 = find("^$".&, "".&); #= R6 [0, 0]
+stc [2]i32 R7 = find("".&, "abc".&); #= R7 [0, 0]
+stc [2]i32 R8 = find("colou?r".&, "color".&); #= R8 [0, 5]
+stc [2]i32 R9 = find("colou?r".&, "colour".&); #= R9 [0, 6]
+stc [2]i32 R10 = find("a*".&, "bbb".&); #= R10 [0, 0]
+stc [2]i32 R11 = find("a*b".&, "aaab".&); #= R11 [0, 4]
+stc [2]i32 R12 = find("x*y*z".&, "xxyyz".&); #= R12 [0, 5]
+stc [2]i32 R13 = find("a.*c".&, "abcbcd".&); #= R13 [0, 5]
+stc [2]i32 R14 = find("[abc]+".&, "xxcabxx".&); #= R14 [2, 5]
+stc [2]i32 R15 = find("[^a-c]+".&, "abxyzc".&); #= R15 [2, 5]
+stc [2]i32 R16 = find("[0-9]+".&, "tel 5551234 ok".&); #= R16 [4, 11]
+stc [2]i32 R17 = find("[a-zA-Z_][a-zA-Z0-9_]*".&, "  9x foo_1 ".&); #= R17 [3, 4]
+stc [2]i32 R18 = find("[]a]+".&, "x]a]y".&); #= R18 [1, 4]
+stc [2]i32 R19 = find("[^]a]".&, "]a]b".&); #= R19 [3, 4]
+stc [2]i32 R20 = find("[a-]+".&, "x-a-y".&); #= R20 [1, 4]
+stc [2]i32 R21 = find("\\.".&, "a.b".&); #= R21 [1, 2]
+stc [2]i32 R22 = find("\\\\".&, "a\\b".&); #= R22 [1, 2]
+stc [2]i32 R23 = find("1\\+1".&, "1+1=2".&); #= R23 [0, 3]
+stc [2]i32 R24 = find("^a*$".&, "aaa".&); #= R24 [0, 3]
+stc [2]i32 R25 = find("^[a-z]+$".&, "hello".&); #= R25 [0, 5]
+stc [2]i32 R26 = find("a?a?a?aaa".&, "aaa".&); #= R26 [0, 3]
+stc [2]i32 R27 = find("a*a*a*b".&, "aaaaaaaac".&); #= R27 [-1, -1]
+stc [2]i32 R28 = find("(a|b)".&, "a".&); #= R28 [-1, -1]
+stc [2]i32 R29 = find("a{2}".&, "aa".&); #= R29 [-1, -1]
+stc [2]i32 R30 = find("^^a".&, "^a".&); #= R30 [0, 2]
+stc [2]i32 R31 = find("a^".&, "a^".&); #= R31 [0, 2]
+stc [2]i32 R32 = find("a$b".&, "a$b".&); #= R32 [0, 3]
+stc [2]i32 R33 = find("*a".&, "*a".&); #= R33 [0, 2]
+stc [2]i32 R34 = find("a**".&, "aaa".&); #= R34 [-1, -1]
+stc [2]i32 R35 = find("[a".&, "a".&); #= R35 [-2, -2]
+stc [2]i32 R36 = find("a\\".&, "a".&); #= R36 [-2, -2]
+stc [2]i32 R37 = find("[^]".&, "x".&); #= R37 [-2, -2]
+stc [2]i32 R38 = find("$".&, "abc".&); #= R38 [3, 3]
+stc u32 R39 = count("a".&, "banana".&); #= R39 3
+stc u32 R40 = count("an".&, "banana".&); #= R40 2
+stc u32 R41 = count("a*".&, "baaac".&); #= R41 4
+stc u32 R42 = count("^a".&, "aaa".&); #= R42 1
+stc u32 R43 = count("[0-9]+".&, "12 345 6".&); #= R43 3
+stc u32 R44 = count("".&, "ab".&); #= R44 3
+stc u32 R45 = count("$".&, "ab".&); #= R45 1
+stc u32 R46 = count("ab*".&, "abbabab".&); #= R46 3
+stc u32 R47 = count("[".&, "a".&); #= R47 0
+stc bool R48 = test("a+".&, "caab".&); #= R48 true
+
+$main = () {}

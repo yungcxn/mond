@@ -1,0 +1,113 @@
+stcfun Word = (u32 bits) -> type {
+    t = if bits <= 8: u8 else: if bits <= 16: u16 else: if bits <= 32: u32 else: u64;
+    ret t;
+}
+
+fun popc = (u32 x) -> u8 {
+    mut u8 n = 0;
+    mut u32 v = x;
+    while v != 0 {
+        n += (v & 1) as u8;
+        v = v >> 1;
+    }
+    ret n;
+}
+
+fun sine_milli = (u32 deg) -> u32 {
+    u32 p = deg * (180 - deg);
+    ret 4 * p * 1000 / (40500 - p);
+}
+
+fun digit_char = (u32 d) -> u8: ret if d < 10: '0' + d as u8 else: 'a' + (d - 10) as u8;
+
+fun sieve_table = () -> [40]u8 {
+    mut [40]u8 marks;
+    for i in 2..<40 {
+        if marks[i] == 0 {
+            mut u32 j = i as u32 * 2;
+            while j < 40 {
+                marks[j] = 1;
+                j += i as u32;
+            }
+        }
+    }
+    ret marks;
+}
+
+fun to_base = (u32 n, u32 base) -> [8]u8 {
+    mut [8]u8 out;
+    mut u32 v = n;
+    mut u32 i = 8;
+    while i > 0 {
+        i -= 1;
+        out[i] = digit_char(v % base);
+        v = v / base;
+    }
+    ret out;
+}
+
+stcfun Shape = (u32 n) -> type: ret match n {
+    1 => *(u8 f0),
+    2 => *(u8 f0, u16 f1),
+    3 => *(u8 f0, u16 f1, u32 f2),
+    _ => *(u8 f0, u16 f1, u32 f2, u64 f3),
+}
+
+stcfun count_composites = () -> u32 {
+    marks = sieve_table();
+    mut u32 c = 0;
+    for i in 2..<40: c += marks[i] as u32;
+    ret c;
+}
+
+stcfun bits_needed = (u64 v) -> u32 {
+    mut u32 n = 0;
+    mut u64 x = v;
+    while x != 0 {
+        n += 1;
+        x = x >> 1;
+    }
+    ret n;
+}
+
+stcfun fitting = (u64 v) -> type: ret Word(bits_needed(v));
+
+type W1 = Word(1); #= W1 u8
+type W12 = Word(12); #= W12 u16
+type W20 = Word(20); #= W20 u32
+type W33 = Word(33); #= W33 u64
+type F300 = fitting(300); #= F300 u16
+type F70000 = fitting(70000); #= F70000 u32
+type S1 = Shape(1); #= S1 *(u8 f0)
+type S3 = Shape(3); #= S3 *(u8 f0, u16 f1, u32 f2)
+type S9 = Shape(9); #= S9 *(u8 f0, u16 f1, u32 f2, u64 f3)
+
+stc u64 Z1 = sizeof Shape(1); #= Z1 1
+stc u64 Z2 = sizeof Shape(2); #= Z2 4
+stc u64 Z3 = sizeof Shape(3); #= Z3 8
+stc u64 Z4 = sizeof Shape(4); #= Z4 16
+
+stc []u8 POP = stcfor 0..<16: popc($it); #= POP [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4]
+stc []u32 SINE = stcfor 0..=6: sine_milli($it * 15); #= SINE [0, 260, 500, 705, 864, 965, 1000]
+stc []u8 HEXD = stcfor 0..<16: digit_char($it); #= HEXD [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102]
+stc [40]u8 COMPOSITE = sieve_table();
+stc []u32 PRIMES = stcfor n in 2..<40: if COMPOSITE[n] == 0: n else: 0; #= PRIMES [2, 3, 0, 5, 0, 7, 0, 0, 0, 11, 0, 13, 0, 0, 0, 17, 0, 19, 0, 0, 0, 23, 0, 0, 0, 0, 0, 29, 0, 31, 0, 0, 0, 0, 0, 37, 0, 0]
+stc u32 CC = count_composites(); #= CC 26
+stc [8]u8 BIN = to_base(37, 2); #= BIN [48, 48, 49, 48, 48, 49, 48, 49]
+stc [8]u8 HEX = to_base(48879, 16); #= HEX [48, 48, 48, 48, 98, 101, 101, 102]
+# BUG: `stcmatch x {..}` on the variable of a stcfor reports not_static (value is still right, like the stcfun case), so a plain match is used
+stc []u32 CLASS = stcfor x in 0..<8: match x { 0 => 100, 1 | 2 => 200, 3..=5 => 300, _ => 400 }; #= CLASS [100, 200, 200, 300, 300, 300, 400, 400]
+stc u32 KIND = stcmatch sizeof Word(20) { 1 => 10, 4 => 40, _ => 0 }; #= KIND 40
+stc u32 P2 = 1;
+stc []u32 POW2 = stcwhile P2 <= 100: { u32 cur = P2; P2 = P2 * 2; cur; } #= POW2 [1, 2, 4, 8, 16, 32, 64]
+stc type WIDE = stcif sizeof Word(20) == 4: Word(40) else: u8; #= WIDE u64
+stc u64 WBYTES = sizeof Word(1) + sizeof Word(9) * 10 + sizeof Word(17) * 100 + sizeof Word(64) * 1000; #= WBYTES 8421
+
+$main = () {
+    Word(12) w = 4000; #: w u16
+    Shape(2) s = Shape(2)(f0 = 1, f1 = 2);
+    x = s.f1; #: x u16
+    p = PRIMES[2]; #: p u32
+    c = COMPOSITE[4]; #: c u8
+    first = HEX[4]; #: first u8
+}

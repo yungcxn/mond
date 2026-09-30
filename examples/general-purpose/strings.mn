@@ -1,0 +1,256 @@
+fun is_digit = (u8 c) -> bool: ret c >= '0' and c <= '9';
+fun is_lower = (u8 c) -> bool: ret c >= 'a' and c <= 'z';
+fun is_upper = (u8 c) -> bool: ret c >= 'A' and c <= 'Z';
+fun is_alpha = (u8 c) -> bool: ret is_lower(c) or is_upper(c);
+fun is_space = (u8 c) -> bool: ret c == ' ' or c == '\t' or c == '\n';
+fun to_upper = (u8 c) -> u8: ret if is_lower(c): c - 32 else: c;
+fun to_lower = (u8 c) -> u8: ret if is_upper(c): c + 32 else: c;
+
+fun atoi = (&[]u8 s) -> i64 {
+    mut u64 i = 0;
+    mut bool neg = false;
+    if s.$len > 0 and s.*[0] == '-' {
+        neg = true;
+        i = 1;
+    }
+    mut i64 v = 0;
+    while i < s.$len and is_digit(s.*[i]) {
+        v = v * 10 + (s.*[i] - '0') as i64;
+        i += 1;
+    }
+    ret if neg: -v else: v;
+}
+
+fun itoa = (*[]u8 out, i64 n) -> u64 {
+    if n == 0 {
+        out.*[0] = '0';
+        ret 1;
+    }
+    mut [24]u8 rev;
+    mut u64 len = 0;
+    mut i64 x = if n < 0: -n else: n;
+    while x > 0 {
+        rev[len] = '0' + (x % 10) as u8;
+        len += 1;
+        x /= 10;
+    }
+    mut u64 at = 0;
+    if n < 0 {
+        out.*[0] = '-';
+        at = 1;
+    }
+    while len > 0 {
+        len -= 1;
+        out.*[at] = rev[len];
+        at += 1;
+    }
+    ret at;
+}
+
+# BUG: a callee that writes through a pointer to a string-literal array frees the thawed cells on return, so literals are copied into a zeroed array first
+fun copy = (*[]u8 dst, &[]u8 src) {
+    for i in 0..<src.$len: dst.*[i] = src.*[i];
+}
+
+fun reverse = (*[]u8 s) {
+    mut u64 i = 0;
+    mut u64 j = s.$len;
+    while i + 1 < j {
+        j -= 1;
+        u8 t = s.*[i];
+        s.*[i] = s.*[j];
+        s.*[j] = t;
+        i += 1;
+    }
+}
+
+fun palindrome = (&[]u8 s) -> bool {
+    mut u64 i = 0;
+    mut u64 j = s.$len;
+    while i < j {
+        while i < j and !is_alpha(s.*[i]): i += 1;
+        while i < j and !is_alpha(s.*[j - 1]): j -= 1;
+        if i >= j: brk;
+        if to_lower(s.*[i]) != to_lower(s.*[j - 1]): ret false;
+        i += 1;
+        j -= 1;
+    }
+    ret true;
+}
+
+fun count_char = (&[]u8 s, u8 c) -> u32 {
+    mut u32 n = 0;
+    for x in s.*: if x == c: n += 1;
+    ret n;
+}
+
+fun words = (&[]u8 s) -> u32 {
+    mut u32 n = 0;
+    mut bool inside = false;
+    for c in s.* {
+        if is_space(c) {
+            inside = false;
+        } else: if !inside {
+            inside = true;
+            n += 1;
+        }
+    }
+    ret n;
+}
+
+fun caesar = (*[]u8 s, u8 shift) {
+    for i in 0..<s.$len {
+        u8 c = s.*[i];
+        if is_lower(c): s.*[i] = 'a' + (c - 'a' + shift) % 26;
+        if is_upper(c): s.*[i] = 'A' + (c - 'A' + shift) % 26;
+    }
+}
+
+fun fnv1a = (&[]u8 s) -> u32 {
+    mut u32 h = 2166136261;
+    for c in s.* {
+        h = h ^ c as u32;
+        h = h * 16777619;
+    }
+    ret h;
+}
+
+# LIMIT: `for i in 0..=(expr) {` parses the parenthesis as a function, so the bound is written without them
+fun find = (&[]u8 hay, &[]u8 needle) -> i64 {
+    if needle.$len > hay.$len: ret -1;
+    for i in 0..=hay.$len - needle.$len {
+        mut bool ok = true;
+        for j in 0..<needle.$len: if hay.*[i + j] != needle.*[j]: ok = false;
+        if ok: ret i as i64;
+    }
+    ret -1;
+}
+
+fun rle_len = (&[]u8 s) -> u32 {
+    mut u32 groups = 0;
+    mut u64 i = 0;
+    while i < s.$len {
+        mut u64 j = i;
+        while j < s.$len and s.*[j] == s.*[i]: j += 1;
+        groups += 1;
+        i = j;
+    }
+    ret groups * 2;
+}
+
+fun balanced = (&[]u8 s) -> bool {
+    mut [32]u8 stack;
+    mut u32 sp = 0;
+    for c in s.* {
+        match c {
+            '(' | '[' | '{' => {
+                stack[sp] = c;
+                sp += 1;
+            },
+            ')' | ']' | '}' => {
+                if sp == 0: ret false;
+                sp -= 1;
+                u8 open = stack[sp];
+                ok = match c { ')' => open == '(', ']' => open == '[', _ => open == '{' };
+                if !ok: ret false;
+            },
+            _ => {},
+        }
+    }
+    ret sp == 0;
+}
+
+fun anagrams = (&[]u8 a, &[]u8 b) -> bool {
+    mut [26]i32 counts;
+    for c in a.*: if is_alpha(c): counts[to_lower(c) - 'a'] += 1;
+    for c in b.*: if is_alpha(c): counts[to_lower(c) - 'a'] -= 1;
+    for n in counts: if n != 0: ret false;
+    ret true;
+}
+
+fun vowels = (&[]u8 s) -> u32 {
+    mut u32 n = 0;
+    for c in s.* {
+        n += match to_lower(c) { 'a' | 'e' | 'i' | 'o' | 'u' => 1, _ => 0 };
+    }
+    ret n;
+}
+
+# BUG: `buf.& as &[n]u8` with a runtime n panics the compiler in has_vars instead of reporting not_static
+fun parse_and_render = (i64 v) -> i64 {
+    mut [24]u8 buf;
+    do itoa(buf.&, v);
+    ret atoi(buf.&);
+}
+
+stcfun upper_hash = () -> u32 {
+    mut [5]u8 s;
+    copy(s.&, "hello".&);
+    for i in 0..<5: s[i] = to_upper(s[i]);
+    ret fnv1a(s.&);
+}
+
+stcfun reversed_first = () -> u8 {
+    mut [5]u8 s;
+    copy(s.&, "hello".&);
+    reverse(s.&);
+    ret s[0];
+}
+
+stcfun reversed_even = () -> u8 {
+    mut [4]u8 s;
+    copy(s.&, "abcd".&);
+    reverse(s.&);
+    ret s[0] + s[3];
+}
+
+stcfun shifted = () -> u32 {
+    mut [11]u8 s;
+    copy(s.&, "Hello World".&);
+    caesar(s.&, 3);
+    u32 once = fnv1a(s.&);
+    caesar(s.&, 23);
+    ret once ^ fnv1a(s.&);
+}
+
+stcfun roundtrip = () -> bool {
+    mut [11]u8 s;
+    copy(s.&, "Hello World".&);
+    caesar(s.&, 13);
+    caesar(s.&, 13);
+    ret find(s.&, "World".&) == 6;
+}
+
+stc i64 A1 = atoi("12345".&); #= A1 12345
+stc i64 A2 = atoi("-987".&); #= A2 -987
+stc i64 A3 = atoi("42abc".&); #= A3 42
+stc i64 A4 = atoi("".&); #= A4 0
+stc i64 RT1 = parse_and_render(-4096); #= RT1 -4096
+stc i64 RT2 = parse_and_render(0); #= RT2 0
+stc i64 RT3 = parse_and_render(9007199254740993); #= RT3 9007199254740993
+stc bool PA = palindrome("A man, a plan, a canal: Panama".&); #= PA true
+stc bool PB = palindrome("not a palindrome".&); #= PB false
+stc bool PE = palindrome("".&); #= PE true
+stc u32 CC = count_char("mississippi".&, 's'); #= CC 4
+stc u32 WC = words("  the quick  brown\tfox\njumps ".&); #= WC 5
+stc u32 FN = fnv1a("hello".&); #= FN 1335831723
+stc u32 FE = fnv1a("".&); #= FE 2166136261
+stc u32 UH = upper_hash(); #= UH 844380939
+stc i64 F1 = find("hello world".&, "o w".&); #= F1 4
+stc i64 F2 = find("hello".&, "xyz".&); #= F2 -1
+stc i64 F3 = find("abc".&, "abcd".&); #= F3 -1
+stc i64 F4 = find("aaab".&, "ab".&); #= F4 2
+stc u32 RL = rle_len("aaabccdddd".&); #= RL 8
+stc bool BL1 = balanced("{[()()]}".&); #= BL1 true
+stc bool BL2 = balanced("{[(])}".&); #= BL2 false
+stc bool BL3 = balanced("((".&); #= BL3 false
+stc bool BL4 = balanced(")".&); #= BL4 false
+stc bool AN1 = anagrams("Listen".&, "Silent".&); #= AN1 true
+stc bool AN2 = anagrams("abc".&, "abd".&); #= AN2 false
+stc u32 VW = vowels("Programming Language".&); #= VW 7
+stc u8 RF = reversed_first(); #= RF 111
+stc u8 RE = reversed_even(); #= RE 197
+stc u32 SF = shifted(); #= SF 1797917332
+stc bool RTR = roundtrip(); #= RTR true
+
+$main = () {}

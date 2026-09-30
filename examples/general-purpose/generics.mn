@@ -1,0 +1,136 @@
+variant Opt = (type T): ++(Some(T), None) tagof u8;
+variant Result = (type T, type E): +(Ok(T), Err(E)) tagof u8;
+
+# BUG: a template applied to its own parameters in swapped order inside its own body (`Pair(B, A)`) reports not_callable / not_static, so the swap is a free function
+type Pair = (type A, type B): *(A first, B second);
+
+type Array = (type T, u32 N): *(mut [N]T items) !{
+    fun get = (u32 i) -> Opt(T): ret if i < N: Opt(T).Some(self.items[i]) else: Opt(T).None;
+    fun set = (u32 i, T v) -> bool {
+        if i >= N: ret false;
+        self.items[i] = v;
+        ret true;
+    }
+    fun len = () -> u32: ret N;
+}
+
+trait Ord = (type T): !{
+    fun cmp = (T other) -> i32;
+    fun lt = (T other) -> bool: ret self.cmp(other) < 0;
+    fun ge = (T other) -> bool: ret self.cmp(other) >= 0;
+}
+
+type Version = *(u32 major, u32 minor) implof Ord(Version) !{
+    fun cmp = (Version o) -> i32 {
+        if self.major != o.major: ret if self.major < o.major: -1 else: 1;
+        if self.minor != o.minor: ret if self.minor < o.minor: -1 else: 1;
+        ret 0;
+    }
+}
+
+type Money = *(i64 cents) implof Ord(Money) !{
+    fun cmp = (Money o) -> i32: ret if self.cents < o.cents: -1 else: if self.cents > o.cents: 1 else: 0;
+}
+
+stcfun max_of = (type T where T oftype Ord(T)): (T a, T b) -> T: ret if a.lt(b): b else: a;
+stcfun min_of = (type T where T oftype Ord(T)): (T a, T b) -> T: ret if a.lt(b): a else: b;
+stcfun clamp_to = (type T where T oftype Ord(T)): (T x, T lo, T hi) -> T: ret max_of(T)(lo, min_of(T)(x, hi));
+
+# BUG: a generic slice pointer parameter `&[]T` rejects `*[N]T` with type_mismatch (the non generic `&[]u32` accepts it), so the length is a static parameter
+stcfun largest = (type T where T oftype Ord(T), u32 N): (&[N]T xs) -> T {
+    mut T best = xs.*[0];
+    for i in 1..<xs.$len: best = max_of(T)(best, xs.*[i]);
+    ret best;
+}
+
+stcfun sum_of = (type T, u32 N): (&[N]T xs) -> T {
+    mut T s = xs.*[0];
+    for i in 1..<xs.$len: s = s + xs.*[i];
+    ret s;
+}
+
+stcfun width_of = (type T) -> u64: ret sizeof T;
+
+stcfun pick = (bool wide) -> type: ret if wide: u64 else: u8;
+
+stcfun unwrap_or = (type T): (Opt(T) o, T fallback) -> T: ret o ?? fallback;
+
+fun swap_pair = (Pair(u8, u32) p) -> Pair(u32, u8): ret Pair(u32, u8)(first = p.second as u32, second = p.first as u8);
+
+fun safe_div = (i32 a, i32 b) -> Result(i32, u8): ret if b == 0: Result(i32, u8).Err(1) else: Result(i32, u8).Ok(a / b);
+
+fun chain = (i32 a, i32 b, i32 c) -> Result(i32, u8) {
+    r1 = safe_div(a, b);
+    x = match r1 {
+        Result(i32, u8).Ok(v) => v,
+        Result(i32, u8).Err(e) => ret Result(i32, u8).Err(e + 10),
+    };
+    ret safe_div(x, c);
+}
+
+fun code = (Result(i32, u8) r) -> i32: ret match r {
+    Result(i32, u8).Ok(v) => v,
+    Result(i32, u8).Err(e) => -(e as i32),
+}
+
+stcfun arrays = () -> u32 {
+    mut Array(u16, 4) a;
+    for i in 0..<4: do a.set(i, i as u16 * 100);
+    refused = a.set(9, 1);
+    u16 x = a.get(2) ?? 7;
+    u16 y = a.get(9) ?? 7;
+    ret x as u32 * 1000 + y as u32 * 10 + refused as u32 + a.len() * 100000;
+}
+
+stcfun pairs = () -> u32 {
+    Pair(u8, u32) p = Pair(u8, u32)(first = 3, second = 400);
+    Pair(u32, u8) q = swap_pair(p);
+    ret q.first * 10 + q.second as u32;
+}
+
+stcfun orders = () -> u32 {
+    Version a = Version(1, 9);
+    Version b = Version(2, 0);
+    Version c = Version(2, 0);
+    ret (a.lt(b) as u32) * 1000 + (b.lt(c) as u32) * 100 + (b.ge(c) as u32) * 10 + (b.ge(a) as u32);
+}
+
+stcfun extremes = () -> u32 {
+    Version v = max_of(Version)(Version(1, 5), Version(1, 12));
+    Money m = min_of(Money)(Money(500), Money(-20));
+    Version hi = clamp_to(Version)(Version(9, 9), Version(1, 0), Version(3, 4));
+    Version lo = clamp_to(Version)(Version(0, 1), Version(1, 0), Version(3, 4));
+    ret v.minor * 1000000 + (-m.cents) as u32 * 10000 + hi.major * 1000 + hi.minor * 100 + lo.major * 10 + lo.minor;
+}
+
+stcfun scans = () -> i64 {
+    [4]Money ms = [Money(5), Money(50), Money(-3), Money(7)];
+    [3]i64 nums = [10, 20, 30];
+    [3]f32 fs = [0.5, 0.25, 0.25];
+    ret largest(Money, 4)(ms.&).cents * 1000 + sum_of(i64, 3)(nums.&) + (sum_of(f32, 3)(fs.&) * 1000000.0) as i64;
+}
+
+stcfun widths = () -> u64: ret width_of(u8) * 1000000 + width_of(pick(true)) * 10000 + width_of(pick(false)) * 100 + width_of(Pair(u8, u64));
+
+stcfun options = () -> u32: ret unwrap_or(u32)(Opt(u32).Some(4), 9) * 10 + unwrap_or(u32)(Opt(u32).None, 9);
+
+stcfun results = () -> i32 {
+    i32 a = code(chain(100, 5, 2));
+    i32 b = code(chain(1, 0, 2));
+    i32 c = code(chain(1, 1, 0));
+    ret a * 10000 + b * 100 + c * -1;
+}
+
+stc u32 AR = arrays(); #= AR 600070
+stc u32 PA = pairs(); #= PA 4003
+stc u32 OR = orders(); #= OR 1011
+stc u32 EX = extremes(); #= EX 12203410
+stc i64 SC = scans(); #= SC 1050060
+stc u64 WI = widths(); #= WI 1080116
+stc u32 OP = options(); #= OP 49
+stc i32 RS = results(); #= RS 98901
+stc u64 SZ1 = sizeof Array(u32, 5); #= SZ1 20
+stc u64 SZ2 = sizeof Opt(u64); #= SZ2 16
+stc u64 SZ3 = sizeof Pair(u8, u8); #= SZ3 2
+
+$main = () {}

@@ -1,0 +1,153 @@
+# BUG: the else of a field `where ... else` is type checked but never applied when a value is built (`Temp(-50).kelvin` stays -50), so only values that satisfy the predicate are constructed below
+type Temp = *(mut i32 kelvin where kelvin >= 0 else kelvin = 0);
+type Pct = *(mut u8 value = 0 where value <= 100 else value = 100);
+type Rgba = *(u8 r, u8 g, u8 b, u8 a = 255) assertsize 4;
+type Pair = *(i32, i32);
+# LIMIT: a field default cannot name another field (`hi = lo + 10` reports undefined_name), defaults are constants
+type Span = *(u32 lo, u32 hi = 10);
+
+type Vec2 = *(mut i32 x = 0, mut i32 y = 0) !{
+    fun add = (Vec2 o) -> Vec2: ret Vec2(x = self.x + o.x, y = self.y + o.y);
+    fun scaled = (i32 k) -> Vec2: ret self with (x = self.x * k, y = self.y * k);
+    fun dot = (Vec2 o) -> i32: ret self.x * o.x + self.y * o.y;
+    fun norm1 = () -> u32: ret (if self.x < 0: -self.x else: self.x) as u32 + (if self.y < 0: -self.y else: self.y) as u32;
+    fun flip = () { i32 t = self.x; self.x = self.y; self.y = t; }
+}
+
+type Rect = *(Vec2 min, Vec2 max) !{
+    fun width = () -> i32: ret self.max.x - self.min.x;
+    fun height = () -> i32: ret self.max.y - self.min.y;
+    fun area = () -> i32: ret self.width() * self.height();
+    fun contains = (Vec2 p) -> bool: ret p.x >= self.min.x and p.x < self.max.x and p.y >= self.min.y and p.y < self.max.y;
+    fun grown = (i32 by) -> Rect: ret Rect(min = self.min.add(Vec2(-by, -by)), max = self.max.add(Vec2(by, by)));
+}
+
+type Account = *(mut i64 balance, mut u32 ops = 0) !{
+    $init = (i64 start): ret Account(balance = start);
+    fun deposit = (i64 n) -> bool {
+        if n <= 0: ret false;
+        self.balance += n;
+        self.ops += 1;
+        ret true;
+    }
+    fun withdraw = (i64 n) -> bool {
+        if n <= 0 or n > self.balance: ret false;
+        self.balance -= n;
+        self.ops += 1;
+        ret true;
+    }
+}
+
+type Builder = *(u32 w = 1, u32 h = 1, bool filled = false) !{
+    fun wide = (u32 n) -> Builder: ret self with (w = n);
+    fun tall = (u32 n) -> Builder: ret self with (h = n);
+    fun solid = () -> Builder: ret self with (filled = true);
+    fun cells = () -> u32: ret if self.filled: self.w * self.h else: 2 * (self.w + self.h);
+}
+
+type Inner = *(mut u32 a, mut u32 b);
+type Outer = *(mut Inner i, mut [3]Inner arr, u32 tag);
+
+type Packed = **(u8 a, u16 b, u8 c, u32 d);
+type Aligned = *(u8 a, u16 b, u8 c, u32 d);
+type Wrapper = *(Aligned x, u8 tail);
+
+stcfun clamps = () -> u32 {
+    Temp cold = Temp(0);
+    Temp warm = Temp(300);
+    Pct big = Pct(100);
+    Pct ok = Pct(40);
+    Pct dflt = Pct();
+    ret cold.kelvin as u32 * 100000000 + warm.kelvin as u32 * 10000 + big.value as u32 * 100 + ok.value as u32 + dflt.value as u32 * 1000000;
+}
+
+stcfun defaults = () -> u32 {
+    Rgba c = Rgba(r = 1, g = 2, b = 3);
+    Rgba d = Rgba(1, 2, 3, 4);
+    Span s = Span(5);
+    Span t = Span(lo = 5, hi = 6);
+    ret c.a as u32 * 1000000 + d.a as u32 * 100000 + s.hi * 1000 + t.hi + s.lo;
+}
+
+stcfun tuples = () -> i32 {
+    Pair p = Pair(3, -4);
+    ret p.$0 * 10 + p.$1;
+}
+
+stcfun vectors = () -> i32 {
+    Vec2 a = Vec2(x = 1, y = 2);
+    Vec2 b = Vec2(3, 4);
+    Vec2 c = a.add(b).scaled(2);
+    mut Vec2 d = c;
+    d.flip();
+    ret c.x * 1000 + c.y * 100 + d.x * 10 + d.y + a.dot(b) * 100000;
+}
+
+stcfun rects = () -> i32 {
+    Rect r = Rect(min = Vec2(1, 1), max = Vec2(4, 5));
+    Rect g = r.grown(1);
+    i32 hits = r.contains(Vec2(1, 1)) as i32 + r.contains(Vec2(4, 4)) as i32 * 2 + r.contains(Vec2(3, 4)) as i32 * 4 + g.contains(Vec2(0, 0)) as i32 * 8;
+    ret r.area() * 1000 + g.area() + hits * 100000;
+}
+
+stcfun accounts = () -> i64 {
+    mut Account a = Account.$init(100);
+    do a.deposit(50);
+    do a.withdraw(500);
+    do a.withdraw(30);
+    do a.deposit(-5);
+    ret a.balance * 100 + a.ops as i64;
+}
+
+stcfun builders = () -> u32 {
+    Builder plain = Builder();
+    Builder big = plain.wide(4).tall(3);
+    Builder solid = big.solid();
+    ret plain.cells() * 10000 + big.cells() * 100 + solid.cells();
+}
+
+stcfun nested_updates = () -> u32 {
+    mut Outer o = Outer(i = Inner(1, 2), arr = [Inner(3, 4), Inner(5, 6), Inner(7, 8)], tag = 9);
+    o.i.a = 10;
+    o.arr[1].b = 60;
+    o.arr[2] = Inner(70, 80);
+    Outer copy = o with (tag = 1);
+    o.arr[0].a = 30;
+    ret copy.i.a * 1000000 + copy.arr[1].b * 10000 + copy.arr[2].a * 100 + copy.arr[0].a + o.arr[0].a * 100000000 + copy.tag * 1000000000;
+}
+
+stcfun with_chain = () -> u32 {
+    Inner a = Inner(1, 2);
+    Inner b = a with (a = 5) with (b = 6);
+    Inner c = a with (b = 9);
+    ret a.a * 100000 + a.b * 10000 + b.a * 1000 + b.b * 100 + c.a * 10 + c.b;
+}
+
+stcfun value_semantics = () -> u32 {
+    mut Inner x = Inner(1, 1);
+    mut Inner y = x;
+    y.a = 5;
+    mut [2]Inner arr = [x, y];
+    arr[0].b = 7;
+    Inner z = arr[1];
+    arr[1].a = 99;
+    ret x.a * 10000 + x.b * 1000 + y.a * 100 + arr[0].b * 10 + z.a + arr[1].a * 100000;
+}
+
+stcfun layouts = () -> u64 {
+    ret sizeof Packed * 1000000 + sizeof Aligned * 10000 + sizeof Wrapper * 100 + sizeof Rgba;
+}
+
+stc u32 CL = clamps(); #= CL 3010040
+stc u32 DF = defaults(); #= DF 255410011
+stc i32 TU = tuples(); #= TU 26
+stc i32 VE = vectors(); #= VE 1109328
+stc i32 RE = rects(); #= RE 1312030
+stc i64 AC = accounts(); #= AC 12002
+stc u32 BU = builders(); #= BU 41412
+stc u32 NU = nested_updates(); #= NU 4010607003
+stc u32 WC = with_chain(); #= WC 125619
+stc u32 VS = value_semantics(); #= VS 9911575
+stc u64 LY = layouts(); #= LY 8121604
+
+$main = () {}

@@ -1,0 +1,158 @@
+fun pick = (i32 a) -> u32: ret 1;
+fun pick = (i32 a, i32 b) -> u32: ret 2;
+fun pick = (i32 a, i32 b, i32 c) -> u32: ret 3;
+fun pick = (f32 a) -> u32: ret 4;
+fun pick = (&u8 s) -> u32: ret 5;
+fun pick = (bool b) -> u32: ret 6;
+fun pick = (u8 a) -> u32: ret 7;
+fun pick = (i64 a) -> u32: ret 8;
+
+fun opt = (u32 a, u32 b = 10) -> u32: ret 100 + a + b;
+fun opt = (f32 a, u32 b = 10) -> u32: ret 200 + b;
+
+fun dflt = (u32 a, u32 b = a * 2, u32 c = a + b) -> u32: ret a * 10000 + b * 100 + c;
+
+fun named = (u32 x, u32 y = 1, u32 z = 2) -> u32: ret x * 100 + y * 10 + z;
+
+# BUG: a named argument does not choose between overloads of the same arity, only the first candidate is tried (`pair(0, c = 1)` and `h(1, d = 9)` report wrong_arity), so only the first of such a pair is called by name
+fun pair = (u32 a, u32 b) -> u32: ret 1;
+fun pair = (u32 a, u32 c) -> u32: ret 2;
+
+fun flag = (u32 a) -> u32: ret 1;
+fun flag = (u32 a, u32 on = 7) -> u32: ret 100 + on;
+
+fun by_kind = (u32 a, u32 b = 1) -> u32: ret 1000 + b;
+fun by_kind = (f32 a, u32 c = 2) -> u32: ret 2000 + c;
+
+fun triple = (u32 a, u32 b = 1, u32 c = 2) -> u32: ret 3000 + b * 10 + c;
+fun triple = (u32 a, u32 b = 1, u32 d = 3, u32 e = 4) -> u32: ret 4000 + b * 100 + d * 10 + e;
+
+fun mixed = (u32 a) -> u32: ret 1;
+fun mixed = (u32 a, u32 b = 5) -> u32: ret 2 + b;
+
+fun guarded = (u32 x where x == 0) -> u32: ret 10;
+fun guarded = (u32 x where x < 10) -> u32: ret 20;
+fun guarded = (u32 x where x < 100) -> u32: ret 30;
+fun guarded = (u32 x) -> u32: ret 40;
+
+fun two_guards = (u32 a where a > 5, u32 b where b > 5) -> u32: ret 1;
+fun two_guards = (u32 a where a > 5, u32 b) -> u32: ret 2;
+fun two_guards = (u32 a, u32 b where b > 5) -> u32: ret 3;
+fun two_guards = (u32 a, u32 b) -> u32: ret 4;
+
+fun guarded_default = (u32 a, u32 b = 7 where b > 5) -> u32: ret 1000 + b;
+fun guarded_default = (u32 a, u32 b) -> u32: ret 2000 + b;
+
+fun by_len = (&[]u8 s) -> u32: ret 100;
+fun by_len = (&[0]u8 s) -> u32: ret 0;
+fun by_len = (&[1]u8 s) -> u32: ret 1;
+fun by_len = (&[2]u8 s) -> u32: ret 2;
+
+type Meters = *(f32 v);
+type Feet = *(f32 v);
+fun unit = (Meters m) -> u32: ret 1;
+fun unit = (Feet f) -> u32: ret 2;
+fun unit = (f32 raw) -> u32: ret 3;
+
+variant Shape = +(Dot, Circle(u32 r));
+fun which = (Shape s) -> u32: ret 1;
+fun which = (Shape.Dot d) -> u32: ret 2;
+fun which = (u32 n) -> u32: ret 3;
+
+stcfun generic_first = (type T): (T a) -> u32: ret sizeof T as u32;
+
+fun ret_ov = (u8 x) -> u8: ret x;
+fun ret_ov = (u16 x) -> u16: ret x + 1;
+
+fun chained = (u32 a, u32 b) -> u32: ret pick(a as i32, b as i32);
+fun chained = (u32 a) -> u32: ret pick(a as i32);
+
+stcfun basic = () -> u32 {
+    i32 n = 1;
+    f32 f = 1.5;
+    u8 small = 3;
+    i64 wide = 4;
+    ret pick(n) * 10000000 + pick(n, n) * 1000000 + pick(n, n, n) * 100000 + pick(f) * 10000 + pick("s") * 1000 + pick(true) * 100 + pick(small) * 10 + pick(wide);
+}
+
+stcfun literals = () -> u32: ret pick(1.5);
+
+stcfun optional = () -> u64 {
+    u32 a = 5;
+    f32 f = 2.0;
+    ret opt(a) as u64 * 1000000000 + opt(a, 20) as u64 * 1000000 + opt(f) as u64 * 1000 + opt(f, 3) as u64;
+}
+
+stcfun defaults_chain = () -> u32 {
+    ret dflt(1) + dflt(2, 3) % 100 * 1000000 + dflt(2, 3, 4) % 100;
+}
+
+stcfun named_args = () -> u32 {
+    ret named(1) * 1000000 + named(1, z = 9) * 10000 + named(1, y = 8) * 100 + named(z = 7, x = 3, y = 4);
+}
+
+stcfun mixed_pick = () -> u32: ret mixed(1, 2) * 100 + mixed(7, b = 1);
+
+stcfun guards = () -> u32 {
+    ret guarded(0) * 1000000 + guarded(5) * 10000 + guarded(50) * 100 + guarded(500);
+}
+
+stcfun double_guards = () -> u32 {
+    ret two_guards(9, 9) * 1000 + two_guards(9, 1) * 100 + two_guards(1, 9) * 10 + two_guards(1, 1);
+}
+
+stcfun guard_defaults = () -> u32 {
+    ret guarded_default(1) * 100000 + guarded_default(1, 6) * 1000 + guarded_default(1, 3) % 1000;
+}
+
+stcfun lengths = () -> u32 {
+    [0]u8 none;
+    [1]u8 one = [1,];
+    [2]u8 two = [1, 2];
+    [3]u8 three = [1, 2, 3];
+    ret by_len(none.&) * 100000000 + by_len(one.&) * 10000000 + by_len(two.&) * 1000000 + by_len(three.&);
+}
+
+stcfun nominal = () -> u32 {
+    ret unit(Meters(1.0)) * 100 + unit(Feet(1.0)) * 10 + unit(2.5);
+}
+
+stcfun variants = () -> u32 {
+    ret which(Shape.Dot) * 100 + which(Shape.Circle(2)) * 10 + which(4);
+}
+
+stcfun sizes = () -> u32 {
+    ret generic_first(u8)(1) * 100 + generic_first(u64)(1);
+}
+
+stcfun by_argument_type = () -> u32 {
+    u8 a = 250;
+    u16 b = 250;
+    ret ret_ov(a) as u32 * 1000 + ret_ov(b) as u32;
+}
+
+stcfun through_calls = () -> u32: ret chained(3, 4) * 10 + chained(3);
+
+stc u32 BA = basic(); #= BA 12345678
+stc u32 LI = literals(); #= LI 4
+stc u64 OP = optional(); #= OP 115125210203
+stc u32 DC = defaults_chain(); #= DC 5010207
+stc u32 NA = named_args(); #= NA 113208547
+stc u32 PN1 = pair(0, b = 1); #= PN1 1
+stc u32 PN2 = flag(1, on = 3); #= PN2 103
+stc u32 PN3 = by_kind(1.5, c = 4); #= PN3 2004
+stc u32 PN4 = by_kind(1, b = 4); #= PN4 1004
+stc u32 PN5 = triple(1, c = 9); #= PN5 3019
+stc u32 PN6 = triple(1, 2, 3, 4); #= PN6 4234
+stc u32 MP = mixed_pick(); #= MP 403
+stc u32 GU = guards(); #= GU 10203040
+stc u32 DG = double_guards(); #= DG 1234
+stc u32 GD = guard_defaults(); #= GD 101706003
+stc u32 LN = lengths(); #= LN 12000100
+stc u32 NO = nominal(); #= NO 123
+stc u32 VA = variants(); #= VA 213
+stc u32 SZ = sizes(); #= SZ 108
+stc u32 BT = by_argument_type(); #= BT 250251
+stc u32 TC = through_calls(); #= TC 21
+
+$main = () {}

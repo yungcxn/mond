@@ -1,0 +1,131 @@
+stc u32 X = 100;
+u32 g = 7;
+fun a = (u32 X2) -> u32 { u32 X = 5; ret X + X2; }
+fun b = (u32 g) -> u32: ret g * 2;
+fun c = () -> u32 { u32 g = 3; ret g; }
+fun d = () -> u32 {
+    u32 x = 1;
+    { u32 x = 2; }
+    ret x;
+}
+fun e = () -> u32 {
+    u32 x = 1;
+    u32 y = { u32 x = 10; x + 1; };
+    ret x + y;
+}
+fun f = (u32 n) -> u32 {
+    mut u32 s = 0;
+    for i in 0..<n { u32 i2 = i * 2; s += i2; }
+    for i in 0..<n { s += i; }
+    ret s;
+}
+fun h = () -> u32 {
+    fun inner = (u32 v) -> u32: ret v + 1;
+    u32 v = 10;
+    ret inner(v);
+}
+fun i = () -> u32 {
+    fun inner = () -> u32: ret 1;
+    mut u32 r = inner();
+    { fun inner = () -> u32: ret 2; r = r * 10 + inner(); }
+    ret r;
+}
+stc u32 A = a(1); #= A 6
+stc u32 B = b(4); #= B 8
+stc u32 C = c(); #= C 3
+stc u32 D = d(); #= D 1
+stc u32 E = e(); #= E 12
+stc u32 F = f(4); #= F 18
+stc u32 H = h(); #= H 11
+stc u32 I = i(); #= I 12
+fun twice = (u32 v) -> u32: ret v * 2;
+
+fun hides_function = () -> u32 {
+    u32 twice = 21;
+    ret twice;
+}
+
+fun hides_type = () -> u32 {
+    u8 Pair = 4;
+    ret Pair as u32;
+}
+
+type Pair = *(u32 a, u32 b);
+
+fun shadow_type_value = (Pair p) -> u32 {
+    u32 a = 100;
+    ret p.a + a;
+}
+
+fun retype = (u32 v) -> f32 {
+    f32 v2 = v as f32;
+    { bool v = true; if v: ret v2 * 2.0; }
+    ret 0.0;
+}
+
+fun different_types = () -> u32 {
+    u32 x = 1;
+    mut u32 total = x;
+    { f32 x = 2.5; total += x as u32; }
+    { bool x = true; total += x as u32 * 100; }
+    { [3]u8 x = [1, 2, 3]; total += x[2] as u32 * 1000; }
+    ret total;
+}
+
+fun arm_bindings = (u32 v) -> u32 {
+    u32 x = 1000;
+    u32 r = match v {
+        0 => x,
+        x => x + 1,
+    };
+    ret r * 10000 + x;
+}
+
+fun closure_params = () -> u32 {
+    u32 x = 5;
+    f = (u32 x): x * 3;
+    g = (u32 y): x + y;
+    ret f(2) * 100 + g(2);
+}
+
+fun loop_shadow = () -> u32 {
+    u32 i = 500;
+    mut u32 s = 0;
+    for i in 0..<3: s += i;
+    ret s * 1000 + i;
+}
+
+fun capture_outer = () -> u32 {
+    mut u32 count = 0;
+    fun bump = () -> u32 {
+        count += 1;
+        ret count;
+    }
+    do bump();
+    do bump();
+    ret bump() * 10 + count;
+}
+
+fun recursion_local = (u32 n) -> u32 {
+    fun walk = (u32 k, u32 acc) -> u32: ret if k == 0: acc else: walk(k - 1, acc + k);
+    ret walk(n, 0);
+}
+
+fun chained_blocks = () -> u32 {
+    u32 a = { u32 b = { u32 c = 4; c * 2; }; b + 1; };
+    ret a;
+}
+
+stc u32 HF = hides_function(); #= HF 21
+stc u32 HT = hides_type(); #= HT 4
+stc u32 ST = shadow_type_value(Pair(1, 2)); #= ST 101
+stc f32 RT = retype(4); #= RT 8
+stc u32 DT = different_types(); #= DT 3103
+stc u32 AB = arm_bindings(0) + arm_bindings(7); #= AB 10082000
+stc u32 CP = closure_params(); #= CP 607
+stc u32 LS = loop_shadow(); #= LS 3500
+stc u32 CO = capture_outer(); #= CO 33
+stc u32 RL = recursion_local(10); #= RL 55
+stc u32 CB = chained_blocks(); #= CB 9
+
+$main = () {}

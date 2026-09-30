@@ -1,0 +1,210 @@
+type Node = *(i32 val, mut Opt(*Node) next);
+variant Opt = (type T): ++(Some(T), None) tagof u8;
+
+fun swap = (*i32 a, *i32 b) {
+    i32 t = a.*;
+    a.* = b.*;
+    b.* = t;
+}
+
+fun swap_ptrs = (* *i32 a, * *i32 b) {
+    *i32 t = a.*;
+    a.* = b.*;
+    b.* = t;
+}
+
+fun divmod = (u32 a, u32 b, *u32 q, *u32 r) {
+    q.* = a / b;
+    r.* = a % b;
+}
+
+fun reverse_in_place = (*[]i32 a) {
+    mut *i32 lo = a.*[0].&;
+    mut *i32 hi = a.*[0].& + (a.$len - 1);
+    for 0..<a.$len / 2 {
+        swap(lo, hi);
+        lo += 1;
+        hi -= 1;
+    }
+}
+
+# LIMIT: the compile time interpreter has no ordering of pointers and cannot hold a pointer inside a variant payload (not_static), so the functions below are only checked, never called from a stc
+fun reverse_until = (*[]i32 a) {
+    mut *i32 lo = a.*[0].&;
+    mut *i32 hi = a.*[0].& + (a.$len - 1);
+    while lo < hi {
+        swap(lo, hi);
+        lo += 1;
+        hi -= 1;
+    }
+}
+
+fun fill = (*i32 p, u32 n, i32 v) {
+    for i in 0..<n: (p + i).* = v + i as i32;
+}
+
+fun sum_ptr = (*i32 p, u32 n) -> i32 {
+    mut i32 s = 0;
+    mut *i32 cur = p;
+    for 0..<n {
+        s += cur.*;
+        cur += 1;
+    }
+    ret s;
+}
+
+fun max_ptr = (*[]i32 a) -> *i32 {
+    mut *i32 best = a.*[0].&;
+    for i in 1..<a.$len: if a.*[i] > best.*: best = a.*[i].&;
+    ret best;
+}
+
+fun find_ptr = (*[]i32 a, i32 key) -> Opt(*i32) {
+    for i in 0..<a.$len: if a.*[i] == key: ret Opt(*i32).Some(a.*[i].&);
+    ret Opt(*i32).None;
+}
+
+fun bump_all = (*[]u32 a) {
+    for i in 0..<a.$len: {
+        p = a.*[i].&;
+        p.* += 1;
+    }
+}
+
+fun count_nodes = (*Node head) -> u32 {
+    mut u32 n = 1;
+    mut *Node cur = head;
+    while cur.next ?<- nxt {
+        n += 1;
+        cur = nxt;
+    }
+    ret n;
+}
+
+fun sum_nodes = (*Node head) -> i32 {
+    mut i32 s = head.val;
+    mut *Node cur = head;
+    while cur.next ?<- nxt {
+        s += nxt.val;
+        cur = nxt;
+    }
+    ret s;
+}
+
+fun through_double = (* *u32 pp) { pp.*.* += 10; }
+fun through_triple = (* * *u32 ppp) { ppp.*.*.* *= 2; }
+
+stcfun swaps = () -> i32 {
+    mut i32 a = 3;
+    mut i32 b = 8;
+    swap(a.&, b.&);
+    mut i32 c = 5;
+    mut *i32 pa = a.&;
+    mut *i32 pc = c.&;
+    swap_ptrs(pa.&, pc.&);
+    pa.* += 100;
+    ret a * 1000000 + b * 10000 + c * 100 + pa.* - 100 + pc.*;
+}
+
+stcfun outs = () -> u32 {
+    mut u32 q = 0;
+    mut u32 r = 0;
+    divmod(47, 5, q.&, r.&);
+    ret q * 100 + r;
+}
+
+stcfun reversal = () -> i32 {
+    mut [6]i32 a = [1, 2, 3, 4, 5, 6];
+    reverse_in_place(a.&);
+    mut [5]i32 b = [10, 20, 30, 40, 50];
+    reverse_in_place(b.&);
+    ret a[0] * 100000 + a[5] * 10000 + b[0] * 100 + b[4] + a[2] * 1000000;
+}
+
+stcfun fills = () -> i32 {
+    mut [5]i32 a;
+    fill(a[0].&, 5, 10);
+    fill(a[2].&, 2, 100);
+    ret sum_ptr(a[0].&, 5) * 1000 + sum_ptr(a[1].&, 3);
+}
+
+stcfun extremes = () -> i32 {
+    mut [6]i32 a = [3, 9, -2, 9, 4, 1];
+    *i32 hi = max_ptr(a.&);
+    hi.* = 100;
+    max_ptr(a.&).* += 1;
+    ret a[1] * 10000 + a[4] + a[3];
+}
+
+stcfun bumps = () -> u32 {
+    mut [4]u32 a = [1, 2, 3, 4];
+    bump_all(a.&);
+    bump_all(a.&);
+    ret a[0] * 1000 + a[1] * 100 + a[2] * 10 + a[3];
+}
+
+stcfun layers = () -> u32 {
+    mut u32 x = 1;
+    mut *u32 p = x.&;
+    mut * *u32 pp = p.&;
+    through_double(pp);
+    mut * * *u32 ppp = pp.&;
+    through_triple(ppp);
+    ret x;
+}
+
+stcfun aliasing = () -> u32 {
+    mut u32 x = 5;
+    p = x.&;
+    q = x.&;
+    p.* += 1;
+    q.* *= 2;
+    x += 1;
+    ret p.* * 1000 + q.* * 10 + x;
+}
+
+stcfun struct_fields = () -> i32 {
+    mut Node n = Node(val = 1, next = Opt(*Node).None);
+    *i32 field = n.val.&;
+    field.* = 42;
+    ret n.val;
+}
+
+stcfun array_of_pointers = () -> i32 {
+    mut i32 a = 1;
+    mut i32 b = 2;
+    mut i32 c = 3;
+    [3]*i32 ptrs = [a.&, b.&, c.&];
+    for p in ptrs: p.* *= 10;
+    ret a * 100 + b * 10 + c + ptrs[1].* * 1000;
+}
+
+stcfun comparisons = () -> u32 {
+    [4]i32 a = [1, 2, 3, 4];
+    *i32 p = a[0].&;
+    *i32 q = a[3].&;
+    *i32 r = a[0].&;
+    ret (p == r) as u32 + (p != q) as u32 * 10 + (q == p) as u32 * 100;
+}
+
+stc i32 SW = swaps(); #= SW 8040513
+stc u32 OU = outs(); #= OU 902
+stc i32 RV = reversal(); #= RV 4615010
+stc i32 FI = fills(); #= FI 236212
+stc i32 EX = extremes(); #= EX 1010013
+stc u32 BU = bumps(); #= BU 3456
+stc u32 LA = layers(); #= LA 22
+stc u32 AL = aliasing(); #= AL 13143
+stc i32 SF = struct_fields(); #= SF 42
+stc i32 AP = array_of_pointers(); #= AP 21230
+stc u32 CM = comparisons(); #= CM 11
+
+$main = () {
+    mut Node last = Node(val = 3, next = Opt(*Node).None);
+    mut Node mid = Node(val = 2, next = Opt(*Node).Some(last.&));
+    mut Node head = Node(val = 1, next = Opt(*Node).Some(mid.&));
+    mut [4]i32 xs = [4, 2, 7, 1];
+    reverse_until(xs.&);
+    r = find_ptr(xs.&, 7);
+    i32 total = sum_nodes(head.&) + count_nodes(head.&) as i32;
+}

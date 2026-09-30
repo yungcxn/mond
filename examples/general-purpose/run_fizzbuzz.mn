@@ -1,0 +1,119 @@
+fun print = (&u8 fmt);
+fun print = (&u8 fmt, i32 a);
+fun print = (&u8 fmt, u32 a);
+fun print = (&u8 fmt, &u8 a);
+fun print = (&u8 fmt, u32 a, u32 b);
+
+variant Kind = +(Fizz, Buzz, FizzBuzz, Num(u32)) tagof u8;
+
+type Tally = *(mut u32 fizz, mut u32 buzz, mut u32 both, mut u32 plain) !{
+    fun record = (Kind k) {
+        match k {
+            Kind.Fizz => self.fizz += 1,
+            Kind.Buzz => self.buzz += 1,
+            Kind.FizzBuzz => self.both += 1,
+            Kind.Num(n) => self.plain += 1,
+        }
+    }
+    fun total = () -> u32: ret self.fizz + self.buzz + self.both + self.plain;
+}
+
+fun classify = (u32 n) -> Kind {
+    by3 = n % 3 == 0;
+    by5 = n % 5 == 0;
+    if by3 and by5: ret Kind.FizzBuzz;
+    if by3: ret Kind.Fizz;
+    if by5: ret Kind.Buzz;
+    ret Kind.Num(n);
+}
+
+fun show = (Kind k) {
+    match k {
+        Kind.Fizz => print("Fizz\n"),
+        Kind.Buzz => print("Buzz\n"),
+        Kind.FizzBuzz => print("FizzBuzz\n"),
+        Kind.Num(n) => print("%u\n", n),
+    }
+}
+
+fun fizzbuzz = (u32 limit, *Tally tally) {
+    for i in 1..=limit {
+        k = classify(i);
+        tally.record(k);
+        show(k);
+    }
+}
+
+fun is_prime = (u32 n) -> bool {
+    if n < 2: ret false;
+    mut u32 d = 2;
+    while d * d <= n {
+        if n % d == 0: ret false;
+        d += 1;
+    }
+    ret true;
+}
+
+fun print_primes = (u32 limit) -> u32 {
+    mut u32 count = 0;
+    for n in 2..=limit {
+        if is_prime(n) {
+            print("%u ", n);
+            count += 1;
+        }
+    }
+    print("\n");
+    ret count;
+}
+
+fun twin_pairs = (u32 limit) -> u32 {
+    mut u32 pairs = 0;
+    mut u32 prev = 0;
+    for n in 2..=limit {
+        if !is_prime(n): cont;
+        if prev != 0 and n - prev == 2 {
+            print("(%u, %u)\n", prev, n);
+            pairs += 1;
+        }
+        prev = n;
+    }
+    ret pairs;
+}
+
+fun collatz_steps = (u32 start) -> u32 {
+    mut u32 n = start;
+    mut u32 steps = 0;
+    while n != 1 {
+        n = if n % 2 == 0: n / 2 else: 3 * n + 1;
+        steps += 1;
+    }
+    ret steps;
+}
+
+fun longest_collatz = (u32 limit) -> u32 {
+    mut u32 best = 1;
+    mut u32 best_steps = 0;
+    for n in 1..=limit {
+        s = collatz_steps(n);
+        if s > best_steps {
+            best = n;
+            best_steps = s;
+        }
+    }
+    print("longest under %u: %u\n", limit, best);
+    ret best;
+}
+
+$main = (i32 argc, &[]&u8 argv) -> i32 {
+    mut Tally tally = Tally(fizz = 0, buzz = 0, both = 0, plain = 0);
+    limit = if argc > 1: 30 else: 15; #: limit u32
+    fizzbuzz(limit, tally.&);
+    total = tally.total(); #: total u32
+
+    primes = print_primes(50); #: primes u32
+    twins = twin_pairs(100); #: twins u32
+    best = longest_collatz(30); #: best u32
+    bump = (u32 x): x + primes;
+    shifted = bump(twins); #: shifted u32
+    ret if total == limit and primes == 15: 0 else: 1;
+}

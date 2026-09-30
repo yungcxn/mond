@@ -1,0 +1,273 @@
+fun bit = (u32 i) -> u32: ret 1 << i;
+
+fun hex = (u8 c) -> u32: ret match c {
+    '0'..='9' => (c - '0') as u32,
+    'a'..='f' => (c - 'a') as u32 + 10,
+    _ => 99,
+}
+
+fun popcount = (u32 m) -> u32 {
+    mut u32 n = 0;
+    mut u32 x = m;
+    while x != 0 {
+        n += x & 1;
+        x = x >> 1;
+    }
+    ret n;
+}
+
+type Cfg = *(
+    u32 n,
+    mut [10]u32 succ,
+    mut [10]u32 pred,
+    mut [10]u32 dom,
+    mut [10]u32 lin,
+    mut [10]u32 lout,
+    mut u32 bad,
+) !{
+    fun build = (&[]u8 edges) {
+        mut u32 i = 0;
+        while (i as u64) + 1 < edges.$len {
+            u8 c = edges.*[i];
+            if c == ' ' {
+                i += 1;
+                cont;
+            }
+            u32 a = hex(c);
+            u32 b = hex(edges.*[i + 1]);
+            if a >= self.n or b >= self.n {
+                self.bad = 1;
+            } else {
+                self.succ[a] = self.succ[a] | bit(b);
+                self.pred[b] = self.pred[b] | bit(a);
+            }
+            i += 2;
+        }
+    }
+
+    fun reach = () -> u32 {
+        mut u32 mask = 1;
+        loop {
+            mut bool changed = false;
+            for i in 0..<self.n {
+                if (mask & bit(i)) != 0 and (mask | self.succ[i]) != mask {
+                    mask = mask | self.succ[i];
+                    changed = true;
+                }
+            }
+            if !changed: ret mask;
+        }
+        ret mask;
+    }
+
+    fun doms = () -> u32 {
+        u32 all = self.reach();
+        for i in 0..<self.n {
+            self.dom[i] = if i == 0: 1 else if (all & bit(i)) != 0: all else 0;
+        }
+        loop {
+            mut bool changed = false;
+            for i in 1..<self.n {
+                if (all & bit(i)) == 0: cont;
+                mut u32 inter = all;
+                for p in 0..<self.n {
+                    if (self.pred[i] & bit(p)) != 0 and (all & bit(p)) != 0: inter = inter & self.dom[p];
+                }
+                u32 nd = inter | bit(i);
+                if nd != self.dom[i] {
+                    self.dom[i] = nd;
+                    changed = true;
+                }
+            }
+            if !changed: brk;
+        }
+        ret all;
+    }
+
+    fun idom = (u32 v) -> i32 {
+        if v == 0 or self.dom[v] == 0: ret -1;
+        u32 strict = self.dom[v] ^ bit(v);
+        for d in 0..<self.n {
+            if (strict & bit(d)) != 0 and self.dom[d] == strict: ret d as i32;
+        }
+        ret -1;
+    }
+
+    fun loop_body = (u32 t, u32 h, u32 all) -> u32 {
+        mut u32 mask = bit(h) | bit(t);
+        loop {
+            mut bool changed = false;
+            for x in 0..<self.n {
+                bool inside = (mask & bit(x)) != 0;
+                u32 grown = mask | (self.pred[x] & all);
+                # LIMIT: `if a and ((b) != c) {` (condition ending in a parenthesised group before the block) is IllegalIfFormat
+                if x != h and inside and grown != mask {
+                    mask = grown;
+                    changed = true;
+                }
+            }
+            if !changed: ret mask;
+        }
+        ret mask;
+    }
+
+    fun back_edges = () -> u32 {
+        mut u32 count = 0;
+        for t in 0..<self.n {
+            for h in 0..<self.n {
+                bool edge = (self.succ[t] & bit(h)) != 0;
+                bool dominated = (self.dom[t] & bit(h)) != 0;
+                if edge and dominated: count += 1;
+            }
+        }
+        ret count;
+    }
+
+    fun live = (&[]u8 use, &[]u8 def) {
+        loop {
+            mut bool changed = false;
+            mut u32 i = self.n;
+            while i > 0 {
+                i -= 1;
+                mut u32 out = 0;
+                for s in 0..<self.n {
+                    if (self.succ[i] & bit(s)) != 0: out = out | self.lin[s];
+                }
+                u32 inn = use.*[i] as u32 | (out & (def.*[i] as u32 ^ 0xFF));
+                if out != self.lout[i] or inn != self.lin[i] {
+                    self.lout[i] = out;
+                    self.lin[i] = inn;
+                    changed = true;
+                }
+            }
+            if !changed: brk;
+        }
+    }
+}
+
+fun fresh = (u32 n) -> Cfg {
+    [10]u32 a;
+    [10]u32 b;
+    [10]u32 c;
+    [10]u32 d;
+    [10]u32 e;
+    ret Cfg(n = n, succ = a, pred = b, dom = c, lin = d, lout = e, bad = 0);
+}
+
+fun reachable = (&[]u8 edges, u32 n) -> u32 {
+    mut Cfg g = fresh(n);
+    g.build(edges);
+    ret g.reach();
+}
+
+fun dominators = (&[]u8 edges, u32 n) -> [10]u32 {
+    mut Cfg g = fresh(n);
+    g.build(edges);
+    do g.doms();
+    ret g.dom;
+}
+
+fun idoms = (&[]u8 edges, u32 n) -> [10]i32 {
+    mut Cfg g = fresh(n);
+    g.build(edges);
+    do g.doms();
+    mut [10]i32 out;
+    for i in 0..<n: out[i] = g.idom(i);
+    ret out;
+}
+
+fun loops = (&[]u8 edges, u32 n) -> [10]u32 {
+    mut Cfg g = fresh(n);
+    g.build(edges);
+    u32 all = g.doms();
+    mut [10]u32 out;
+    for t in 0..<n {
+        for h in 0..<n {
+            bool edge = (g.succ[t] & bit(h)) != 0;
+            bool dominated = (g.dom[t] & bit(h)) != 0;
+            if edge and dominated: out[h] = out[h] | g.loop_body(t, h, all);
+        }
+    }
+    ret out;
+}
+
+fun back_edge_count = (&[]u8 edges, u32 n) -> u32 {
+    mut Cfg g = fresh(n);
+    g.build(edges);
+    do g.doms();
+    ret g.back_edges();
+}
+
+fun live_in = (&[]u8 edges, u32 n, &[]u8 use, &[]u8 def) -> [10]u32 {
+    mut Cfg g = fresh(n);
+    g.build(edges);
+    g.live(use, def);
+    ret g.lin;
+}
+
+fun live_out = (&[]u8 edges, u32 n, &[]u8 use, &[]u8 def) -> [10]u32 {
+    mut Cfg g = fresh(n);
+    g.build(edges);
+    g.live(use, def);
+    ret g.lout;
+}
+
+fun bad_edges = (&[]u8 edges, u32 n) -> u32 {
+    mut Cfg g = fresh(n);
+    g.build(edges);
+    ret g.bad;
+}
+
+stc [10]u32 G1 = dominators("01 02 13 23".&, 4); #= G1 [1, 3, 5, 9, 0, 0, 0, 0, 0, 0]
+stc [10]i32 G2 = idoms("01 02 13 23".&, 4); #= G2 [-1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [10]u32 G3 = loops("01 12 21 13".&, 4); #= G3 [0, 6, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 G4 = back_edge_count("01 12 21 13".&, 4); #= G4 1
+stc [10]u32 G5 = dominators("01 12 23 32 34 41 45".&, 6); #= G5 [1, 3, 7, 15, 31, 63, 0, 0, 0, 0]
+stc [10]i32 G6 = idoms("01 12 23 32 34 41 45".&, 6); #= G6 [-1, 0, 1, 2, 3, 4, 0, 0, 0, 0]
+stc [10]u32 G7 = loops("01 12 23 32 34 41 45".&, 6); #= G7 [0, 30, 12, 0, 0, 0, 0, 0, 0, 0]
+stc u32 G8 = back_edge_count("01 12 23 32 34 41 45".&, 6); #= G8 2
+stc u32 G9 = reachable("01 12 34".&, 5); #= G9 7
+stc [10]u32 G10 = dominators("01 12 34".&, 5); #= G10 [1, 3, 7, 0, 0, 0, 0, 0, 0, 0]
+stc [10]i32 G11 = idoms("01 12 34".&, 5); #= G11 [-1, 0, 1, -1, -1, 0, 0, 0, 0, 0]
+stc [10]u32 G12 = dominators("01 02 12 21 13 23".&, 4); #= G12 [1, 3, 5, 9, 0, 0, 0, 0, 0, 0]
+stc [10]i32 G13 = idoms("01 02 12 21 13 23".&, 4); #= G13 [-1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [10]u32 G14 = loops("01 02 12 21 13 23".&, 4); #= G14 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 G15 = back_edge_count("01 02 12 21 13 23".&, 4); #= G15 0
+stc [10]u32 G16 = dominators("01 11 12".&, 3); #= G16 [1, 3, 7, 0, 0, 0, 0, 0, 0, 0]
+stc [10]u32 G17 = loops("01 11 12".&, 3); #= G17 [0, 2, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 G18 = back_edge_count("01 11 12".&, 3); #= G18 1
+stc [10]u32 G19 = dominators("01 12 21 13 31 14".&, 5); #= G19 [1, 3, 7, 11, 19, 0, 0, 0, 0, 0]
+stc [10]u32 G20 = loops("01 12 21 13 31 14".&, 5); #= G20 [0, 14, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 G21 = back_edge_count("01 12 21 13 31 14".&, 5); #= G21 2
+stc u32 G22 = reachable("01 12 23 34 45 56 67 78 89".&, 10); #= G22 1023
+stc [10]u32 G23 = dominators("01 12 23 34 45 56 67 78 89".&, 10); #= G23 [1, 3, 7, 15, 31, 63, 127, 255, 511, 1023]
+stc [10]u32 G24 = loops("01 10 12".&, 3); #= G24 [3, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 G25 = back_edge_count("01 10 12".&, 3); #= G25 1
+stc u32 G26 = reachable("".&, 1); #= G26 1
+stc [10]u32 G27 = dominators("".&, 1); #= G27 [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [10]i32 G28 = idoms("01 02 12 23 24 34".&, 5); #= G28 [-1, 0, 0, 2, 2, 0, 0, 0, 0, 0]
+stc u32 G29 = reachable("01 06 12 13 14 15 21 37 46 72 74".&, 8); #= G29 255
+stc [10]u32 G30 = dominators("01 06 12 13 14 15 21 37 46 72 74".&, 8); #= G30 [1, 3, 7, 11, 19, 35, 65, 139, 0, 0]
+stc [10]i32 G31 = idoms("01 06 12 13 14 15 21 37 46 72 74".&, 8); #= G31 [-1, 0, 1, 1, 1, 1, 0, 3, 0, 0]
+stc [10]u32 G32 = loops("01 06 12 13 14 15 21 37 46 72 74".&, 8); #= G32 [0, 142, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 G33 = back_edge_count("01 06 12 13 14 15 21 37 46 72 74".&, 8); #= G33 1
+stc [10]i32 G34 = idoms("01 02 03 04 07 15 16 33 47 57".&, 8); #= G34 [-1, 0, 0, 0, 0, 1, 1, 0, 0, 0]
+stc [10]u32 G35 = loops("01 02 03 04 07 15 16 33 47 57".&, 8); #= G35 [0, 0, 0, 8, 0, 0, 0, 0, 0, 0]
+stc u32 G36 = back_edge_count("01 02 03 04 07 15 16 33 47 57".&, 8); #= G36 1
+stc [10]u32 G37 = dominators("01 04 12 13 14 16 25 26 34 61 67".&, 8); #= G37 [1, 3, 7, 11, 17, 39, 67, 195, 0, 0]
+stc [10]i32 G38 = idoms("01 04 12 13 14 16 25 26 34 61 67".&, 8); #= G38 [-1, 0, 1, 1, 0, 2, 1, 6, 0, 0]
+stc [10]u32 G39 = loops("01 04 12 13 14 16 25 26 34 61 67".&, 8); #= G39 [0, 70, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 G40 = back_edge_count("01 04 12 13 14 16 25 26 34 61 67".&, 8); #= G40 1
+stc [10]u32 G41 = live_in("01 12 21 13".&, 4, [0, 5, 6, 2].&, [7, 0, 3, 0].&); #= G41 [0, 7, 6, 2, 0, 0, 0, 0, 0, 0]
+stc [10]u32 G42 = live_out("01 12 21 13".&, 4, [0, 5, 6, 2].&, [7, 0, 3, 0].&); #= G42 [7, 6, 7, 0, 0, 0, 0, 0, 0, 0]
+stc [10]u32 G43 = live_in("01 02 13 23".&, 4, [0, 1, 2, 3].&, [3, 0, 0, 0].&); #= G43 [0, 3, 3, 3, 0, 0, 0, 0, 0, 0]
+stc [10]u32 G44 = live_out("01 02 13 23".&, 4, [0, 1, 2, 3].&, [3, 0, 0, 0].&); #= G44 [3, 3, 3, 0, 0, 0, 0, 0, 0, 0]
+stc [10]u32 G45 = live_in("01 12".&, 3, [0, 0, 1].&, [1, 1, 0].&); #= G45 [0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+stc [10]u32 G46 = live_out("01 12".&, 3, [0, 0, 1].&, [1, 1, 0].&); #= G46 [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [10]u32 G47 = live_in("01 12 23 32 34 41 45".&, 6, [0, 1, 2, 4, 8, 3].&, [1, 2, 4, 8, 2, 0].&); #= G47 [0, 1, 3, 7, 9, 3, 0, 0, 0, 0]
+stc [10]u32 G48 = live_out("01 12 23 32 34 41 45".&, 6, [0, 1, 2, 4, 8, 3].&, [1, 2, 4, 8, 2, 0].&); #= G48 [1, 3, 7, 11, 3, 0, 0, 0, 0, 0]
+stc u32 G49 = bad_edges("01 19".&, 4); #= G49 1
+stc u32 G50 = bad_edges("05 50".&, 3); #= G50 1
+stc u32 G51 = bad_edges("01 12".&, 3); #= G51 0
+
+$main = () {}

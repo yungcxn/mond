@@ -1,0 +1,194 @@
+variant Dir = +(Up, Down, Idle) tagof u8;
+variant Event = +(Call(u8 floor), Tick, DoorOpen, DoorClose, Emergency) tagof u8;
+
+type Elevator = *(mut u8 floor, mut Dir dir, mut bool open, mut [8]bool requests, mut u32 moved, mut bool halted) !{
+    fun pending_above = () -> bool {
+        for f in (self.floor + 1)..<8: if self.requests[f]: ret true;
+        ret false;
+    }
+
+    fun pending_below = () -> bool {
+        for f in 0..<self.floor: if self.requests[f]: ret true;
+        ret false;
+    }
+
+    fun choose = () {
+        if self.requests[self.floor] {
+            self.requests[self.floor] = false;
+            self.open = true;
+            self.dir = Dir.Idle;
+            ret;
+        }
+        if self.dir.$tag == Dir.Up.$tag and self.pending_above(): ret;
+        if self.dir.$tag == Dir.Down.$tag and self.pending_below(): ret;
+        self.dir = if self.pending_above(): Dir.Up else: if self.pending_below(): Dir.Down else: Dir.Idle;
+    }
+
+    fun handle = (Event e) {
+        if self.halted: ret;
+        match e {
+            Event.Call(f) => self.requests[f] = true,
+            Event.DoorOpen => self.open = true,
+            Event.DoorClose => self.open = false,
+            Event.Emergency => {
+                self.halted = true;
+                self.dir = Dir.Idle;
+            },
+            Event.Tick => {
+                if self.open {
+                    self.open = false;
+                    ret;
+                }
+                self.choose();
+                match self.dir.$tag {
+                    0 => {
+                        self.floor += 1;
+                        self.moved += 1;
+                    },
+                    1 => {
+                        self.floor -= 1;
+                        self.moved += 1;
+                    },
+                    _ => {},
+                }
+            },
+        }
+    }
+}
+
+variant Tx = +(Deposit(u32 cents), Withdraw(u32 cents), Fee(u32 cents), Transfer(u8 to, u32 cents)) tagof u8;
+variant Outcome = +(Done, Insufficient(u32 short), Frozen, Rejected) tagof u8;
+
+type Ledger = *(mut [4]u32 balance, mut [4]bool frozen, mut u32 applied, mut u32 rejected) !{
+    fun apply = (u8 acct, Tx tx) -> Outcome {
+        if self.frozen[acct] {
+            self.rejected += 1;
+            ret Outcome.Frozen;
+        }
+        Outcome out = match tx {
+            Tx.Deposit(c) => {
+                self.balance[acct] += c;
+                Outcome.Done;
+            },
+            Tx.Withdraw(c) => if self.balance[acct] < c: Outcome.Insufficient(short = c - self.balance[acct]) else: {
+                self.balance[acct] -= c;
+                Outcome.Done;
+            },
+            Tx.Fee(c) => {
+                self.balance[acct] = if self.balance[acct] > c: self.balance[acct] - c else: 0;
+                Outcome.Done;
+            },
+            Tx.Transfer(to, c) => if to >= 4 or self.frozen[to]: Outcome.Rejected else: if self.balance[acct] < c: Outcome.Insufficient(short = c - self.balance[acct]) else: {
+                self.balance[acct] -= c;
+                self.balance[to] += c;
+                Outcome.Done;
+            },
+        };
+        match out {
+            Outcome.Done => self.applied += 1,
+            _ => self.rejected += 1,
+        }
+        ret out;
+    }
+
+    fun total = () -> u32 {
+        mut u32 t = 0;
+        for b in self.balance: t += b;
+        ret t;
+    }
+}
+
+type Item = *(mut u32 sku, mut u32 qty, mut u32 price);
+
+type Inventory = *(mut [6]Item items, mut u32 count) !{
+    fun add = (u32 sku, u32 qty, u32 price) -> bool {
+        for i in 0..<self.count {
+            if self.items[i].sku == sku {
+                self.items[i].qty += qty;
+                ret true;
+            }
+        }
+        if self.count == 6: ret false;
+        self.items[self.count].sku = sku;
+        self.items[self.count].qty = qty;
+        self.items[self.count].price = price;
+        self.count += 1;
+        ret true;
+    }
+
+    fun take = (u32 sku, u32 qty) -> u32 {
+        for i in 0..<self.count {
+            if self.items[i].sku == sku {
+                u32 got = if self.items[i].qty < qty: self.items[i].qty else: qty;
+                self.items[i].qty -= got;
+                ret got;
+            }
+        }
+        ret 0;
+    }
+
+    fun stock = () -> u32 {
+        mut u32 n = 0;
+        for i in 0..<self.count: n += self.items[i].qty;
+        ret n;
+    }
+}
+
+# LIMIT: a variant field of a zeroed record (`mut Elevator e;`) has no value and reading it is not_static, so the record is built with every variant field given
+fun new_elevator = () -> Elevator {
+    [8]bool none;
+    ret Elevator(floor = 0, dir = Dir.Idle, open = false, requests = none, moved = 0, halted = false);
+}
+
+stcfun elevator_run = () -> u32 {
+    mut Elevator e = new_elevator();
+    [12]Event script = [
+        Event.Call(3), Event.Tick, Event.Tick, Event.Call(1), Event.Tick, Event.Tick,
+        Event.Tick, Event.Tick, Event.Tick, Event.Tick, Event.Tick, Event.Tick,
+    ];
+    for ev in script: e.handle(ev);
+    ret e.floor as u32 * 1000 + e.moved * 100 + e.dir.$tag as u32 * 10 + e.open as u32;
+}
+
+stcfun elevator_halt = () -> u32 {
+    mut Elevator e = new_elevator();
+    e.handle(Event.Call(5));
+    e.handle(Event.Tick);
+    e.handle(Event.Tick);
+    e.handle(Event.Emergency);
+    e.handle(Event.Tick);
+    e.handle(Event.Call(0));
+    ret e.floor as u32 * 100 + e.moved * 10 + e.halted as u32;
+}
+
+stcfun ledger_run = () -> u32 {
+    mut Ledger l;
+    do l.apply(0, Tx.Deposit(1000));
+    do l.apply(1, Tx.Deposit(250));
+    a = l.apply(0, Tx.Withdraw(400));
+    b = l.apply(1, Tx.Withdraw(400));
+    c = l.apply(0, Tx.Transfer(1, 100));
+    d = l.apply(0, Tx.Transfer(9, 100));
+    do l.apply(1, Tx.Fee(1000));
+    l.frozen[2] = true;
+    e = l.apply(2, Tx.Deposit(5));
+    f = l.apply(0, Tx.Transfer(2, 10));
+    short = match b { Outcome.Insufficient(s) => s, _ => 0 };
+    ret l.total() * 100000 + l.applied * 10000 + l.rejected * 1000 + short + (d.$tag as u32) * 10000000;
+}
+
+stcfun inventory_run = () -> u32 {
+    mut Inventory inv;
+    do inv.add(100, 5, 10);
+    do inv.add(200, 3, 20);
+    do inv.add(100, 2, 10);
+    u32 took = inv.take(100, 4) + inv.take(200, 10) + inv.take(999, 1);
+    ret inv.stock() * 100 + took * 10 + inv.count;
+}
+
+stc u32 EL = elevator_run(); #= EL 1520
+stc u32 EH = elevator_halt(); #= EH 221
+stc u32 LG = ledger_run(); #= LG 80054150
+stc u32 IV = inventory_run(); #= IV 372
+
+$main = () {}

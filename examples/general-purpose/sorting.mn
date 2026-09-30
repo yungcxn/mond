@@ -1,0 +1,258 @@
+fun swap = (*[]u32 a, u64 i, u64 j) {
+    u32 t = a.*[i];
+    a.*[i] = a.*[j];
+    a.*[j] = t;
+}
+
+fun bubble = (*[]u32 a) {
+    mut u64 n = a.$len;
+    mut bool swapped = true;
+    while swapped {
+        swapped = false;
+        for i in 1..<n {
+            if a.*[i - 1] > a.*[i] {
+                swap(a, i - 1, i);
+                swapped = true;
+            }
+        }
+        n -= 1;
+    }
+}
+
+fun insertion = (*[]u32 a) {
+    for i in 1..<a.$len {
+        mut u64 j = i;
+        while j > 0 and a.*[j - 1] > a.*[j] {
+            swap(a, j - 1, j);
+            j -= 1;
+        }
+    }
+}
+
+fun selection = (*[]u32 a) {
+    for i in 0..<a.$len {
+        mut u64 m = i;
+        for j in (i + 1)..<a.$len: if a.*[j] < a.*[m]: m = j;
+        swap(a, i, m);
+    }
+}
+
+fun pack = (&[]u32 a) -> u64 {
+    mut u64 h = 0;
+    for x in a.*: h = h * 10 + x as u64;
+    ret h;
+}
+
+stcfun run_bubble = () -> u64 {
+    mut [6]u32 xs = [5, 2, 9, 1, 5, 6];
+    bubble(xs.&);
+    ret pack(xs.&);
+}
+
+stcfun run_insertion = () -> u64 {
+    mut [6]u32 xs = [5, 2, 9, 1, 5, 6];
+    insertion(xs.&);
+    ret pack(xs.&);
+}
+
+stcfun run_selection = () -> u64 {
+    mut [6]u32 xs = [5, 2, 9, 1, 5, 6];
+    selection(xs.&);
+    ret pack(xs.&);
+}
+
+stc u64 BB = run_bubble(); #= BB 125569
+stc u64 IN = run_insertion(); #= IN 125569
+stc u64 SE = run_selection(); #= SE 125569
+
+fun partition = (*[]u32 a, u64 lo, u64 hi) -> u64 {
+    u32 pivot = a.*[hi];
+    mut u64 i = lo;
+    for j in lo..<hi {
+        if a.*[j] < pivot {
+            swap(a, i, j);
+            i += 1;
+        }
+    }
+    swap(a, i, hi);
+    ret i;
+}
+
+fun quick = (*[]u32 a, u64 lo, u64 hi) {
+    if lo >= hi: ret;
+    u64 p = partition(a, lo, hi);
+    if p > lo: quick(a, lo, p - 1);
+    quick(a, p + 1, hi);
+}
+
+fun merge = (*[]u32 a, *[]u32 tmp, u64 lo, u64 mid, u64 hi) {
+    mut u64 i = lo;
+    mut u64 j = mid;
+    mut u64 k = lo;
+    while i < mid and j < hi {
+        if a.*[i] <= a.*[j] {
+            tmp.*[k] = a.*[i];
+            i += 1;
+        } else {
+            tmp.*[k] = a.*[j];
+            j += 1;
+        }
+        k += 1;
+    }
+    while i < mid { tmp.*[k] = a.*[i]; i += 1; k += 1; }
+    while j < hi { tmp.*[k] = a.*[j]; j += 1; k += 1; }
+    for x in lo..<hi: a.*[x] = tmp.*[x];
+}
+
+fun merge_sort = (*[]u32 a, *[]u32 tmp, u64 lo, u64 hi) {
+    if hi - lo < 2: ret;
+    u64 mid = lo + (hi - lo) / 2;
+    merge_sort(a, tmp, lo, mid);
+    merge_sort(a, tmp, mid, hi);
+    merge(a, tmp, lo, mid, hi);
+}
+
+fun sift_down = (*[]u32 a, u64 start, u64 end) {
+    mut u64 root = start;
+    while root * 2 + 1 < end {
+        mut u64 child = root * 2 + 1;
+        if child + 1 < end and a.*[child] < a.*[child + 1]: child += 1;
+        if a.*[root] >= a.*[child]: ret;
+        swap(a, root, child);
+        root = child;
+    }
+}
+
+fun heap_sort = (*[]u32 a) {
+    u64 n = a.$len;
+    mut u64 start = n / 2;
+    while start > 0 {
+        start -= 1;
+        sift_down(a, start, n);
+    }
+    mut u64 end = n;
+    while end > 1 {
+        end -= 1;
+        swap(a, 0, end);
+        sift_down(a, 0, end);
+    }
+}
+
+fun shell = (*[]u32 a) {
+    mut u64 gap = a.$len / 2;
+    while gap > 0 {
+        for i in gap..<a.$len {
+            u32 t = a.*[i];
+            mut u64 j = i;
+            while j >= gap and a.*[j - gap] > t {
+                a.*[j] = a.*[j - gap];
+                j -= gap;
+            }
+            a.*[j] = t;
+        }
+        gap /= 2;
+    }
+}
+
+fun counting = (*[]u32 a, u32 max) {
+    mut [16]u32 counts;
+    for x in a.*: counts[x] += 1;
+    mut u64 at = 0;
+    for v in 0..=max {
+        for 0..<counts[v] {
+            a.*[at] = v;
+            at += 1;
+        }
+    }
+}
+
+fun bsearch = (&[]u32 a, u32 key) -> i64 {
+    mut i64 lo = 0;
+    mut i64 hi = a.$len as i64 - 1;
+    while lo <= hi {
+        i64 mid = lo + (hi - lo) / 2;
+        u32 v = a.*[mid as u64];
+        if v == key: ret mid;
+        if v < key: lo = mid + 1 else: hi = mid - 1;
+    }
+    ret -1;
+}
+
+fun is_sorted = (&[]u32 a) -> bool {
+    for i in 1..<a.$len: if a.*[i - 1] > a.*[i]: ret false;
+    ret true;
+}
+
+stcfun run_quick = () -> u64 {
+    mut [10]u32 xs = [9, 3, 7, 1, 8, 2, 8, 0, 5, 4];
+    quick(xs.&, 0, 9);
+    ret pack(xs.&) * 10 + is_sorted(xs.&) as u64;
+}
+
+stcfun run_merge = () -> u64 {
+    mut [10]u32 xs = [9, 3, 7, 1, 8, 2, 8, 0, 5, 4];
+    mut [10]u32 tmp;
+    merge_sort(xs.&, tmp.&, 0, 10);
+    ret pack(xs.&) * 10 + is_sorted(xs.&) as u64;
+}
+
+stcfun run_heap = () -> u64 {
+    mut [10]u32 xs = [9, 3, 7, 1, 8, 2, 8, 0, 5, 4];
+    heap_sort(xs.&);
+    ret pack(xs.&) * 10 + is_sorted(xs.&) as u64;
+}
+
+stcfun run_shell = () -> u64 {
+    mut [10]u32 xs = [9, 3, 7, 1, 8, 2, 8, 0, 5, 4];
+    shell(xs.&);
+    ret pack(xs.&) * 10 + is_sorted(xs.&) as u64;
+}
+
+stcfun run_counting = () -> u64 {
+    mut [10]u32 xs = [9, 3, 7, 1, 8, 2, 8, 0, 5, 4];
+    counting(xs.&, 9);
+    ret pack(xs.&) * 10 + is_sorted(xs.&) as u64;
+}
+
+stcfun run_reversed = () -> u64 {
+    mut [8]u32 xs = [8, 7, 6, 5, 4, 3, 2, 1];
+    quick(xs.&, 0, 7);
+    ret pack(xs.&);
+}
+
+stcfun run_sorted_input = () -> u64 {
+    mut [8]u32 xs = [1, 2, 3, 4, 5, 6, 7, 8];
+    mut [8]u32 tmp;
+    merge_sort(xs.&, tmp.&, 0, 8);
+    ret pack(xs.&);
+}
+
+stcfun run_dupes = () -> u64 {
+    mut [7]u32 xs = [4, 4, 4, 4, 4, 4, 4];
+    heap_sort(xs.&);
+    ret pack(xs.&);
+}
+
+stcfun run_single = () -> u64 {
+    mut [1]u32 xs = [7,];
+    quick(xs.&, 0, 0);
+    ret pack(xs.&);
+}
+
+stcfun run_search = () -> i64 {
+    [8]u32 xs = [1, 3, 5, 7, 9, 11, 13, 15];
+    ret bsearch(xs.&, 11) * 100 + bsearch(xs.&, 1) * 10 + bsearch(xs.&, 4);
+}
+
+stc u64 QS = run_quick(); #= QS 1234578891
+stc u64 MS = run_merge(); #= MS 1234578891
+stc u64 HS = run_heap(); #= HS 1234578891
+stc u64 SH = run_shell(); #= SH 1234578891
+stc u64 CS = run_counting(); #= CS 1234578891
+stc u64 RV = run_reversed(); #= RV 12345678
+stc u64 SI = run_sorted_input(); #= SI 12345678
+stc u64 DU = run_dupes(); #= DU 4444444
+stc u64 ON = run_single(); #= ON 7
+stc i64 BS = run_search(); #= BS 499
+
+$main = () {}

@@ -1,0 +1,256 @@
+fun copy = (*[]u8 dst, &[]u8 src) {
+    for i in 0..<src.$len: dst.*[i] = src.*[i];
+}
+
+fun roman_value = (u8 c) -> u32: ret match c {
+    'I' => 1, 'V' => 5, 'X' => 10, 'L' => 50, 'C' => 100, 'D' => 500, 'M' => 1000,
+    _ => 0,
+}
+
+fun from_roman = (&[]u8 s) -> u32 {
+    mut u32 total = 0;
+    for i in 0..<s.$len {
+        u32 v = roman_value(s.*[i]);
+        if i + 1 < s.$len and roman_value(s.*[i + 1]) > v: total -= v else: total += v;
+    }
+    ret total;
+}
+
+fun to_roman = (u32 n, *[16]u8 out) -> u32 {
+    [13]u32 vals = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1];
+    [13]u8 first = ['M', 'C', 'D', 'C', 'C', 'X', 'L', 'X', 'X', 'I', 'V', 'I', 'I'];
+    [13]u8 second = [0, 'M', 0, 'D', 0, 'C', 0, 'L', 0, 'X', 0, 'V', 0];
+    mut u32 rest = n;
+    mut u32 len = 0;
+    for i in 0..<13 {
+        while rest >= vals[i] {
+            rest -= vals[i];
+            if second[i] != 0 {
+                out.*[len] = first[i];
+                len += 1;
+                out.*[len] = second[i];
+                len += 1;
+            } else {
+                out.*[len] = first[i];
+                len += 1;
+            }
+        }
+    }
+    ret len;
+}
+
+fun luhn = (&[]u8 digits) -> bool {
+    mut u32 sum = 0;
+    mut bool dbl = false;
+    mut u64 i = digits.$len;
+    while i > 0 {
+        i -= 1;
+        mut u32 d = (digits.*[i] - '0') as u32;
+        if dbl {
+            d *= 2;
+            if d > 9: d -= 9;
+        }
+        sum += d;
+        dbl = !dbl;
+    }
+    ret sum % 10 == 0;
+}
+
+fun b64_char = (u32 v) -> u8: ret match v {
+    0..=25 => 'A' + v as u8,
+    26..=51 => 'a' + (v - 26) as u8,
+    52..=61 => '0' + (v - 52) as u8,
+    62 => '+',
+    _ => '/',
+}
+
+fun base64 = (&[]u8 data, *[32]u8 out) -> u32 {
+    mut u32 n = 0;
+    mut u64 i = 0;
+    while i < data.$len {
+        u32 b0 = data.*[i] as u32;
+        u32 b1 = if i + 1 < data.$len: data.*[i + 1] as u32 else: 0;
+        u32 b2 = if i + 2 < data.$len: data.*[i + 2] as u32 else: 0;
+        u32 triple = (b0 << 16) | (b1 << 8) | b2;
+        out.*[n] = b64_char((triple >> 18) & 63);
+        out.*[n + 1] = b64_char((triple >> 12) & 63);
+        out.*[n + 2] = if i + 1 < data.$len: b64_char((triple >> 6) & 63) else: '=';
+        out.*[n + 3] = if i + 2 < data.$len: b64_char(triple & 63) else: '=';
+        n += 4;
+        i += 3;
+    }
+    ret n;
+}
+
+fun prefix_table = (&[]u8 p, *[16]u32 t) {
+    t.*[0] = 0;
+    mut u32 k = 0;
+    for i in 1..<p.$len {
+        while k > 0 and p.*[k] != p.*[i]: k = t.*[k - 1];
+        if p.*[k] == p.*[i]: k += 1;
+        t.*[i] = k;
+    }
+}
+
+fun kmp_count = (&[]u8 text, &[]u8 pat) -> u32 {
+    mut [16]u32 t;
+    prefix_table(pat, t.&);
+    mut u32 k = 0;
+    mut u32 found = 0;
+    for c in text.* {
+        while k > 0 and pat.*[k] != c: k = t[k - 1];
+        if pat.*[k] == c: k += 1;
+        if k == pat.$len {
+            found += 1;
+            k = t[k - 1];
+        }
+    }
+    ret found;
+}
+
+fun glob = (&[]u8 pat, &[]u8 s, u64 pi, u64 si) -> bool {
+    if pi == pat.$len: ret si == s.$len;
+    if pat.*[pi] == '*' {
+        for skip in si..=s.$len: if glob(pat, s, pi + 1, skip): ret true;
+        ret false;
+    }
+    if si == s.$len: ret false;
+    if pat.*[pi] == '?' or pat.*[pi] == s.*[si]: ret glob(pat, s, pi + 1, si + 1);
+    ret false;
+}
+
+fun rot13 = (*[]u8 s) {
+    for i in 0..<s.$len {
+        u8 c = s.*[i];
+        if c >= 'a' and c <= 'z': s.*[i] = 'a' + (c - 'a' + 13) % 26;
+        if c >= 'A' and c <= 'Z': s.*[i] = 'A' + (c - 'A' + 13) % 26;
+    }
+}
+
+fun hex_digit = (u8 v) -> u8: ret if v < 10: '0' + v else: 'a' + (v - 10);
+
+fun hex_sum = (&[]u8 data) -> u32 {
+    mut u32 h = 0;
+    for b in data.* {
+        h = h * 31 + hex_digit(b >> 4) as u32;
+        h = h * 31 + hex_digit(b & 15) as u32;
+    }
+    ret h;
+}
+
+fun parse_csv_sum = (&[]u8 line) -> i32 {
+    mut i32 total = 0;
+    mut i32 cur = 0;
+    mut bool neg = false;
+    for c in line.* {
+        match c {
+            ',' => {
+                total += if neg: -cur else: cur;
+                cur = 0;
+                neg = false;
+            },
+            '-' => neg = true,
+            '0'..='9' => cur = cur * 10 + (c - '0') as i32,
+            _ => {},
+        }
+    }
+    ret total + if neg: -cur else: cur;
+}
+
+fun lcp_len = (&[]u8 a, &[]u8 b, &[]u8 c) -> u32 {
+    mut u32 n = 0;
+    while n < a.$len and n < b.$len and n < c.$len {
+        if a.*[n] != b.*[n] or a.*[n] != c.*[n]: brk;
+        n += 1;
+    }
+    ret n;
+}
+
+fun letter_freq = (&[]u8 s) -> u32 {
+    mut [26]u32 f;
+    for c in s.*: if c >= 'a' and c <= 'z': f[c - 'a'] += 1;
+    mut u32 best = 0;
+    for i in 1..<26: if f[i] > f[best]: best = i;
+    ret best * 100 + f[best];
+}
+
+fun run_length = (&[]u8 s, *[32]u8 out) -> u32 {
+    mut u32 n = 0;
+    mut u64 i = 0;
+    while i < s.$len {
+        mut u64 j = i;
+        while j < s.$len and s.*[j] == s.*[i]: j += 1;
+        out.*[n] = '0' + (j - i) as u8;
+        out.*[n + 1] = s.*[i];
+        n += 2;
+        i = j;
+    }
+    ret n;
+}
+
+fun sum_bytes = (&[]u8 s, u32 n) -> u32 {
+    mut u32 t = 0;
+    for i in 0..<n: t = t * 131 + s.*[i] as u32;
+    ret t;
+}
+
+stcfun roman_round = (u32 n) -> u32 {
+    mut [16]u8 buf;
+    u32 len = to_roman(n, buf.&);
+    ret from_roman(buf.&) * 100 + len;
+}
+
+# BUG: a stcfun does not accept `*[N]u8` for an `&[]u8` parameter at a static call (type_mismatch, a plain fun does), so this one is a plain fun
+fun b64 = (&[]u8 data) -> u64 {
+    mut [32]u8 out;
+    u32 n = base64(data, out.&);
+    ret n as u64 * 1000000000 + sum_bytes(out.&, n) as u64 % 1000000000;
+}
+
+stcfun rot_twice = () -> u32 {
+    mut [13]u8 s;
+    copy(s.&, "Hello, World!".&);
+    rot13(s.&);
+    u32 once = sum_bytes(s.&, 13);
+    rot13(s.&);
+    ret once % 1000 * 1000 + sum_bytes(s.&, 13) % 1000;
+}
+
+stcfun runs = () -> u32 {
+    mut [32]u8 out;
+    u32 n = run_length("aaabccddddd".&, out.&);
+    ret n * 1000000 + sum_bytes(out.&, n) % 1000000;
+}
+
+stc u32 RM1 = from_roman("MCMXCIV".&); #= RM1 1994
+stc u32 RM2 = from_roman("XLII".&); #= RM2 42
+stc u32 RM3 = from_roman("".&); #= RM3 0
+stc u32 RR1 = roman_round(1994); #= RR1 199407
+stc u32 RR2 = roman_round(3888); #= RR2 388815
+stc u32 RR3 = roman_round(4); #= RR3 402
+stc bool LU1 = luhn("4539578763621486".&); #= LU1 true
+stc bool LU2 = luhn("4539578763621487".&); #= LU2 false
+stc bool LU3 = luhn("79927398713".&); #= LU3 true
+stc u64 B1 = b64("Man".&); #= B1 4190341938
+stc u64 B2 = b64("Ma".&); #= B2 4190341751
+stc u64 B3 = b64("M".&); #= B3 4190237737
+stc u64 B4 = b64("hello world".&); #= B4 16967189818
+stc u32 K1 = kmp_count("abababab".&, "abab".&); #= K1 3
+stc u32 K2 = kmp_count("aaaaa".&, "aa".&); #= K2 4
+stc u32 K3 = kmp_count("abc".&, "d".&); #= K3 0
+stc u32 K4 = kmp_count("ababcabcabababd".&, "ababd".&); #= K4 1
+stc bool G1 = glob("a*b?d".&, "axxbcd".&, 0, 0); #= G1 true
+stc bool G2 = glob("*".&, "".&, 0, 0); #= G2 true
+stc bool G3 = glob("a*b".&, "acbc".&, 0, 0); #= G3 false
+stc bool G4 = glob("?".&, "".&, 0, 0); #= G4 false
+stc bool G5 = glob("**a**".&, "bab".&, 0, 0); #= G5 true
+stc u32 RT = rot_twice(); #= RT 785285
+stc u32 HS = hex_sum("\n\r".&) + hex_sum("Az".&); #= HS 3122796
+stc i32 CSV1 = parse_csv_sum("10,20,-5,7".&); #= CSV1 32
+stc i32 CSV2 = parse_csv_sum("-1,-2,-3".&); #= CSV2 -6
+stc i32 CSV3 = parse_csv_sum("".&); #= CSV3 0
+stc u32 LC = lcp_len("interstellar".&, "internet".&, "interval".&); #= LC 5
+stc u32 LF = letter_freq("the quick brown fox jumps over the lazy dog".&); #= LF 1404
+stc u32 RL = runs(); #= RL 8336243
+
+$main = () {}

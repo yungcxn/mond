@@ -1,0 +1,171 @@
+variant Expr = +(Lit(i64 v), Neg(u32 inner), Bin(u8 op, u32 l, u32 r), Var(u8 name), Nil) tagof u8;
+variant Cell = +(Empty, Wall, Door(bool open), Item(u8 kind, u32 qty)) tagof u8;
+variant Pt = +(At(i32 x, i32 y), Off) tagof u8;
+type Line = *(Pt a, Pt b);
+type Ent = *(Cell cell, u8 hp);
+
+# BUG: `-10..=-2` parses as `-(10..=-2)` and reports type_mismatch (a sequence), so a negative lower bound is parenthesized
+fun neg_lit = (i32 n) -> i32: ret match n { -1 => 100, (-10)..=-2 => 200, 0 => 300, _ => 400 }
+
+fun sign_word = (i64 n) -> u8: ret match n {
+    ..<-1000000 => 0,
+    (-1000000)..<0 => 1,
+    0 => 2,
+    1..=1000000 => 3,
+    _ => 4,
+}
+
+fun big_lits = (u64 n) -> u8: ret match n {
+    0xFFFF_FFFF_FFFF_FFFF => 1,
+    0x8000_0000_0000_0000 => 2,
+    4294967296 => 3,
+    _ => 0,
+}
+
+fun char_class = (u8 c) -> u8: ret match c {
+    'a'..='f' | 'A'..='F' | '0'..='9' => 1,
+    'g'..='z' | 'G'..='Z' => 2,
+    ' ' | '\t' | '\n' => 3,
+    '_' => 4,
+    _ => 0,
+}
+
+fun bool_pair = (bool a, bool b) -> u8: ret match a {
+    true => match b { true => 3, false => 2 },
+    false => match b { true => 1, false => 0 },
+}
+
+# LIMIT: exhaustiveness is decided per case, `Door(true)` and `Door(false)` together do not cover Door, and the same holds for every combination of payload or field patterns (line_kind), so a catch-all closes them
+fun cell_kind = (Cell c) -> u32: ret match c {
+    Cell.Empty => 0,
+    Cell.Wall => 1,
+    Cell.Door(true) => 2,
+    Cell.Door(_) => 3,
+    Cell.Item(0, _) => 4,
+    Cell.Item(k, 0) => 5 + k as u32 * 100,
+    Cell.Item(1..=3, q) => 6 + q * 1000,
+    Cell.Item(_, q) => 7 + q * 10000,
+}
+
+fun ent_kind = (Ent e) -> u32: ret match e {
+    Ent(cell = Cell.Wall, hp = _) => 1,
+    Ent(cell = Cell.Item(k, q), hp = 0) => 2 + (k as u32 + q) * 10,
+    Ent(cell = Cell.Item(_, _), hp = h) => 3 + h as u32 * 10,
+    # BUG: a record pattern that omits a field and holds only literals (`Ent(hp = 255)`) panics the compiler in has_vars, so every field is named
+    Ent(cell = _, hp = 255) => 4,
+    Ent(cell = c, hp = h) => 5,
+}
+
+fun line_kind = (Line l) -> i32: ret match l {
+    Line(a = Pt.At(x1, y1), b = Pt.At(x2, y2)) => (x2 - x1) * 100 + (y2 - y1),
+    Line(a = Pt.Off, b = Pt.Off) => -1,
+    Line(a = Pt.At(x, y), b = Pt.Off) => x + y,
+    _ => 0,
+}
+
+fun expr_class = (Expr e) -> u32: ret match e {
+    Expr.Lit(0) => 1,
+    Expr.Lit(v) => if v < 0: 2 else: 3,
+    Expr.Neg(_) => 4,
+    # BUG: an or-pattern whose alternatives bind the same names resolves but is not_static when executed, so the alternatives are separate arms
+    Expr.Bin('+', l, r) => 5 + l * 10 + r * 100,
+    Expr.Bin('-', l, r) => 5 + l * 10 + r * 100,
+    Expr.Bin('*', 1, r) => 6 + r * 10,
+    Expr.Bin(op, _, _) => 7 + op as u32 * 1000,
+    Expr.Var('x'..='z') => 8,
+    Expr.Var(n) => 9,
+    Expr.Nil => 10,
+}
+
+fun arm_bodies = (u32 n) -> u32 {
+    mut u32 acc = 0;
+    match n {
+        0 => acc = 1,
+        1 => {
+            acc = 2;
+            acc += 5;
+        },
+        2 => do acc += 100,
+        _ => {},
+    }
+    ret acc;
+}
+
+fun nested_match = (Cell a, Cell b) -> u32: ret match a {
+    Cell.Item(_, qa) => match b {
+        Cell.Item(_, qb) => qa + qb,
+        Cell.Empty => qa,
+        _ => 0,
+    },
+    Cell.Empty => match b { Cell.Empty => 1000, _ => 2000 },
+    _ => 3000,
+}
+
+variant Small = +(Some(u8), None = 0xFF) tagof self;
+
+fun small_sum = (Small a, Small b) -> u32 {
+    x = a ?? 0;
+    y = b ?? 0;
+    ret x as u32 + y as u32 * 1000;
+}
+
+fun small_chain = (Small a, Small b, Small c) -> u32: ret (a ?? b ?? c ?? 77) as u32;
+
+fun small_arrow = (Small s) -> u32 {
+    if s ?<- v: ret v as u32 + 1000;
+    ret 5;
+}
+
+fun small_match = (Small s) -> u32: ret match s {
+    Small.Some(0) => 1,
+    Small.Some(v) => v as u32 + 10,
+    Small.None => 0,
+}
+
+fun small_while = (Small a, Small b) -> u32 {
+    mut u32 n = 0;
+    if a ?<- x: n += x as u32;
+    if b ?<- y: n += y as u32 * 100;
+    ret n;
+}
+
+# LIMIT: `<-` labels the operand right before it (`a + b <- s` names b), so labelled expressions are parenthesized
+fun label_arrows = (i32 a, i32 b) -> i32 {
+    if ((a + b) <- s) > 10: ret s * 100;
+    if ((a * b) <- p) < 0: ret p;
+    ret ((a - b) <- d) * 2 + d;
+}
+
+fun early_exit = (Small a) -> u32 {
+    u8 v = a ?? ret 999;
+    ret v as u32;
+}
+
+stc i32 N1 = neg_lit(-1) + neg_lit(-5) * 10 + neg_lit(0) * 100 + neg_lit(-11) * 1000; #= N1 432100
+stc u32 SW = sign_word(-5000000) as u32 * 10000 + sign_word(-5) as u32 * 1000 + sign_word(0) as u32 * 100 + sign_word(9) as u32 * 10 + sign_word(5000000) as u32; #= SW 1234
+stc u32 BL = big_lits(0xFFFFFFFFFFFFFFFF) as u32 * 1000 + big_lits(9223372036854775808) as u32 * 100 + big_lits(4294967296) as u32 * 10 + big_lits(1) as u32; #= BL 1230
+stc u32 CC = char_class('c') as u32 * 10000 + char_class('q') as u32 * 1000 + char_class('\t') as u32 * 100 + char_class('_') as u32 * 10 + char_class('!') as u32; #= CC 12340
+stc u32 BP = bool_pair(true, true) as u32 * 1000 + bool_pair(true, false) as u32 * 100 + bool_pair(false, true) as u32 * 10 + bool_pair(false, false) as u32; #= BP 3210
+stc u32 CK1 = cell_kind(Cell.Empty) + cell_kind(Cell.Wall) * 10 + cell_kind(Cell.Door(true)) * 100 + cell_kind(Cell.Door(false)) * 1000; #= CK1 3210
+stc u32 CK2 = cell_kind(Cell.Item(0, 9)); #= CK2 4
+stc u32 CK3 = cell_kind(Cell.Item(4, 0)); #= CK3 405
+stc u32 CK4 = cell_kind(Cell.Item(2, 5)); #= CK4 5006
+stc u32 CK5 = cell_kind(Cell.Item(9, 2)); #= CK5 20007
+stc u32 EN = ent_kind(Ent(Cell.Wall, 7)) + ent_kind(Ent(Cell.Item(2, 3), 0)) * 10 + ent_kind(Ent(Cell.Item(2, 3), 4)) * 1000 + ent_kind(Ent(Cell.Empty, 255)) * 100000 + ent_kind(Ent(Cell.Empty, 1)) * 1000000; #= EN 5443521
+stc i32 LN = line_kind(Line(Pt.At(1, 2), Pt.At(4, 9))) * 10000 + line_kind(Line(Pt.Off, Pt.Off)) * 100 + line_kind(Line(Pt.At(3, 4), Pt.Off)) * 10 - line_kind(Line(Pt.Off, Pt.At(1, 1))); #= LN 3069970
+stc u32 EC = expr_class(Expr.Lit(0)) + expr_class(Expr.Lit(-4)) * 10 + expr_class(Expr.Lit(4)) * 100 + expr_class(Expr.Neg(3)) * 1000 + expr_class(Expr.Nil) * 10000; #= EC 104321
+stc u32 EB1 = expr_class(Expr.Bin('+', 2, 3)); #= EB1 325
+stc u32 EB2 = expr_class(Expr.Bin('*', 1, 4)); #= EB2 46
+stc u32 EB3 = expr_class(Expr.Bin('*', 2, 4)); #= EB3 42007
+stc u32 EV = expr_class(Expr.Var('y')) * 10 + expr_class(Expr.Var('a')); #= EV 89
+stc u32 AB = arm_bodies(0) + arm_bodies(1) * 10 + arm_bodies(2) * 1000 + arm_bodies(3) * 100000; #= AB 100071
+stc u32 NM = nested_match(Cell.Item(1, 5), Cell.Item(2, 6)) + nested_match(Cell.Item(1, 5), Cell.Empty) * 10 + nested_match(Cell.Item(1, 5), Cell.Wall) * 100 + nested_match(Cell.Empty, Cell.Empty) * 1000 + nested_match(Cell.Empty, Cell.Wall) * 10000 + nested_match(Cell.Wall, Cell.Wall) * 100000; #= NM 321000061
+stc u32 SS = small_sum(Small.Some(4), Small.None) + small_sum(Small.None, Small.Some(6)) * 10; #= SS 60004
+stc u32 SCH = small_chain(Small.None, Small.None, Small.None) * 1000000 + small_chain(Small.None, Small.Some(5), Small.Some(6)) * 1000 + small_chain(Small.Some(3), Small.Some(5), Small.None); #= SCH 77005003
+stc u32 SA = small_arrow(Small.Some(4)) * 10 + small_arrow(Small.None); #= SA 10045
+stc u32 SMT = small_match(Small.Some(0)) + small_match(Small.Some(9)) * 10 + small_match(Small.None) * 100; #= SMT 191
+stc u32 SWH = small_while(Small.Some(3), Small.Some(2)) * 1000 + small_while(Small.None, Small.Some(2)); #= SWH 203200
+stc i32 LA = label_arrows(6, 7) + label_arrows(-3, 4) * 10 + label_arrows(1, 2) * 1000; #= LA -1820
+stc u32 EE = early_exit(Small.Some(9)) + early_exit(Small.None) * 1000; #= EE 999009
+
+$main = () {}

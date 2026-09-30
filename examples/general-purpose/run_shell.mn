@@ -1,0 +1,106 @@
+fun print = (&u8 fmt);
+fun print = (&u8 fmt, i32 a);
+fun print = (&u8 fmt, u32 a);
+fun print = (&u8 fmt, &u8 a);
+fun print = (&u8 fmt, &u8 a, i32 b);
+
+variant Cmd = +(Echo, Add, Mul, Neg, Count, Help, Quit, Unknown) tagof u8;
+
+variant Outcome = +(Done(i32 value), Failed(u32 code), Stop) tagof u8;
+
+type Shell = *(mut i32 acc = 0, mut u32 ran = 0, mut u32 failed = 0) !{
+    fun note = (Outcome o) {
+        self.ran += 1;
+        match o {
+            Outcome.Done(v) => self.acc = v,
+            Outcome.Failed(c) => self.failed += 1,
+            Outcome.Stop => self.ran += 0,
+        }
+    }
+    fun summary = () -> u32: ret self.ran * 100 + self.failed;
+}
+
+# LIMIT: a `&u8` cannot be indexed, so C strings are read through a fixed size view
+fun digit_at = (&u8 s, u32 i) -> u8 {
+    &[16]u8 v = s as &[16]u8;
+    ret v.*[i];
+}
+
+fun parse = (&u8 s) -> i32 {
+    mut i32 sign = 1;
+    mut u32 i = 0;
+    if digit_at(s, 0) == '-' {
+        sign = -1;
+        i = 1;
+    }
+    mut i32 v = 0;
+    while i < 16 {
+        u8 c = digit_at(s, i);
+        if c < '0' or c > '9': brk;
+        v = v * 10 + (c - '0') as i32;
+        i += 1;
+    }
+    ret v * sign;
+}
+
+fun lookup = (&u8 name) -> Cmd {
+    ret match name {
+        "echo" => Cmd.Echo,
+        "add" => Cmd.Add,
+        "mul" => Cmd.Mul,
+        "neg" => Cmd.Neg,
+        "count" => Cmd.Count,
+        "help" | "?" => Cmd.Help,
+        "quit" | "exit" => Cmd.Quit,
+        _ => Cmd.Unknown,
+    };
+}
+
+fun fold_args = (&[]&u8 argv, u32 from, i32 init, (i32, i32) -> i32 f) -> i32 {
+    mut i32 acc = init;
+    for i in from..<argv.$len: acc = f(acc, parse(argv.*[i]));
+    ret acc;
+}
+
+fun run = (Cmd c, &[]&u8 argv) -> Outcome {
+    ret match c {
+        Cmd.Echo => {
+            for i in 2..<argv.$len: print("%s\n", argv.*[i]);
+            Outcome.Done(0);
+        },
+        Cmd.Add => Outcome.Done(fold_args(argv, 2, 0, (i32 a, i32 b): a + b)),
+        Cmd.Mul => Outcome.Done(fold_args(argv, 2, 1, (i32 a, i32 b): a * b)),
+        Cmd.Neg => {
+            if argv.$len < 3: ret Outcome.Failed(2);
+            Outcome.Done(-parse(argv.*[2]));
+        },
+        Cmd.Count => Outcome.Done(argv.$len as i32 - 2),
+        Cmd.Help => {
+            print("commands: echo add mul neg count help quit\n");
+            Outcome.Done(0);
+        },
+        Cmd.Quit => Outcome.Stop,
+        Cmd.Unknown => Outcome.Failed(1),
+    };
+}
+
+$main = (i32 argc, &[]&u8 argv) -> i32 {
+    mut Shell sh;
+    if argc < 2 {
+        print("usage: shell <command> args\n");
+        ret 64;
+    }
+    cmd = lookup(argv.*[1]); #: cmd +(Echo, Add, Mul, Neg, Count, Help, Quit, Unknown)
+    out = run(cmd, argv); #: out +(Done, Failed, Stop)
+    sh.note(out);
+    match out {
+        Outcome.Done(v) => print("= %d\n", v),
+        Outcome.Failed(code) => print("error %u\n", code),
+        Outcome.Stop => print("bye\n"),
+    }
+    s = sh.summary(); #: s u32
+    ret match out {
+        Outcome.Failed(code) => code as i32,
+        _ => 0,
+    };
+}

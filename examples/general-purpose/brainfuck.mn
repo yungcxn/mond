@@ -1,0 +1,98 @@
+type Machine = *(&[]u8 prog, mut [64]u8 tape, mut u32 ptr, mut u32 pc, mut [16]u8 out, mut u32 outn, mut [8]u8 input, mut u32 inn, mut u32 steps) !{
+    fun matching_fwd = () -> u32 {
+        mut u32 depth = 1;
+        mut u32 at = self.pc;
+        while depth > 0 {
+            at += 1;
+            match self.prog.*[at] {
+                '[' => depth += 1,
+                ']' => depth -= 1,
+                _ => {},
+            }
+        }
+        ret at;
+    }
+
+    fun matching_back = () -> u32 {
+        mut u32 depth = 1;
+        mut u32 at = self.pc;
+        while depth > 0 {
+            at -= 1;
+            match self.prog.*[at] {
+                ']' => depth += 1,
+                '[' => depth -= 1,
+                _ => {},
+            }
+        }
+        ret at;
+    }
+
+    fun run = () -> u32 {
+        while self.pc < self.prog.$len and self.steps < 20000 {
+            self.steps += 1;
+            match self.prog.*[self.pc] {
+                '>' => self.ptr += 1,
+                '<' => self.ptr -= 1,
+                '+' => self.tape[self.ptr] += 1,
+                '-' => self.tape[self.ptr] -= 1,
+                '.' => {
+                    self.out[self.outn] = self.tape[self.ptr];
+                    self.outn += 1;
+                },
+                ',' => {
+                    self.tape[self.ptr] = self.input[self.inn];
+                    self.inn += 1;
+                },
+                '[' => if self.tape[self.ptr] == 0: self.pc = self.matching_fwd(),
+                ']' => if self.tape[self.ptr] != 0: self.pc = self.matching_back(),
+                _ => {},
+            }
+            self.pc += 1;
+        }
+        ret self.outn;
+    }
+}
+
+fun output = (&[]u8 prog, &[]u8 input) -> u64 {
+    [64]u8 tape;
+    [16]u8 out;
+    mut [8]u8 inbuf;
+    for i in 0..<input.$len: inbuf[i] = input.*[i];
+    mut Machine m = Machine(prog = prog, tape = tape, ptr = 0, pc = 0, out = out, outn = 0, input = inbuf, inn = 0, steps = 0);
+    u32 n = m.run();
+    mut u64 h = 0;
+    for i in 0..<n: h = h * 256 + m.out[i] as u64;
+    ret h;
+}
+
+fun out_count = (&[]u8 prog) -> u32 {
+    [64]u8 tape;
+    [16]u8 out;
+    [8]u8 inbuf;
+    mut Machine m = Machine(prog = prog, tape = tape, ptr = 0, pc = 0, out = out, outn = 0, input = inbuf, inn = 0, steps = 0);
+    ret m.run();
+}
+
+fun steps_taken = (&[]u8 prog) -> u32 {
+    [64]u8 tape;
+    [16]u8 out;
+    [8]u8 inbuf;
+    mut Machine m = Machine(prog = prog, tape = tape, ptr = 0, pc = 0, out = out, outn = 0, input = inbuf, inn = 0, steps = 0);
+    do m.run();
+    ret m.steps;
+}
+
+stc u64 B1 = output("++++++++[>++++++++<-]>+.".&, "".&); #= B1 65
+stc u64 B2 = output("+++[>+++++<-]>[>++<-]>.".&, "".&); #= B2 30
+stc u64 B3 = output(",[.,]".&, "abc".&); #= B3 6382179
+# LIMIT: only \n \t \r \0 \\ \" are escapes, `\x02` silently lexes as the letter x, so raw bytes come from an array
+stc u64 B4 = output(",>,<[->+<]>.".&, [2, 3].&); #= B4 5
+stc u32 B5 = out_count("++++[>++++<-]>[.-]".&); #= B5 16
+stc u64 B6 = output("+[-]+++.".&, "".&); #= B6 3
+stc u64 B7 = output("-.".&, "".&); #= B7 255
+stc u64 B8 = output("++>+++<[->+<]>.[<+>-]<".&, "".&); #= B8 5
+stc u64 B9 = output("+[>+[>+<-]<-]>.".&, "".&); #= B9 0
+stc u64 BA = output("++[>++[>++<-]<-]>>.".&, "".&); #= BA 8
+stc u32 BS = steps_taken("+++[-]".&); #= BS 10
+
+$main = () {}

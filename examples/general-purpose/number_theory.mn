@@ -1,0 +1,369 @@
+type Egcd = *(i64 g, i64 x, i64 y);
+type Congruence = *(i64 r, i64 m);
+
+fun ext_gcd = (i64 a, i64 b) -> Egcd {
+    if b == 0: ret Egcd(a, 1, 0);
+    Egcd r = ext_gcd(b, a % b);
+    ret Egcd(r.g, r.y, r.x - (a / b) * r.y);
+}
+
+fun mod_inv = (i64 a, i64 m) -> i64 {
+    Egcd e = ext_gcd(((a % m) + m) % m, m);
+    if e.g != 1: ret -1;
+    ret ((e.x % m) + m) % m;
+}
+
+fun crt = (Congruence a, Congruence b) -> Congruence {
+    Egcd e = ext_gcd(a.m, b.m);
+    if (b.r - a.r) % e.g != 0: ret Congruence(-1, 0);
+    i64 l = a.m / e.g * b.m;
+    i64 step = ((b.r - a.r) / e.g) % (b.m / e.g);
+    i64 k = (((step * e.x) % (b.m / e.g)) + b.m / e.g) % (b.m / e.g);
+    ret Congruence(((a.r + a.m * k) % l + l) % l, l);
+}
+
+fun crt_all = (&[]Congruence cs) -> Congruence {
+    mut Congruence acc = Congruence(0, 1);
+    for c in cs.*: acc = crt(acc, c);
+    ret acc;
+}
+
+fun pow_mod = (u64 base, u64 e, u64 m) -> u64 {
+    mut u64 r = 1 % m;
+    mut u64 b = base % m;
+    mut u64 k = e;
+    while k > 0 {
+        if (k & 1) == 1: r = mul_mod(r, b, m);
+        b = mul_mod(b, b, m);
+        k = k >> 1;
+    }
+    ret r;
+}
+
+fun add_mod = (u64 a, u64 b, u64 m) -> u64: ret if a >= m - b: a - (m - b) else: a + b;
+
+fun mul_mod = (u64 a, u64 b, u64 m) -> u64 {
+    if a < 4294967296 and b < 4294967296: ret a * b % m;
+    mut u64 r = 0;
+    mut u64 x = a % m;
+    mut u64 k = b;
+    while k > 0 {
+        if (k & 1) == 1: r = add_mod(r, x, m);
+        x = add_mod(x, x, m);
+        k = k >> 1;
+    }
+    ret r;
+}
+
+fun witness = (u64 n, u64 a) -> bool {
+    mut u64 d = n - 1;
+    mut u32 s = 0;
+    while (d & 1) == 0 {
+        d = d >> 1;
+        s += 1;
+    }
+    mut u64 x = pow_mod(a, d, n);
+    if x == 1 or x == n - 1: ret false;
+    # LIMIT: a parenthesised range end (`0..<(s - 1)`) reports IllegalForFormat, so the parentheses are dropped
+    for 0..<s - 1 {
+        x = mul_mod(x, x, n);
+        if x == n - 1: ret false;
+    }
+    ret true;
+}
+
+fun is_prime_mr = (u64 n, u32 rounds) -> bool {
+    if n < 2: ret false;
+    [12]u64 bases = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
+    for i in 0..<12 {
+        u64 p = bases[i];
+        if n % p == 0: ret n == p;
+    }
+    for i in 0..<rounds: if witness(n, bases[i]): ret false;
+    ret true;
+}
+
+fun fib_pair = (u64 n) -> Congruence {
+    if n == 0: ret Congruence(0, 1);
+    Congruence h = fib_pair(n / 2);
+    i64 a = h.r;
+    i64 b = h.m;
+    i64 c = a * (2 * b - a);
+    i64 d = a * a + b * b;
+    ret if (n & 1) == 0: Congruence(c, d) else: Congruence(d, c + d);
+}
+
+fun totient = (u32 n) -> u32 {
+    mut u32 r = n;
+    mut u32 m = n;
+    mut u32 p = 2;
+    while p * p <= m {
+        if m % p == 0 {
+            while m % p == 0: m /= p;
+            r -= r / p;
+        }
+        p += 1;
+    }
+    if m > 1: r -= r / m;
+    ret r;
+}
+
+fun build_spf = (*[]u32 spf) {
+    for i in 0..<spf.$len: spf.*[i] = i as u32;
+    mut u32 i = 2;
+    while i * i < spf.$len as u32 {
+        if spf.*[i] == i {
+            mut u32 j = i * i;
+            while j < spf.$len as u32 {
+                if spf.*[j] == j: spf.*[j] = i;
+                j += i;
+            }
+        }
+        i += 1;
+    }
+}
+
+fun factor_signature = (&[]u32 spf, u32 n) -> u64 {
+    mut u32 m = n;
+    mut u64 sig = 0;
+    while m > 1 {
+        u32 p = spf.*[m];
+        mut u32 e = 0;
+        while m % p == 0 {
+            m /= p;
+            e += 1;
+        }
+        sig = sig * 100 + (p as u64);
+        sig = sig * 10 + (e as u64);
+    }
+    ret sig;
+}
+
+fun divisor_count = (&[]u32 spf, u32 n) -> u32 {
+    mut u32 m = n;
+    mut u32 count = 1;
+    while m > 1 {
+        u32 p = spf.*[m];
+        mut u32 e = 0;
+        while m % p == 0 {
+            m /= p;
+            e += 1;
+        }
+        count *= e + 1;
+    }
+    ret count;
+}
+
+fun iroot = (u64 n, u32 k) -> u64 {
+    mut u64 lo = 0;
+    mut u64 hi = if k == 2: 4294967295 else: 2642245;
+    while lo < hi {
+        u64 mid = lo + (hi - lo + 1) / 2;
+        mut u64 p = 1;
+        mut bool over = false;
+        for 0..<k {
+            if p > n / mid: over = true;
+            p *= mid;
+        }
+        if over or p > n: hi = mid - 1 else: lo = mid;
+    }
+    ret lo;
+}
+
+fun is_perfect_power = (u64 n) -> bool {
+    if n < 4: ret false;
+    for k in 2..=40 {
+        u64 r = iroot(n, k as u32);
+        if r < 2: brk;
+        mut u64 p = 1;
+        for 0..<k: p *= r;
+        if p == n: ret true;
+    }
+    ret false;
+}
+
+fun jacobi = (i64 a0, i64 n0) -> i32 {
+    mut i64 a = ((a0 % n0) + n0) % n0;
+    mut i64 n = n0;
+    mut i32 t = 1;
+    while a != 0 {
+        while (a & 1) == 0 {
+            a = a >> 1;
+            i64 r = n & 7;
+            if r == 3 or r == 5: t = -t;
+        }
+        i64 tmp = a;
+        a = n;
+        n = tmp;
+        if (a & 3) == 3 and (n & 3) == 3: t = -t;
+        a = a % n;
+    }
+    ret if n == 1: t else: 0;
+}
+
+fun binom_mod = (u32 n, u32 k, u32 p) -> u32 {
+    if k > n: ret 0;
+    mut u64 num = 1;
+    mut u64 den = 1;
+    for i in 0..<k {
+        num = num * ((n - i) as u64) % (p as u64);
+        den = den * ((i + 1) as u64) % (p as u64);
+    }
+    ret (num * (mod_inv(den as i64, p as i64) as u64) % (p as u64)) as u32;
+}
+
+stcfun eg = (i64 a, i64 b) -> i64 {
+    Egcd e = ext_gcd(a, b);
+    ret e.g * 1000000 + (e.x + 500) * 1000 + (e.y + 500);
+}
+
+stc i64 E1 = eg(240, 46); #= E1 2491547
+stc i64 E2 = eg(17, 0); #= E2 17501500
+stc i64 E3 = eg(0, 9); #= E3 9500501
+stc i64 E4 = eg(35, 15); #= E4 5501498
+stc i64 E5 = eg(101, 103); #= E5 1551450
+
+stc i64 I1 = mod_inv(3, 11); #= I1 4
+stc i64 I2 = mod_inv(10, 17); #= I2 12
+stc i64 I3 = mod_inv(6, 9); #= I3 -1
+stc i64 I4 = mod_inv(-3, 11); #= I4 7
+stc i64 I5 = mod_inv(1, 1000000007); #= I5 1
+stc i64 I6 = mod_inv(123456789, 1000000007); #= I6 18633540
+
+stcfun sunzi = () -> i64 {
+    [3]Congruence cs = [Congruence(2, 3), Congruence(3, 5), Congruence(2, 7)];
+    Congruence r = crt_all(cs.&);
+    ret r.r * 1000 + r.m;
+}
+
+stcfun crt_pair = (i64 r1, i64 m1, i64 r2, i64 m2) -> i64 {
+    Congruence r = crt(Congruence(r1, m1), Congruence(r2, m2));
+    ret r.r * 1000 + r.m;
+}
+
+stc i64 C1 = sunzi(); #= C1 23105
+stc i64 C2 = crt_pair(1, 4, 2, 6); #= C2 -1000
+stc i64 C3 = crt_pair(1, 4, 3, 6); #= C3 9012
+stc i64 C4 = crt_pair(0, 5, 0, 7); #= C4 35
+stc i64 C5 = crt_pair(2, 3, 3, 5); #= C5 8015
+
+stc bool M0 = is_prime_mr(0, 12); #= M0 false
+stc bool M1 = is_prime_mr(1, 12); #= M1 false
+stc bool M2 = is_prime_mr(2, 12); #= M2 true
+stc bool M3 = is_prime_mr(37, 12); #= M3 true
+stc bool M4 = is_prime_mr(561, 12); #= M4 false
+stc bool M5 = is_prime_mr(3215031751, 4); #= M5 true
+stc bool M6 = is_prime_mr(3215031751, 5); #= M6 false
+stc bool M7 = is_prime_mr(1000000007, 12); #= M7 true
+stc bool M8 = is_prime_mr(4294967297, 12); #= M8 false
+stc bool M9 = is_prime_mr(4294967291, 12); #= M9 true
+stc bool MA = is_prime_mr(2305843009213693951, 3); #= MA true
+stc bool MB = is_prime_mr(18446744073709551557, 3); #= MB true
+stc bool MC = is_prime_mr(18446743979220271189, 3); #= MC false
+
+stc u64 PM1 = pow_mod(2, 61, 2305843009213693951); #= PM1 1
+stc u64 PM2 = pow_mod(2, 100, 1000000007); #= PM2 976371285
+stc u64 PM3 = pow_mod(7, 0, 1); #= PM3 0
+stc u64 PM4 = pow_mod(3, 1000000000000000000, 18446744073709551557); #= PM4 4014180641660839766
+stc u64 AM1 = add_mod(18446744073709551555, 18446744073709551555, 18446744073709551557); #= AM1 18446744073709551553
+stc u64 MM1 = mul_mod(9223372036854775808, 2, 18446744073709551557); #= MM1 59
+stc u64 MM2 = mul_mod(18446744073709551556, 18446744073709551556, 18446744073709551557); #= MM2 1
+stc u64 MM3 = mul_mod(1099511627777, 1099511627779, 2305843009213693951); #= MM3 4398047035395
+
+stc i64 FD0 = fib_pair(0).r; #= FD0 0
+stc i64 FD1 = fib_pair(1).r; #= FD1 1
+stc i64 FD2 = fib_pair(10).r; #= FD2 55
+stc i64 FD3 = fib_pair(50).r; #= FD3 12586269025
+stc i64 FD4 = fib_pair(92).r; #= FD4 7540113804746346429
+stc i64 FD5 = fib_pair(93).r; #= FD5 -6246583658587674878
+stc i64 FD6 = fib_pair(100).r; #= FD6 3736710778780434371
+stc i64 FD7 = fib_pair(150).r; #= FD7 6792540214324356296
+
+stcfun totient_sum = (u32 n) -> u32 {
+    mut u32 s = 0;
+    for k in 1..=n: s += totient(k);
+    ret s;
+}
+
+stcfun divisor_phi_sum = (u32 n) -> u32 {
+    mut u32 s = 0;
+    for d in 1..=n: if n % d == 0: s += totient(d);
+    ret s;
+}
+
+stc u32 T1 = totient(1); #= T1 1
+stc u32 T2 = totient(9); #= T2 6
+stc u32 T3 = totient(36); #= T3 12
+stc u32 T4 = totient(97); #= T4 96
+stc u32 T5 = totient(999983); #= T5 999982
+stc u32 T6 = totient_sum(100); #= T6 3044
+stc u32 T7 = divisor_phi_sum(360); #= T7 360
+
+stcfun signature = (u32 n) -> u64 {
+    mut [100]u32 spf;
+    build_spf(spf.&);
+    ret factor_signature(spf.&, n);
+}
+
+stcfun ndiv = (u32 n) -> u32 {
+    mut [100]u32 spf;
+    build_spf(spf.&);
+    ret divisor_count(spf.&, n);
+}
+
+stc u64 SP1 = signature(1); #= SP1 0
+stc u64 SP2 = signature(60); #= SP2 22031051
+stc u64 SP3 = signature(63); #= SP3 32071
+stc u64 SP4 = signature(64); #= SP4 26
+stc u64 SP5 = signature(61); #= SP5 611
+stc u32 ND1 = ndiv(60); #= ND1 12
+stc u32 ND2 = ndiv(64); #= ND2 7
+stc u32 ND3 = ndiv(61); #= ND3 2
+stc u32 ND4 = ndiv(1); #= ND4 1
+
+stcfun count_powers = () -> u32 {
+    mut [1001]bool seen;
+    for b in 2..<32 {
+        mut u32 p = b * b;
+        while p <= 1000 {
+            seen[p] = true;
+            p *= b;
+        }
+    }
+    mut u32 c = 0;
+    for x in seen: c += x as u32;
+    ret c;
+}
+
+stc u32 CP = count_powers(); #= CP 40
+stc u64 R1 = iroot(1000000000000000000, 2); #= R1 1000000000
+stc u64 R2 = iroot(1000000000000000000, 3); #= R2 1000000
+stc u64 R3 = iroot(18446744073709551615, 2); #= R3 4294967295
+stc u64 R4 = iroot(18446744073709551615, 3); #= R4 2642245
+stc u64 R5 = iroot(999, 3); #= R5 9
+stc u64 R6 = iroot(1000, 3); #= R6 10
+stc u64 R7 = iroot(0, 3); #= R7 0
+stc bool PP1 = is_perfect_power(1024); #= PP1 true
+stc bool PP2 = is_perfect_power(1025); #= PP2 false
+stc bool PP3 = is_perfect_power(4611686018427387904); #= PP3 true
+stc bool PP4 = is_perfect_power(4052555153018976267); #= PP4 true
+stc bool PP5 = is_perfect_power(1000000000000000001); #= PP5 false
+stc bool PP6 = is_perfect_power(18446744065119617025); #= PP6 true
+stc bool PP7 = is_perfect_power(7); #= PP7 false
+
+stc i32 J1 = jacobi(1001, 9907); #= J1 -1
+stc i32 J2 = jacobi(19, 45); #= J2 1
+stc i32 J3 = jacobi(8, 21); #= J3 -1
+stc i32 J4 = jacobi(3, 9); #= J4 0
+stc i32 J5 = jacobi(-1, 7); #= J5 -1
+stc i32 J6 = jacobi(-1, 5); #= J6 1
+stc i32 J7 = jacobi(0, 1); #= J7 1
+stc i32 J8 = jacobi(12345, 331); #= J8 -1
+stc i32 J9 = jacobi(7, 77); #= J9 0
+
+stc u32 BM1 = binom_mod(50, 10, 1000000007); #= BM1 272278100
+stc u32 BM2 = binom_mod(5, 6, 13); #= BM2 0
+stc u32 BM3 = binom_mod(0, 0, 13); #= BM3 1
+stc u32 BM4 = binom_mod(30, 15, 101); #= BM4 3
+
+$main = () {}

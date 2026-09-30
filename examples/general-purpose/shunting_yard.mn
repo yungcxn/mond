@@ -1,0 +1,229 @@
+variant Tok = +(Num(i64 v), Op(u8 c), LParen, RParen) tagof u8;
+
+fun prec = (u8 c) -> u32: ret match c {
+    '+' | '-' => 1,
+    '*' | '/' | '%' => 2,
+    'n' => 3,
+    '^' => 4,
+    _ => 0,
+}
+
+fun is_right = (u8 c) -> bool: ret c == '^' or c == 'n';
+
+type Sy = *(&[]u8 src, mut [24]Tok out, mut u32 nout, mut [24]u8 ops, mut u32 nops, mut u32 err, mut u32 at) !{
+    fun emit = (Tok t) {
+        self.out[self.nout] = t;
+        self.nout += 1;
+    }
+
+    fun push_op = (u8 c) {
+        self.ops[self.nops] = c;
+        self.nops += 1;
+    }
+
+    fun fail = (u32 code) {
+        if self.err == 0: self.err = code;
+    }
+
+    fun pop_while = (u8 o1) {
+        while self.nops > 0 {
+            u8 top = self.ops[self.nops - 1];
+            if top == '(': brk;
+            u32 p2 = prec(top);
+            u32 p1 = prec(o1);
+            # LIMIT: `if a or (b) {` (parenthesised group last in the condition, followed by a block) is IllegalIfFormat
+            bool pop = p2 > p1 or (p2 == p1 and !is_right(o1));
+            if pop {
+                self.emit(Tok.Op(top));
+                self.nops -= 1;
+            } else {
+                brk;
+            }
+        }
+    }
+
+    fun close = () {
+        while self.nops > 0 and self.ops[self.nops - 1] != '(' {
+            self.emit(Tok.Op(self.ops[self.nops - 1]));
+            self.nops -= 1;
+        }
+        if self.nops == 0: self.fail(2) else: self.nops -= 1;
+    }
+
+    fun convert = () {
+        mut bool want = true;
+        while self.at < self.src.$len and self.err == 0 {
+            u8 c = self.src.*[self.at];
+            self.at += 1;
+            match c {
+                ' ' => {},
+                '0'..='9' => {
+                    if !want: self.fail(3);
+                    mut i64 v = (c - '0') as i64;
+                    while self.at < self.src.$len and self.src.*[self.at] >= '0' and self.src.*[self.at] <= '9' {
+                        v = v * 10 + (self.src.*[self.at] - '0') as i64;
+                        self.at += 1;
+                    }
+                    self.emit(Tok.Num(v));
+                    want = false;
+                },
+                '(' => {
+                    if !want: self.fail(3);
+                    self.push_op('(');
+                },
+                ')' => {
+                    if want: self.fail(3) else: self.close();
+                    want = false;
+                },
+                '-' | '+' | '*' | '/' | '%' | '^' => {
+                    if want {
+                        if c == '-': self.push_op('n') else: self.fail(3);
+                    } else {
+                        self.pop_while(c);
+                        self.push_op(c);
+                        want = true;
+                    }
+                },
+                _ => self.fail(1),
+            }
+        }
+        if self.err != 0: ret;
+        if self.src.$len == 0: self.fail(5);
+        if want: self.fail(3);
+        while self.nops > 0 and self.err == 0 {
+            u8 top = self.ops[self.nops - 1];
+            self.nops -= 1;
+            if top == '(': self.fail(2) else: self.emit(Tok.Op(top));
+        }
+    }
+
+    fun apply = (u8 op, i64 a, i64 b) -> i64 {
+        if (op == '/' or op == '%') and b == 0 {
+            self.fail(6);
+            ret 0;
+        }
+        if op == '^' and b < 0 {
+            self.fail(7);
+            ret 0;
+        }
+        if op == '^' {
+            mut i64 r = 1;
+            for 0..<b: r *= a;
+            ret r;
+        }
+        ret match op {
+            '+' => a + b,
+            '-' => a - b,
+            '*' => a * b,
+            '/' => a / b,
+            _ => a % b,
+        };
+    }
+
+    fun eval = () -> i64 {
+        mut [24]i64 st;
+        mut u32 sp = 0;
+        for i in 0..<self.nout {
+            match self.out[i] {
+                Tok.Num(v) => {
+                    st[sp] = v;
+                    sp += 1;
+                },
+                Tok.Op(c) => {
+                    if c == 'n' {
+                        st[sp - 1] = -st[sp - 1];
+                    } else {
+                        i64 r = self.apply(c, st[sp - 2], st[sp - 1]);
+                        sp -= 1;
+                        st[sp - 1] = r;
+                    }
+                },
+                _ => {},
+            }
+        }
+        ret st[0];
+    }
+}
+
+fun calc = (&[]u8 src) -> i64 {
+    [24]Tok blank;
+    [24]u8 ob;
+    mut Sy sy = Sy(src = src, out = blank, nout = 0, ops = ob, nops = 0, err = 0, at = 0);
+    sy.convert();
+    if sy.err != 0 {
+        i64 code = sy.err as i64;
+        ret -1000 - code;
+    }
+    i64 v = sy.eval();
+    if sy.err != 0 {
+        i64 code = sy.err as i64;
+        ret -1000 - code;
+    }
+    ret v;
+}
+
+fun rpn_is = (&[]u8 src, &[]u8 want) -> bool {
+    [24]Tok blank;
+    [24]u8 ob;
+    mut Sy sy = Sy(src = src, out = blank, nout = 0, ops = ob, nops = 0, err = 0, at = 0);
+    sy.convert();
+    if sy.err != 0 or sy.nout as u64 != want.$len: ret false;
+    for i in 0..<sy.nout {
+        u8 w = want.*[i];
+        ok = match sy.out[i] {
+            Tok.Num(v) => v == (w - '0') as i64,
+            Tok.Op(c) => c == w,
+            _ => false,
+        };
+        if !ok: ret false;
+    }
+    ret true;
+}
+
+stc i64 Y1 = calc("1+2".&); #= Y1 3
+stc i64 Y2 = calc("1 + 2 * 3".&); #= Y2 7
+stc i64 Y3 = calc("(1 + 2) * 3".&); #= Y3 9
+stc i64 Y4 = calc("10 - 4 - 3".&); #= Y4 3
+stc i64 Y5 = calc("2 ^ 3 ^ 2".&); #= Y5 512
+stc i64 Y6 = calc("-2 ^ 2".&); #= Y6 -4
+stc i64 Y7 = calc("2 ^ -1".&); #= Y7 -1007
+stc i64 Y8 = calc("100 / 7 % 4".&); #= Y8 2
+stc i64 Y9 = calc("7 / 0".&); #= Y9 -1006
+stc i64 Y10 = calc("7 % 0".&); #= Y10 -1006
+stc i64 Y11 = calc("((((5))))".&); #= Y11 5
+stc i64 Y12 = calc("2 * (3 + 4) * (5 - 1)".&); #= Y12 56
+stc i64 Y13 = calc("--3".&); #= Y13 3
+stc i64 Y14 = calc("3 - -3".&); #= Y14 6
+stc i64 Y15 = calc("-(2+3)*4".&); #= Y15 -20
+stc i64 Y16 = calc("1 +".&); #= Y16 -1003
+stc i64 Y17 = calc("(1 + 2".&); #= Y17 -1002
+stc i64 Y18 = calc("1 + 2)".&); #= Y18 -1002
+stc i64 Y19 = calc("()".&); #= Y19 -1003
+stc i64 Y20 = calc("".&); #= Y20 -1005
+stc i64 Y21 = calc("   ".&); #= Y21 -1003
+stc i64 Y22 = calc("1 $ 2".&); #= Y22 -1001
+stc i64 Y23 = calc("1 2".&); #= Y23 -1003
+stc i64 Y24 = calc("(2) 3".&); #= Y24 -1003
+stc i64 Y25 = calc("* 2".&); #= Y25 -1003
+stc i64 Y26 = calc("1 - - - 1".&); #= Y26 0
+stc i64 Y27 = calc("8 / 2 / 2".&); #= Y27 2
+stc i64 Y28 = calc("2 ^ 10 - 1000".&); #= Y28 24
+stc i64 Y29 = calc("-7 / 2".&); #= Y29 -3
+stc i64 Y30 = calc("-7 % 3".&); #= Y30 -1
+stc i64 Y31 = calc("7 % -3".&); #= Y31 1
+stc i64 Y32 = calc("2 * 3 % 4".&); #= Y32 2
+stc i64 Y33 = calc("000123".&); #= Y33 123
+stc bool Y34 = rpn_is("3+4*2".&, "342*+".&); #= Y34 true
+stc bool Y35 = rpn_is("3*4+2".&, "34*2+".&); #= Y35 true
+stc bool Y36 = rpn_is("(3+4)*2".&, "34+2*".&); #= Y36 true
+stc bool Y37 = rpn_is("8-3-2".&, "83-2-".&); #= Y37 true
+stc bool Y38 = rpn_is("2^3^2".&, "232^^".&); #= Y38 true
+stc bool Y39 = rpn_is("1-2*3-4".&, "123*-4-".&); #= Y39 true
+stc bool Y40 = rpn_is("2*3^2".&, "232^*".&); #= Y40 true
+stc bool Y41 = rpn_is("(1+2)*(3+4)".&, "12+34+*".&); #= Y41 true
+stc bool Y42 = rpn_is("9/(3*2)".&, "932*/".&); #= Y42 true
+stc bool Y43 = rpn_is("3+4*2".&, "342+*".&); #= Y43 false
+stc bool Y44 = rpn_is("(1+".&, "1".&); #= Y44 false
+stc bool Y45 = rpn_is("1+2".&, "12+3".&); #= Y45 false
+
+$main = () {}

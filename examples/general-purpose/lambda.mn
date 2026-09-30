@@ -1,0 +1,378 @@
+variant T = +(Var(u32 k), Lam(u32 b), App(u32 f, u32 a)) tagof u8;
+
+stc u32 NONE = 0xFFFFFFFF;
+
+type Lc = *(
+    mut &[]u8 src,
+    mut u32 pos,
+    mut u32 bad,
+    mut [2600]T nodes,
+    mut u32 n,
+    mut [16]u8 names,
+    mut u32 depth,
+    mut [96]u8 out,
+    mut u32 nout,
+    mut bool done,
+    mut u32 steps,
+) !{
+    fun mk = (T t) -> u32 {
+        self.nodes[self.n] = t;
+        self.n += 1;
+        ret self.n - 1;
+    }
+
+    fun var = (u32 k) -> u32: ret self.mk(T.Var(k));
+    fun lam = (u32 b) -> u32: ret self.mk(T.Lam(b));
+    fun app = (u32 f, u32 a) -> u32: ret self.mk(T.App(f, a));
+
+    fun shift = (i32 d, u32 c, u32 t) -> u32 {
+        match self.nodes[t] {
+            T.Var(k) => ret if k >= c: self.var((k as i32 + d) as u32) else: t,
+            T.Lam(b) => ret self.lam(self.shift(d, c + 1, b)),
+            T.App(f, a) => ret self.app(self.shift(d, c, f), self.shift(d, c, a)),
+        }
+    }
+
+    fun subst = (u32 j, u32 s, u32 t) -> u32 {
+        match self.nodes[t] {
+            T.Var(k) => ret if k == j: s else: t,
+            T.Lam(b) => ret self.lam(self.subst(j + 1, self.shift(1, 0, s), b)),
+            T.App(f, a) => ret self.app(self.subst(j, s, f), self.subst(j, s, a)),
+        }
+    }
+
+    fun beta = (u32 body, u32 arg) -> u32 {
+        u32 up = self.shift(1, 0, arg);
+        ret self.shift(-1, 0, self.subst(0, up, body));
+    }
+
+    fun step = (u32 t) -> u32 {
+        match self.nodes[t] {
+            T.App(f, a) => {
+                match self.nodes[f] {
+                    T.Lam(b) => ret self.beta(b, a),
+                    _ => {},
+                }
+                u32 nf = self.step(f);
+                if nf != NONE: ret self.app(nf, a);
+                u32 na = self.step(a);
+                if na != NONE: ret self.app(f, na);
+                ret NONE;
+            },
+            T.Lam(b) => {
+                u32 nb = self.step(b);
+                if nb != NONE: ret self.lam(nb);
+                ret NONE;
+            },
+            T.Var(_) => ret NONE,
+        }
+    }
+
+    fun normalize = (u32 t, u32 limit) -> u32 {
+        mut u32 cur = t;
+        mut u32 steps = 0;
+        loop {
+            u32 nx = self.step(cur);
+            if nx == NONE {
+                self.done = true;
+                brk;
+            }
+            if steps == limit: brk;
+            cur = nx;
+            steps += 1;
+        }
+        self.steps = steps;
+        ret cur;
+    }
+
+    fun is_var = (u32 t, u32 k) -> bool: ret match self.nodes[t] {
+        T.Var(j) => j == k,
+        _ => false,
+    }
+
+    fun church = (u32 t) -> i32 {
+        u32 b1 = match self.nodes[t] {
+            T.Lam(b) => b,
+            _ => NONE,
+        };
+        if b1 == NONE: ret -1;
+        u32 b2 = match self.nodes[b1] {
+            T.Lam(b) => b,
+            _ => NONE,
+        };
+        if b2 == NONE: ret -1;
+        mut u32 cur = b2;
+        mut i32 n = 0;
+        loop {
+            match self.nodes[cur] {
+                T.Var(k) => ret if k == 0: n else: -1,
+                T.App(f, a) => {
+                    if !self.is_var(f, 1): ret -1;
+                    n += 1;
+                    cur = a;
+                },
+                _ => ret -1,
+            }
+        }
+        ret -1;
+    }
+
+    fun ws = () {
+        while (self.pos as u64) < self.src.$len and self.src.*[self.pos] == ' ': self.pos += 1;
+    }
+
+    fun fail = (u32 code) -> u32 {
+        if self.bad == 0: self.bad = code;
+        ret self.var(0);
+    }
+
+    fun parse_atom = () -> u32 {
+        self.ws();
+        if (self.pos as u64) >= self.src.$len: ret self.fail(1);
+        u8 c = self.src.*[self.pos];
+        self.pos += 1;
+        if c == '(' {
+            u32 t = self.parse_term();
+            self.ws();
+            if (self.pos as u64) < self.src.$len and self.src.*[self.pos] == ')' {
+                self.pos += 1;
+            } else {
+                do self.fail(2);
+            }
+            ret t;
+        }
+        if c == '\\' {
+            self.ws();
+            if (self.pos as u64) >= self.src.$len: ret self.fail(1);
+            u8 name = self.src.*[self.pos];
+            self.pos += 1;
+            if (name < 'a' or name > 'z') and name != '_': ret self.fail(3);
+            self.ws();
+            if (self.pos as u64) >= self.src.$len or self.src.*[self.pos] != '.': ret self.fail(4);
+            self.pos += 1;
+            if self.depth == 16: ret self.fail(7);
+            self.names[self.depth] = name;
+            self.depth += 1;
+            u32 body = self.parse_term();
+            self.depth -= 1;
+            ret self.lam(body);
+        }
+        if c >= 'a' and c <= 'z' {
+            mut u32 i = self.depth;
+            while i > 0 {
+                i -= 1;
+                if self.names[i] == c: ret self.var(self.depth - 1 - i);
+            }
+            ret self.fail(5);
+        }
+        if c >= '0' and c <= '9' {
+            mut u32 inner = self.var(0);
+            # LIMIT: `for 0..<(c - '0') {` (range ending in a parenthesised group before the block) is IllegalForFormat
+            u8 count = c - '0';
+            for 0..<count {
+                u32 one = self.var(1);
+                inner = self.app(one, inner);
+            }
+            ret self.lam(self.lam(inner));
+        }
+        if c == '#' {
+            if (self.pos as u64) >= self.src.$len: ret self.fail(1);
+            u8 d = self.src.*[self.pos];
+            self.pos += 1;
+            if d < '0' or d > '9': ret self.fail(6);
+            ret self.var((d - '0') as u32);
+        }
+        ret self.fail(6);
+    }
+
+    fun parse_term = () -> u32 {
+        mut u32 t = self.parse_atom();
+        loop {
+            self.ws();
+            if (self.pos as u64) >= self.src.$len or self.bad != 0: brk;
+            if self.src.*[self.pos] == ')': brk;
+            u32 a = self.parse_atom();
+            t = self.app(t, a);
+        }
+        ret t;
+    }
+
+    fun parse = () -> u32 {
+        u32 t = self.parse_term();
+        self.ws();
+        if self.bad == 0 and (self.pos as u64) < self.src.$len: ret self.fail(8);
+        ret t;
+    }
+
+    fun put = (u8 c) {
+        if self.nout < 96 {
+            self.out[self.nout] = c;
+            self.nout += 1;
+        }
+    }
+
+    fun put_int = (u32 v) {
+        if v >= 10: self.put_int(v / 10);
+        self.put('0' + (v % 10) as u8);
+    }
+
+    fun print = (u32 t, u32 ctx) {
+        match self.nodes[t] {
+            T.Var(k) => self.put_int(k),
+            T.Lam(b) => {
+                if ctx > 0: self.put('(');
+                self.put('\\');
+                self.put('.');
+                self.print(b, 0);
+                if ctx > 0: self.put(')');
+            },
+            T.App(f, a) => {
+                if ctx == 2: self.put('(');
+                self.print(f, 1);
+                self.put(' ');
+                self.print(a, 2);
+                if ctx == 2: self.put(')');
+            },
+        }
+    }
+
+    fun out_is = (&[]u8 want) -> bool {
+        if self.nout as u64 != want.$len: ret false;
+        for i in 0..<self.nout {
+            if self.out[i] != want.*[i]: ret false;
+        }
+        ret true;
+    }
+}
+
+fun fresh = (&[]u8 src) -> Lc {
+    [2600]T nodes;
+    [16]u8 names;
+    [96]u8 out;
+    ret Lc(src = src, pos = 0, bad = 0, nodes = nodes, n = 0, names = names, depth = 0, out = out, nout = 0, done = false, steps = 0);
+}
+
+fun nat = (&[]u8 src, u32 limit) -> i32 {
+    mut Lc l = fresh(src);
+    u32 t = l.parse();
+    if l.bad != 0: ret -2;
+    u32 r = l.normalize(t, limit);
+    if !l.done: ret -3;
+    ret l.church(r);
+}
+
+fun nf_is = (&[]u8 src, u32 limit, &[]u8 want) -> bool {
+    mut Lc l = fresh(src);
+    u32 t = l.parse();
+    if l.bad != 0: ret false;
+    u32 r = l.normalize(t, limit);
+    if !l.done: ret false;
+    l.print(r, 0);
+    ret l.out_is(want);
+}
+
+fun parse_is = (&[]u8 src, &[]u8 want) -> bool {
+    mut Lc l = fresh(src);
+    u32 t = l.parse();
+    if l.bad != 0: ret false;
+    l.print(t, 0);
+    ret l.out_is(want);
+}
+
+fun parse_err = (&[]u8 src) -> u32 {
+    mut Lc l = fresh(src);
+    do l.parse();
+    ret l.bad;
+}
+
+fun steps_of = (&[]u8 src, u32 limit) -> u32 {
+    mut Lc l = fresh(src);
+    u32 t = l.parse();
+    do l.normalize(t, limit);
+    ret l.steps;
+}
+
+fun converges = (&[]u8 src, u32 limit) -> bool {
+    mut Lc l = fresh(src);
+    u32 t = l.parse();
+    do l.normalize(t, limit);
+    ret l.done;
+}
+
+fun shift_is = (&[]u8 src, i32 d, u32 c, &[]u8 want) -> bool {
+    mut Lc l = fresh(src);
+    u32 t = l.parse();
+    l.print(l.shift(d, c, t), 0);
+    ret l.out_is(want);
+}
+
+fun subst_is = (&[]u8 src, u32 j, &[]u8 arg, &[]u8 want) -> bool {
+    mut Lc l = fresh(src);
+    u32 t = l.parse();
+    l.src = arg;
+    l.pos = 0;
+    u32 s = l.parse();
+    l.print(l.subst(j, s, t), 0);
+    ret l.out_is(want);
+}
+
+stc bool C1 = parse_is("\\x.x".&, "\\.0".&); #= C1 true
+stc bool C2 = parse_is("\\x.\\y.x".&, "\\.\\.1".&); #= C2 true
+stc bool C3 = parse_is("\\x.\\y.y x".&, "\\.\\.0 1".&); #= C3 true
+stc bool C4 = parse_is("\\x.\\y.\\z.x z (y z)".&, "\\.\\.\\.2 0 (1 0)".&); #= C4 true
+stc bool C5 = parse_is("(\\x.x) (\\y.y) (\\z.z)".&, "(\\.0) (\\.0) (\\.0)".&); #= C5 true
+stc bool C6 = parse_is("\\f.(\\x.f (x x)) (\\x.f (x x))".&, "\\.(\\.1 (0 0)) (\\.1 (0 0))".&); #= C6 true
+stc bool C7 = parse_is("0".&, "\\.\\.0".&); #= C7 true
+stc bool C8 = parse_is("2".&, "\\.\\.1 (1 0)".&); #= C8 true
+stc bool C9 = parse_is("\\x.x 1 #3".&, "\\.0 (\\.\\.1 0) 3".&); #= C9 true
+stc u32 C10 = parse_err("".&); #= C10 1
+stc u32 C11 = parse_err("\\x".&); #= C11 4
+stc u32 C12 = parse_err("(x".&); #= C12 5
+stc u32 C13 = parse_err("(\\x.x))".&); #= C13 8
+stc u32 C14 = parse_err("\\X.x".&); #= C14 3
+stc u32 C15 = parse_err("#a".&); #= C15 6
+stc u32 C16 = parse_err("?".&); #= C16 6
+stc i32 C17 = nat("7".&, 100); #= C17 7
+stc i32 C18 = nat("(\\n.\\f.\\x.f (n f x)) 2".&, 100); #= C18 3
+stc i32 C19 = nat("(\\n.\\f.\\x.f (n f x)) ((\\n.\\f.\\x.f (n f x)) 0)".&, 100); #= C19 2
+stc i32 C20 = nat("(\\m.\\n.\\f.\\x.m f (n f x)) 2 3".&, 200); #= C20 5
+stc i32 C21 = nat("(\\m.\\n.\\f.\\x.m f (n f x)) 4 4".&, 200); #= C21 8
+stc i32 C22 = nat("(\\m.\\n.\\f.m (n f)) 2 3".&, 300); #= C22 6
+stc i32 C23 = nat("(\\m.\\n.\\f.m (n f)) 3 3".&, 400); #= C23 9
+stc i32 C24 = nat("(\\b.\\e.e b) 2 3".&, 300); #= C24 8
+stc i32 C25 = nat("(\\b.\\e.e b) 3 2".&, 300); #= C25 9
+stc i32 C26 = nat("(\\b.\\e.e b) 2 0".&, 300); #= C26 -1
+stc i32 C27 = nat("(\\n.\\f.\\x.n (\\g.\\h.h (g f)) (\\u.x) (\\u.u)) 3".&, 400); #= C27 2
+stc i32 C28 = nat("(\\n.\\f.\\x.n (\\g.\\h.h (g f)) (\\u.x) (\\u.u)) 0".&, 400); #= C28 0
+stc i32 C29 = nat("(\\m.\\n.\\f.\\x.m f (n f x)) 2 ((\\m.\\n.\\f.m (n f)) 2 2)".&, 400); #= C29 6
+stc i32 C30 = nat("\\x.x".&, 100); #= C30 -1
+stc i32 C31 = nat("\\f.\\x.f".&, 100); #= C31 -1
+stc i32 C32 = nat("(\\x.x x) (\\x.x x)".&, 50); #= C32 -3
+stc i32 C33 = nat("(".&, 50); #= C33 -2
+stc bool C34 = nf_is("(\\x.x x) (\\y.y)".&, 400, "\\.0".&); #= C34 true
+stc bool C35 = nf_is("(\\x.\\y.x) (\\z.z)".&, 400, "\\.\\.0".&); #= C35 true
+stc bool C36 = nf_is("(\\x.\\y.\\z.x z (y z)) (\\a.\\b.a) (\\a.\\b.a)".&, 400, "\\.0".&); #= C36 true
+stc bool C37 = nf_is("(\\x.\\y.y) ((\\x.x x) (\\x.x x))".&, 400, "\\.0".&); #= C37 true
+stc bool C38 = nf_is("(\\n.n (\\x.(\\a.\\b.b)) (\\a.\\b.a)) 0".&, 400, "\\.\\.1".&); #= C38 true
+stc bool C39 = nf_is("(\\n.n (\\x.(\\a.\\b.b)) (\\a.\\b.a)) 2".&, 400, "\\.\\.0".&); #= C39 true
+stc bool C40 = nf_is("(\\a.\\b.a) 1 2".&, 400, "\\.\\.1 0".&); #= C40 true
+stc bool C41 = nf_is("(\\x.x x) (\\x.x x)".&, 20, "".&); #= C41 false
+stc bool C42 = nf_is("\\x.(\\y.y) x".&, 400, "\\.0".&); #= C42 true
+stc bool C43 = nf_is("(\\x.x x x) (\\x.x x x)".&, 30, "".&); #= C43 false
+stc u32 C44 = steps_of("(\\x.x) (\\y.y)".&, 10); #= C44 1
+stc u32 C45 = steps_of("(\\m.\\n.\\f.\\x.m f (n f x)) 2 2".&, 100); #= C45 6
+stc u32 C46 = steps_of("(\\x.x x) (\\x.x x)".&, 17); #= C46 17
+stc u32 C47 = steps_of("(\\x.\\y.y) ((\\x.x x) (\\x.x x))".&, 5); #= C47 1
+stc bool C48 = converges("(\\x.x x) (\\x.x x)".&, 30); #= C48 false
+stc bool C49 = converges("(\\n.\\f.\\x.f (n f x)) 2".&, 30); #= C49 true
+stc bool C50 = shift_is("\\_.\\_.#1 (#0 #2)".&, 2, 0, "\\.\\.1 (0 4)".&); #= C50 true
+stc bool C51 = shift_is("\\_.#0 #1 (\\_.#0 #1 #2)".&, 2, 0, "\\.0 3 (\\.0 1 4)".&); #= C51 true
+stc bool C52 = shift_is("#0 #1 #2".&, 1, 1, "0 2 3".&); #= C52 true
+stc bool C53 = shift_is("#3".&, -1, 0, "2".&); #= C53 true
+stc bool C54 = shift_is("\\_.#0 #1".&, 5, 1, "\\.0 1".&); #= C54 true
+stc bool C55 = subst_is("#1 (\\_.\\_.#3)".&, 1, "#0".&, "0 (\\.\\.2)".&); #= C55 true
+stc bool C56 = subst_is("\\_.#1".&, 0, "\\_.#0 #1".&, "\\.\\.0 2".&); #= C56 true
+stc bool C57 = subst_is("#0 #1 #2".&, 1, "\\_.#0".&, "0 (\\.0) 2".&); #= C57 true
+stc bool C58 = subst_is("\\_.#0".&, 0, "#7".&, "\\.0".&); #= C58 true
+
+$main = () {}

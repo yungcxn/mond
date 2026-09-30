@@ -1,0 +1,63 @@
+# BUG: accepted without a diagnostic, but the value does not fit the declared static parameter
+#   type Buf = (u32 N): *([N]u8 data);  Buf(-1) a;  Buf(5000000000) b;     template value arguments are not checked against the parameter type
+#   stcfun Word = (u32 bits) -> type: ...;  Word(-1) w;                     same for a stcfun called as a type (a plain call `sq(-1)` is a type_mismatch)
+# BUG: a wrong kind of template argument (`Stack(u8, u8)`, `Stack(4, u8)`, `Stack(u8, "s")`) is reported at the template declaration as not_static / not_a_type, never at the offending argument
+
+variant Opt = (type T): ++(Some(T), None) tagof u8;
+type Pair = (type A, type B): *(mut A first, mut B second);
+type Stack = (type T, u32 N): *(mut [N]T items, mut u32 len = 0) !{
+    fun push = (T v) -> bool {
+        if self.len >= N: ret false;
+        self.items[self.len] = v;
+        self.len += 1;
+        ret true;
+    }
+}
+type Plain = *(u8 v);
+type Small = (type T stcwhere sizeof T <= 4): *(T v); #! stcwhere_violated
+type Ring = (type T, u32 N stcwhere N > 1 and N < 256): *(mut [N]T buf, mut u32 head = 0); #! stcwhere_violated stcwhere_violated
+type Lst = (type T): *(T value, *Lst(T) next);
+type Node = (type T): *(T value, Node(T) next); #! recursive_by_value_type
+type Tree = (type T): *(T value, [2]Tree(T) kids); #! recursive_by_value_type
+type MA = (type T): *(MB(T) b); #! recursive_by_value_type
+type MB = (type T): *(MA(T) a);
+type Inf = (type T): *(*Inf(*T) p); #! static_eval_failed
+type Grow = (u32 N): *([N]u8 a, *Grow(N + 1) next); #! static_eval_failed
+
+fun sizes = (Stack(u8, 4) s4, Opt(Opt(u8)) oo, Pair(Pair(u8, u8), u8) pp) {
+    Stack(u8, 8) a = s4; #! type_mismatch
+    Opt(u8) b = oo; #! type_mismatch
+    Pair(u8, Pair(u8, u8)) c = pp; #! type_mismatch
+    Opt(u16) d = Opt(u8).Some(1); #! type_mismatch
+    Stack(u8, 4) e = Stack(u16, 4)(items = [1, 2, 3, 4]); #! type_mismatch
+}
+
+fun args = () {
+    Stack(u8, 4, 5) a; #! wrong_arity
+    Opt() b; #! wrong_arity
+    Opt(u8, u8) c; #! wrong_arity
+    Plain(u8) d; #! not_a_type
+    Opt(u8) ok = Opt(u8).Some(1);
+    Opt(u8) o1 = Opt(u8).Some("s"); #! type_mismatch
+    Opt(u8) o2 = Opt(u8).Some(); #! wrong_arity
+    Opt(u8) o3 = Opt(u8).None(1); #! wrong_arity
+    Pair(u8, u16) p1 = Pair(u8, u16)(first = 300, second = 1); #! type_mismatch
+    Pair(u8, u16) p2 = Pair(u8, u16)(first = 1, second = -1); #! type_mismatch
+    Pair(u8, u16) p3 = Pair(u8, u16)(second = 1, first = 2, third = 3); #! unknown_named_argument
+}
+
+fun instances = () {
+    Small(u8) s1;
+    Small(u64) s2;
+    Ring(u8, 4) r1;
+    Ring(u8, 1) r2;
+    Ring(u8, 300) r3;
+    Lst(u8) l;
+    Node(u8) n;
+    Tree(u8) t;
+    MA(u8) m;
+    Inf(u8) i;
+    Grow(1) g;
+}
+
+$main = () {}

@@ -1,0 +1,150 @@
+fun max = (u32 a, u32 b) -> u32: ret if a > b: a else: b;
+fun min3 = (u32 a, u32 b, u32 c) -> u32: ret if a < b: (if a < c: a else: c) else: (if b < c: b else: c);
+
+fun knapsack = (&[]u32 w, &[]u32 v, u32 cap) -> u32 {
+    mut [64]u32 best;
+    for i in 0..<w.$len {
+        mut u32 c = cap;
+        while c >= w.*[i] {
+            best[c] = max(best[c], best[c - w.*[i]] + v.*[i]);
+            if c == 0: brk;
+            c -= 1;
+        }
+    }
+    ret best[cap];
+}
+
+fun lcs = (&[]u8 a, &[]u8 b) -> u32 {
+    mut [16][16]u32 t;
+    for i in 1..=a.$len {
+        for j in 1..=b.$len {
+            t[i][j] = if a.*[i - 1] == b.*[j - 1]: t[i - 1][j - 1] + 1 else: max(t[i - 1][j], t[i][j - 1]);
+        }
+    }
+    ret t[a.$len][b.$len];
+}
+
+fun edit_distance = (&[]u8 a, &[]u8 b) -> u32 {
+    mut [16][16]u32 t;
+    for i in 0..=a.$len: t[i][0] = i as u32;
+    for j in 0..=b.$len: t[0][j] = j as u32;
+    for i in 1..=a.$len {
+        for j in 1..=b.$len {
+            u32 cost = if a.*[i - 1] == b.*[j - 1]: 0 else: 1;
+            t[i][j] = min3(t[i - 1][j] + 1, t[i][j - 1] + 1, t[i - 1][j - 1] + cost);
+        }
+    }
+    ret t[a.$len][b.$len];
+}
+
+fun coin_ways = (&[]u32 coins, u32 amount) -> u32 {
+    mut [64]u32 ways;
+    ways[0] = 1;
+    for c in coins.*: for a in c..=amount: ways[a] += ways[a - c];
+    ret ways[amount];
+}
+
+fun coin_min = (&[]u32 coins, u32 amount) -> i32 {
+    mut [64]u32 need;
+    for a in 1..=amount {
+        need[a] = 1000000;
+        for c in coins.*: if c <= a and need[a - c] + 1 < need[a]: need[a] = need[a - c] + 1;
+    }
+    ret if need[amount] >= 1000000: -1 else: need[amount] as i32;
+}
+
+fun lis = (&[]i32 xs) -> u32 {
+    mut [32]u32 len;
+    mut u32 best = 0;
+    for i in 0..<xs.$len {
+        len[i] = 1;
+        for j in 0..<i: if xs.*[j] < xs.*[i] and len[j] + 1 > len[i]: len[i] = len[j] + 1;
+        best = max(best, len[i]);
+    }
+    ret best;
+}
+
+fun max_subarray = (&[]i32 xs) -> i32 {
+    mut i32 best = xs.*[0];
+    mut i32 cur = xs.*[0];
+    for i in 1..<xs.$len {
+        cur = if cur > 0: cur + xs.*[i] else: xs.*[i];
+        if cur > best: best = cur;
+    }
+    ret best;
+}
+
+fun stairs = (u32 n) -> u64 {
+    mut [50]u64 t;
+    t[0] = 1;
+    t[1] = 1;
+    for i in 2..=n: t[i] = t[i - 1] + t[i - 2];
+    ret t[n];
+}
+
+fun partitions = (u32 n) -> u64 {
+    mut [32]u64 p;
+    p[0] = 1;
+    for k in 1..=n: for i in k..=n: p[i] += p[i - k];
+    ret p[n];
+}
+
+fun rod = (&[]u32 price, u32 n) -> u32 {
+    mut [16]u32 t;
+    for i in 1..=n: for j in 1..=i: t[i] = max(t[i], price.*[j - 1] + t[i - j]);
+    ret t[n];
+}
+
+fun catalan = (u32 n) -> u64 {
+    mut [20]u64 c;
+    c[0] = 1;
+    for i in 1..=n: for j in 0..<i: c[i] += c[j] * c[i - 1 - j];
+    ret c[n];
+}
+
+fun grid_min_path = (&[3][3]u32 g) -> u32 {
+    mut [3][3]u32 t;
+    t[0][0] = g.*[0][0];
+    for i in 1..<3: t[i][0] = t[i - 1][0] + g.*[i][0];
+    for j in 1..<3: t[0][j] = t[0][j - 1] + g.*[0][j];
+    for i in 1..<3: for j in 1..<3: t[i][j] = g.*[i][j] + (if t[i - 1][j] < t[i][j - 1]: t[i - 1][j] else: t[i][j - 1]);
+    ret t[2][2];
+}
+
+fun palindromic_substrings = (&[]u8 s) -> u32 {
+    mut u32 n = 0;
+    for center in 0..<s.$len * 2 - 1 {
+        mut i64 l = (center / 2) as i64;
+        mut i64 r = l + (center % 2) as i64;
+        while l >= 0 and r < s.$len as i64 and s.*[l as u64] == s.*[r as u64] {
+            n += 1;
+            l -= 1;
+            r += 1;
+        }
+    }
+    ret n;
+}
+
+stc u32 KS = knapsack([1, 3, 4, 5].&, [1, 4, 5, 7].&, 7); #= KS 9
+# LIMIT: a one element array literal needs a trailing comma, `[5]` is an array type
+stc u32 KS0 = knapsack([5,].&, [10,].&, 4); #= KS0 0
+stc u32 LC = lcs("AGGTAB".&, "GXTXAYB".&); #= LC 4
+stc u32 LC0 = lcs("abc".&, "xyz".&); #= LC0 0
+stc u32 ED = edit_distance("kitten".&, "sitting".&); #= ED 3
+stc u32 ED0 = edit_distance("".&, "abc".&); #= ED0 3
+stc u32 ED1 = edit_distance("flaw".&, "lawn".&); #= ED1 2
+stc u32 CW = coin_ways([1, 2, 5].&, 11); #= CW 11
+stc i32 CM = coin_min([1, 2, 5].&, 11); #= CM 3
+stc i32 CM1 = coin_min([5, 10].&, 3); #= CM1 -1
+stc u32 LS = lis([10, 9, 2, 5, 3, 7, 101, 18].&); #= LS 4
+stc i32 MS = max_subarray([-2, 1, -3, 4, -1, 2, 1, -5, 4].&); #= MS 6
+stc i32 MS1 = max_subarray([-3, -1, -2].&); #= MS1 -1
+stc u64 ST = stairs(40); #= ST 165580141
+stc u64 PT = partitions(30); #= PT 5604
+stc u32 RD = rod([1, 5, 8, 9, 10, 17, 17, 20].&, 8); #= RD 22
+stc u64 CT = catalan(15); #= CT 9694845
+stc u32 GM = grid_min_path([[1, 3, 1], [1, 5, 1], [4, 2, 1]].&); #= GM 7
+stc u32 PS = palindromic_substrings("aaa".&); #= PS 6
+stc u32 PS1 = palindromic_substrings("abcba".&); #= PS1 7
+
+$main = () {}

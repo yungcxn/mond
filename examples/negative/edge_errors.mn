@@ -1,0 +1,29 @@
+type Rec = *(i32 a, u8 b);
+variant V = +(A, B(u8));
+trait T = !{ fun need = () -> i32; }
+type Impl = *(i32 v) implof T !{ fun need = () -> i32: ret 1; }
+type Bad = *(i32 v) implof Nope !{ } #! undefined_name
+
+fun k = () -> i32 { ret; } #! ret_type_mismatch
+fun f = (bool c, i32 n, V v) {
+    Rec r1 = Rec(a = 1); #! wrong_arity
+    Rec r2 = Rec(1); #! wrong_arity
+    Rec r3 = Rec(a = 1, b = 2, a = 3); #! wrong_arity
+    Rec r4 = Rec(1, 2, 3); #! wrong_arity
+    Rec ok = Rec(b = 2, a = 1);
+    match v { V.A => 1, V.B(a, b) => 2 } #! non_exhaustive_match wrong_arity
+    n = 5 as [2]u8; #! assign_to_immutable invalid_cast
+    Impl i = Impl(v = 1);
+    T tt = i;
+    i32 y = tt.need(1); #! wrong_arity
+}
+
+# BUG: all of these are accepted without a diagnostic
+#   type Dup = *(i32 a, i32 a);                      duplicate field
+#   variant W = +(A, B(u8), A);                      duplicate case
+#   fun g = (u32 a, u32 a) {}                        duplicate parameter
+#   fun h = (i32 x) -> i32 { if x > 0 { ret 1; } }   a path that never returns, also `-> i32 { }`
+#   V u = V.B;                                       payload case used without its payload
+#   arr[7] and arr[-1] on a [3]i32                   constant index out of range (only caught when executed)
+
+$main = () {}

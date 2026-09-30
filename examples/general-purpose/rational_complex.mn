@@ -1,0 +1,395 @@
+fun abs64 = (i64 x) -> i64: ret if x < 0: -x else: x;
+fun gcd64 = (i64 a, i64 b) -> i64: ret if b == 0: abs64(a) else: gcd64(b, a % b);
+
+type Rat = *(i64 n, i64 d) !{
+    fun add = (Rat o) -> Rat: ret rat(self.n * o.d + o.n * self.d, self.d * o.d);
+    fun sub = (Rat o) -> Rat: ret rat(self.n * o.d - o.n * self.d, self.d * o.d);
+    fun mul = (Rat o) -> Rat: ret rat(self.n * o.n, self.d * o.d);
+    fun div = (Rat o) -> Rat: ret rat(self.n * o.d, self.d * o.n);
+    fun neg = () -> Rat: ret Rat(-self.n, self.d);
+    fun recip = () -> Rat: ret rat(self.d, self.n);
+
+    fun cmp = (Rat o) -> i32 {
+        i64 l = self.n * o.d;
+        i64 r = o.n * self.d;
+        ret if l < r: -1 else: (if l > r: 1 else: 0);
+    }
+
+    fun floor = () -> i64 {
+        i64 q = self.n / self.d;
+        ret if self.n % self.d < 0: q - 1 else: q;
+    }
+
+    fun ceil = () -> i64 {
+        i64 q = self.n / self.d;
+        ret if self.n % self.d > 0: q + 1 else: q;
+    }
+
+    fun pow = (u32 e) -> Rat {
+        mut Rat r = Rat(1, 1);
+        for 0..<e: r = r.mul(self.*);
+        ret r;
+    }
+
+    fun key = () -> i64: ret self.n * 100000 + self.d;
+}
+
+fun rat = (i64 n, i64 d where d != 0 else ret Rat(0, 0)) -> Rat {
+    i64 g = gcd64(n, d);
+    i64 s = if d < 0: -1 else: 1;
+    ret Rat(s * n / g, s * d / g);
+}
+
+fun harmonic = (u32 n) -> Rat {
+    mut Rat h = rat(0, 1);
+    for k in 1..=n: h = h.add(rat(1, k as i64));
+    ret h;
+}
+
+fun telescoping = (u32 n) -> Rat {
+    mut Rat s = rat(0, 1);
+    for k in 1..=n: s = s.add(rat(1, (k * (k + 1)) as i64));
+    ret s;
+}
+
+fun cf_terms = (i64 n0, i64 d0) -> u64 {
+    mut i64 n = n0;
+    mut i64 d = d0;
+    mut u64 out = 0;
+    while d != 0 {
+        out = out * 10 + (n / d) as u64;
+        i64 r = n % d;
+        n = d;
+        d = r;
+    }
+    ret out;
+}
+
+fun convergent = (&[]u32 terms, u64 count) -> Rat {
+    mut Rat r = rat(terms.*[count - 1] as i64, 1);
+    mut u64 i = count - 1;
+    while i > 0 {
+        i -= 1;
+        r = rat(terms.*[i] as i64, 1).add(r.recip());
+    }
+    ret r;
+}
+
+fun farey_count = (u32 n) -> u32 {
+    mut u32 count = 2;
+    mut Rat a = Rat(0, 1);
+    mut Rat b = Rat(1, n as i64);
+    while b.n < b.d {
+        count += 1;
+        i64 k = (n as i64 + a.d) / b.d;
+        Rat c = Rat(k * b.n - a.n, k * b.d - a.d);
+        a = b;
+        b = c;
+    }
+    ret count;
+}
+
+stc i64 R1 = rat(6, 8).key(); #= R1 300004
+stc i64 R2 = rat(-6, 8).key(); #= R2 -299996
+stc i64 R3 = rat(6, -8).key(); #= R3 -299996
+stc i64 R4 = rat(-6, -8).key(); #= R4 300004
+stc i64 R5 = rat(0, 5).key(); #= R5 1
+stc i64 R6 = rat(5, 0).key(); #= R6 0
+stc i64 R7 = rat(7, 1).key(); #= R7 700001
+stc i64 R8 = rat(1, 3).add(rat(1, 6)).key(); #= R8 100002
+stc i64 R9 = rat(1, 3).sub(rat(1, 2)).key(); #= R9 -99994
+stc i64 RA = rat(2, 3).mul(rat(9, 4)).key(); #= RA 300002
+stc i64 RB = rat(2, 3).div(rat(4, 9)).key(); #= RB 300002
+stc i64 RC = rat(2, 3).div(rat(-4, 9)).key(); #= RC -299998
+stc i64 RD = rat(3, 7).neg().key(); #= RD -299993
+stc i64 RE = rat(-3, 7).recip().key(); #= RE -699997
+stc i64 RF = rat(2, 3).pow(5).key(); #= RF 3200243
+stc i64 RG = rat(-1, 2).pow(3).key(); #= RG -99992
+stc i64 RH = rat(5, 9).pow(0).key(); #= RH 100001
+
+stc i32 CM1 = rat(1, 3).cmp(rat(2, 6)); #= CM1 0
+stc i32 CM2 = rat(1, 3).cmp(rat(1, 2)); #= CM2 -1
+stc i32 CM3 = rat(-1, 3).cmp(rat(-1, 2)); #= CM3 1
+stc i32 CM4 = rat(-1, 3).cmp(rat(1, 1000)); #= CM4 -1
+
+stc i64 FL1 = rat(7, 2).floor(); #= FL1 3
+stc i64 FL2 = rat(-7, 2).floor(); #= FL2 -4
+stc i64 FL3 = rat(-6, 2).floor(); #= FL3 -3
+stc i64 CE1 = rat(7, 2).ceil(); #= CE1 4
+stc i64 CE2 = rat(-7, 2).ceil(); #= CE2 -3
+stc i64 CE3 = rat(6, 2).ceil(); #= CE3 3
+
+stc i64 H1 = harmonic(1).key(); #= H1 100001
+stc i64 H10 = harmonic(10).key(); #= H10 738102520
+stc i64 H20 = harmonic(20).key(); #= H20 5583529019504
+stc i64 T50 = telescoping(50).key(); #= T50 5000051
+stc i64 T0 = telescoping(0).key(); #= T0 1
+
+stc u64 CF1 = cf_terms(415, 93); #= CF1 4267
+stc u64 CF2 = cf_terms(3141592653, 1000000000); #= CF2 3880185129133
+stc u64 CF3 = cf_terms(5, 1); #= CF3 5
+stc u64 CF4 = cf_terms(1, 3); #= CF4 3
+stc u64 CF5 = cf_terms(89, 55); #= CF5 111111112
+
+stcfun conv = (u64 upto) -> i64 {
+    [6]u32 terms = [3, 7, 15, 1, 292, 1];
+    ret convergent(terms.&, upto).key();
+}
+
+stc i64 CV1 = conv(1); #= CV1 300001
+stc i64 CV2 = conv(2); #= CV2 2200007
+stc i64 CV3 = conv(3); #= CV3 33300106
+stc i64 CV4 = conv(4); #= CV4 35500113
+stc i64 CV5 = conv(5); #= CV5 10399333102
+stc i64 CV6 = conv(6); #= CV6 10434833215
+
+stc u32 FY1 = farey_count(1); #= FY1 2
+stc u32 FY2 = farey_count(5); #= FY2 11
+stc u32 FY3 = farey_count(8); #= FY3 23
+
+type Cx = *(f64 re, f64 im) !{
+    fun add = (Cx o) -> Cx: ret Cx(self.re + o.re, self.im + o.im);
+    fun sub = (Cx o) -> Cx: ret Cx(self.re - o.re, self.im - o.im);
+    fun mul = (Cx o) -> Cx: ret Cx(self.re * o.re - self.im * o.im, self.re * o.im + self.im * o.re);
+    fun conj = () -> Cx: ret Cx(self.re, -self.im);
+    fun abs2 = () -> f64: ret self.re * self.re + self.im * self.im;
+
+    fun div = (Cx o) -> Cx {
+        Cx n = self.mul(o.conj());
+        f64 d = o.abs2();
+        ret Cx(n.re / d, n.im / d);
+    }
+
+    fun powi = (u32 e) -> Cx {
+        mut Cx r = Cx(1.0, 0.0);
+        mut Cx b = self.*;
+        mut u32 k = e;
+        while k > 0 {
+            if (k & 1) == 1: r = r.mul(b);
+            b = b.mul(b);
+            k = k >> 1;
+        }
+        ret r;
+    }
+}
+
+type Gauss = *(i64 a, i64 b) !{
+    fun mul = (Gauss o) -> Gauss: ret Gauss(self.a * o.a - self.b * o.b, self.a * o.b + self.b * o.a);
+    fun sub = (Gauss o) -> Gauss: ret Gauss(self.a - o.a, self.b - o.b);
+    fun norm = () -> i64: ret self.a * self.a + self.b * self.b;
+
+    fun div_round = (Gauss o) -> Gauss {
+        i64 n = o.norm();
+        i64 re = self.a * o.a + self.b * o.b;
+        i64 im = self.b * o.a - self.a * o.b;
+        ret Gauss(floor_div(2 * re + n, 2 * n), floor_div(2 * im + n, 2 * n));
+    }
+}
+
+fun floor_div = (i64 a, i64 b) -> i64 {
+    i64 q = a / b;
+    # LIMIT: an `if` condition ending in a parenthesised group before `:` (`if x and (a < 0): ..`) is parsed as a lambda and reports IllegalIfFormat, so the group goes into a variable
+    bool opposite = (a < 0) != (b < 0);
+    ret if a % b != 0 and opposite: q - 1 else: q;
+}
+
+fun gauss_gcd = (Gauss x, Gauss y) -> Gauss {
+    if y.norm() == 0: ret x;
+    Gauss q = x.div_round(y);
+    ret gauss_gcd(y, x.sub(q.mul(y)));
+}
+
+stc f64 X1 = Cx(1.0, 2.0).mul(Cx(3.0, -4.0)).re; #= X1 11
+stc f64 X2 = Cx(1.0, 2.0).mul(Cx(3.0, -4.0)).im; #= X2 2
+stc f64 X3 = Cx(0.0, 1.0).mul(Cx(0.0, 1.0)).re; #= X3 -1
+stc f64 X4 = Cx(1.0, 1.0).powi(8).re; #= X4 16
+stc f64 X5 = Cx(1.0, 1.0).powi(2).im; #= X5 2
+stc f64 X6 = Cx(0.0, 1.0).powi(3).im; #= X6 -1
+stc f64 X7 = Cx(2.0, 5.0).powi(0).re; #= X7 1
+stc f64 X8 = Cx(3.0, 4.0).abs2(); #= X8 25
+stc f64 X9 = Cx(3.0, 4.0).conj().im; #= X9 -4
+stc f64 XA = Cx(1.0, 2.0).div(Cx(3.0, 4.0)).re; #= XA 0.44
+stc f64 XB = Cx(1.0, 0.0).div(Cx(0.0, 2.0)).im; #= XB -0.5
+stc f64 XC = Cx(1.5, -0.5).add(Cx(0.5, 0.5)).re; #= XC 2
+stc f64 XD = Cx(1.5, -0.5).sub(Cx(0.5, 0.75)).im; #= XD -1.25
+
+stc i64 G1 = Gauss(3, 4).mul(Gauss(1, -2)).a; #= G1 11
+stc i64 G2 = Gauss(3, 4).mul(Gauss(1, -2)).b; #= G2 -2
+stc i64 G3 = Gauss(11, 3).norm(); #= G3 130
+stc i64 G4 = gauss_gcd(Gauss(11, 3), Gauss(1, 8)).norm(); #= G4 5
+stc i64 G5 = gauss_gcd(Gauss(5, 0), Gauss(3, 4)).norm(); #= G5 5
+stc i64 G6 = gauss_gcd(Gauss(7, 0), Gauss(0, 3)).norm(); #= G6 1
+stc i64 G7 = gauss_gcd(Gauss(0, 0), Gauss(3, -2)).norm(); #= G7 13
+stc i64 G8 = gauss_gcd(Gauss(-14, 38), Gauss(6, 22)).norm(); #= G8 8
+stc i64 G9 = gauss_gcd(Gauss(11, 3), Gauss(1, 8)).a; #= G9 -1
+stc i64 GA = gauss_gcd(Gauss(11, 3), Gauss(1, 8)).b; #= GA 2
+stc i64 GB = Gauss(7, 1).div_round(Gauss(2, 1)).a; #= GB 3
+stc i64 GC = Gauss(7, 1).div_round(Gauss(2, 1)).b; #= GC -1
+
+type Fx = *(i32 raw) !{
+    fun add = (Fx o) -> Fx: ret Fx(self.raw + o.raw);
+    fun sub = (Fx o) -> Fx: ret Fx(self.raw - o.raw);
+    fun mul = (Fx o) -> Fx: ret Fx((((self.raw as i64) * (o.raw as i64)) >> 16) as i32);
+    fun div = (Fx o) -> Fx: ret Fx((((self.raw as i64) << 16) / (o.raw as i64)) as i32);
+    fun floor = () -> i32: ret self.raw >> 16;
+    fun milli = () -> i64: ret ((self.raw as i64) * 1000) >> 16;
+
+    fun sqrt = () -> Fx {
+        mut u64 rem = (self.raw as u64) << 16;
+        mut u64 res = 0;
+        mut u64 bit = 1 << 62;
+        while bit > rem: bit = bit >> 2;
+        while bit != 0 {
+            if rem >= res + bit {
+                rem -= res + bit;
+                res = (res >> 1) + bit;
+            } else {
+                res = res >> 1;
+            }
+            bit = bit >> 2;
+        }
+        ret Fx(res as i32);
+    }
+}
+
+fun fx = (i32 whole, u32 frac16) -> Fx: ret Fx((whole << 16) + frac16 as i32);
+
+type Vec3 = *(i32 x, i32 y, i32 z) !{
+    fun add = (Vec3 o) -> Vec3: ret Vec3(self.x + o.x, self.y + o.y, self.z + o.z);
+    fun scale = (i32 k) -> Vec3: ret Vec3(self.x * k, self.y * k, self.z * k);
+    fun dot = (Vec3 o) -> i32: ret self.x * o.x + self.y * o.y + self.z * o.z;
+    fun len2 = () -> i32: ret self.dot(self.*);
+
+    fun cross = (Vec3 o) -> Vec3: ret Vec3(
+        self.y * o.z - self.z * o.y,
+        self.z * o.x - self.x * o.z,
+        self.x * o.y - self.y * o.x,
+    );
+
+    fun key = () -> i64: ret (self.x as i64) * 1000000 + (self.y as i64) * 1000 + (self.z as i64);
+}
+
+type Vec2 = *(i32 x, i32 y) !{
+    fun cross = (Vec2 o) -> i64: ret (self.x as i64) * (o.y as i64) - (self.y as i64) * (o.x as i64);
+    fun sub = (Vec2 o) -> Vec2: ret Vec2(self.x - o.x, self.y - o.y);
+}
+
+fun orient = (Vec2 a, Vec2 b, Vec2 c) -> i32 {
+    i64 v = b.sub(a).cross(c.sub(a));
+    ret if v > 0: 1 else: (if v < 0: -1 else: 0);
+}
+
+fun area2 = (&[]Vec2 pts) -> i64 {
+    mut i64 s = 0;
+    for i in 0..<pts.$len {
+        Vec2 p = pts.*[i];
+        Vec2 q = pts.*[(i + 1) % pts.$len];
+        s += (p.x as i64) * (q.y as i64) - (q.x as i64) * (p.y as i64);
+    }
+    ret s;
+}
+
+type Quat = *(i64 w, i64 x, i64 y, i64 z) !{
+    fun mul = (Quat o) -> Quat: ret Quat(
+        self.w * o.w - self.x * o.x - self.y * o.y - self.z * o.z,
+        self.w * o.x + self.x * o.w + self.y * o.z - self.z * o.y,
+        self.w * o.y - self.x * o.z + self.y * o.w + self.z * o.x,
+        self.w * o.z + self.x * o.y - self.y * o.x + self.z * o.w,
+    );
+    fun conj = () -> Quat: ret Quat(self.w, -self.x, -self.y, -self.z);
+    fun norm = () -> i64: ret self.w * self.w + self.x * self.x + self.y * self.y + self.z * self.z;
+    fun key = () -> i64: ret self.w * 1000000 + self.x * 10000 + self.y * 100 + self.z;
+}
+
+stc i32 F1 = fx(1, 32768).mul(fx(2, 32768)).raw; #= F1 245760
+stc i64 F2 = fx(1, 32768).mul(fx(2, 32768)).milli(); #= F2 3750
+stc i64 F3 = fx(7, 0).div(fx(2, 0)).milli(); #= F3 3500
+stc i64 F4 = fx(-7, 0).div(fx(2, 0)).milli(); #= F4 -3500
+stc i32 F5 = fx(-2, 32768).floor(); #= F5 -2
+stc i32 F6 = fx(-2, 0).floor(); #= F6 -2
+stc i32 F7 = fx(3, 65535).floor(); #= F7 3
+stc i32 F8 = fx(40000, 0).raw; #= F8 -1673527296
+stc i32 F9 = fx(200, 0).mul(fx(200, 0)).raw; #= F9 -1673527296
+stc i32 FA = fx(1, 0).div(fx(3, 0)).raw; #= FA 21845
+stc i32 FB = fx(0, 1).mul(fx(0, 1)).raw; #= FB 0
+stc i32 FC = fx(2, 0).sqrt().raw; #= FC 92681
+stc i32 FD = fx(16, 0).sqrt().raw; #= FD 262144
+stc i32 FE = fx(0, 0).sqrt().raw; #= FE 0
+stc i32 FF = fx(1, 0).sqrt().raw; #= FF 65536
+stc i64 FG = fx(10, 0).sqrt().milli(); #= FG 3162
+stc i32 FH = fx(1, 0).sub(fx(3, 0)).add(fx(0, 16384)).raw; #= FH -114688
+
+stc i64 V1 = Vec3(1, 2, 3).cross(Vec3(4, 5, 6)).key(); #= V1 -2994003
+stc i64 V2 = Vec3(1, 0, 0).cross(Vec3(0, 1, 0)).key(); #= V2 1
+stc i32 V3 = Vec3(1, 2, 3).dot(Vec3(4, -5, 6)); #= V3 12
+stc i32 V4 = Vec3(3, 4, 12).len2(); #= V4 169
+stc i64 V5 = Vec3(2, 3, 4).cross(Vec3(2, 3, 4)).key(); #= V5 0
+stc i64 V6 = Vec3(1, 2, 3).add(Vec3(1, 1, 1).scale(-2)).key(); #= V6 -999999
+stc i32 V7 = Vec3(2000000, 2000000, 0).len2(); #= V7 -1524072448
+
+stc i32 O1 = orient(Vec2(0, 0), Vec2(4, 0), Vec2(4, 4)); #= O1 1
+stc i32 O2 = orient(Vec2(0, 0), Vec2(4, 0), Vec2(4, -4)); #= O2 -1
+stc i32 O3 = orient(Vec2(0, 0), Vec2(2, 2), Vec2(5, 5)); #= O3 0
+stc i32 O4 = orient(Vec2(-1, -1), Vec2(-1, -1), Vec2(7, 3)); #= O4 0
+
+stcfun square_area = () -> i64 {
+    [4]Vec2 sq = [Vec2(0, 0), Vec2(4, 0), Vec2(4, 3), Vec2(0, 3)];
+    ret area2(sq.&);
+}
+
+stcfun cw_area = () -> i64 {
+    [3]Vec2 tri = [Vec2(0, 0), Vec2(0, 5), Vec2(5, 0)];
+    ret area2(tri.&);
+}
+
+stcfun l_area = () -> i64 {
+    [6]Vec2 l = [Vec2(0, 0), Vec2(4, 0), Vec2(4, 2), Vec2(2, 2), Vec2(2, 5), Vec2(0, 5)];
+    ret area2(l.&);
+}
+
+stcfun degenerate_area = () -> i64 {
+    [2]Vec2 seg = [Vec2(0, 0), Vec2(5, 5)];
+    ret area2(seg.&);
+}
+
+stc i64 AR1 = square_area(); #= AR1 24
+stc i64 AR2 = cw_area(); #= AR2 -25
+stc i64 AR3 = l_area(); #= AR3 28
+stc i64 AR4 = degenerate_area(); #= AR4 0
+
+stcfun quat_units = () -> i64 {
+    Quat i = Quat(0, 1, 0, 0);
+    Quat j = Quat(0, 0, 1, 0);
+    Quat k = Quat(0, 0, 0, 1);
+    ret i.mul(j).key() * 1000000 + j.mul(k).key() * 1000 + k.mul(i).key();
+}
+
+stcfun quat_ijk = () -> i64 {
+    Quat i = Quat(0, 1, 0, 0);
+    Quat j = Quat(0, 0, 1, 0);
+    Quat k = Quat(0, 0, 0, 1);
+    ret i.mul(j).mul(k).w;
+}
+
+stcfun quat_norm_mult = () -> i64 {
+    Quat p = Quat(1, 2, 3, 4);
+    Quat q = Quat(-2, 0, 5, 1);
+    Quat r = p.mul(q);
+    ret r.norm() - p.norm() * q.norm();
+}
+
+stcfun quat_inverse = () -> i64 {
+    Quat p = Quat(3, -1, 2, 5);
+    Quat r = p.mul(p.conj());
+    ret r.w * 1000 + r.x + r.y + r.z;
+}
+
+stc i64 Q1 = quat_units(); #= Q1 11000100
+stc i64 Q2 = quat_ijk(); #= Q2 -1
+stc i64 Q3 = quat_norm_mult(); #= Q3 0
+stc i64 Q4 = quat_inverse(); #= Q4 39000
+stc i64 Q5 = Quat(1, 2, 3, 4).mul(Quat(-2, 0, 5, 1)).key(); #= Q5 -21210297
+stc i64 Q6 = Quat(1, 2, 3, 4).mul(Quat(1, 0, 0, 0)).key(); #= Q6 1020304
+stc i64 Q7 = Quat(0, 0, 0, 0).mul(Quat(9, 9, 9, 9)).key(); #= Q7 0
+
+$main = () {}

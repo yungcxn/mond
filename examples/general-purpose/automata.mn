@@ -1,0 +1,353 @@
+type Elementary = *(u32 rule, mut u64 cells) !{
+    fun step = () {
+        u64 x = self.cells;
+        u64 left = (x << 1) | (x >> 63);
+        u64 right = (x >> 1) | (x << 63);
+        mut u64 next = 0;
+        for i in 0..<64 {
+            u32 l = ((left >> i) & 1) as u32;
+            u32 c = ((x >> i) & 1) as u32;
+            u32 r = ((right >> i) & 1) as u32;
+            u32 pattern = (l << 2) | (c << 1) | r;
+            u64 bit = ((self.rule >> pattern) & 1) as u64;
+            next = next | (bit << i);
+        }
+        self.cells = next;
+    }
+
+    fun population = () -> u32 {
+        mut u32 n = 0;
+        mut u64 x = self.cells;
+        while x != 0 {
+            n += (x & 1) as u32;
+            x = x >> 1;
+        }
+        ret n;
+    }
+
+    fun center = () -> u32: ret ((self.cells >> 32) & 1) as u32;
+}
+
+fun seeded = (u32 rule) -> Elementary: ret Elementary(rule = rule, cells = (1 as u64) << 32);
+
+fun run_pop = (u32 rule, u32 gens) -> u32 {
+    mut Elementary e = seeded(rule);
+    for 0..<gens: e.step();
+    ret e.population();
+}
+
+fun run_cells = (u32 rule, u32 gens) -> u64 {
+    mut Elementary e = seeded(rule);
+    for 0..<gens: e.step();
+    ret e.cells;
+}
+
+fun center_bits = (u32 rule, u32 gens) -> u64 {
+    mut Elementary e = seeded(rule);
+    mut u64 bits = 0;
+    for 0..<gens {
+        bits = (bits << 1) | e.center() as u64;
+        e.step();
+    }
+    ret bits;
+}
+
+fun total_pop = (u32 rule, u32 gens) -> u32 {
+    mut Elementary e = seeded(rule);
+    mut u32 total = 0;
+    for 0..<gens {
+        total += e.population();
+        e.step();
+    }
+    ret total;
+}
+
+stc u64 G30 = run_cells(30, 1); #= G30 15032385536
+stc u64 G30B = run_cells(30, 3); #= G30B 66035122176
+stc u64 G90 = run_cells(90, 4); #= G90 68987912192
+stc u64 G110 = run_cells(110, 3); #= G110 5905580032
+stc u64 G0 = run_cells(0, 1); #= G0 0
+stc u64 G255 = run_cells(255, 1); #= G255 18446744073709551615
+stc u64 G204 = run_cells(204, 7); #= G204 4294967296
+stc u64 G170 = run_cells(170, 1); #= G170 2147483648
+stc u64 G184 = run_cells(184, 5); #= G184 137438953472
+stc u32 P30 = run_pop(30, 20); #= P30 21
+stc u32 P90 = run_pop(90, 16); #= P90 2
+stc u32 P90B = run_pop(90, 15); #= P90B 16
+stc u32 P110 = run_pop(110, 30); #= P110 16
+stc u32 P54 = run_pop(54, 12); #= P54 7
+stc u64 C30 = center_bits(30, 30); #= C30 925983979
+stc u64 C90 = center_bits(90, 16); #= C90 32768
+stc u32 T90 = total_pop(90, 32); #= T90 243
+stc u32 T30 = total_pop(30, 30); #= T30 502
+stc u32 W30 = run_pop(30, 31); #= W30 39
+
+type Ant = *(mut [256]u8 grid, mut i32 r, mut i32 c, mut u32 dir, mut u32 steps) !{
+    fun step = () {
+        u32 idx = (self.r as u32) * 16 + self.c as u32;
+        if self.grid[idx] == 0 {
+            self.dir = (self.dir + 1) % 4;
+            self.grid[idx] = 1;
+        } else {
+            self.dir = (self.dir + 3) % 4;
+            self.grid[idx] = 0;
+        }
+        match self.dir {
+            0 => self.r = (self.r + 15) % 16,
+            1 => self.c = (self.c + 1) % 16,
+            2 => self.r = (self.r + 1) % 16,
+            _ => self.c = (self.c + 15) % 16,
+        }
+        self.steps += 1;
+    }
+}
+
+fun ant_run = (u32 steps) -> Ant {
+    mut Ant a = Ant(grid = blank_grid(), r = 8, c = 8, dir = 0, steps = 0);
+    for 0..<steps: a.step();
+    ret a;
+}
+
+fun blank_grid = () -> [256]u8 {
+    mut [256]u8 g;
+    ret g;
+}
+
+fun black = (Ant a) -> u32 {
+    mut u32 n = 0;
+    for x in a.grid: n += x as u32;
+    ret n;
+}
+
+stc u32 AB1 = black(ant_run(0)); #= AB1 0
+stc u32 AB2 = black(ant_run(1)); #= AB2 1
+stc u32 AB3 = black(ant_run(4)); #= AB3 4
+stc u32 AB4 = black(ant_run(11)); #= AB4 7
+stc u32 AB5 = black(ant_run(200)); #= AB5 40
+stc u32 AB6 = black(ant_run(600)); #= AB6 72
+stc i32 AR1 = ant_run(4).r * 100 + ant_run(4).c; #= AR1 808
+stc i32 AR2 = ant_run(200).r * 100 + ant_run(200).c; #= AR2 1004
+stc u32 AD1 = ant_run(200).dir; #= AD1 0
+stc u32 AD2 = ant_run(1000).dir; #= AD2 0
+stc u32 AS1 = ant_run(300).steps; #= AS1 300
+
+type Lfsr = *(mut u16 s) !{
+    fun step = () -> u16 {
+        u16 bit = (self.s ^ (self.s >> 2) ^ (self.s >> 3) ^ (self.s >> 5)) & 1;
+        self.s = (self.s >> 1) | (bit << 15);
+        ret self.s;
+    }
+}
+
+type Lfsr8 = *(mut u8 s) !{
+    fun step = () -> u8 {
+        u8 bit = (self.s ^ (self.s >> 2) ^ (self.s >> 3) ^ (self.s >> 4)) & 1;
+        self.s = (self.s >> 1) | (bit << 7);
+        ret self.s;
+    }
+}
+
+fun lfsr_period = (u8 seed) -> u32 {
+    mut Lfsr8 l = Lfsr8(s = seed);
+    mut u32 n = 0;
+    loop {
+        do l.step();
+        n += 1;
+        if l.s == seed: brk;
+    }
+    ret n;
+}
+
+fun lfsr_ones = (u8 seed) -> u32 {
+    mut Lfsr8 l = Lfsr8(s = seed);
+    mut u32 ones = 0;
+    for 0..<255 {
+        u8 v = l.step();
+        ones += (v & 1) as u32;
+    }
+    ret ones;
+}
+
+fun lfsr16 = (u16 seed, u32 n) -> u16 {
+    mut Lfsr l = Lfsr(s = seed);
+    for 0..<n: do l.step();
+    ret l.s;
+}
+
+stc u32 LP1 = lfsr_period(1); #= LP1 255
+stc u32 LP2 = lfsr_period(0xAC); #= LP2 255
+stc u32 LO1 = lfsr_ones(1); #= LO1 128
+stc u16 L16A = lfsr16(0xACE1, 1); #= L16A 22128
+stc u16 L16B = lfsr16(0xACE1, 10); #= L16B 51371
+stc u16 L16C = lfsr16(0xACE1, 100); #= L16C 5089
+stc u16 L16D = lfsr16(0xACE1, 0); #= L16D 44257
+stc u16 L16E = lfsr16(1, 16); #= L16E 26625
+
+type Say = *(mut [1000]u8 cur, mut [1000]u8 next, mut u32 len) !{
+    fun advance = () {
+        mut u32 w = 0;
+        mut u32 i = 0;
+        while i < self.len {
+            mut u32 run = 1;
+            while i + run < self.len and self.cur[i + run] == self.cur[i]: run += 1;
+            self.next[w] = run as u8;
+            self.next[w + 1] = self.cur[i];
+            w += 2;
+            i += run;
+        }
+        for k in 0..<w: self.cur[k] = self.next[k];
+        self.len = w;
+    }
+
+    fun digit_sum = () -> u32 {
+        mut u32 s = 0;
+        for k in 0..<self.len: s += self.cur[k] as u32;
+        ret s;
+    }
+}
+
+fun say_term = (u32 n) -> Say {
+    mut Say s;
+    s.cur[0] = 1;
+    s.len = 1;
+    for 1..<n: s.advance();
+    ret s;
+}
+
+fun look_and_say = (u32 n) -> u32: ret say_term(n).len;
+fun look_and_say_digit_sum = (u32 n) -> u32: ret say_term(n).digit_sum();
+
+stc u32 LS1 = look_and_say(1); #= LS1 1
+stc u32 LS2 = look_and_say(2); #= LS2 2
+stc u32 LS3 = look_and_say(5); #= LS3 6
+stc u32 LS4 = look_and_say(10); #= LS4 20
+stc u32 LS5 = look_and_say(20); #= LS5 302
+stc u32 LS6 = look_and_say_digit_sum(12); #= LS6 56
+
+fun digits_sorted = (u32 n, bool desc) -> u32 {
+    mut [4]u32 d;
+    mut u32 x = n;
+    for i in 0..<4 {
+        d[i] = x % 10;
+        x /= 10;
+    }
+    for i in 0..<4 {
+        for j in 0..<3 - i {
+            bool out_of_order = if desc: d[j] < d[j + 1] else: d[j] > d[j + 1];
+            if out_of_order {
+                u32 t = d[j];
+                d[j] = d[j + 1];
+                d[j + 1] = t;
+            }
+        }
+    }
+    ret d[0] * 1000 + d[1] * 100 + d[2] * 10 + d[3];
+}
+
+fun kaprekar_steps = (u32 n) -> u32 {
+    mut u32 x = n;
+    mut u32 steps = 0;
+    while x != 6174 and steps < 20 {
+        u32 hi = digits_sorted(x, true);
+        u32 lo = digits_sorted(x, false);
+        if hi == lo: ret 99;
+        x = hi - lo;
+        steps += 1;
+    }
+    ret steps;
+}
+
+fun is_happy = (u32 n) -> bool {
+    mut u32 x = n;
+    mut u32 guard = 0;
+    while x != 1 and x != 4 and guard < 50 {
+        mut u32 s = 0;
+        while x > 0 {
+            u32 d = x % 10;
+            s += d * d;
+            x /= 10;
+        }
+        x = s;
+        guard += 1;
+    }
+    ret x == 1;
+}
+
+fun happy_count = (u32 upto) -> u32 {
+    mut u32 n = 0;
+    for k in 1..=upto: if is_happy(k): n += 1;
+    ret n;
+}
+
+stc u32 K1 = kaprekar_steps(3524); #= K1 3
+stc u32 K2 = kaprekar_steps(6174); #= K2 0
+stc u32 K3 = kaprekar_steps(1111); #= K3 99
+stc u32 K4 = kaprekar_steps(1000); #= K4 5
+stc u32 K5 = kaprekar_steps(9998); #= K5 5
+stc u32 K6 = kaprekar_steps(2111); #= K6 5
+stc u32 K7 = digits_sorted(3524, true); #= K7 5432
+stc u32 K8 = digits_sorted(3524, false); #= K8 2345
+stc bool H1 = is_happy(19); #= H1 true
+stc bool H2 = is_happy(4); #= H2 false
+stc bool H3 = is_happy(1); #= H3 true
+stc bool H4 = is_happy(989); #= H4 true
+stc u32 HC1 = happy_count(100); #= HC1 20
+stc u32 HC2 = happy_count(1000); #= HC2 143
+
+type Counter = *(mut [8]bool bits, mut u32 carries) !{
+    fun tick = () {
+        mut u32 i = 0;
+        while i < 8 {
+            if self.bits[i] {
+                self.bits[i] = false;
+                self.carries += 1;
+                i += 1;
+            } else {
+                self.bits[i] = true;
+                brk;
+            }
+        }
+    }
+
+    fun value = () -> u32 {
+        mut u32 v = 0;
+        for i in 0..<8: if self.bits[i]: v = v | (1 << i);
+        ret v;
+    }
+}
+
+fun counter_after = (u32 ticks) -> u32 {
+    mut Counter c;
+    for 0..<ticks: c.tick();
+    ret c.value() * 1000 + c.carries;
+}
+
+fun johnson_period = (u32 width) -> u32 {
+    mut [16]bool reg;
+    mut u32 n = 0;
+    loop {
+        bool feed = !reg[width - 1];
+        mut u32 i = width - 1;
+        while i > 0 {
+            reg[i] = reg[i - 1];
+            i -= 1;
+        }
+        reg[0] = feed;
+        n += 1;
+        mut bool zero = true;
+        for k in 0..<width: if reg[k]: zero = false;
+        if zero: brk;
+    }
+    ret n;
+}
+
+stc u32 CT1 = counter_after(0); #= CT1 0
+stc u32 CT2 = counter_after(1); #= CT2 1000
+stc u32 CT3 = counter_after(255); #= CT3 255247
+stc u32 CT4 = counter_after(256); #= CT4 255
+stc u32 CT5 = counter_after(300); #= CT5 44296
+stc u32 JP1 = johnson_period(4); #= JP1 8
+stc u32 JP2 = johnson_period(1); #= JP2 2
+stc u32 JP3 = johnson_period(10); #= JP3 20
+
+$main = () {}

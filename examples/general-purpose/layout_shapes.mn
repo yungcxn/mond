@@ -1,0 +1,133 @@
+type Pk = *(u8 a, u16 b, u8 c);
+type Sorted = *(u16 b, u8 a, u8 c);
+type Wide = *(u64 w, u8 t);
+type Bytes = *(u8 n, [3]u8 data);
+type Shorts = *([3]u16 data, u8 n);
+type Inner = *(u8 a, u16 b);
+type Nested = *(u8 first, Inner mid, u8 last);
+type Loose = **(u8 a, u16 b, u64 c);
+type Wrapped = **(u8 a, Inner b);
+type Floats = *(bool flag, f32 x, f64 y);
+type Reverse = *(f64 y, f32 x, bool flag);
+type Halves = *(f16 h, u8 b);
+type Ptrs = *(&u8 p, u8 tag);
+type Fixed = *(u8 a, u32 b) assertsize 8;
+type Tight = **(u8 a, u32 b) assertsize 5;
+type Grid = *([2]Inner rows, u8 n) assertsize 10;
+
+variant Mix = +(Tiny(u8, u8), Word(u16), Empty) tagof u8;
+variant Long = +(Big(u64), Small(u8, u8, u8), Empty) tagof u8;
+variant Nib = +(Lo(u8), Hi(u8), Other) tagof u16;
+variant Sel = ++(Some(u32), None) tagof u8;
+
+stc u64 S1 = sizeof Pk; #= S1 6
+stc u64 S2 = sizeof Sorted; #= S2 4
+stc u64 S3 = sizeof Wide; #= S3 16
+stc u64 S4 = sizeof Bytes; #= S4 4
+stc u64 S5 = sizeof Shorts; #= S5 8
+stc u64 S6 = sizeof Nested; #= S6 8
+stc u64 S7 = sizeof Loose; #= S7 11
+stc u64 S8 = sizeof Wrapped; #= S8 5
+stc u64 S9 = sizeof Floats; #= S9 16
+stc u64 S10 = sizeof Reverse; #= S10 16
+stc u64 S11 = sizeof Halves; #= S11 4
+stc u64 S12 = sizeof Ptrs; #= S12 16
+stc u64 S13 = sizeof Fixed; #= S13 8
+stc u64 S14 = sizeof Tight; #= S14 5
+stc u64 S15 = sizeof Grid; #= S15 10
+stc u64 V1 = sizeof Mix; #= V1 4
+stc u64 V2 = sizeof Long; #= V2 16
+stc u64 V3 = sizeof Nib; #= V3 4
+stc u64 V4 = sizeof Sel; #= V4 8
+stc u64 A1 = sizeof [3]Inner; #= A1 12
+stc u64 A2 = sizeof [2][3]Pk; #= A2 36
+
+stc []u64 SIZES = stcfor T in [Pk, Sorted, Wide, Bytes, Shorts, Nested]: sizeof T; #= SIZES [6, 4, 16, 4, 8, 8]
+stc []u64 ALIGNED = stcfor T in [u8, u16, u32, u64, Pk, Wide]: (sizeof T + 3) / 4 * 4; #= ALIGNED [4, 4, 4, 8, 8, 16]
+
+# BUG: `for T in [Pk, Sorted]: t += sizeof T` inside a fun or stcfun is accepted without a diagnostic but every static evaluation of it is poison, so the type list is walked by a top level stcfor
+stc [6]u64 PARTS = stcfor T in [Pk, Sorted, Wide, Floats, Halves, Fixed]: sizeof T; #= PARTS [6, 4, 16, 16, 4, 8]
+
+stcfun total = ([6]u64 xs) -> u64 {
+    mut u64 t = 0;
+    for i in 0..<6: t += xs[i];
+    ret t;
+}
+
+stcfun padding = (type T, u64 packed) -> u64: ret sizeof T - packed;
+
+stcfun lost = () -> u64: ret padding(Pk, 4) * 1000 + padding(Floats, 13) * 100 + padding(Nested, 5) * 10 + padding(Wide, 9);
+
+stcfun classify = (type T) -> u32 {
+    if sizeof T == 1: ret 1;
+    if sizeof T <= 4: ret 2;
+    if sizeof T <= 8: ret 3;
+    ret 4;
+}
+
+stcfun kinds = () -> u32 {
+    ret classify(u8) * 100000 + classify(Pk) * 10000 + classify(Bytes) * 1000 + classify(Nested) * 100 + classify(Ptrs) * 10 + classify(Mix);
+}
+
+stcfun runtime_shapes = () -> u64 {
+    Pk p = Pk(a = 1, b = 2, c = 3);
+    [3]Inner arr = [Inner(1, 2), Inner(3, 4), Inner(5, 6)];
+    Sel s = Sel.Some(5);
+    ret sizeof p * 1000000 + sizeof arr * 10000 + sizeof (typeof s) * 100 + sizeof arr[1];
+}
+
+stc u64 TT = total(PARTS); #= TT 54
+stc u64 LO = lost(); #= LO 2337
+stc u32 KI = kinds(); #= KI 132342
+stc u64 RT = runtime_shapes(); #= RT 6120804
+
+trait Sized = !{ fun bytes = () -> u32; }
+
+type Cell = *(u8 v) implof Sized !{ fun bytes = () -> u32: ret 1; }
+type Line = *([4]Cell cells) implof Sized !{ fun bytes = () -> u32: ret 4; }
+type Plain = *(u16 v);
+
+stcfun type_checks = () -> u32 {
+    Cell c = Cell(v = 1);
+    Line l = Line(cells = [c, c, c, c]);
+    Plain p = Plain(v = 2);
+    [2]u16 pair = [1, 2];
+    mut u32 r = 0;
+    if c oftype Sized: r += 1;
+    if l oftype Sized: r += 10;
+    if p oftype Sized: r += 100;
+    if (typeof l.cells[0]) == Cell: r += 1000;
+    if (typeof pair[1]) == u16: r += 10000;
+    if (typeof pair) == [2]u16: r += 100000;
+    # LIMIT: `if a == (b): ..` reads `(b): ..` as a lambda (IllegalIfFormat), so the type is named first
+    last = typeof l.cells[3];
+    if (typeof c) == last: r += 1000000;
+    if sizeof l == 4 * sizeof c: r += 10000000;
+    if Plain oftype Sized: r += 100000000;
+    ret r;
+}
+
+stcfun equal_types = () -> u32 {
+    mut u32 r = 0;
+    if u8 == u8: r += 1;
+    if u8 == u16: r += 10;
+    a3 = [3]u8;
+    b3 = [3]u8;
+    a4 = [4]u8;
+    if a3 == b3: r += 100;
+    if a3 == a4: r += 1000;
+    if *(u8 a) == *(u8 a): r += 10000;
+    if Cell == Cell: r += 100000;
+    ret r;
+}
+
+stc u32 TC = type_checks(); #= TC 11111011
+stc u32 EQ = equal_types(); #= EQ 100101
+
+$main = () {
+    Line l = Line(cells = [Cell(1), Cell(2), Cell(3), Cell(4)]);
+    n = sizeof l; #: n u64
+    b = l.bytes(); #: b u32
+    s = sizeof Line; #: s u64
+    k = l.cells[2]; #: k *(u8 v)
+}

@@ -1,0 +1,381 @@
+variant Ins = +(
+    Nop,
+    Const(u8 d, u32 v),
+    Copy(u8 d, u8 s),
+    Input(u8 d, u8 idx),
+    Add(u8 d, u8 a, u8 b),
+    Sub(u8 d, u8 a, u8 b),
+    Mul(u8 d, u8 a, u8 b),
+    Div(u8 d, u8 a, u8 b),
+    Mod(u8 d, u8 a, u8 b),
+    And(u8 d, u8 a, u8 b),
+    Shl(u8 d, u8 a, u8 k),
+    Shr(u8 d, u8 a, u8 k),
+    AndI(u8 d, u8 a, u32 m),
+    Out(u8 a),
+) tagof u8;
+
+fun log2_exact = (u32 v) -> u32 {
+    if v < 2 or (v & (v - 1)) != 0: ret 99;
+    mut u32 k = 0;
+    mut u32 x = v;
+    while x > 1 {
+        x = x >> 1;
+        k += 1;
+    }
+    ret k;
+}
+
+fun run = (&[]Ins prog, u32 x, u32 y) -> u32 {
+    mut [16]u32 r;
+    mut u32 out = 0;
+    for ins in prog.* {
+        match ins {
+            Ins.Nop => {},
+            Ins.Const(d, v) => r[d] = v,
+            Ins.Copy(d, s) => r[d] = r[s],
+            Ins.Input(d, idx) => r[d] = if idx == 0: x else: y,
+            Ins.Add(d, a, b) => r[d] = r[a] + r[b],
+            Ins.Sub(d, a, b) => r[d] = r[a] - r[b],
+            Ins.Mul(d, a, b) => r[d] = r[a] * r[b],
+            Ins.Div(d, a, b) => r[d] = if r[b] == 0: 0 else: r[a] / r[b],
+            Ins.Mod(d, a, b) => r[d] = if r[b] == 0: 0 else: r[a] % r[b],
+            Ins.And(d, a, b) => r[d] = r[a] & r[b],
+            Ins.Shl(d, a, k) => r[d] = r[a] << k,
+            Ins.Shr(d, a, k) => r[d] = r[a] >> k,
+            Ins.AndI(d, a, m) => r[d] = r[a] & m,
+            Ins.Out(a) => out = out * 31 + r[a],
+        }
+    }
+    ret out;
+}
+
+fun live_count = (&[]Ins prog) -> u32 {
+    mut u32 n = 0;
+    for ins in prog.* {
+        match ins {
+            Ins.Nop => {},
+            _ => n += 1,
+        }
+    }
+    ret n;
+}
+
+type Opt = *(
+    mut [24]Ins code,
+    u32 n,
+    mut [16]bool known,
+    mut [16]u32 kv,
+    mut [16]u8 alias,
+    mut u32 folded,
+    mut u32 simplified,
+    mut u32 strength,
+    mut u32 copies,
+    mut u32 dead,
+) !{
+    fun forget = () {
+        for i in 0..<16 {
+            self.known[i] = false;
+            self.alias[i] = i as u8;
+        }
+    }
+
+    fun set_const = (u32 at, u8 d, u32 v) {
+        self.code[at] = Ins.Const(d, v);
+        self.known[d] = true;
+        self.kv[d] = v;
+    }
+
+    fun set_copy = (u32 at, u8 d, u8 s) {
+        self.code[at] = Ins.Copy(d, s);
+        self.simplified += 1;
+        self.known[d] = self.known[s];
+        self.kv[d] = self.kv[s];
+    }
+
+    fun binary = (u32 at, u8 op, u8 d, u8 a, u8 b) {
+        bool ka = self.known[a];
+        bool kb = self.known[b];
+        u32 va = self.kv[a];
+        u32 vb = self.kv[b];
+        if ka and kb {
+            if (op == 3 or op == 4) and vb == 0 {
+                self.known[d] = false;
+                ret;
+            }
+            u32 v = match op {
+                0 => va + vb,
+                1 => va - vb,
+                2 => va * vb,
+                3 => va / vb,
+                4 => va % vb,
+                _ => va & vb,
+            };
+            self.set_const(at, d, v);
+            self.folded += 1;
+            ret;
+        }
+        if op == 1 and a == b {
+            self.set_const(at, d, 0);
+            self.simplified += 1;
+            ret;
+        }
+        if op == 5 and a == b {
+            self.set_copy(at, d, a);
+            ret;
+        }
+        if op == 0 or op == 2 {
+            u32 unit = if op == 0: 0 else: 1;
+            if ka and va == unit {
+                self.set_copy(at, d, b);
+                ret;
+            }
+            if kb and vb == unit {
+                self.set_copy(at, d, a);
+                ret;
+            }
+        }
+        # LIMIT: `if a and (b) {` (condition ending in a parenthesised group before the block) is IllegalIfFormat, so the tail is hoisted into locals
+        u32 rhs_unit = if op == 1: 0 else: 1;
+        bool drops_rhs = (op == 1 or op == 3) and kb and vb == rhs_unit;
+        if drops_rhs {
+            self.set_copy(at, d, a);
+            ret;
+        }
+        bool absorbs = (ka and va == 0) or (kb and vb == 0);
+        if (op == 2 or op == 5) and absorbs {
+            self.set_const(at, d, 0);
+            self.simplified += 1;
+            ret;
+        }
+        if op == 2 {
+            u32 ka2 = log2_exact(va);
+            u32 kb2 = log2_exact(vb);
+            if kb and kb2 != 99 {
+                self.code[at] = Ins.Shl(d, a, kb2 as u8);
+                self.strength += 1;
+                self.known[d] = false;
+                ret;
+            }
+            if ka and ka2 != 99 {
+                self.code[at] = Ins.Shl(d, b, ka2 as u8);
+                self.strength += 1;
+                self.known[d] = false;
+                ret;
+            }
+        }
+        if op == 3 or op == 4 {
+            u32 kk = log2_exact(vb);
+            if kb and kk != 99 {
+                if op == 3: self.code[at] = Ins.Shr(d, a, kk as u8) else: self.code[at] = Ins.AndI(d, a, vb - 1);
+                self.strength += 1;
+                self.known[d] = false;
+                ret;
+            }
+        }
+        self.known[d] = false;
+    }
+
+    fun fold_pass = () {
+        self.forget();
+        for at in 0..<self.n {
+            match self.code[at] {
+                Ins.Const(d, v) => {
+                    self.known[d] = true;
+                    self.kv[d] = v;
+                },
+                Ins.Copy(d, s) => {
+                    if self.known[s] {
+                        self.set_const(at, d, self.kv[s]);
+                        self.folded += 1;
+                    } else {
+                        self.known[d] = false;
+                    }
+                },
+                Ins.Input(d, _) => self.known[d] = false,
+                Ins.Add(d, a, b) => self.binary(at, 0, d, a, b),
+                Ins.Sub(d, a, b) => self.binary(at, 1, d, a, b),
+                Ins.Mul(d, a, b) => self.binary(at, 2, d, a, b),
+                Ins.Div(d, a, b) => self.binary(at, 3, d, a, b),
+                Ins.Mod(d, a, b) => self.binary(at, 4, d, a, b),
+                Ins.And(d, a, b) => self.binary(at, 5, d, a, b),
+                Ins.Shl(d, a, k) => {
+                    if self.known[a] {
+                        self.set_const(at, d, self.kv[a] << k);
+                        self.folded += 1;
+                    } else {
+                        self.known[d] = false;
+                    }
+                },
+                Ins.Shr(d, a, k) => {
+                    if self.known[a] {
+                        self.set_const(at, d, self.kv[a] >> k);
+                        self.folded += 1;
+                    } else {
+                        self.known[d] = false;
+                    }
+                },
+                Ins.AndI(d, a, m) => {
+                    if self.known[a] {
+                        self.set_const(at, d, self.kv[a] & m);
+                        self.folded += 1;
+                    } else {
+                        self.known[d] = false;
+                    }
+                },
+                _ => {},
+            }
+        }
+    }
+
+    fun kill = (u8 d) {
+        for i in 0..<16 {
+            if self.alias[i] == d: self.alias[i] = i as u8;
+        }
+        self.alias[d] = d;
+    }
+
+    fun use = (u8 r) -> u8 {
+        u8 t = self.alias[r];
+        if t != r: self.copies += 1;
+        ret t;
+    }
+
+    fun copy_pass = () {
+        self.forget();
+        for at in 0..<self.n {
+            match self.code[at] {
+                Ins.Copy(d, s) => {
+                    u8 root = self.alias[s];
+                    self.kill(d);
+                    if root != d: self.alias[d] = root;
+                },
+                Ins.Const(d, _) => self.kill(d),
+                Ins.Input(d, _) => self.kill(d),
+                Ins.Add(d, a, b) => {
+                    self.code[at] = Ins.Add(d, self.use(a), self.use(b));
+                    self.kill(d);
+                },
+                Ins.Sub(d, a, b) => {
+                    self.code[at] = Ins.Sub(d, self.use(a), self.use(b));
+                    self.kill(d);
+                },
+                Ins.Mul(d, a, b) => {
+                    self.code[at] = Ins.Mul(d, self.use(a), self.use(b));
+                    self.kill(d);
+                },
+                Ins.Div(d, a, b) => {
+                    self.code[at] = Ins.Div(d, self.use(a), self.use(b));
+                    self.kill(d);
+                },
+                Ins.Mod(d, a, b) => {
+                    self.code[at] = Ins.Mod(d, self.use(a), self.use(b));
+                    self.kill(d);
+                },
+                Ins.And(d, a, b) => {
+                    self.code[at] = Ins.And(d, self.use(a), self.use(b));
+                    self.kill(d);
+                },
+                Ins.Shl(d, a, k) => {
+                    self.code[at] = Ins.Shl(d, self.use(a), k);
+                    self.kill(d);
+                },
+                Ins.Shr(d, a, k) => {
+                    self.code[at] = Ins.Shr(d, self.use(a), k);
+                    self.kill(d);
+                },
+                Ins.AndI(d, a, m) => {
+                    self.code[at] = Ins.AndI(d, self.use(a), m);
+                    self.kill(d);
+                },
+                Ins.Out(a) => self.code[at] = Ins.Out(self.use(a)),
+                Ins.Nop => {},
+            }
+        }
+    }
+
+    fun bit = (u8 r) -> u32: ret 1 << r as u32;
+
+    fun dce_pass = () {
+        mut u32 live = 0;
+        mut u32 at = self.n;
+        while at > 0 {
+            at -= 1;
+            match self.code[at] {
+                Ins.Out(a) => live = live | self.bit(a),
+                Ins.Nop => {},
+                Ins.Const(d, _) => live = self.retire(at, d, live, 0),
+                Ins.Input(d, _) => live = self.retire(at, d, live, 0),
+                Ins.Copy(d, s) => live = self.retire(at, d, live, self.bit(s)),
+                Ins.Add(d, a, b) => live = self.retire(at, d, live, self.bit(a) | self.bit(b)),
+                Ins.Sub(d, a, b) => live = self.retire(at, d, live, self.bit(a) | self.bit(b)),
+                Ins.Mul(d, a, b) => live = self.retire(at, d, live, self.bit(a) | self.bit(b)),
+                Ins.Div(d, a, b) => live = self.retire(at, d, live, self.bit(a) | self.bit(b)),
+                Ins.Mod(d, a, b) => live = self.retire(at, d, live, self.bit(a) | self.bit(b)),
+                Ins.And(d, a, b) => live = self.retire(at, d, live, self.bit(a) | self.bit(b)),
+                Ins.Shl(d, a, _) => live = self.retire(at, d, live, self.bit(a)),
+                Ins.Shr(d, a, _) => live = self.retire(at, d, live, self.bit(a)),
+                Ins.AndI(d, a, _) => live = self.retire(at, d, live, self.bit(a)),
+            }
+        }
+    }
+
+    fun retire = (u32 at, u8 d, u32 live, u32 uses) -> u32 {
+        u32 mask = self.bit(d);
+        if (live & mask) == 0 {
+            self.code[at] = Ins.Nop;
+            self.dead += 1;
+            ret live;
+        }
+        ret (live ^ mask) | uses;
+    }
+}
+
+fun report = (&[]Ins prog, u32 x, u32 y) -> [9]u32 {
+    # BUG: matching on an element of a zero-initialised variant array that was never written is not_static, so every slot is filled first
+    mut [24]Ins code;
+    for i in 0..<24: code[i] = Ins.Nop;
+    for i in 0..<prog.$len: code[i] = prog.*[i];
+    mut [16]bool known;
+    mut [16]u32 kv;
+    mut [16]u8 alias;
+    mut Opt o = Opt(code = code, n = prog.$len as u32, known = known, kv = kv, alias = alias, folded = 0, simplified = 0, strength = 0, copies = 0, dead = 0);
+    u32 before = live_count(prog);
+    u32 hb = run(prog, x, y);
+    for 0..<4 {
+        o.fold_pass();
+        o.copy_pass();
+        o.dce_pass();
+    }
+    [24]Ins final = o.code;
+    ret [before, live_count(final.&), o.folded, o.simplified, o.strength, o.copies, o.dead, hb, run(final.&, x, y)];
+}
+
+stc [9]u32 O1 = report([Ins.Const(0, 6), Ins.Const(1, 7), Ins.Mul(2, 0, 1), Ins.Add(3, 2, 0), Ins.Out(3)].&, 7, 5); #= O1 [5, 2, 2, 0, 0, 0, 3, 48, 48]
+stc [9]u32 O2 = report([Ins.Input(0, 0), Ins.Const(1, 8), Ins.Mul(2, 0, 1), Ins.Out(2)].&, 7, 5); #= O2 [4, 3, 0, 0, 1, 0, 1, 56, 56]
+stc [9]u32 O3 = report([Ins.Input(0, 0), Ins.Const(1, 64), Ins.Mul(2, 1, 0), Ins.Out(2)].&, 3, 5); #= O3 [4, 3, 0, 0, 1, 0, 1, 192, 192]
+stc [9]u32 O4 = report([Ins.Input(0, 0), Ins.Const(1, 16), Ins.Div(2, 0, 1), Ins.Out(2)].&, 1000, 5); #= O4 [4, 3, 0, 0, 1, 0, 1, 62, 62]
+stc [9]u32 O5 = report([Ins.Input(0, 0), Ins.Const(1, 8), Ins.Mod(2, 0, 1), Ins.Out(2)].&, 1000, 5); #= O5 [4, 3, 0, 0, 1, 0, 1, 0, 0]
+stc [9]u32 O6 = report([Ins.Input(0, 0), Ins.Const(1, 0), Ins.Add(2, 0, 1), Ins.Const(3, 1), Ins.Mul(4, 2, 3), Ins.Out(4)].&, 9, 5); #= O6 [6, 2, 0, 2, 0, 1, 4, 9, 9]
+stc [9]u32 O7 = report([Ins.Input(0, 0), Ins.Sub(1, 0, 0), Ins.Out(1)].&, 9, 5); #= O7 [3, 2, 0, 1, 0, 0, 1, 0, 0]
+stc [9]u32 O8 = report([Ins.Input(0, 0), Ins.And(1, 0, 0), Ins.Out(1)].&, 9, 5); #= O8 [3, 2, 0, 1, 0, 1, 1, 9, 9]
+stc [9]u32 O9 = report([Ins.Input(0, 0), Ins.Const(1, 0), Ins.Mul(2, 0, 1), Ins.Out(2)].&, 9, 5); #= O9 [4, 2, 0, 1, 0, 0, 2, 0, 0]
+stc [9]u32 O10 = report([Ins.Const(1, 0), Ins.Input(0, 0), Ins.And(2, 0, 1), Ins.Out(2)].&, 9, 5); #= O10 [4, 2, 0, 1, 0, 0, 2, 0, 0]
+stc [9]u32 O11 = report([Ins.Const(0, 5), Ins.Const(1, 0), Ins.Div(2, 0, 1), Ins.Mod(3, 0, 1), Ins.Out(2), Ins.Out(3)].&, 1, 1); #= O11 [6, 6, 0, 0, 0, 0, 0, 0, 0]
+stc [9]u32 O12 = report([Ins.Input(0, 0), Ins.Const(1, 1), Ins.Div(2, 0, 1), Ins.Const(3, 0), Ins.Sub(4, 2, 3), Ins.Out(4)].&, 42, 1); #= O12 [6, 2, 0, 2, 0, 1, 4, 42, 42]
+stc [9]u32 O13 = report([Ins.Input(0, 0), Ins.Input(1, 1), Ins.Mul(2, 0, 1), Ins.Add(3, 2, 2), Ins.Out(0)].&, 4, 9); #= O13 [5, 2, 0, 0, 0, 0, 3, 4, 4]
+stc [9]u32 O14 = report([Ins.Input(0, 0), Ins.Copy(1, 0), Ins.Add(2, 1, 1), Ins.Out(2)].&, 21, 0); #= O14 [4, 3, 0, 0, 0, 2, 1, 42, 42]
+stc [9]u32 O15 = report([Ins.Input(0, 0), Ins.Copy(1, 0), Ins.Const(0, 100), Ins.Add(2, 1, 0), Ins.Out(2)].&, 5, 0); #= O15 [5, 5, 0, 0, 0, 0, 0, 105, 105]
+stc [9]u32 O16 = report([Ins.Input(0, 0), Ins.Copy(1, 0), Ins.Copy(2, 1), Ins.Copy(3, 2), Ins.Out(3)].&, 77, 0); #= O16 [5, 2, 0, 0, 0, 1, 3, 77, 77]
+stc [9]u32 O17 = report([Ins.Const(0, 4294967295), Ins.Const(1, 2), Ins.Add(2, 0, 1), Ins.Const(3, 2147483648), Ins.Mul(4, 3, 1), Ins.Sub(5, 4, 1), Ins.Out(2), Ins.Out(4), Ins.Out(5)].&, 0, 0); #= O17 [9, 6, 3, 0, 0, 0, 3, 959, 959]
+stc [9]u32 O18 = report([Ins.Const(0, 5), Ins.Shl(1, 0, 3), Ins.Shr(2, 1, 1), Ins.AndI(3, 2, 12), Ins.Out(3)].&, 0, 0); #= O18 [5, 2, 3, 0, 0, 0, 3, 4, 4]
+stc [9]u32 O19 = report([Ins.Input(0, 0), Ins.Const(1, 2), Ins.Mul(2, 0, 0), Ins.Mul(3, 2, 0), Ins.Mul(4, 3, 1), Ins.Const(5, 8), Ins.Mul(6, 0, 5), Ins.Add(7, 4, 6), Ins.Const(8, 5), Ins.Add(9, 7, 8), Ins.Out(9)].&, 3, 0); #= O19 [11, 9, 0, 0, 2, 0, 2, 83, 83]
+stc [9]u32 O20 = report([Ins.Const(0, 1), Ins.Out(0), Ins.Const(0, 2), Ins.Out(0), Ins.Out(0)].&, 0, 0); #= O20 [5, 5, 0, 0, 0, 0, 0, 1025, 1025]
+stc [9]u32 O21 = report([Ins.Nop,].&, 1, 2); #= O21 [0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [9]u32 O22 = report([Ins.Out(3),].&, 1, 2); #= O22 [1, 1, 0, 0, 0, 0, 0, 0, 0]
+stc [9]u32 O23 = report([Ins.Nop, Ins.Input(0, 1), Ins.Nop, Ins.Out(0)].&, 3, 4); #= O23 [2, 2, 0, 0, 0, 0, 0, 4, 4]
+stc [9]u32 O24 = report([Ins.Const(0, 3), Ins.Const(0, 4), Ins.Add(1, 0, 0), Ins.Out(1)].&, 0, 0); #= O24 [4, 2, 1, 0, 0, 0, 2, 8, 8]
+stc [9]u32 O25 = report([Ins.Input(0, 0), Ins.Const(1, 3), Ins.Const(2, 4), Ins.Add(3, 1, 2), Ins.Mul(4, 0, 3), Ins.Out(4)].&, 6, 0); #= O25 [6, 4, 1, 0, 0, 0, 2, 42, 42]
+stc [9]u32 O26 = report([Ins.Input(0, 0), Ins.Copy(1, 0), Ins.Add(0, 0, 1), Ins.Add(2, 0, 1), Ins.Out(2)].&, 10, 0); #= O26 [5, 5, 0, 0, 0, 1, 0, 30, 30]
+
+$main = () {}

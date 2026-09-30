@@ -1,0 +1,83 @@
+variant Opt = (type T): ++(Some(T), None) tagof u8;
+
+type Pair = (type A, type B): *(A first, B second);
+
+type Stack = (type T, u32 N): *(mut [N]T items, mut u32 len = 0) !{
+    fun push = (T v) -> bool {
+        if self.len >= N: ret false;
+        self.items[self.len] = v;
+        self.len += 1;
+        ret true;
+    }
+    fun pop = () -> Opt(T) {
+        if self.len == 0: ret Opt(T).None;
+        self.len -= 1;
+        ret Opt(T).Some(self.items[self.len]);
+    }
+    fun size = () -> u32: ret self.len;
+}
+
+fun flatten = (Opt(Opt(u8)) o) -> Opt(u8): ret match o {
+    Opt(Opt(u8)).Some(inner) => inner,
+    Opt(Opt(u8)).None => Opt(u8).None,
+};
+
+# BUG: exhaustiveness is per outer case, so the nested payload arms need a `_` arm
+fun depth = (Opt(Opt(u8)) o) -> u32: ret match o {
+    Opt(Opt(u8)).Some(Opt(u8).Some(x)) => 2,
+    Opt(Opt(u8)).Some(Opt(u8).None) => 1,
+    _ => 0,
+};
+
+stcfun opts = () -> u32 {
+    Opt(Opt(u8)) a = Opt(Opt(u8)).Some(Opt(u8).Some(7));
+    Opt(Opt(u8)) b = Opt(Opt(u8)).Some(Opt(u8).None);
+    Opt(Opt(u8)) c = Opt(Opt(u8)).None;
+    u8 x = flatten(a) ?? 0;
+    u8 y = flatten(b) ?? 9;
+    u8 z = flatten(c) ?? 5;
+    ret x as u32 * 10000 + y as u32 * 1000 + z as u32 * 100 + depth(a) * 10 + depth(b) + depth(c);
+}
+
+# BUG: known dangling block, `Stack.push` storing a whole record through `self` aliases freed memory once a later call runs, so the outer stack is filled directly
+stcfun nested_stacks = () -> u32 {
+    mut Stack(Stack(u8, 2), 3) outer;
+    mut Stack(u8, 2) inner;
+    do inner.push(4);
+    do inner.push(5);
+    refused = inner.push(6);
+    outer.items[0] = inner;
+    outer.len += 1;
+    do inner.pop();
+    do inner.push(9);
+    outer.items[1] = inner;
+    outer.len += 1;
+    top = outer.items[outer.len - 1];
+    below = outer.items[0];
+    ret refused as u32 * 100000 + outer.size() * 10000 + top.items[1] as u32 * 100 + below.items[1] as u32 * 10 + top.size();
+}
+
+stcfun pairs = () -> u32 {
+    Pair(Pair(u8, u16), u32) p = Pair(Pair(u8, u16), u32)(first = Pair(u8, u16)(first = 1, second = 2), second = 3);
+    Pair(u8, Pair(u16, u32)) q = Pair(u8, Pair(u16, u32))(first = 4, second = Pair(u16, u32)(first = 5, second = 6));
+    ret p.first.first as u32 * 100000 + p.first.second as u32 * 10000 + p.second * 1000 + q.first as u32 * 100 + q.second.first as u32 * 10 + q.second.second;
+}
+
+stc u32 OP = opts(); #= OP 79521
+stc u32 NS = nested_stacks(); #= NS 20952
+stc u32 PA = pairs(); #= PA 123456
+stc u64 SP = sizeof Pair(Pair(u8, u16), u32); #= SP 8
+stc u64 SQ = sizeof Pair(u8, Pair(u16, u32)); #= SQ 12
+stc u64 SO = sizeof Opt(Opt(u8)); #= SO 3
+stc u64 SS = sizeof Stack(Stack(u8, 2), 3); #= SS 28
+
+$main = () {
+    Opt(Opt(u8)) o = Opt(Opt(u8)).Some(Opt(u8).None);
+    f = flatten(o); #: f ++(Some, None)
+    d = depth(o); #: d u32
+    mut Stack(Pair(u8, u8), 2) s;
+    q = s.pop(); #: q ++(Some, None)
+    n = s.size(); #: n u32
+    Pair(Pair(u8, u16), u32) p = Pair(Pair(u8, u16), u32)(first = Pair(u8, u16)(first = 1, second = 2), second = 3);
+    x = p.first.second; #: x u16
+}

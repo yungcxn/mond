@@ -1,0 +1,32 @@
+# BUG: accepted without a diagnostic, the generated array does not have the declared length
+#   stc [4]u32 T = stcfor 0..<5: $it;     (holds 5 elements)     also `stc [6]u32` and a loop value `[4]u32 a = for i in 0..<5: i;`
+
+stc [3]u32 SMALL = [1, 2, 3];
+
+fun ratio = (u32 d) -> u32: ret 100 / d; #! static_eval_failed
+fun cell = (u32 i) -> u32: ret SMALL[i]; #! static_eval_failed
+stcfun sq = (u32 x) -> u32: ret x * x;
+stcfun Word = (u32 bits) -> type: ret if bits <= 8: u8 else: u32;
+
+stc []u32 SAFE = stcfor 0..<3: ratio(3 - $it);
+stc []u32 DIV = stcfor 0..<4: ratio(3 - $it);
+stc []u32 CELLS = stcfor i in 0..<3: cell(i);
+stc []u32 WIDE = stcfor i in 0..<5: cell(i);
+stc []u32 DIRECT = stcfor i in 0..<5: SMALL[i]; #! static_eval_failed
+stc u32 PAST = SMALL[3]; #! static_eval_failed
+stc u32 MOD = 5 % 0; #! static_eval_failed
+stc []bool FLAGS = stcfor i in 0..<3: i; #! type_mismatch
+stc []u32 NARROW = stcfor i in SMALL: i as u8; #! type_mismatch
+stc u32 PICK = stcmatch 4 { 1 => 1, 2 => 2 }; #! non_exhaustive_match
+
+fun runtime = (u32 n) {
+    xs = stcfor 0..<n: 1; #! not_static
+    ys = stcfor i in 0..<3: sq(n); #! not_static
+    zs = sq(n); #! not_static
+    w = stcmatch n { 1 => 1, _ => 2 }; #! not_static
+    Word(n) t; #! not_static
+    ok = sq(4);
+    Word(4) o;
+}
+
+$main = () {}

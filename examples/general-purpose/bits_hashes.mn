@@ -1,0 +1,165 @@
+fun popcount = (u64 x) -> u32 {
+    mut u64 v = x;
+    mut u32 n = 0;
+    while v != 0 {
+        v = v & (v - 1);
+        n += 1;
+    }
+    ret n;
+}
+
+fun popcount_swar = (u32 x) -> u32 {
+    mut u32 v = x;
+    v = v - ((v >> 1) & 0x55555555);
+    v = (v & 0x33333333) + ((v >> 2) & 0x33333333);
+    v = (v + (v >> 4)) & 0x0F0F0F0F;
+    ret (v * 0x01010101) >> 24;
+}
+
+fun reverse_bits = (u32 x) -> u32 {
+    mut u32 v = x;
+    mut u32 r = 0;
+    for 0..<32 {
+        r = (r << 1) | (v & 1);
+        v = v >> 1;
+    }
+    ret r;
+}
+
+fun rotl = (u32 x, u32 k) -> u32: ret (x << k) | (x >> (32 - k));
+fun rotr = (u32 x, u32 k) -> u32: ret (x >> k) | (x << (32 - k));
+
+fun is_pow2 = (u32 x) -> bool: ret x != 0 and (x & (x - 1)) == 0;
+
+fun next_pow2 = (u32 x) -> u32 {
+    mut u32 v = x - 1;
+    v = v | (v >> 1);
+    v = v | (v >> 2);
+    v = v | (v >> 4);
+    v = v | (v >> 8);
+    v = v | (v >> 16);
+    ret v + 1;
+}
+
+fun log2_floor = (u32 x) -> u32 {
+    mut u32 n = 0;
+    mut u32 v = x;
+    while v > 1 {
+        v = v >> 1;
+        n += 1;
+    }
+    ret n;
+}
+
+fun crc32 = (&[]u8 data) -> u32 {
+    mut u32 crc = 0xFFFFFFFF;
+    for b in data.* {
+        crc = crc ^ b as u32;
+        for 0..<8 {
+            u32 mask = 0 - (crc & 1);
+            crc = (crc >> 1) ^ (0xEDB88320 & mask);
+        }
+    }
+    ret crc ^ 0xFFFFFFFF;
+}
+
+fun adler32 = (&[]u8 data) -> u32 {
+    mut u32 a = 1;
+    mut u32 b = 0;
+    for x in data.* {
+        a = (a + x as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    ret (b << 16) | a;
+}
+
+fun djb2 = (&[]u8 s) -> u32 {
+    mut u32 h = 5381;
+    for c in s.*: h = h * 33 + c as u32;
+    ret h;
+}
+
+fun xorshift32 = (*u32 state) -> u32 {
+    mut u32 x = state.*;
+    x = x ^ (x << 13);
+    x = x ^ (x >> 17);
+    x = x ^ (x << 5);
+    state.* = x;
+    ret x;
+}
+
+fun lcg = (*u64 state) -> u32 {
+    state.* = state.* * 6364136223846793005 + 1442695040888963407;
+    ret (state.* >> 33) as u32;
+}
+
+fun bswap = (u32 x) -> u32: ret (x << 24) | ((x & 0xFF00) << 8) | ((x >> 8) & 0xFF00) | (x >> 24);
+
+fun parity = (u32 x) -> u32: ret popcount(x as u64) % 2;
+
+fun extract = (u32 x, u32 lo, u32 width) -> u32: ret (x >> lo) & ((1 << width) - 1);
+fun insert = (u32 x, u32 lo, u32 width, u32 v) -> u32 {
+    u32 mask = ((1 << width) - 1) << lo;
+    ret (x & (0xFFFFFFFF ^ mask)) | ((v << lo) & mask);
+}
+
+fun murmur_mix = (u32 h0) -> u32 {
+    mut u32 h = h0;
+    h = h ^ (h >> 16);
+    h = h * 0x85EBCA6B;
+    h = h ^ (h >> 13);
+    h = h * 0xC2B2AE35;
+    h = h ^ (h >> 16);
+    ret h;
+}
+
+stcfun random_run = () -> u32 {
+    mut u32 s = 2463534242;
+    mut u32 acc = 0;
+    for 0..<100: acc = acc ^ xorshift32(s.&);
+    ret acc;
+}
+
+stcfun lcg_run = () -> u32 {
+    mut u64 s = 42;
+    mut u32 acc = 0;
+    for 0..<50: acc = acc + lcg(s.&);
+    ret acc;
+}
+
+stcfun distribution = () -> u32 {
+    mut u32 s = 1;
+    mut [4]u32 buckets;
+    for 0..<200: buckets[xorshift32(s.&) % 4] += 1;
+    ret buckets[0] * 1000000 + buckets[1] * 10000 + buckets[2] * 100 + buckets[3];
+}
+
+stc u32 PC1 = popcount(0xFFFF_FFFF_FFFF_FFFF); #= PC1 64
+stc u32 PC2 = popcount(0); #= PC2 0
+stc u32 PC3 = popcount(0b1011_0110); #= PC3 5
+stc u32 PS1 = popcount_swar(0xF0F0F0F0); #= PS1 16
+stc u32 PS2 = popcount_swar(0xFFFFFFFF); #= PS2 32
+stc u32 RB = reverse_bits(1); #= RB 2147483648
+stc u32 RB2 = reverse_bits(0x0000FFFF); #= RB2 4294901760
+stc u32 RL = rotl(0x80000001, 1); #= RL 3
+stc u32 RR = rotr(3, 1); #= RR 2147483649
+stc bool P1 = is_pow2(64); #= P1 true
+stc bool P2 = is_pow2(0); #= P2 false
+stc bool P3 = is_pow2(65); #= P3 false
+stc u32 NP = next_pow2(100); #= NP 128
+stc u32 NP2 = next_pow2(128); #= NP2 128
+stc u32 LG = log2_floor(1000); #= LG 9
+stc u32 CRC = crc32("123456789".&); #= CRC 3421780262
+stc u32 CRC0 = crc32("".&); #= CRC0 0
+stc u32 AD = adler32("Wikipedia".&); #= AD 300286872
+stc u32 DJ = djb2("hello".&); #= DJ 261238937
+stc u32 BS = bswap(0x12345678); #= BS 2018915346
+stc u32 PA = parity(7) * 10 + parity(3); #= PA 10
+stc u32 EX = extract(0xABCD1234, 8, 8); #= EX 18
+stc u32 IN = insert(0xFFFFFFFF, 4, 8, 0); #= IN 4294963215
+stc u32 MM = murmur_mix(1); #= MM 1364076727
+stc u32 XR = random_run(); #= XR 1686884341
+stc u32 LC = lcg_run(); #= LC 2981369574
+stc u32 DI = distribution(); #= DI 56544545
+
+$main = () {}

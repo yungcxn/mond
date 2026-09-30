@@ -1,0 +1,162 @@
+type Mat = (u32 N): *(mut [N][N]i64 c) !{
+    fun at = (u32 r, u32 k) -> i64: ret self.c[r][k];
+    fun set = (u32 r, u32 k, i64 v) { self.c[r][k] = v; }
+    fun trace = () -> i64 {
+        mut i64 t = 0;
+        for i in 0..<N: t += self.c[i][i];
+        ret t;
+    }
+    fun sum = () -> i64 {
+        mut i64 t = 0;
+        for i in 0..<N: for j in 0..<N: t += self.c[i][j];
+        ret t;
+    }
+}
+
+fun mul = (Mat(3) a, Mat(3) b) -> Mat(3) {
+    mut Mat(3) r;
+    for i in 0..<3 {
+        for j in 0..<3 {
+            mut i64 s = 0;
+            for k in 0..<3: s += a.c[i][k] * b.c[k][j];
+            r.c[i][j] = s;
+        }
+    }
+    ret r;
+}
+
+fun transpose = (Mat(3) a) -> Mat(3) {
+    mut Mat(3) r;
+    for i in 0..<3: for j in 0..<3: r.c[j][i] = a.c[i][j];
+    ret r;
+}
+
+fun eye = () -> Mat(3) {
+    mut Mat(3) r;
+    for i in 0..<3: r.c[i][i] = 1;
+    ret r;
+}
+
+fun mat_pow = (Mat(3) a, u32 e) -> Mat(3) {
+    mut Mat(3) r = eye();
+    mut Mat(3) b = a;
+    mut u32 x = e;
+    while x > 0 {
+        if x % 2 == 1: r = mul(r, b);
+        b = mul(b, b);
+        x /= 2;
+    }
+    ret r;
+}
+
+fun det3 = (Mat(3) m) -> i64 {
+    i64 a = m.c[0][0] * (m.c[1][1] * m.c[2][2] - m.c[1][2] * m.c[2][1]);
+    i64 b = m.c[0][1] * (m.c[1][0] * m.c[2][2] - m.c[1][2] * m.c[2][0]);
+    i64 c = m.c[0][2] * (m.c[1][0] * m.c[2][1] - m.c[1][1] * m.c[2][0]);
+    ret a - b + c;
+}
+
+fun equal = (Mat(3) a, Mat(3) b) -> bool {
+    for i in 0..<3: for j in 0..<3: if a.c[i][j] != b.c[i][j]: ret false;
+    ret true;
+}
+
+fun pascal_row = (u32 n) -> u64 {
+    mut [16]u64 row;
+    row[0] = 1;
+    for i in 1..=n {
+        mut u32 j = i;
+        while j > 0 {
+            row[j] += row[j - 1];
+            j -= 1;
+        }
+    }
+    mut u64 s = 0;
+    for k in 0..=n: s += row[k] * row[k];
+    ret s;
+}
+
+fun dot = (&[]i64 a, &[]i64 b) -> i64 {
+    mut i64 s = 0;
+    for i in 0..<a.$len: s += a.*[i] * b.*[i];
+    ret s;
+}
+
+fun spiral_sum = () -> u32 {
+    mut [4][4]u32 g;
+    mut u32 n = 1;
+    mut i32 top = 0;
+    mut i32 bot = 3;
+    mut i32 left = 0;
+    mut i32 right = 3;
+    while top <= bot and left <= right {
+        for c in left..=right { g[top][c] = n; n += 1; }
+        top += 1;
+        for r in top..=bot { g[r][right] = n; n += 1; }
+        right -= 1;
+        if top <= bot {
+            mut i32 c = right;
+            while c >= left { g[bot][c] = n; n += 1; c -= 1; }
+            bot -= 1;
+        }
+        if left <= right {
+            mut i32 r = bot;
+            while r >= top { g[r][left] = n; n += 1; r -= 1; }
+            left += 1;
+        }
+    }
+    ret g[0][0] * 1000000 + g[1][1] * 10000 + g[2][2] * 100 + g[3][0];
+}
+
+stcfun fibmat = (u32 n) -> i64 {
+    mut Mat(3) m;
+    m.c[0][0] = 1; m.c[0][1] = 1; m.c[1][0] = 1;
+    m.c[2][2] = 1;
+    Mat(3) p = mat_pow(m, n);
+    ret p.c[0][1];
+}
+
+stcfun sample = () -> Mat(3) {
+    mut Mat(3) m;
+    mut i64 v = 1;
+    for i in 0..<3 { for j in 0..<3 { m.c[i][j] = v; v += 1; } }
+    ret m;
+}
+
+stcfun products = () -> i64 {
+    Mat(3) a = sample();
+    Mat(3) t = transpose(a);
+    Mat(3) sq = mul(a, t);
+    ret sq.trace() * 1000 + sq.sum();
+}
+
+stcfun checks = () -> i64 {
+    Mat(3) a = sample();
+    Mat(3) i = eye();
+    mut i64 r = 0;
+    if equal(mul(a, i), a): r += 1;
+    if equal(mul(i, a), a): r += 10;
+    if equal(transpose(transpose(a)), a): r += 100;
+    if !equal(transpose(a), a): r += 1000;
+    ret r;
+}
+
+stcfun dets = () -> i64 {
+    mut Mat(3) m;
+    m.c[0][0] = 2; m.c[0][1] = 0; m.c[0][2] = 1;
+    m.c[1][0] = 1; m.c[1][1] = 3; m.c[1][2] = 2;
+    m.c[2][0] = 1; m.c[2][1] = 1; m.c[2][2] = 1;
+    ret det3(m) * 1000 + det3(sample()) + det3(eye()) * 100;
+}
+
+stc i64 F10 = fibmat(10); #= F10 55
+stc i64 F40 = fibmat(40); #= F40 102334155
+stc i64 PR = products(); #= PR 285693
+stc i64 CK = checks(); #= CK 1111
+stc i64 DT = dets(); #= DT 100
+stc u64 PA = pascal_row(10); #= PA 184756
+stc u32 SP = spiral_sum(); #= SP 1131510
+stc i64 DO = dot([1, 2, 3].&, [4, 5, 6].&); #= DO 32
+stc i64 MT = Mat(2)(c = [[1, 2], [3, 4]]).trace(); #= MT 5
+
+$main = () {}

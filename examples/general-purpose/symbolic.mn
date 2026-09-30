@@ -1,0 +1,339 @@
+variant E = +(Num(i64 v), X, Add(u32 a, u32 b), Mul(u32 a, u32 b), Pow(u32 a, u32 k)) tagof u8;
+
+type Arena = *(mut &[]u8 src, mut u32 pos, mut u32 bad, mut [160]E nodes, mut u32 n, mut [96]u8 out, mut u32 nout) !{
+    fun mk = (E e) -> u32 {
+        self.nodes[self.n] = e;
+        self.n += 1;
+        ret self.n - 1;
+    }
+
+    fun num = (i64 v) -> u32: ret self.mk(E.Num(v));
+
+    fun value = (u32 i) -> i64: ret match self.nodes[i] {
+        E.Num(v) => v,
+        _ => 0,
+    }
+
+    fun is_num = (u32 i) -> bool: ret match self.nodes[i] {
+        E.Num(_) => true,
+        _ => false,
+    }
+
+    fun is_val = (u32 i, i64 v) -> bool: ret self.is_num(i) and self.value(i) == v;
+
+    fun add = (u32 a, u32 b) -> u32 {
+        if self.is_num(a) and self.is_num(b): ret self.num(self.value(a) + self.value(b));
+        if self.is_val(a, 0): ret b;
+        if self.is_val(b, 0): ret a;
+        ret self.mk(E.Add(a, b));
+    }
+
+    fun mul = (u32 a, u32 b) -> u32 {
+        if self.is_num(a) and self.is_num(b): ret self.num(self.value(a) * self.value(b));
+        if self.is_val(a, 0) or self.is_val(b, 0): ret self.num(0);
+        if self.is_val(a, 1): ret b;
+        if self.is_val(b, 1): ret a;
+        ret self.mk(E.Mul(a, b));
+    }
+
+    fun pow = (u32 a, u32 k) -> u32 {
+        if k == 0: ret self.num(1);
+        if k == 1: ret a;
+        if self.is_num(a) {
+            mut i64 r = 1;
+            for 0..<k: r *= self.value(a);
+            ret self.num(r);
+        }
+        ret self.mk(E.Pow(a, k));
+    }
+
+    fun diff = (u32 i) -> u32 {
+        match self.nodes[i] {
+            E.Num(_) => ret self.num(0),
+            E.X => ret self.num(1),
+            E.Add(a, b) => ret self.add(self.diff(a), self.diff(b)),
+            E.Mul(a, b) => ret self.add(self.mul(self.diff(a), b), self.mul(a, self.diff(b))),
+            E.Pow(a, k) => ret self.mul(self.mul(self.num(k as i64), self.pow(a, k - 1)), self.diff(a)),
+        }
+    }
+
+    fun simplify = (u32 i) -> u32 {
+        match self.nodes[i] {
+            E.Add(a, b) => ret self.add(self.simplify(a), self.simplify(b)),
+            E.Mul(a, b) => ret self.mul(self.simplify(a), self.simplify(b)),
+            E.Pow(a, k) => ret self.pow(self.simplify(a), k),
+            _ => ret i,
+        }
+    }
+
+    fun eval = (u32 i, i64 x) -> i64 {
+        match self.nodes[i] {
+            E.Num(v) => ret v,
+            E.X => ret x,
+            E.Add(a, b) => ret self.eval(a, x) + self.eval(b, x),
+            E.Mul(a, b) => ret self.eval(a, x) * self.eval(b, x),
+            E.Pow(a, k) => {
+                i64 base = self.eval(a, x);
+                mut i64 r = 1;
+                for 0..<k: r *= base;
+                ret r;
+            },
+        }
+    }
+
+    fun size = (u32 i) -> u32 {
+        ret match self.nodes[i] {
+            E.Add(a, b) => 1 + self.size(a) + self.size(b),
+            E.Mul(a, b) => 1 + self.size(a) + self.size(b),
+            E.Pow(a, _) => 1 + self.size(a),
+            _ => 1,
+        };
+    }
+
+    fun equal = (u32 i, u32 j) -> bool {
+        match self.nodes[i] {
+            E.Num(v) => ret self.is_val(j, v),
+            E.X => ret match self.nodes[j] {
+                E.X => true,
+                _ => false,
+            },
+            E.Add(a, b) => ret match self.nodes[j] {
+                E.Add(c, d) => self.equal(a, c) and self.equal(b, d),
+                _ => false,
+            },
+            E.Mul(a, b) => ret match self.nodes[j] {
+                E.Mul(c, d) => self.equal(a, c) and self.equal(b, d),
+                _ => false,
+            },
+            E.Pow(a, k) => ret match self.nodes[j] {
+                E.Pow(c, m) => k == m and self.equal(a, c),
+                _ => false,
+            },
+        }
+    }
+
+    fun token = () -> u32 {
+        while self.pos as u64 < self.src.$len and self.src.*[self.pos] == ' ': self.pos += 1;
+        ret self.pos;
+    }
+
+    fun word_end = () -> u32 {
+        mut u32 e = self.token();
+        while e as u64 < self.src.$len and self.src.*[e] != ' ': e += 1;
+        ret e;
+    }
+
+    fun number = (u32 s, u32 e) -> i64 {
+        mut u32 k = s;
+        if self.src.*[k] == '-': k += 1;
+        if k == e {
+            self.bad = 1;
+            ret 0;
+        }
+        mut i64 v = 0;
+        while k < e {
+            u8 c = self.src.*[k];
+            if c < '0' or c > '9' {
+                self.bad = 1;
+                ret 0;
+            }
+            v = v * 10 + (c - '0') as i64;
+            k += 1;
+        }
+        ret if self.src.*[s] == '-': -v else: v;
+    }
+
+    fun parse = () -> u32 {
+        u32 s = self.token();
+        u32 e = self.word_end();
+        if s == e {
+            self.bad = 1;
+            ret self.num(0);
+        }
+        self.pos = e;
+        u8 c = self.src.*[s];
+        if e - s == 1 and c == 'x': ret self.mk(E.X);
+        # LIMIT: `if a and (b or c) {` (condition ending in a parenthesised group before the block) is IllegalIfFormat
+        bool binary = c == '+' or c == '*';
+        if e - s == 1 and binary {
+            u32 a = self.parse();
+            u32 b = self.parse();
+            ret self.mk(if c == '+': E.Add(a, b) else: E.Mul(a, b));
+        }
+        if e - s == 1 and c == '^' {
+            u32 a = self.parse();
+            u32 ks = self.token();
+            u32 ke = self.word_end();
+            self.pos = ke;
+            if ks == ke {
+                self.bad = 1;
+                ret a;
+            }
+            i64 k = self.number(ks, ke);
+            if k < 0: self.bad = 1;
+            ret self.mk(E.Pow(a, k as u32));
+        }
+        ret self.num(self.number(s, e));
+    }
+
+    fun put = (u8 c) {
+        self.out[self.nout] = c;
+        self.nout += 1;
+    }
+
+    fun put_int = (i64 v) {
+        if v < 0 {
+            self.put('-');
+            self.put_int(-v);
+            ret;
+        }
+        if v >= 10: self.put_int(v / 10);
+        self.put('0' + (v % 10) as u8);
+    }
+
+    fun print = (u32 i) {
+        match self.nodes[i] {
+            E.Num(v) => self.put_int(v),
+            E.X => self.put('x'),
+            E.Add(a, b) => {
+                self.put('(');
+                self.print(a);
+                self.put('+');
+                self.print(b);
+                self.put(')');
+            },
+            E.Mul(a, b) => {
+                self.put('(');
+                self.print(a);
+                self.put('*');
+                self.print(b);
+                self.put(')');
+            },
+            E.Pow(a, k) => {
+                self.print(a);
+                self.put('^');
+                self.put_int(k as i64);
+            },
+        }
+    }
+}
+
+
+fun pipe = (&[]u8 src, &[]u8 steps, &[]u8 want) -> bool {
+    [160]E blank;
+    [96]u8 ob;
+    mut Arena a = Arena(src = src, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
+    mut u32 root = a.parse();
+    if a.bad != 0 or a.token() as u64 != src.$len: ret false;
+    for i in 0..<steps.$len {
+        match steps.*[i] {
+            's' => root = a.simplify(root),
+            'd' => root = a.diff(root),
+            _ => {},
+        }
+    }
+    a.print(root);
+    if a.nout as u64 != want.$len: ret false;
+    for i in 0..<a.nout {
+        if a.out[i] != want.*[i]: ret false;
+    }
+    ret true;
+}
+
+fun parses = (&[]u8 src) -> bool {
+    [160]E blank;
+    [96]u8 ob;
+    mut Arena a = Arena(src = src, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
+    do a.parse();
+    ret a.bad == 0 and a.token() as u64 == src.$len;
+}
+
+fun value_at = (&[]u8 src, &[]u8 steps, i64 x) -> i64 {
+    [160]E blank;
+    [96]u8 ob;
+    mut Arena a = Arena(src = src, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
+    mut u32 root = a.parse();
+    for i in 0..<steps.$len {
+        match steps.*[i] {
+            's' => root = a.simplify(root),
+            'd' => root = a.diff(root),
+            _ => {},
+        }
+    }
+    ret a.eval(root, x);
+}
+
+fun size_after = (&[]u8 src, &[]u8 steps) -> u32 {
+    [160]E blank;
+    [96]u8 ob;
+    mut Arena a = Arena(src = src, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
+    mut u32 root = a.parse();
+    for i in 0..<steps.$len {
+        match steps.*[i] {
+            's' => root = a.simplify(root),
+            'd' => root = a.diff(root),
+            _ => {},
+        }
+    }
+    ret a.size(root);
+}
+
+fun same_simplified = (&[]u8 s1, &[]u8 s2) -> bool {
+    [160]E blank;
+    [96]u8 ob;
+    mut Arena a = Arena(src = s1, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
+    u32 r1 = a.simplify(a.parse());
+    a.src = s2;
+    a.pos = 0;
+    u32 r2 = a.simplify(a.parse());
+    ret a.equal(r1, r2);
+}
+
+stc bool S1 = pipe("* + x 1 + x 2".&, "p".&, "((x+1)*(x+2))".&); #= S1 true
+stc bool S2 = pipe("^ + x 1 3".&, "p".&, "(x+1)^3".&); #= S2 true
+stc bool S3 = pipe("+ x -3".&, "p".&, "(x+-3)".&); #= S3 true
+stc bool S4 = pipe("+ 0 * 1 x".&, "s".&, "x".&); #= S4 true
+stc bool S5 = pipe("* 0 + x x".&, "s".&, "0".&); #= S5 true
+stc bool S6 = pipe("+ * 2 3 * 4 5".&, "s".&, "26".&); #= S6 true
+stc bool S7 = pipe("^ x 0".&, "s".&, "1".&); #= S7 true
+stc bool S8 = pipe("^ x 1".&, "s".&, "x".&); #= S8 true
+stc bool S9 = pipe("* + 1 1 x".&, "s".&, "(2*x)".&); #= S9 true
+stc bool S10 = pipe("+ x + 0 0".&, "s".&, "x".&); #= S10 true
+stc bool S11 = pipe("7".&, "d".&, "0".&); #= S11 true
+stc bool S12 = pipe("* 3 x".&, "d".&, "3".&); #= S12 true
+stc bool S13 = pipe("* x x".&, "d".&, "(x+x)".&); #= S13 true
+stc bool S14 = pipe("^ x 3".&, "d".&, "(3*x^2)".&); #= S14 true
+stc bool S15 = pipe("* x ^ x 3".&, "d".&, "(x^3+(x*(3*x^2)))".&); #= S15 true
+stc bool S16 = pipe("^ + x 1 2".&, "d".&, "(2*(x+1))".&); #= S16 true
+stc bool S17 = pipe("^ x 4".&, "dd".&, "(4*(3*x^2))".&); #= S17 true
+stc bool S18 = pipe("^ x 3".&, "dddd".&, "0".&); #= S18 true
+stc bool S19 = pipe("* + x 1 + x 2".&, "d".&, "((x+2)+(x+1))".&); #= S19 true
+stc bool S20 = pipe("^ + * 2 x 1 3".&, "ds".&, "((3*((2*x)+1)^2)*2)".&); #= S20 true
+stc bool S21 = parses("+ x 1".&); #= S21 true
+stc bool S22 = pipe("+ x 1".&, "p".&, "(1+x)".&); #= S22 false
+stc bool S23 = pipe("+ x".&, "p".&, "x".&); #= S23 false
+stc bool S24 = pipe("x".&, "d".&, "0".&); #= S24 false
+stc bool S25 = parses("+ x".&); #= S25 false
+stc bool S26 = parses("".&); #= S26 false
+stc bool S27 = parses("^ x".&); #= S27 false
+stc bool S28 = parses("^ x -1".&); #= S28 false
+stc bool S29 = parses("? x".&); #= S29 false
+stc bool S30 = parses("+ x 1 2".&); #= S30 false
+stc bool S31 = parses("^ x x".&); #= S31 false
+stc bool S32 = parses("  x  ".&); #= S32 true
+stc i64 S33 = value_at("^ x 3".&, "d".&, 4); #= S33 48
+stc i64 S34 = value_at("* x ^ x 3".&, "d".&, 2); #= S34 32
+stc i64 S35 = value_at("^ + x 1 3".&, "dd".&, -2); #= S35 -6
+stc i64 S36 = value_at("+ * x x * 3 x".&, "d".&, -1); #= S36 1
+stc i64 S37 = value_at("^ x 20".&, "".&, 3); #= S37 3486784401
+stc u32 S38 = size_after("+ * 0 x 5".&, "s".&); #= S38 1
+stc u32 S39 = size_after("+ * 0 x 5".&, "".&); #= S39 5
+stc u32 S40 = size_after("^ x 3".&, "d".&); #= S40 4
+stc u32 S41 = size_after("^ + x 1 2".&, "dd".&); #= S41 1
+stc u32 S42 = size_after("* + 0 x * 1 x".&, "s".&); #= S42 3
+stc bool S43 = same_simplified("+ 0 x".&, "* 1 x".&); #= S43 true
+stc bool S44 = same_simplified("+ x 1".&, "+ 1 x".&); #= S44 false
+stc bool S45 = same_simplified("* 2 3".&, "+ 3 3".&); #= S45 true
+stc bool S46 = same_simplified("^ x 2".&, "* x x".&); #= S46 false
+
+$main = () {}

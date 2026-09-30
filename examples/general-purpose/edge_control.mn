@@ -1,0 +1,216 @@
+stcfun nested_break = () -> u32 {
+    mut u32 hits = 0;
+    for i in 0..<10 {
+        for j in 0..<10 {
+            if j > i: brk;
+            if (i + j) % 2 == 1: cont;
+            hits += 1;
+        }
+        if i == 6: brk;
+    }
+    ret hits;
+}
+
+stcfun find_pair = (u32 target) -> u32 {
+    for a in 1..<20 {
+        for b in a..<20 {
+            if a * b == target: ret a * 100 + b;
+        }
+    }
+    ret 0;
+}
+
+stcfun empty_ranges = () -> u32 {
+    mut u32 n = 0;
+    for 0..<0: n += 1;
+    for i in 5..<5: n += 10;
+    for i in 3..=2: n += 100;
+    []i32 none = [];
+    for x in none: n += 1000;
+    ret n;
+}
+
+stcfun single_ranges = () -> u32 {
+    mut u32 n = 0;
+    for i in 7..=7: n += i;
+    for i in 7..<8: n += i * 10;
+    ret n;
+}
+
+stcfun unbounded = () -> u32 {
+    mut u32 s = 0;
+    for i in 1.. {
+        if i > 10: brk;
+        if i % 3 != 0: cont;
+        s += i;
+    }
+    ret s;
+}
+
+stcfun loop_value = () -> u32 {
+    mut u32 k = 0;
+    xs = loop k += 1: if k > 5: brk else: if k % 2 == 0: k * k else: k;
+    mut u32 t = 0;
+    for x in xs: t = t * 10 + x;
+    ret t;
+}
+
+stcfun while_repeat = () -> u32 {
+    mut u32 s = 0;
+    mut u32 i = 0;
+    while i < 10, i += 3 { s += i; }
+    ret s * 100 + i;
+}
+
+stcfun while_value = () -> u32 {
+    mut u32 i = 0;
+    xs = while i < 4: i++ * 2;
+    mut u32 t = 0;
+    for x in xs: t = t * 10 + x;
+    ret t;
+}
+
+stcfun for_value = () -> u32 {
+    xs = for i in 1..=4: i * i;
+    ys = for x in xs: x + 1;
+    mut u32 t = 0;
+    for y in ys: t = t * 100 + y;
+    ret t;
+}
+
+stcfun if_chain = (i32 x) -> i32 {
+    ret if x < -100: -3 else: if x < 0: -2 else: if x == 0: 0 else: if x < 100: 2 else: 3;
+}
+
+stcfun chain_sweep = () -> i32 {
+    ret if_chain(-500) * 10000 + if_chain(-1) * 1000 + if_chain(0) * 100 + if_chain(99) * 10 + if_chain(100);
+}
+
+stcfun blocks_as_values = () -> u32 {
+    u32 a = {
+        u32 t = 3;
+        t * t;
+    };
+    u32 b = if a > 5 {
+        u32 q = a + 1;
+        q * 2;
+    } else {
+        0;
+    };
+    ret a * 100 + b;
+}
+
+stcfun early_returns = (u32 n) -> u32 {
+    if n == 0: ret 100;
+    for i in 0..<n {
+        if i == 3 {
+            ret i * 10;
+        }
+    }
+    if n > 10: ret 200;
+    ret n;
+}
+
+stcfun return_sweep = () -> u32 {
+    ret early_returns(0) + early_returns(2) * 1000 + early_returns(5) * 10 + early_returns(11) * 100000;
+}
+
+stcfun loop_with_ret = () -> u32 {
+    mut u32 i = 0;
+    loop {
+        i += 1;
+        if i * i > 200: ret i;
+    }
+}
+
+stcfun cont_in_while = () -> u32 {
+    mut u32 i = 0;
+    mut u32 s = 0;
+    while i < 20 {
+        i += 1;
+        if i % 5 == 0: cont;
+        if i > 17: brk;
+        s += i;
+    }
+    ret s * 100 + i;
+}
+
+stcfun labelled = () -> u32 {
+    mut bool found = false;
+    mut u32 at = 0;
+    for i in 0..<8 {
+        for j in 0..<8 {
+            if i * 8 + j == 37 {
+                found = true;
+                at = i * 10 + j;
+                brk;
+            }
+        }
+        if found: brk;
+    }
+    ret at;
+}
+
+stcfun do_and_defer = () -> u32 {
+    mut u32 log = 0;
+    {
+        defer log = log * 10 + 1;
+        defer log = log * 10 + 2;
+        log = 5;
+    }
+    ret log;
+}
+
+stcfun defer_in_loop = () -> u32 {
+    mut u32 log = 0;
+    for i in 1..=3 {
+        defer log = log * 10 + i;
+        log += 100;
+    }
+    ret log;
+}
+
+stcfun defer_on_return = (bool early) -> u32 {
+    mut u32 log = 1;
+    defer log = 999;
+    if early: ret log;
+    log = 2;
+    ret log;
+}
+
+stcfun size_class = (type T) -> u32 {
+    ret if sizeof T > 4: 1 else: if sizeof T > 1: 2 else: 3;
+}
+
+stcfun bucket = (u32 n) -> u32: ret match n { 0 => 10, 1 | 2 => 20, 3..=9 => 30, _ => 40 };
+
+fun safe_div = (i32 a, i32 b where b != 0 else ret 0 - 1) -> i32: ret a / b;
+fun clamp_pct = (i32 p where p >= 0 and p <= 100 else ret 50) -> i32: ret p;
+fun both_guards = (i32 a where a > 0 else ret 1, i32 b where b > 0 else ret 2) -> i32: ret a + b;
+
+stcfun contracts = () -> i32: ret safe_div(9, 3) * 10000 + safe_div(9, 0) * 1000 + clamp_pct(101) * 100 + clamp_pct(7) + both_guards(0, 5) * 100000 + both_guards(5, 0) * 1000000 + both_guards(2, 3) * 10000000;
+
+stc u32 NB = nested_break(); #= NB 16
+stc i32 CT = contracts(); #= CT 52134007
+stc u32 FP = find_pair(91); #= FP 713
+stc u32 FP0 = find_pair(23); #= FP0 0
+stc u32 ER = empty_ranges(); #= ER 0
+stc u32 SR = single_ranges(); #= SR 77
+stc u32 UB = unbounded(); #= UB 18
+stc u32 LV = loop_value(); #= LV 14465
+stc u32 WR = while_repeat(); #= WR 1812
+stc u32 WV = while_value(); #= WV 246
+stc u32 FV = for_value(); #= FV 2051017
+stc i32 CS = chain_sweep(); #= CS -31977
+stc u32 BV = blocks_as_values(); #= BV 920
+stc u32 RS = return_sweep(); #= RS 3002400
+stc u32 LR = loop_with_ret(); #= LR 15
+stc u32 CW = cont_in_while(); #= CW 12318
+stc u32 LB = labelled(); #= LB 45
+stc u32 DD = do_and_defer(); #= DD 521
+stc u32 DL = defer_in_loop(); #= DL 111123
+stc u32 DR = defer_on_return(true) * 1000 + defer_on_return(false); #= DR 1002
+stc u32 SP = size_class(u64) * 100 + size_class(u16) * 10 + size_class(u8); #= SP 123
+stc u32 SM = bucket(0) + bucket(2) + bucket(7) + bucket(99); #= SM 100
+
+$main = () {}

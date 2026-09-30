@@ -1,0 +1,194 @@
+# BUG: a template method parameter typed `Poly(N)` (the template applied to its own params) is a different type than the realised `Poly(8)` (type_mismatch with identical printed types for arguments and for `P x = p.add(..)`), so operands are passed as `[N]i64` coefficient arrays and results are unwrapped with `.c`
+type Poly = (u32 N): *(mut [N]i64 c) !{
+    fun eval = (i64 x) -> i64 {
+        mut i64 acc = 0;
+        mut u32 i = N;
+        while i > 0 {
+            i -= 1;
+            acc = acc * x + self.c[i];
+        }
+        ret acc;
+    }
+
+    fun degree = () -> i32 {
+        mut i32 i = N as i32 - 1;
+        while i >= 0 {
+            if self.c[i] != 0: ret i;
+            i -= 1;
+        }
+        ret -1;
+    }
+
+    fun add = ([N]i64 o) -> Poly(N) {
+        mut Poly(N) r;
+        for i in 0..<N: r.c[i] = self.c[i] + o[i];
+        ret r;
+    }
+
+    fun sub = ([N]i64 o) -> Poly(N) {
+        mut Poly(N) r;
+        for i in 0..<N: r.c[i] = self.c[i] - o[i];
+        ret r;
+    }
+
+    fun scale = (i64 k) -> Poly(N) {
+        mut Poly(N) r;
+        for i in 0..<N: r.c[i] = self.c[i] * k;
+        ret r;
+    }
+
+    fun mul = ([N]i64 o) -> Poly(N) {
+        mut Poly(N) r;
+        for i in 0..<N {
+            if self.c[i] == 0: cont;
+            for j in 0..<N: if i + j < N: r.c[i + j] += self.c[i] * o[j];
+        }
+        ret r;
+    }
+
+    fun deriv = () -> Poly(N) {
+        mut Poly(N) r;
+        for i in 1..<N: r.c[i - 1] = self.c[i] * (i as i64);
+        ret r;
+    }
+
+    fun compose = ([N]i64 q) -> Poly(N) {
+        mut Poly(N) r;
+        mut u32 i = N;
+        while i > 0 {
+            i -= 1;
+            r = r.mul(q);
+            r.c[0] += self.c[i];
+        }
+        ret r;
+    }
+
+    fun pow = (u32 e) -> Poly(N) {
+        mut Poly(N) r;
+        r.c[0] = 1;
+        for 0..<e: r = r.mul(self.c);
+        ret r;
+    }
+
+    fun shift_up = (u32 k) -> Poly(N) {
+        mut Poly(N) r;
+        for i in 0..<N: if i + k < N: r.c[i + k] = self.c[i];
+        ret r;
+    }
+
+    fun quotient_linear = (i64 root) -> Poly(N) {
+        mut Poly(N) q;
+        mut i64 carry = 0;
+        mut u32 i = N;
+        while i > 1 {
+            i -= 1;
+            carry = carry * root + self.c[i];
+            q.c[i - 1] = carry;
+        }
+        ret q;
+    }
+
+    fun eq = ([N]i64 o) -> bool {
+        for i in 0..<N: if self.c[i] != o[i]: ret false;
+        ret true;
+    }
+}
+
+type P = Poly(8);
+
+fun poly = (&[]i64 cs) -> P {
+    mut P p;
+    for i in 0..<cs.$len: p.c[i] = cs.*[i];
+    ret p;
+}
+
+fun chebyshev = (u32 n) -> P {
+    mut [8]i64 a = poly([1,].&).c;
+    mut [8]i64 b = poly([0, 1].&).c;
+    if n == 0: ret poly(a.&);
+    for 0..<n - 1 {
+        [8]i64 next = poly(b.&).shift_up(1).scale(2).sub(a).c;
+        a = b;
+        b = next;
+    }
+    ret poly(b.&);
+}
+
+fun int_roots = (P p, i64 lo, i64 hi) -> u32 {
+    mut u32 n = 0;
+    mut i64 x = lo;
+    while x <= hi {
+        if p.eval(x) == 0: n += 1;
+        x += 1;
+    }
+    ret n;
+}
+
+stc i64 E1 = poly([3, 0, 2].&).eval(5); #= E1 53
+stc i64 E2 = poly([3, 0, 2].&).eval(0); #= E2 3
+stc i64 E3 = poly([3, 0, 2].&).eval(-4); #= E3 35
+stc i64 E4 = poly([7,].&).eval(123456); #= E4 7
+stc i64 E5 = poly([0, 0, 0, 1].&).eval(1000000); #= E5 1000000000000000000
+stc i64 E6 = poly([1, 1, 1, 1, 1, 1, 1, 1].&).eval(2); #= E6 255
+stc i64 E7 = poly([0,].&).eval(99); #= E7 0
+
+stc i32 DG1 = poly([3, 0, 2].&).degree(); #= DG1 2
+stc i32 DG2 = poly([0,].&).degree(); #= DG2 -1
+stc i32 DG3 = poly([5,].&).degree(); #= DG3 0
+stc i32 DG4 = poly([0, 0, 0, 0, 0, 0, 0, 4].&).degree(); #= DG4 7
+
+stc i64 S1 = poly([1, 1].&).pow(6).eval(100); #= S1 1061520150601
+stc i64 S2 = poly([1, 1].&).pow(7).c[3]; #= S2 35
+stc i64 S3 = poly([-1, 1].&).pow(5).c[2]; #= S3 -10
+stc i64 S4 = poly([-1, 1].&).pow(5).c[5]; #= S4 1
+stc i64 S5 = poly([1, 1].&).pow(0).eval(9); #= S5 1
+stc i64 S6 = poly([1, 1].&).pow(9).c[7]; #= S6 36
+stc i64 S7 = poly([1, 1].&).pow(9).c[0]; #= S7 1
+
+stc i64 M1 = poly([1, 2, 3].&).mul(poly([4, 5].&).c).eval(1); #= M1 54
+stc i64 M2 = poly([1, 2, 3].&).mul(poly([4, 5].&).c).c[3]; #= M2 15
+stc i64 M3 = poly([1, 2, 3].&).mul(poly([0,].&).c).degree(); #= M3 -1
+stc i64 M4 = poly([-1, 1].&).mul(poly([1, 1].&).c).c[0]; #= M4 -1
+stc i64 M5 = poly([1, 1].&).mul(poly([1, 1].&).c).eq(poly([1, 2, 1].&).c) as i64; #= M5 1
+stc i64 M6 = poly([1, 1].&).mul(poly([1, 1].&).c).eq(poly([1, 2, 2].&).c) as i64; #= M6 0
+stc i64 M7 = poly([0, 0, 0, 0, 0, 0, 1, 0].&).mul(poly([0, 0, 0, 1].&).c).eval(3); #= M7 0
+stc i64 M8 = poly([0, 0, 0, 0, 0, 0, 1, 0].&).mul(poly([0, 0, 1].&).c).eval(3); #= M8 0
+stc i64 M9 = poly([1, 1].&).mul(poly([1, 1].&).c).scale(-3).c[1]; #= M9 -6
+
+stc i64 A1 = poly([1, 2, 3].&).add(poly([4, 5].&).c).eval(10); #= A1 375
+stc i64 A2 = poly([1, 2, 3].&).sub(poly([1, 2, 3].&).c).degree(); #= A2 -1
+stc i64 A3 = poly([1, 2, 3].&).sub(poly([4, 5].&).c).c[0]; #= A3 -3
+
+stc i64 D1 = poly([5, 4, 3, 2, 1].&).deriv().eval(2); #= D1 72
+stc i64 D2 = poly([5, 4, 3, 2, 1].&).deriv().deriv().deriv().deriv().degree(); #= D2 0
+stc i64 D3 = poly([5, 4, 3, 2, 1].&).deriv().deriv().deriv().deriv().deriv().degree(); #= D3 -1
+stc i64 D4 = poly([9,].&).deriv().degree(); #= D4 -1
+stc i64 D5 = poly([0, 1].&).pow(5).deriv().c[4]; #= D5 5
+
+stc i64 C1 = poly([1, 2, 1].&).compose(poly([1, 1].&).c).eval(3); #= C1 25
+stc i64 C2 = poly([0, 0, 1].&).compose(poly([1, 1].&).c).c[1]; #= C2 2
+stc i64 C3 = poly([1, 0, 1].&).compose(poly([1, 0, 1].&).c).c[2]; #= C3 2
+stc i64 C4 = poly([2, 3].&).compose(poly([5,].&).c).eval(100); #= C4 17
+stc i64 C5 = poly([0, 1].&).compose(poly([3, 1, 4].&).c).eval(2); #= C5 21
+
+stc i64 Q1 = poly([-6, 11, -6, 1].&).quotient_linear(1).eval(100); #= Q1 9506
+stc i64 Q2 = poly([-6, 11, -6, 1].&).eval(1); #= Q2 0
+stc i64 Q3 = poly([-6, 11, -6, 1].&).eval(4); #= Q3 6
+stc i64 Q4 = poly([-6, 11, -6, 1].&).quotient_linear(4).c[0]; #= Q4 3
+
+stc u32 RT1 = int_roots(poly([-6, 11, -6, 1].&), -10, 10); #= RT1 3
+stc u32 RT2 = int_roots(poly([1, 0, 1].&), -10, 10); #= RT2 0
+stc u32 RT3 = int_roots(poly([0, 0, 1].&), -10, 10); #= RT3 1
+stc u32 RT4 = int_roots(poly([-16, 0, 0, 0, 1].&), -10, 10); #= RT4 2
+
+stc i64 T2 = chebyshev(2).c[2]; #= T2 2
+stc i64 T2C = chebyshev(2).c[0]; #= T2C -1
+stc i64 T5 = chebyshev(5).c[5]; #= T5 16
+stc i64 T5B = chebyshev(5).c[3]; #= T5B -20
+stc i64 T5C = chebyshev(5).c[1]; #= T5C 5
+stc i64 T7 = chebyshev(7).c[7]; #= T7 64
+stc i64 T7A = chebyshev(7).eval(1); #= T7A 1
+stc i64 T6E = chebyshev(6).eval(3); #= T6E 19601
+stc i64 T0 = chebyshev(0).eval(5); #= T0 1
+
+$main = () {}

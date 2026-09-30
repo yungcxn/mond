@@ -1,0 +1,221 @@
+fun class_of = (u64 c) -> u16 {
+    ret match c {
+        'a'..='z' | 'A'..='Z' => 0,
+        '0'..='9' => 1,
+        '_' => 2,
+        ' ' | '\t' | '\n' => 3,
+        '+' => 4,
+        '-' => 5,
+        '<' => 6,
+        '=' => 7,
+        '.' => 8,
+        '>' => 9,
+        _ => 10,
+    };
+}
+
+fun next_state = (u64 i) -> u8 {
+    u64 s = i / 11;
+    u64 c = i % 11;
+    ret match s {
+        0 => match c {
+            0 | 2 => 1,
+            1 => 2,
+            3 => 13,
+            4 => 7,
+            5 => 9,
+            6 => 5,
+            7 => 11,
+            _ => 15,
+        },
+        1 => if c <= 2: 1 else: 15,
+        2 => match c {
+            1 => 2,
+            8 => 4,
+            _ => 15,
+        },
+        3 => if c == 1: 3 else: 15,
+        4 => if c == 1: 3 else: 15,
+        5 => if c == 7: 6 else: 15,
+        7 => if c == 4: 8 else: 15,
+        9 => if c == 9: 10 else: 15,
+        11 => if c == 7: 12 else: 15,
+        13 => if c == 3: 13 else: 15,
+        _ => 15,
+    };
+}
+
+fun kind_of = (u64 s) -> u8 {
+    ret match s {
+        1 => 1,
+        2 => 2,
+        3 => 3,
+        5 => 4,
+        6 => 5,
+        7 => 6,
+        8 => 7,
+        9 => 8,
+        10 => 9,
+        11 => 10,
+        12 => 11,
+        13 => 12,
+        _ => 0,
+    };
+}
+
+# BUG: `stc []u8 X = stcfor 0..<256: 7;` is a type_mismatch (found u32, expected u8) although every element fits, `[]u16` works
+stc []u16 CLASS = stcfor 0..<256: class_of($it);
+stc []u8 TRANS = stcfor 0..<176: next_state($it);
+stc []u8 KIND = stcfor 0..<16: kind_of($it);
+
+stcfun accepting = () -> u32 {
+    mut u32 n = 0;
+    for s in 0..<16 {
+        if KIND[s] != 0: n += 1;
+    }
+    ret n;
+}
+
+stcfun live_transitions = () -> u32 {
+    mut u32 n = 0;
+    for i in 0..<176 {
+        if TRANS[i] != 15: n += 1;
+    }
+    ret n;
+}
+
+stc u32 ACCEPTING = accepting(); #= ACCEPTING 12
+stc u32 EDGES = live_transitions(); #= EDGES 20
+stc u16 CL1 = CLASS['q']; #= CL1 0
+stc u16 CL2 = CLASS['7']; #= CL2 1
+stc u16 CL3 = CLASS['~']; #= CL3 10
+stc u16 CL4 = CLASS['>']; #= CL4 9
+stc u8 TR1 = TRANS[0 * 11 + 1]; #= TR1 2
+stc u8 TR2 = TRANS[2 * 11 + 8]; #= TR2 4
+stc u8 TR3 = TRANS[4 * 11 + 8]; #= TR3 15
+
+type Lexer = *(&[]u8 src, mut u32 pos, mut [24]u8 kinds, mut [24]u8 lens, mut u32 n, mut u32 steps) !{
+    fun next_token = () -> bool {
+        if (self.pos as u64) >= self.src.$len: ret false;
+        mut u32 state = 0;
+        mut u32 i = self.pos;
+        mut u8 last_kind = 0;
+        mut u32 last_end = self.pos;
+        while (i as u64) < self.src.$len {
+            u32 cls = CLASS[self.src.*[i]] as u32;
+            u32 ns = TRANS[state * 11 + cls] as u32;
+            if ns == 15: brk;
+            state = ns;
+            i += 1;
+            self.steps += 1;
+            if KIND[state] != 0 {
+                last_kind = KIND[state];
+                last_end = i;
+            }
+        }
+        if last_kind == 0 {
+            last_kind = 13;
+            last_end = self.pos + 1;
+        }
+        if last_kind != 12 {
+            self.kinds[self.n] = last_kind;
+            self.lens[self.n] = (last_end - self.pos) as u8;
+            self.n += 1;
+        }
+        self.pos = last_end;
+        ret true;
+    }
+
+    fun run = () {
+        while self.n < 24 and self.next_token() {}
+    }
+}
+
+fun lex = (&[]u8 src) -> Lexer {
+    [24]u8 kinds;
+    [24]u8 lens;
+    mut Lexer l = Lexer(src = src, pos = 0, kinds = kinds, lens = lens, n = 0, steps = 0);
+    l.run();
+    ret l;
+}
+
+fun kinds_of = (&[]u8 src) -> [12]u8 {
+    Lexer l = lex(src);
+    mut [12]u8 out;
+    for i in 0..<12: out[i] = l.kinds[i];
+    ret out;
+}
+
+fun lens_of = (&[]u8 src) -> [12]u8 {
+    Lexer l = lex(src);
+    mut [12]u8 out;
+    for i in 0..<12: out[i] = l.lens[i];
+    ret out;
+}
+
+fun token_count = (&[]u8 src) -> u32 {
+    Lexer l = lex(src);
+    ret l.n;
+}
+
+fun step_count = (&[]u8 src) -> u32 {
+    Lexer l = lex(src);
+    ret l.steps;
+}
+
+stc [12]u8 Z1 = kinds_of("abc_1 = 12.5 <= x++ -> y".&); #= Z1 [1, 10, 3, 5, 1, 7, 9, 1, 0, 0, 0, 0]
+stc [12]u8 Z2 = lens_of("abc_1 = 12.5 <= x++ -> y".&); #= Z2 [5, 1, 4, 2, 1, 2, 2, 1, 0, 0, 0, 0]
+stc u32 Z3 = token_count("abc_1 = 12.5 <= x++ -> y".&); #= Z3 8
+stc u32 Z4 = step_count("abc_1 = 12.5 <= x++ -> y".&); #= Z4 24
+stc [12]u8 Z5 = kinds_of("".&); #= Z5 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 Z6 = token_count("".&); #= Z6 0
+stc u32 Z7 = step_count("".&); #= Z7 0
+stc [12]u8 Z8 = kinds_of("   ".&); #= Z8 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z9 = kinds_of("x".&); #= Z9 [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z10 = kinds_of("42".&); #= Z10 [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z11 = kinds_of("3.14".&); #= Z11 [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z12 = kinds_of("12.".&); #= Z12 [2, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z13 = lens_of("12.".&); #= Z13 [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 Z14 = token_count("12.".&); #= Z14 2
+stc u32 Z15 = step_count("12.".&); #= Z15 3
+stc [12]u8 Z16 = kinds_of("1.5.5".&); #= Z16 [3, 13, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z17 = lens_of("1.5.5".&); #= Z17 [3, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 Z18 = token_count("1.5.5".&); #= Z18 3
+stc u32 Z19 = step_count("1.5.5".&); #= Z19 4
+stc [12]u8 Z20 = kinds_of(".5".&); #= Z20 [13, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z21 = kinds_of("a-b".&); #= Z21 [1, 8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z22 = kinds_of("a->b".&); #= Z22 [1, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z23 = kinds_of("a--b".&); #= Z23 [1, 8, 8, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z24 = kinds_of("a-->b".&); #= Z24 [1, 8, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z25 = lens_of("a-->b".&); #= Z25 [1, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 Z26 = token_count("a-->b".&); #= Z26 4
+stc u32 Z27 = step_count("a-->b".&); #= Z27 5
+stc [12]u8 Z28 = kinds_of("<=<==".&); #= Z28 [5, 5, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z29 = lens_of("<=<==".&); #= Z29 [2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z30 = kinds_of("==".&); #= Z30 [11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z31 = kinds_of("===".&); #= Z31 [11, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z32 = kinds_of("= =".&); #= Z32 [10, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z33 = kinds_of("<>".&); #= Z33 [4, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z34 = kinds_of("+++".&); #= Z34 [7, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 Z35 = token_count("+++".&); #= Z35 2
+stc u32 Z36 = step_count("+++".&); #= Z36 3
+stc [12]u8 Z37 = kinds_of("a+ +b".&); #= Z37 [1, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z38 = kinds_of("x_y9 _z 9z".&); #= Z38 [1, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z39 = lens_of("x_y9 _z 9z".&); #= Z39 [4, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z40 = kinds_of("if(x)".&); #= Z40 [1, 13, 1, 13, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z41 = kinds_of("  a\t\nb  ".&); #= Z41 [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 Z42 = token_count("  a\t\nb  ".&); #= Z42 2
+stc u32 Z43 = step_count("  a\t\nb  ".&); #= Z43 8
+stc [12]u8 Z44 = kinds_of("1e5".&); #= Z44 [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z45 = kinds_of("a.b".&); #= Z45 [1, 13, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z46 = kinds_of("$#".&); #= Z46 [13, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z47 = kinds_of("-> <- ->".&); #= Z47 [9, 4, 8, 9, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z48 = kinds_of("12.34.56.78".&); #= Z48 [3, 13, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z49 = lens_of("12.34.56.78".&); #= Z49 [5, 1, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc [12]u8 Z50 = kinds_of("0..1".&); #= Z50 [2, 13, 13, 2, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 Z51 = token_count("0..1".&); #= Z51 4
+stc u32 Z52 = step_count("0..1".&); #= Z52 3
+stc [12]u8 Z53 = kinds_of("end_".&); #= Z53 [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+stc u32 Z54 = token_count("a b c d e f g h i j k l m n o p q r s t u v w x y z 1 2 3".&); #= Z54 24
+
+$main = () {}

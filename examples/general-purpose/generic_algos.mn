@@ -1,0 +1,201 @@
+type Pair = (type A, type B): *(mut A first, mut B second);
+
+stcfun map = (type A, type B, u32 N): (&[N]A xs, (A) -> B f) -> [N]B {
+    mut [N]B out;
+    for i in 0..<N: out[i] = f(xs.*[i]);
+    ret out;
+}
+
+stcfun reduce = (type T, u32 N): (&[N]T xs, T init, (T, T) -> T f) -> T {
+    mut T acc = init;
+    for i in 0..<N: acc = f(acc, xs.*[i]);
+    ret acc;
+}
+
+stcfun count_if = (type T, u32 N): (&[N]T xs, (T) -> bool p) -> u32 {
+    mut u32 n = 0;
+    for i in 0..<N: if p(xs.*[i]): n += 1;
+    ret n;
+}
+
+stcfun filter = (type T, u32 N): (&[N]T xs, (T) -> bool p) -> [N]T {
+    mut [N]T out;
+    mut u32 k = 0;
+    for i in 0..<N {
+        if p(xs.*[i]) {
+            out[k] = xs.*[i];
+            k += 1;
+        }
+    }
+    ret out;
+}
+
+stcfun zip = (type A, type B, u32 N): (&[N]A a, &[N]B b) -> [N]Pair(A, B) {
+    mut [N]Pair(A, B) out;
+    for i in 0..<N {
+        out[i].first = a.*[i];
+        out[i].second = b.*[i];
+    }
+    ret out;
+}
+
+stcfun pipeline = () -> u32 {
+    [5]u32 xs = [1, 2, 3, 4, 5];
+    sq = map(u32, u32, 5)(xs.&, (u32 x): x * x);
+    evens = filter(u32, 5)(sq.&, (u32 x): x % 2 == 0);
+    total = reduce(u32, 5)(sq.&, 0, (u32 a, u32 b): a + b);
+    ret total * 1000 + count_if(u32, 5)(xs.&, (u32 x): x > 2) * 100 + evens[0] * 10 + evens[1];
+}
+
+stc u32 PL = pipeline(); #= PL 55356
+
+stcfun dot = () -> i64 {
+    [4]i32 a = [1, -2, 3, 4];
+    [4]i32 b = [5, 6, -7, 8];
+    z = zip(i32, i32, 4)(a.&, b.&);
+    prods = map(Pair(i32, i32), i64, 4)(z.&, (Pair(i32, i32) p): (p.first as i64) * (p.second as i64));
+    ret reduce(i64, 4)(prods.&, 0, (i64 x, i64 y): x + y);
+}
+
+stcfun widen = () -> u64 {
+    [3]u8 small = [200, 100, 50];
+    wide = map(u8, u64, 3)(small.&, (u8 x): x as u64 * 1000000000);
+    biggest = reduce(u64, 3)(wide.&, 0, (u64 a, u64 b): if a > b: a else: b);
+    smallest = reduce(u8, 3)(small.&, 255, (u8 a, u8 b): if a < b: a else: b);
+    ret biggest + smallest as u64;
+}
+
+stcfun mixed = () -> u32 {
+    [4]u16 ids = [10, 20, 30, 40];
+    [4]bool flags = [true, false, true, true];
+    z = zip(u16, bool, 4)(ids.&, flags.&);
+    kept = filter(Pair(u16, bool), 4)(z.&, (Pair(u16, bool) p): p.second);
+    total = reduce(u32, 4)(map(Pair(u16, bool), u32, 4)(kept.&, (Pair(u16, bool) p): p.first as u32).&, 0, (u32 a, u32 b): a + b);
+    ret total;
+}
+stc i64 DT = dot(); #= DT 4
+stc u64 WD = widen(); #= WD 200000000050
+stc u32 MX = mixed(); #= MX 80
+
+trait Metric = (type T): !{
+    fun dist = (T other) -> u32;
+    fun near = (T other, u32 r) -> bool: ret self.dist(other) <= r;
+    fun far = (T other, u32 r) -> bool: ret self.dist(other) > r;
+    fun bucket = (T other, u32 w) -> u32: ret self.dist(other) / w;
+}
+
+type Point = *(i32 x, i32 y) implof Metric(Point) !{
+    fun dist = (Point o) -> u32 {
+        dx = if self.x > o.x: self.x - o.x else: o.x - self.x;
+        dy = if self.y > o.y: self.y - o.y else: o.y - self.y;
+        ret (dx + dy) as u32;
+    }
+}
+
+type Slot = *(u8 pos) implof Metric(Slot) !{
+    fun dist = (Slot o) -> u32: ret if self.pos > o.pos: (self.pos - o.pos) as u32 else: (o.pos - self.pos) as u32;
+    fun near = (Slot o, u32 r) -> bool: ret self.dist(o) * 2 <= r;
+}
+
+stcfun closest = (type T where T oftype Metric(T), u32 N): (&[N]T xs, T target) -> u32 {
+    mut u32 best = 0;
+    mut u32 best_d = xs.*[0].dist(target);
+    for i in 1..<N {
+        d = xs.*[i].dist(target);
+        if d < best_d {
+            best = i as u32;
+            best_d = d;
+        }
+    }
+    ret best;
+}
+
+stcfun within = (type T where T oftype Metric(T), u32 N): (&[N]T xs, T target, u32 r) -> u32 {
+    mut u32 n = 0;
+    for i in 0..<N: if xs.*[i].near(target, r): n += 1;
+    ret n;
+}
+
+stcfun spread = (type T where T oftype Metric(T)): (T a, T b, T c) -> u32: ret a.bucket(b, 3) * 100 + b.bucket(c, 3) * 10 + a.bucket(c, 3);
+
+stcfun metrics = () -> u32 {
+    [4]Point ps = [Point(0, 0), Point(5, 5), Point(-3, 2), Point(9, -1)];
+    [4]Slot ss = [Slot(10), Slot(20), Slot(30), Slot(40)];
+    near_pt = within(Point, 4)(ps.&, Point(1, 1), 5);
+    near_sl = within(Slot, 4)(ss.&, Slot(24), 8);
+    ret closest(Point, 4)(ps.&, Point(4, 4)) * 10000 + closest(Slot, 4)(ss.&, Slot(33)) * 1000 + near_pt * 100 + near_sl * 10 + spread(Point)(ps[0], ps[1], ps[3]);
+}
+
+stc u32 ME = metrics(); #= ME 12543
+
+trait Convert = (type A, type B): !{
+    fun to = () -> B;
+    fun from = (A a) -> B;
+    fun both = (A a) -> B: ret self.from(a);
+}
+
+type Celsius = *(i32 deg) implof Convert(i32, i32) !{
+    fun to = () -> i32: ret self.deg * 9 / 5 + 32;
+    fun from = (i32 a) -> i32: ret a * 9 / 5 + 32 + self.deg;
+}
+
+type Scaler = *(u8 k) implof Convert(u8, u32) !{
+    fun to = () -> u32: ret self.k as u32 * 1000;
+    fun from = (u8 a) -> u32: ret (a as u32) * (self.k as u32);
+}
+
+stcfun run_convert = (type T, type A, type B where T oftype Convert(A, B)): (T t, A a) -> B: ret t.to() + t.both(a);
+
+stcfun queries = () -> u32 {
+    mut u32 r = 0;
+    if Point oftype Metric(Point): r += 1;
+    if Slot oftype Metric(Point): r += 10;
+    if Celsius oftype Convert(i32, i32): r += 100;
+    if Scaler oftype Convert(u8, u32): r += 1000;
+    if Scaler oftype Convert(u32, u8): r += 10000;
+    ret r;
+}
+
+stc u32 QU = queries(); #= QU 1101
+stc i32 RC = run_convert(Celsius, i32, i32)(Celsius(100), 10); #= RC 362
+stc u32 RS = run_convert(Scaler, u8, u32)(Scaler(3), 7); #= RS 3021
+
+type Fn = (u32) -> u32;
+
+# BUG: known #12 form, `pick(ops[i])` with a loop variable reports not_static from a stcfun (value right), so pick is a plain fun
+fun pick = (u32 op) -> Fn {
+    ret match op {
+        0 => (u32 x): x + 1,
+        1 => (u32 x): x * 2,
+        2 => (u32 x): x * x,
+        _ => (u32 x): x,
+    };
+}
+
+stcfun apply_n = (Fn f, u32 n, u32 x) -> u32 {
+    mut u32 v = x;
+    for 0..<n: v = f(v);
+    ret v;
+}
+
+stcfun run_all = (u32 n): ([4]u32 ops, u32 x) -> u32 {
+    mut u32 v = x;
+    for i in 0..<n: v = pick(ops[i])(v);
+    ret v;
+}
+
+stcfun lambdas = () -> u32 {
+    ret pick(1)(pick(0)(pick(1)(3))) + apply_n(pick(1), 5, 1) * 100 + apply_n(pick(2), 3, 2) * 10000 + run_all(4)([0, 1, 2, 3], 2);
+}
+
+stc u32 LA = lambdas(); #= LA 2563250
+
+$main = () {
+    Point p = Point(1, 2);
+    d = p.dist(Point(4, 6)); #: d u32
+    n = p.near(Point(2, 2), 3); #: n bool
+    Slot s = Slot(3);
+    b = s.bucket(Slot(9), 2); #: b u32
+    c = Celsius(5).to(); #: c i32
+    z = Pair(u8, bool)(first = 1, second = true); #: z *(u8 first, bool second)
+}

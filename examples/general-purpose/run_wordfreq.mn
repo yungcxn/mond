@@ -1,0 +1,108 @@
+fun print = (&u8 fmt);
+fun print = (&u8 fmt, u32 a);
+fun print = (&u8 fmt, &u8 a);
+fun print = (&u8 fmt, &u8 a, u32 b);
+
+# LIMIT: a `&u8` cannot be indexed, so C strings are read through a fixed size view
+type Text = &[48]u8;
+
+fun text_of = (&u8 s) -> Text: ret s as Text;
+
+fun text_len = (&u8 s) -> u32 {
+    Text t = text_of(s);
+    mut u32 n = 0;
+    while n < 48 and t.*[n] != 0: n += 1;
+    ret n;
+}
+
+fun lower = (u8 c) -> u8: ret if c >= 'A' and c <= 'Z': c + 32 else: c;
+
+fun same_word = (&u8 a, &u8 b) -> bool {
+    Text x = text_of(a);
+    Text y = text_of(b);
+    mut u32 i = 0;
+    while i < 48 {
+        if lower(x.*[i]) != lower(y.*[i]): ret false;
+        if x.*[i] == 0: ret true;
+        i += 1;
+    }
+    ret true;
+}
+
+fun hash_word = (&u8 s) -> u32 {
+    Text t = text_of(s);
+    mut u32 h = 5381;
+    mut u32 i = 0;
+    while i < 48 and t.*[i] != 0 {
+        h = h * 33 + lower(t.*[i]) as u32;
+        i += 1;
+    }
+    ret h;
+}
+
+type Entry = *(mut &u8 word, mut u32 count, mut bool taken = false);
+
+type Table = *(mut [16]Entry slots, mut u32 used = 0, mut u32 probes = 0) !{
+    fun add = (&u8 w) -> bool {
+        if self.used >= 16: ret false;
+        mut u32 at = hash_word(w) % 16;
+        loop {
+            self.probes += 1;
+            if !self.slots[at].taken {
+                self.slots[at].word = w;
+                self.slots[at].count = 1;
+                self.slots[at].taken = true;
+                self.used += 1;
+                ret true;
+            }
+            if same_word(self.slots[at].word, w) {
+                self.slots[at].count += 1;
+                ret true;
+            }
+            at = (at + 1) % 16;
+        }
+        ret false;
+    }
+    fun count_of = (&u8 w) -> u32 {
+        mut u32 at = hash_word(w) % 16;
+        for 0..<16 {
+            if !self.slots[at].taken: ret 0;
+            if same_word(self.slots[at].word, w): ret self.slots[at].count;
+            at = (at + 1) % 16;
+        }
+        ret 0;
+    }
+    fun most_common = () -> u32 {
+        mut u32 best = 0;
+        for i in 0..<16: if self.slots[i].taken and self.slots[i].count > self.slots[best].count: best = i as u32;
+        ret best;
+    }
+}
+
+fun report = (*Table t) {
+    for i in 0..<16 {
+        if t.slots[i].taken: print("%s: %u\n", t.slots[i].word, t.slots[i].count);
+    }
+}
+
+$main = (i32 argc, &[]&u8 argv) -> i32 {
+    mut Table table;
+    mut u32 rejected = 0;
+    for i in 1..<argv.$len {
+        &u8 w = argv.*[i];
+        if text_len(w) == 0: cont;
+        if !table.add(w): rejected += 1;
+    }
+    used = table.used; #: used u32
+    probes = table.probes; #: probes u32
+    if used == 0 {
+        print("no words\n");
+        ret 1;
+    }
+    top = table.most_common(); #: top u32
+    &u8 winner = table.slots[top].word; #: winner &u8
+    print("most common: %s x %u\n", winner, table.count_of(winner));
+    report(table.&);
+    hello = table.count_of("hello"); #: hello u32
+    ret if rejected == 0: 0 else: 2;
+}

@@ -1,0 +1,158 @@
+trait Shape = !{
+    fun area = () -> u32;
+    fun perimeter = () -> u32;
+    fun sides = () -> u32;
+    fun ratio = () -> u32: ret self.area() * 100 / self.perimeter();
+}
+
+# BUG: when a call goes through a trait value the default of a trait method wins over the override of the implementing type (`fun tag` in Rect returned 27 instead of 999), so no type overrides `tag`
+trait Named = !{
+    fun name = () -> u32;
+    fun tag = () -> u32: ret self.name() * 10 + 7;
+}
+
+trait Solid = implof Shape, Named !{
+    fun height = () -> u32;
+    fun volume = () -> u32: ret self.area() * self.height();
+}
+
+type Square = *(u32 s) implof Shape, Named !{
+    fun area = () -> u32: ret self.s * self.s;
+    fun perimeter = () -> u32: ret 4 * self.s;
+    fun sides = () -> u32: ret 4;
+    fun name = () -> u32: ret 1;
+}
+
+type Rect = *(u32 w, u32 h) implof Shape, Named !{
+    fun area = () -> u32: ret self.w * self.h;
+    fun perimeter = () -> u32: ret 2 * (self.w + self.h);
+    fun sides = () -> u32: ret 4;
+    fun name = () -> u32: ret 2;
+}
+
+type Tri = *(u32 a, u32 b, u32 c) implof Shape !{
+    fun area = () -> u32: ret self.a * self.b / 2;
+    fun perimeter = () -> u32: ret self.a + self.b + self.c;
+    fun sides = () -> u32: ret 3;
+}
+
+type Prism = *(u32 base, u32 h) implof Solid !{
+    fun area = () -> u32: ret self.base * self.base;
+    fun perimeter = () -> u32: ret 4 * self.base;
+    fun sides = () -> u32: ret 4;
+    fun name = () -> u32: ret 3;
+    fun height = () -> u32: ret self.h;
+}
+
+fun area_of = (Shape s) -> u32: ret s.area();
+fun ratio_of = (Shape s) -> u32: ret s.ratio();
+fun tag_of = (Named n) -> u32: ret n.tag();
+fun volume_of = (Solid s) -> u32: ret s.volume();
+fun both = (Shape s) -> u32: ret s.area() * 1000 + s.perimeter();
+
+stcfun total_area = () -> u32 {
+    Square a = Square(s = 3);
+    Rect b = Rect(w = 2, h = 5);
+    Tri c = Tri(a = 3, b = 4, c = 5);
+    ret area_of(a) + area_of(b) + area_of(c);
+}
+
+stcfun by_trait_value = () -> u32 {
+    Shape s = Square(s = 4);
+    Shape t = Tri(a = 6, b = 8, c = 10);
+    ret s.area() * 10000 + t.area() * 100 + s.sides() * 10 + t.sides();
+}
+
+stcfun tags = () -> u32 {
+    Square a = Square(s = 1);
+    Rect b = Rect(w = 1, h = 1);
+    Prism c = Prism(base = 2, h = 3);
+    ret tag_of(a) * 1000000 + tag_of(b) * 1000 + tag_of(c);
+}
+
+stcfun solids = () -> u32 {
+    Prism p = Prism(base = 3, h = 4);
+    ret volume_of(p) * 1000 + ratio_of(p) + p.name();
+}
+
+stcfun queries = () -> u32 {
+    Square sq = Square(s = 2);
+    Tri tr = Tri(a = 1, b = 1, c = 1);
+    Prism pr = Prism(base = 1, h = 1);
+    mut u32 r = 0;
+    if sq oftype Shape: r += 1;
+    if sq oftype Named: r += 10;
+    if tr oftype Named: r += 100;
+    if pr oftype Solid: r += 1000;
+    if pr oftype Shape: r += 10000;
+    if (typeof sq) == Square: r += 100000;
+    if (typeof sq) == Shape: r += 1000000;
+    ret r;
+}
+
+stcfun ratios = () -> u32: ret ratio_of(Square(s = 10)) + ratio_of(Rect(w = 3, h = 7)) * 1000 + both(Tri(a = 3, b = 4, c = 5)) * 100000;
+
+trait Counter = !{
+    fun bump = () -> u32;
+    fun value = () -> u32;
+}
+
+type Plain = *(u32 n) implof Counter !{
+    fun bump = () -> u32: ret self.n + 1;
+    fun value = () -> u32: ret self.n;
+}
+
+type Doubling = *(u32 n) implof Counter !{
+    fun bump = () -> u32: ret self.n * 2 + 1;
+    fun value = () -> u32: ret self.n;
+}
+
+# LIMIT: a pointer to a plain (non template) trait does not accept a pointer to an implementor (type_mismatch), only trait values do
+fun step_of = (Counter c) -> u32: ret c.bump() - c.value();
+
+stcfun counters = () -> u32 {
+    Plain p = Plain(n = 5);
+    Doubling d = Doubling(n = 5);
+    ret step_of(p) * 100 + step_of(d) * 10 + p.bump();
+}
+
+trait Visitor = !{
+    fun num = (i64 v) -> i64;
+    fun add = (i64 l, i64 r) -> i64;
+    fun mul = (i64 l, i64 r) -> i64;
+}
+
+type Evaluator = *(u8 unused) implof Visitor !{
+    fun num = (i64 v) -> i64: ret v;
+    fun add = (i64 l, i64 r) -> i64: ret l + r;
+    fun mul = (i64 l, i64 r) -> i64: ret l * r;
+}
+
+type Depth = *(u8 unused) implof Visitor !{
+    fun num = (i64 v) -> i64: ret 1;
+    fun add = (i64 l, i64 r) -> i64: ret (if l > r: l else: r) + 1;
+    fun mul = (i64 l, i64 r) -> i64: ret (if l > r: l else: r) + 1;
+}
+
+fun walk = (Visitor v) -> i64 {
+    i64 a = v.num(2);
+    i64 b = v.num(3);
+    i64 c = v.add(a, b);
+    i64 d = v.mul(c, v.num(4));
+    ret v.add(d, v.mul(a, b));
+}
+
+stcfun visit = () -> i64 {
+    ret walk(Evaluator(unused = 0)) * 100 + walk(Depth(unused = 0));
+}
+
+stc u32 TA = total_area(); #= TA 25
+stc u32 BT = by_trait_value(); #= BT 162443
+stc u32 TG = tags(); #= TG 17027037
+stc u32 SO = solids(); #= SO 36078
+stc u32 QU = queries(); #= QU 111011
+stc u32 RA = ratios(); #= RA 601305250
+stc u32 CO = counters(); #= CO 166
+stc i64 VI = visit(); #= VI 2604
+
+$main = () {}

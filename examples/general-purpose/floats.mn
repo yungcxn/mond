@@ -1,0 +1,131 @@
+# LIMIT: `as` does not bind into the right operand of * / %, so `a / n as f64` needs parentheses around the cast
+fun abs = (f64 x) -> f64: ret if x < 0.0: -x else: x;
+
+fun sqrt_newton = (f64 x) -> f64 {
+    if x == 0.0: ret 0.0;
+    mut f64 g = x;
+    for 0..<40: g = (g + x / g) / 2.0;
+    ret g;
+}
+
+fun exp_series = (f64 x) -> f64 {
+    mut f64 term = 1.0;
+    mut f64 sum = 1.0;
+    for n in 1..<30 {
+        term = term * x / (n as f64);
+        sum += term;
+    }
+    ret sum;
+}
+
+fun sin_series = (f64 x) -> f64 {
+    mut f64 term = x;
+    mut f64 sum = x;
+    for n in 1..<12 {
+        term = -term * x * x / (((2 * n) as f64) * ((2 * n + 1) as f64));
+        sum += term;
+    }
+    ret sum;
+}
+
+fun integrate = (f64 a, f64 b, u32 n) -> f64 {
+    f64 h = (b - a) / (n as f64);
+    mut f64 s = 0.0;
+    for i in 0..<n {
+        f64 x = a + (i as f64 + 0.5) * h;
+        s += x * x * h;
+    }
+    ret s;
+}
+
+fun mandel = (f64 cr, f64 ci) -> u32 {
+    mut f64 zr = 0.0;
+    mut f64 zi = 0.0;
+    for i in 0..<50 {
+        if zr * zr + zi * zi > 4.0: ret i;
+        f64 t = zr * zr - zi * zi + cr;
+        zi = 2.0 * zr * zi + ci;
+        zr = t;
+    }
+    ret 50;
+}
+
+fun mandel_rows = () -> u32 {
+    mut u32 inside = 0;
+    for y in 0..<9 {
+        for x in 0..<18 {
+            f64 cr = -2.0 + x as f64 * 0.15;
+            f64 ci = -1.2 + y as f64 * 0.3;
+            if mandel(cr, ci) == 50: inside += 1;
+        }
+    }
+    ret inside;
+}
+
+fun floor = (f64 x) -> i64 {
+    i64 t = x as i64;
+    ret if (t as f64) > x: t - 1 else: t;
+}
+
+fun round_half_up = (f64 x) -> i64: ret floor(x + 0.5);
+
+fun mean = (&[]f32 xs) -> f32 {
+    mut f32 s = 0.0;
+    for x in xs.*: s += x;
+    ret s / (xs.$len as f32);
+}
+
+fun variance = (&[]f32 xs) -> f32 {
+    f32 m = mean(xs);
+    mut f32 s = 0.0;
+    for x in xs.*: s += (x - m) * (x - m);
+    ret s / (xs.$len as f32);
+}
+
+fun lerp = (f32 a, f32 b, f32 t) -> f32: ret a + (b - a) * t;
+
+fun to_fixed = (f64 x, u32 places) -> i64 {
+    mut f64 scale = 1.0;
+    for 0..<places: scale *= 10.0;
+    ret round_half_up(x * scale);
+}
+
+fun harmonic = (u32 n) -> f64 {
+    mut f64 s = 0.0;
+    for i in 1..=n: s += 1.0 / (i as f64);
+    ret s;
+}
+
+fun compensated = () -> f64 {
+    mut f64 sum = 0.0;
+    mut f64 c = 0.0;
+    for 0..<1000 {
+        f64 y = 0.001 - c;
+        f64 t = sum + y;
+        c = (t - sum) - y;
+        sum = t;
+    }
+    ret sum;
+}
+
+stc i64 SQ = to_fixed(sqrt_newton(2.0), 6); #= SQ 1414214
+stc i64 SQ0 = to_fixed(sqrt_newton(0.0), 6); #= SQ0 0
+stc i64 SQ1 = to_fixed(sqrt_newton(1000000.0), 3); #= SQ1 1000000
+stc i64 EX = to_fixed(exp_series(1.0), 8); #= EX 271828183
+stc i64 EX0 = to_fixed(exp_series(0.0), 8); #= EX0 100000000
+stc i64 EXN = to_fixed(exp_series(-1.0), 8); #= EXN 36787944
+stc i64 SN = to_fixed(sin_series(1.0), 8); #= SN 84147098
+stc i64 SN2 = to_fixed(sin_series(3.14159265358979), 6); #= SN2 0
+stc i64 IN = to_fixed(integrate(0.0, 3.0, 1000), 4); #= IN 90000
+stc u32 MD = mandel(0.0, 0.0); #= MD 50
+stc u32 MO = mandel(2.0, 2.0); #= MO 1
+stc u32 MR = mandel_rows(); #= MR 40
+stc i64 FL1 = floor(2.7) * 100 + floor(-2.7) * 10 + floor(-3.0); #= FL1 167
+stc i64 RH = round_half_up(2.5) * 100 + round_half_up(-2.5) * 10 + round_half_up(2.4); #= RH 282
+stc f32 ME = mean([1.0, 2.0, 3.0, 4.0].&); #= ME 2.5
+stc f32 VA = variance([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0].&); #= VA 4
+stc f32 LE = lerp(10.0, 20.0, 0.25); #= LE 12.5
+stc i64 HM = to_fixed(harmonic(100), 6); #= HM 5187378
+stc i64 CM = to_fixed(compensated(), 9); #= CM 1000000000
+
+$main = () {}

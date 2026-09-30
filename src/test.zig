@@ -285,7 +285,8 @@ pub fn main(init: std.process.Init) !void {
     const w = &fw.interface;
     const p1 = try check(w, io, "examples", false, args[1..]);
     const p2 = try check(w, io, "examples/positive", false, args[1..]);
-    const pos = .{ p1[0] + p2[0], p1[1] + p2[1] };
+    const p3 = try check(w, io, "examples/general-purpose", false, args[1..]);
+    const pos = .{ p1[0] + p2[0] + p3[0], p1[1] + p2[1] + p3[1] };
     const neg = try check(w, io, "examples/negative", true, args[1..]);
     const failed = pos[1] + neg[1];
     try w.print(bold ++ "\n{s}{d} passed, {d} failed" ++ reset ++ dim ++ "  ({d} positive, {d} negative files)\n" ++ reset, .{ if (failed == 0) green else red, pos[0] + neg[0], failed, pos[0] + pos[1], neg[0] + neg[1] });

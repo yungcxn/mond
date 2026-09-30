@@ -1,0 +1,176 @@
+type IntFn = (i64) -> i64;
+type Pred = (i64) -> bool;
+type Fold = (i64, i64) -> i64;
+
+# LIMIT: a closure that captures and escapes its frame cannot be evaluated at compile time (not_static), so these are only checked and lowered, never called from a stc
+fun compose = (IntFn f, IntFn g): (i64 x): f(g(x));
+fun twice = (IntFn f): (i64 x): f(f(x));
+fun adder = (i64 n): (i64 x): x + n;
+fun multiplier = (i64 n) -> IntFn: ret (i64 x): x * n;
+fun curry_add = (i64 a): (i64 b): (i64 c): a + b + c;
+fun flip = (Fold f): (i64 a, i64 b): f(b, a);
+fun negate = (Pred p): (i64 x): !p(x);
+
+fun map_into = (&[]i64 src, *[]i64 dst, IntFn f) {
+    for i in 0..<src.$len: dst.*[i] = f(src.*[i]);
+}
+
+fun filter_count = (&[]i64 src, Pred p) -> u32 {
+    mut u32 n = 0;
+    for x in src.*: if p(x): n += 1;
+    ret n;
+}
+
+fun fold = (&[]i64 src, i64 init, Fold f) -> i64 {
+    mut i64 acc = init;
+    for x in src.*: acc = f(acc, x);
+    ret acc;
+}
+
+fun any = (&[]i64 src, Pred p) -> bool {
+    for x in src.*: if p(x): ret true;
+    ret false;
+}
+
+fun all = (&[]i64 src, Pred p) -> bool {
+    for x in src.*: if !p(x): ret false;
+    ret true;
+}
+
+fun iterate = (IntFn f, i64 x, u32 n) -> i64 {
+    mut i64 v = x;
+    for 0..<n: v = f(v);
+    ret v;
+}
+
+fun fix_point = (IntFn f, i64 start) -> i64 {
+    mut i64 v = start;
+    loop {
+        i64 next = f(v);
+        if next == v: brk;
+        v = next;
+    }
+    ret v;
+}
+
+fun counter_from = (i64 start): (i64 step): start + step;
+
+
+fun apply_all = (&[]IntFn fs, i64 x) -> i64 {
+    mut i64 v = x;
+    for f in fs.*: v = f(v);
+    ret v;
+}
+
+fun memo_fib = (u32 n) -> u64 {
+    mut [64]u64 memo;
+    fun go = (u32 k) -> u64 {
+        if k < 2: ret k as u64;
+        if memo[k] != 0: ret memo[k];
+        u64 r = go(k - 1) + go(k - 2);
+        memo[k] = r;
+        ret r;
+    }
+    ret go(n);
+}
+
+fun accumulate = (u32 n) -> i64 {
+    mut i64 total = 0;
+    add = (i64 x): total += x;
+    for i in 1..=n: add(i as i64);
+    ret total;
+}
+
+fun capture_by_value = () -> i64 {
+    i64 base = 10;
+    f = (i64 x): x + base;
+    ret f(1) + f(2);
+}
+
+fun shadowing = () -> i64 {
+    i64 x = 1;
+    f = (i64 x): x * 2;
+    ret f(5) + x;
+}
+
+fun nested_closures = (i64 a) -> i64 {
+    i64 b = a * 2;
+    outer = (i64 c) -> i64 {
+        i64 d = c + b;
+        inner = (i64 e): e + d + a;
+        ret inner(1);
+    }
+    ret outer(3);
+}
+
+fun church = (u32 n) -> IntFn {
+    mut IntFn acc = (i64 x): x;
+    for 0..<n {
+        IntFn prev = acc;
+        acc = (i64 x): prev(x) + 1;
+    }
+    ret acc;
+}
+
+stcfun run_map = () -> i64 {
+    mut [5]i64 out;
+    map_into([1, 2, 3, 4, 5].&, out.&, (i64 x): x * x - 1);
+    ret fold(out.&, 0, (i64 a, i64 b): a * 2 + b);
+}
+
+stcfun run_pred = () -> u32 {
+    [8]i64 xs = [3, 8, -1, 12, 7, 0, 5, 10];
+    even = (i64 x): x % 2 == 0;
+    odd = (i64 x): x % 2 != 0;
+    u32 a = filter_count(xs.&, even);
+    u32 b = filter_count(xs.&, odd);
+    u32 c = filter_count(xs.&, (i64 x): x > 4);
+    ret a * 100 + b * 10 + c;
+}
+
+stcfun run_quant = () -> u32 {
+    [4]i64 xs = [2, 4, 6, 9];
+    ev = (i64 x): x % 2 == 0;
+    ret any(xs.&, ev) as u32 * 100 + all(xs.&, ev) as u32 * 10 + all(xs.&, (i64 x): x > 0) as u32;
+}
+
+stcfun run_fix = () -> i64 {
+    ret fix_point((i64 x): if x > 1: x / 2 else: x, 1000) * 100 + iterate((i64 x): x * 3, 1, 5);
+}
+
+stcfun run_table = () -> i64 {
+    [3]IntFn fs = [(i64 x): x + 3, (i64 x): x * 4, (i64 x): x - 1];
+    ret apply_all(fs.&, 2);
+}
+
+stcfun local_recursion = () -> i64 {
+    fun fact = (i64 n) -> i64: ret if n <= 1: 1 else: n * fact(n - 1);
+    ret fact(10);
+}
+
+fun is_even = (i64 n) -> bool: ret if n == 0: true else: is_odd(n - 1);
+fun is_odd = (i64 n) -> bool: ret if n == 0: false else: is_even(n - 1);
+
+# LIMIT: local functions are not hoisted, a local mutual recursion reports undefined_name, so this pair lives at the top level
+stcfun mutual = () -> i64: ret is_even(10) as i64 * 10 + is_odd(10) as i64;
+
+stc i64 R2 = run_map(); #= R2 110
+stc u32 R3 = run_pred(); #= R3 445
+stc u32 R4 = run_quant(); #= R4 101
+stc i64 R7 = run_fix(); #= R7 343
+stc i64 R8 = run_table(); #= R8 19
+stc u64 MF = memo_fib(50); #= MF 12586269025
+stc i64 AC = accumulate(10); #= AC 55
+stc i64 CV = capture_by_value(); #= CV 23
+stc i64 SH = shadowing(); #= SH 11
+stc i64 NC = nested_closures(4); #= NC 16
+stc i64 LR = local_recursion(); #= LR 3628800
+stc i64 MU = mutual(); #= MU 10
+
+$main = () {
+    IntFn inc = adder(1);
+    IntFn dbl = multiplier(2);
+    IntFn f = compose(inc, dbl);
+    i64 a = f(5) + twice(dbl)(3) + curry_add(1)(2)(3) + flip((i64 x, i64 y): x - y)(1, 10) + counter_from(5)(6) + church(7)(100);
+    b = filter_count([1, 2, 3].&, negate((i64 x): x > 1));
+}

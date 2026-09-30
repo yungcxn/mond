@@ -1,0 +1,254 @@
+variant Opt = (type T): ++(Some(T), None) tagof u8;
+
+type Stack = (type T, u32 CAP): *(mut [CAP]T items, mut u32 len) !{
+    fun push = (T v) -> bool {
+        if self.len == CAP: ret false;
+        self.items[self.len] = v;
+        self.len += 1;
+        ret true;
+    }
+    fun pop = () -> Opt(T) {
+        if self.len == 0: ret Opt(T).None;
+        self.len -= 1;
+        ret Opt(T).Some(self.items[self.len]);
+    }
+    fun peek = () -> Opt(T): ret if self.len == 0: Opt(T).None else: Opt(T).Some(self.items[self.len - 1]);
+}
+
+type Queue = (type T, u32 CAP): *(mut [CAP]T items, mut u32 head, mut u32 count) !{
+    fun put = (T v) -> bool {
+        if self.count == CAP: ret false;
+        self.items[(self.head + self.count) % CAP] = v;
+        self.count += 1;
+        ret true;
+    }
+    fun take = () -> Opt(T) {
+        if self.count == 0: ret Opt(T).None;
+        T v = self.items[self.head];
+        self.head = (self.head + 1) % CAP;
+        self.count -= 1;
+        ret Opt(T).Some(v);
+    }
+}
+
+type MinHeap = (u32 CAP): *(mut [CAP]i32 a, mut u32 n) !{
+    fun push = (i32 v) {
+        mut u32 i = self.n;
+        self.n += 1;
+        self.a[i] = v;
+        while i > 0 and self.a[(i - 1) / 2] > self.a[i] {
+            i32 t = self.a[i];
+            self.a[i] = self.a[(i - 1) / 2];
+            self.a[(i - 1) / 2] = t;
+            i = (i - 1) / 2;
+        }
+    }
+    fun pop = () -> i32 {
+        i32 top = self.a[0];
+        self.n -= 1;
+        self.a[0] = self.a[self.n];
+        mut u32 i = 0;
+        loop {
+            mut u32 m = i;
+            u32 l = i * 2 + 1;
+            u32 r = i * 2 + 2;
+            if l < self.n and self.a[l] < self.a[m]: m = l;
+            if r < self.n and self.a[r] < self.a[m]: m = r;
+            if m == i: brk;
+            i32 t = self.a[i];
+            self.a[i] = self.a[m];
+            self.a[m] = t;
+            i = m;
+        }
+        ret top;
+    }
+}
+
+type Table = (u32 CAP): *(mut [CAP]u32 keys, mut [CAP]i32 vals, mut [CAP]bool used, mut u32 count) !{
+    fun slot = (u32 key) -> u32 {
+        mut u32 i = key * 2654435761 % CAP;
+        while self.used[i] and self.keys[i] != key: i = (i + 1) % CAP;
+        ret i;
+    }
+    fun put = (u32 key, i32 val) -> bool {
+        u32 i = self.slot(key);
+        if !self.used[i] {
+            if self.count == CAP - 1: ret false;
+            self.used[i] = true;
+            self.keys[i] = key;
+            self.count += 1;
+        }
+        self.vals[i] = val;
+        ret true;
+    }
+    fun get = (u32 key) -> Opt(i32) {
+        u32 i = self.slot(key);
+        ret if self.used[i]: Opt(i32).Some(self.vals[i]) else: Opt(i32).None;
+    }
+}
+
+type Bitset = (u32 WORDS): *(mut [WORDS]u32 w) !{
+    fun set = (u32 i) { self.w[i / 32] = self.w[i / 32] | 1 << i % 32; }
+    # LIMIT: there is no bitwise not, so the mask is inverted by xor with all ones
+    fun clear = (u32 i) { self.w[i / 32] = self.w[i / 32] & (0xFFFFFFFF ^ (1 << i % 32)); }
+    fun test = (u32 i) -> bool: ret ((self.w[i / 32] >> i % 32) & 1) == 1;
+    fun count = () -> u32 {
+        mut u32 n = 0;
+        for word in self.w {
+            mut u32 x = word;
+            while x != 0 {
+                n += x & 1;
+                x = x >> 1;
+            }
+        }
+        ret n;
+    }
+}
+
+# BUG: storing a whole record through a pointer in a callee (`p.* = Node(..)`) leaves a dangling block, so the fields are written one by one
+type Node = *(mut i32 val, mut u32 next);
+type List = (u32 CAP): *(mut [CAP]Node nodes, mut u32 head, mut u32 free, mut u32 len) !{
+    fun init_all = () {
+        for i in 0..<CAP: self.nodes[i].next = i + 1;
+        self.head = CAP;
+    }
+    fun push_front = (i32 v) -> bool {
+        if self.free == CAP: ret false;
+        u32 at = self.free;
+        self.free = self.nodes[at].next;
+        self.nodes[at].val = v;
+        self.nodes[at].next = self.head;
+        self.head = at;
+        self.len += 1;
+        ret true;
+    }
+    fun reverse = () {
+        mut u32 prev = CAP;
+        mut u32 cur = self.head;
+        while cur != CAP {
+            u32 next = self.nodes[cur].next;
+            self.nodes[cur].next = prev;
+            prev = cur;
+            cur = next;
+        }
+        self.head = prev;
+    }
+    fun sum_alt = () -> i32 {
+        mut i32 s = 0;
+        mut i32 sign = 1;
+        mut u32 cur = self.head;
+        while cur != CAP {
+            s += sign * self.nodes[cur].val;
+            sign = -sign;
+            cur = self.nodes[cur].next;
+        }
+        ret s;
+    }
+    fun digits = () -> u64 {
+        mut u64 d = 0;
+        mut u32 cur = self.head;
+        while cur != CAP {
+            d = d * 10 + self.nodes[cur].val as u64;
+            cur = self.nodes[cur].next;
+        }
+        ret d;
+    }
+}
+
+type Vec = (type T, u32 CAP): *(mut [CAP]T data, mut u32 len) !{
+    fun push = (T v) { self.data[self.len] = v; self.len += 1; }
+    fun map_in_place = ((T) -> T f) { for i in 0..<self.len: self.data[i] = f(self.data[i]); }
+    fun fold = (T zero, (T, T) -> T f) -> T {
+        mut T acc = zero;
+        for i in 0..<self.len: acc = f(acc, self.data[i]);
+        ret acc;
+    }
+}
+
+stcfun drain = () -> u32 {
+    mut Stack(u32, 4) s;
+    mut u32 pushed = 0;
+    for i in 1..=6: if s.push(i * 10): pushed += 1;
+    mut u32 sum = 0;
+    while s.pop() ?<- v: sum += v;
+    ret pushed * 1000 + sum;
+}
+
+stcfun fifo = () -> u32 {
+    mut Queue(u8, 3) q;
+    q.put(1); q.put(2); q.put(3);
+    mut u32 refused = q.put(4) as u32;
+    mut u32 out = 0;
+    out = out * 10 + (q.take() ?? 0) as u32;
+    q.put(9);
+    while q.take() ?<- v: out = out * 10 + v as u32;
+    ret out * 10 + refused + (q.take() ?? 7) as u32 * 100000000;
+}
+
+stcfun heapsort = () -> u64 {
+    mut MinHeap(16) h;
+    [9]i32 xs = [5, -2, 9, 0, 7, 3, 3, -8, 12];
+    for x in xs: h.push(x);
+    mut u64 acc = 0;
+    mut i32 prev = -1000;
+    mut bool ordered = true;
+    for 0..<9 {
+        i32 v = h.pop();
+        if v < prev: ordered = false;
+        prev = v;
+        acc = acc * 3 + (v + 8) as u64;
+    }
+    ret acc * 2 + ordered as u64;
+}
+
+stcfun table = () -> i32 {
+    mut Table(16) t;
+    for k in 1..=10: do t.put(k * 7, k as i32 * 100);
+    do t.put(14, -1);
+    mut i32 s = 0;
+    for k in 1..=10: s += t.get(k * 7) ?? 0;
+    ret s * 10 + (t.get(5) ?? 3) + t.count as i32 * 100000;
+}
+
+stcfun bits = () -> u32 {
+    mut Bitset(2) b;
+    for i in [0, 5, 31, 32, 40, 63]: b.set(i);
+    b.clear(5);
+    b.clear(1);
+    ret b.count() * 100 + b.test(31) as u32 * 10 + b.test(5) as u32;
+}
+
+stcfun linked = () -> u64 {
+    mut List(6) l;
+    l.init_all();
+    for v in 1..=8: do l.push_front(v as i32);
+    u64 before = l.digits();
+    l.reverse();
+    ret before * 1000000 + l.digits() * 10 + l.len as u64;
+}
+
+stcfun alternating = () -> i32 {
+    mut List(4) l;
+    l.init_all();
+    [4]i32 vs = [1, 2, 3, 4];
+    for v in vs: do l.push_front(v * v);
+    ret l.sum_alt();
+}
+
+stcfun vectors = () -> i64 {
+    mut Vec(i64, 8) v;
+    for i in 1..=5: v.push(i);
+    v.map_in_place((i64 x): x * x);
+    ret v.fold(0, (i64 a, i64 b): a + b) * 100 + v.fold(1, (i64 a, i64 b): if b > a: b else: a);
+}
+
+stc u32 DR = drain(); #= DR 4100
+stc u32 FF = fifo(); #= FF 700012390
+stc u64 HP = heapsort(); #= HP 46151
+stc i32 TB = table(); #= TB 1052993
+stc u32 BT = bits(); #= BT 510
+stc u64 LK = linked(); #= LK 654322234566
+stc i32 AL = alternating(); #= AL 10
+stc i64 VC = vectors(); #= VC 5525
+
+$main = () {}
