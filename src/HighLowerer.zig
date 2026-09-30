@@ -1579,12 +1579,14 @@ fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId
         self.tmp.push(@intFromEnum(x));
     }
     var args = all;
+    var dynamic = false;
     if (off == 1) {
         const bound = self.nk(callee) == .member and self.sp.tag(self.ty(self.arg(callee, 0))) != .meta_type;
         const recv = if (bound) self.arg(callee, 0) else self.r.arg_value(args[0]);
         const x = if (!bound) self.expr_to(recv, self.sp.get(ft).function_type.params[0]) else if (self.is_ptr(self.ty(recv))) self.expr(recv) else self.place(recv);
         self.tmp.push(@intFromEnum(x));
         if (!bound) args = args[1..];
+        dynamic = self.r.dp(.kind, rd).* == .trait_member and self.sp.tag(self.r.deref(self.ty(recv))) == .trait_type;
     }
     const at = self.tmp.head;
     for (pnodes) |_| self.tmp.push(none);
@@ -1611,7 +1613,6 @@ fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId
     self.body = saved;
     const list_at = self.list(self.tmp.buf[mark..self.tmp.head]);
     self.tmp.head = mark;
-    const dynamic = self.r.dp(.kind, rd).* == .trait_member and self.r.nk(self.r.value_node(rd)) == .def_fun_declaration;
     return self.emit(if (dynamic) .call_dyn else .call, if (t == .none) self.fn_ret(rd) else t, @intFromEnum(fv), list_at);
 }
 

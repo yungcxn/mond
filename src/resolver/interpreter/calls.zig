@@ -120,9 +120,9 @@ fn invoke(ip: *Interpreter, n: NodeId, d0: Decl.Index, all: []const NodeId, self
         args = args[1..];
         base += 1;
     }
-    if (r.nk(r.value_node(d)) == .def_fun_declaration and self.is_ref()) d = switch (sp.lookup_member(ip.vtype(ip.mem.buf[self.at()]), r.dp(.name, d).*)) {
+    if (r.dp(.kind, d).* == .trait_member and self.is_ref()) d = switch (sp.lookup_member(ip.vtype(ip.mem.buf[self.at()]), r.dp(.name, d).*)) {
         .method => |m| m,
-        else => return ip.fail(n, .not_static, 0, 0),
+        else => d,
     };
     r.h05_ensure_signature(d);
     if (r.length_generic(r.dp(.ty, d).*)) d = realize(ip, n, d, args, base) orelse return .poison;

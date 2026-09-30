@@ -5,7 +5,6 @@ trait Shape = !{
     fun ratio = () -> u32: ret self.area() * 100 / self.perimeter();
 }
 
-# BUG: when a call goes through a trait value the default of a trait method wins over the override of the implementing type (`fun tag` in Rect returned 27 instead of 999), so no type overrides `tag`
 trait Named = !{
     fun name = () -> u32;
     fun tag = () -> u32: ret self.name() * 10 + 7;
@@ -28,6 +27,7 @@ type Rect = *(u32 w, u32 h) implof Shape, Named !{
     fun perimeter = () -> u32: ret 2 * (self.w + self.h);
     fun sides = () -> u32: ret 4;
     fun name = () -> u32: ret 2;
+    fun tag = () -> u32: ret 999;
 }
 
 type Tri = *(u32 a, u32 b, u32 c) implof Shape !{
@@ -148,7 +148,7 @@ stcfun visit = () -> i64 {
 
 stc u32 TA = total_area(); #= TA 25
 stc u32 BT = by_trait_value(); #= BT 162443
-stc u32 TG = tags(); #= TG 17027037
+stc u32 TG = tags(); #= TG 17999037
 stc u32 SO = solids(); #= SO 36078
 stc u32 QU = queries(); #= QU 111011
 stc u32 RA = ratios(); #= RA 601305250
