@@ -47,7 +47,6 @@ fun itoa = (*[]u8 out, i64 n) -> u64 {
     ret at;
 }
 
-# BUG: a callee that writes through a pointer to a string-literal array frees the thawed cells on return, so literals are copied into a zeroed array first
 fun copy = (*[]u8 dst, &[]u8 src) {
     for i in 0..<src.$len: dst.*[i] = src.*[i];
 }
@@ -190,22 +189,19 @@ stcfun upper_hash = () -> u32 {
 }
 
 stcfun reversed_first = () -> u8 {
-    mut [5]u8 s;
-    copy(s.&, "hello".&);
+    mut [5]u8 s = "hello";
     reverse(s.&);
     ret s[0];
 }
 
 stcfun reversed_even = () -> u8 {
-    mut [4]u8 s;
-    copy(s.&, "abcd".&);
+    mut [4]u8 s = "abcd";
     reverse(s.&);
     ret s[0] + s[3];
 }
 
 stcfun shifted = () -> u32 {
-    mut [11]u8 s;
-    copy(s.&, "Hello World".&);
+    mut [11]u8 s = "Hello World";
     caesar(s.&, 3);
     u32 once = fnv1a(s.&);
     caesar(s.&, 23);
@@ -213,8 +209,7 @@ stcfun shifted = () -> u32 {
 }
 
 stcfun roundtrip = () -> bool {
-    mut [11]u8 s;
-    copy(s.&, "Hello World".&);
+    mut [11]u8 s = "Hello World";
     caesar(s.&, 13);
     caesar(s.&, 13);
     ret find(s.&, "World".&) == 6;

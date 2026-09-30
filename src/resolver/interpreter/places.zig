@@ -79,10 +79,7 @@ pub fn load(ip: *Interpreter, n: NodeId) Value {
 pub fn bind(ip: *Interpreter, d: Decl.Index, v: Value) void {
     const r = ip.res();
     if (d == .none) return;
-    if (slot(ip, d)) |s| {
-        ip.mem.buf[s] = v;
-        return;
-    }
+    if (slot(ip, d)) |s| return ip.set(s, v);
     if (r.dp(.ty, d).* == .none) r.dp(.ty, d).* = ip.vtype(v);
     r.dp(.value, d).* = ip.pool(v);
 }
@@ -108,8 +105,7 @@ fn write(ip: *Interpreter, n: NodeId, v: Value) void {
     }
     const mark = ip.adopted.head;
     const c = cell(ip, n) orelse return;
-    const x = ip.own(.fit(v, ip.mem.buf[c].ty));
-    ip.mem.buf[c] = x;
+    ip.set(c, ip.own(.fit(v, ip.mem.buf[c].ty)));
     flush(ip, mark);
 }
 
@@ -213,8 +209,7 @@ pub fn update(ip: *Interpreter, n: NodeId, k: Kind) Value {
     const new = ip.arith(n, op, old, if (compound) operand else .int(if (Value.is_int(old.ty)) old.ty else .u64_type, 1));
     if (new.is(.poison_type)) return new;
     if (c) |i| {
-        const x = ip.own(.fit(new, old.ty));
-        ip.mem.buf[i] = x;
+        ip.set(i, ip.own(.fit(new, old.ty)));
         flush(ip, mark);
     } else write(ip, target, new);
     return if (compound) .unit else if (k == .inc_postfix or k == .dec_postfix) old else new;

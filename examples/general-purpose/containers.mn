@@ -105,7 +105,6 @@ type Bitset = (u32 WORDS): *(mut [WORDS]u32 w) !{
     }
 }
 
-# BUG: storing a whole record through a pointer in a callee (`p.* = Node(..)`) leaves a dangling block, so the fields are written one by one
 type Node = *(mut i32 val, mut u32 next);
 type List = (u32 CAP): *(mut [CAP]Node nodes, mut u32 head, mut u32 free, mut u32 len) !{
     fun init_all = () {
@@ -116,8 +115,7 @@ type List = (u32 CAP): *(mut [CAP]Node nodes, mut u32 head, mut u32 free, mut u3
         if self.free == CAP: ret false;
         u32 at = self.free;
         self.free = self.nodes[at].next;
-        self.nodes[at].val = v;
-        self.nodes[at].next = self.head;
+        self.nodes[at] = Node(v, self.head);
         self.head = at;
         self.len += 1;
         ret true;

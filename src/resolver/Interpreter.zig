@@ -34,6 +34,9 @@ list: DynBuf(Value),
 ids: DynBuf(Index),
 adopted: DynBuf(Adopted),
 defers: DynBuf(Defer),
+// a block stored into a cell older than its frame stays until that cell is gone
+floor: u32 = 0,
+floor_cell: u32 = no_cell,
 
 pub fn init(a: std.mem.Allocator) Interpreter {
     return .{ .frames = .init(a, 64), .mem = .init(a, 1024), .list = .init(a, 256), .ids = .init(a, 256), .adopted = .init(a, 16), .defers = .init(a, 16) };
@@ -60,7 +63,7 @@ fn close(ip: *Interpreter, s: Session) void {
     places.flush(ip, s.adopted);
     ip.depth -= 1;
     ip.frames.head -= 1;
-    ip.mem.head = s.mem;
+    ip.truncate(s.mem);
     ip.ctx = s.ctx;
 }
 
@@ -94,7 +97,24 @@ pub fn enter(ip: *Interpreter, body: Resolver.Body) void {
 
 pub fn leave(ip: *Interpreter, keep: bool) void {
     ip.frames.head -= 1;
-    if (!keep) ip.mem.head = ip.frames.buf[ip.frames.head].base;
+    if (!keep) ip.truncate(ip.frames.buf[ip.frames.head].base);
+}
+
+fn truncate(ip: *Interpreter, to: u32) void {
+    if (ip.floor_cell < to) {
+        ip.mem.head = @max(to, @min(ip.floor, ip.mem.head));
+        return;
+    }
+    ip.mem.head = to;
+    ip.floor = 0;
+    ip.floor_cell = no_cell;
+}
+
+pub fn set(ip: *Interpreter, c: usize, v: Value) void {
+    ip.mem.buf[c] = v;
+    if (!v.is_heap() or c >= ip.top().base) return;
+    ip.floor = @max(ip.floor, ip.mem.head);
+    ip.floor_cell = @min(ip.floor_cell, @as(u32, @intCast(c)));
 }
 
 pub fn detached(ip: *Interpreter, n: NodeId) Value {
@@ -156,8 +176,7 @@ pub fn put(ip: *Interpreter, v: Value) u32 {
 }
 
 pub fn fill(ip: *Interpreter, c: usize, v: Value, t: Index) void {
-    const x = ip.own(ip.coerce(v, t));
-    ip.mem.buf[c] = x;
+    ip.set(c, ip.own(ip.coerce(v, t)));
 }
 
 pub fn vtype(ip: *Interpreter, v: Value) Index {
@@ -231,7 +250,7 @@ pub fn thaw(ip: *Interpreter, c: u32) Value {
     const n = ip.span(v) orelse return v;
     const at = ip.alloc(n);
     for (0..n) |i| ip.mem.buf[at + i] = ip.elem(v, @intCast(i));
-    ip.mem.buf[c] = .block(ip.vtype(v), at, n);
+    ip.set(c, .block(ip.vtype(v), at, n));
     return ip.mem.buf[c];
 }
 

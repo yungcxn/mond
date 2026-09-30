@@ -39,19 +39,16 @@ stcfun opts = () -> u32 {
     ret x as u32 * 10000 + y as u32 * 1000 + z as u32 * 100 + depth(a) * 10 + depth(b) + depth(c);
 }
 
-# BUG: known dangling block, `Stack.push` storing a whole record through `self` aliases freed memory once a later call runs, so the outer stack is filled directly
 stcfun nested_stacks = () -> u32 {
     mut Stack(Stack(u8, 2), 3) outer;
     mut Stack(u8, 2) inner;
     do inner.push(4);
     do inner.push(5);
     refused = inner.push(6);
-    outer.items[0] = inner;
-    outer.len += 1;
+    do outer.push(inner);
     do inner.pop();
     do inner.push(9);
-    outer.items[1] = inner;
-    outer.len += 1;
+    do outer.push(inner);
     top = outer.items[outer.len - 1];
     below = outer.items[0];
     ret refused as u32 * 100000 + outer.size() * 10000 + top.items[1] as u32 * 100 + below.items[1] as u32 * 10 + top.size();
