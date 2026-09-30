@@ -68,7 +68,7 @@ fn close(ip: *Interpreter, s: Session) void {
 }
 
 pub fn export_(ip: *Interpreter, n: NodeId, v: Value) Index {
-    return if (ip.escapes(v)) ip.res().report(.not_static, n, 0, 0) else ip.pool(v);
+    return if (ip.escapes(v)) ip.report(.not_static, n, 0, 0) else ip.pool(v);
 }
 
 pub fn static_value(ip: *Interpreter, ctx: *Resolver.FnCtx, n: NodeId) Index {
@@ -138,14 +138,20 @@ pub fn charge(ip: *Interpreter, n: NodeId, cost: u32) bool {
         ip.budget -= cost;
         return true;
     }
-    if (ip.budget > 0) _ = ip.res().report(.static_eval_failed, n, 0, 0);
+    if (ip.budget > 0) _ = ip.report(.static_eval_failed, n, 0, 0);
     ip.budget = 0;
     return false;
 }
 
 pub fn fail(ip: *Interpreter, n: NodeId, code: @import("Doctor.zig").Disorder, a: anytype, b: anytype) Value {
-    if (!ip.res().errors_since(0, n)) _ = ip.res().report(code, n, a, b);
+    if (!ip.res().errors_since(0, n)) _ = ip.report(code, n, a, b);
     return .poison;
+}
+
+// checking is over for evaluated nodes: a failure is diagnosed without poisoning their types, `try_static` may rewind it
+pub fn report(ip: *Interpreter, code: @import("Doctor.zig").Disorder, n: NodeId, a: anytype, b: anytype) Index {
+    ip.res().doc.h21_report(code, n, a, b);
+    return .poison_type;
 }
 
 pub fn framed(ip: *Interpreter) bool {

@@ -678,7 +678,11 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => blk: {
             const exp = sp.apply_vars(ap, expected);
             const e = sp.array_elem(exp);
-            const hint = if (e != .none) e else if (self.is_numeric(exp)) exp else .none;
+            var hint = if (e != .none) e else if (self.is_numeric(exp)) exp else .none;
+            const g = self.range(node);
+            for ([_]NodeId{ g.lo, g.hi }) |x| if (x != 0 and hint != .none and self.is_literal(x) and statics.literal_type(self, x, hint) != hint) {
+                hint = .none;
+            };
             const b = if (k == .gen_incl or k == .gen_excl) self.pair(ctx, node, a0, a1, hint) else self.operand(ctx, a0, hint);
             if (!sp.class(b).is_integer) break :blk self.mismatch(node, b, .u64_type);
             break :blk sp.intern(.{ .array_type = .{ .len = self.fresh_var(node), .elem = b } });

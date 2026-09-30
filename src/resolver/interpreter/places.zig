@@ -37,7 +37,7 @@ fn impure(ip: *Interpreter, n: NodeId) bool {
         const f = ip.frames.buf[i];
         if (f.body.len == 0) return false;
         if (f.body.decl != .none and r.dp(.kind, f.body.decl).* == .static_function) {
-            _ = r.report(.impure_stcfun, n, 0, 0);
+            _ = ip.report(.impure_stcfun, n, 0, 0);
             return true;
         }
     }
@@ -125,7 +125,7 @@ pub fn cell(ip: *Interpreter, n: NodeId) ?u32 {
     if (k == .dereference) {
         const p = ip.eval(r.arg(n, 0));
         if (p.is_ref()) return p.at();
-        if (!p.is(.poison_type)) _ = r.report(.not_static, n, 0, 0);
+        if (!p.is(.poison_type)) _ = ip.report(.not_static, n, 0, 0);
         return null;
     }
     if (k != .array_index and k != .member) {
@@ -146,11 +146,11 @@ pub fn cell(ip: *Interpreter, n: NodeId) ?u32 {
     } else 0;
     if (!agg.is_heap()) {
         if (through and k == .array_index) return c + @as(u32, @intCast(i));
-        if (!agg.is(.poison_type)) _ = r.report(.not_static, n, 0, 0);
+        if (!agg.is(.poison_type)) _ = ip.report(.not_static, n, 0, 0);
         return null;
     }
     if (i >= agg.len()) {
-        _ = r.report(.static_eval_failed, n, @as(u32, @truncate(i)), agg.len());
+        _ = ip.report(.static_eval_failed, n, @as(u32, @truncate(i)), agg.len());
         return null;
     }
     return agg.at() + @as(u32, @intCast(i));
