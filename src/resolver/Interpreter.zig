@@ -117,12 +117,6 @@ pub fn set(ip: *Interpreter, c: usize, v: Value) void {
     ip.floor_cell = @min(ip.floor_cell, @as(u32, @intCast(c)));
 }
 
-pub fn detached(ip: *Interpreter, n: NodeId) Value {
-    ip.frames.push(.{ .body = .{}, .base = ip.mem.head });
-    defer ip.frames.head -= 1;
-    return ip.eval(n);
-}
-
 pub fn top(ip: *Interpreter) Frame {
     return ip.frames.buf[ip.frames.head - 1];
 }

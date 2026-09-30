@@ -2,8 +2,7 @@ type Temp = *(mut i32 kelvin where kelvin >= 0 else kelvin = 0);
 type Pct = *(mut u8 value = 0 where value <= 100 else value = 100);
 type Rgba = *(u8 r, u8 g, u8 b, u8 a = 255) assertsize 4;
 type Pair = *(i32, i32);
-# LIMIT: a field default cannot name another field (`hi = lo + 10` reports undefined_name), defaults are constants
-type Span = *(u32 lo, u32 hi = 10);
+type Span = *(u32 lo, u32 hi = lo + 10);
 
 type Vec2 = *(mut i32 x = 0, mut i32 y = 0) !{
     fun add = (Vec2 o) -> Vec2: ret Vec2(x = self.x + o.x, y = self.y + o.y);
@@ -139,7 +138,7 @@ stcfun layouts = () -> u64 {
 }
 
 stc u32 CL = clamps(); #= CL 3010040
-stc u32 DF = defaults(); #= DF 255410011
+stc u32 DF = defaults(); #= DF 255415011
 stc i32 TU = tuples(); #= TU 26
 stc i32 VE = vectors(); #= VE 1109328
 stc i32 RE = rects(); #= RE 1312030

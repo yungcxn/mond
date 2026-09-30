@@ -128,10 +128,8 @@ fun topo = (&[6][6]u8 adj) -> u64 {
     ret if tail == 6: order else: 0;
 }
 
-# BUG: a template value parameter in a field default (`mut u32 sets = N`) reports undefined_name, so `sets` is set in init_all
-type Dsu = (u32 N): *(mut [N]u32 parent, mut [N]u32 size, mut u32 sets) !{
+type Dsu = (u32 N): *(mut [N]u32 parent, mut [N]u32 size, mut u32 sets = N) !{
     fun init_all = () {
-        self.sets = N;
         for i in 0..<N {
             self.parent[i] = i;
             self.size[i] = 1;

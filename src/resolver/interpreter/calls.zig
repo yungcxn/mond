@@ -218,12 +218,7 @@ pub fn construct(ip: *Interpreter, target: Index, args: []const NodeId) Value {
         if (x.is(.poison_type)) return x;
         ip.fill(at + fi, x, sp.get(rec).custom_type.field_types[fi]);
     }
-    for (fields, 0..) |f, i| if (ip.mem.buf[at + i].is(.none)) {
-        const t = sp.get(rec).custom_type.field_types[i];
-        const dflt = r.param(f).default;
-        ip.fill(at + i, if (dflt != 0) ip.detached(dflt) else ip.zero(t), t);
-    };
-    if (!guard(ip, rec, at)) return .poison;
+    if (!complete(ip, rec, at)) return .poison;
     const agg: Value = .block(rec, at, len);
     if (!is_case) return agg;
     if (ip.escapes(agg) and args.len > 0) return ip.fail(args[0], .not_static, 0, 0);
@@ -249,21 +244,34 @@ pub fn with(ip: *Interpreter, n: NodeId) Value {
         if (x.is(.poison_type)) return x;
         ip.fill(at + fi, x, sp.get(t).custom_type.field_types[fi]);
     }
-    return if (guard(ip, t, at)) .block(t, at, len) else .poison;
+    return if (complete(ip, t, at)) .block(t, at, len) else .poison;
 }
 
-// a field's `where .. else` repairs the value being built, the fields are the locals of the type's frame
-fn guard(ip: *Interpreter, rec: Index, at: u32) bool {
+// the defaults and `where .. else` of the fields of a value being built, in the frame of the type where the fields are the locals
+fn complete(ip: *Interpreter, rec: Index, at: u32) bool {
     const r = ip.res();
     const fields = r.fields_of(rec);
-    for (fields) |f| {
-        if (r.param(f).@"else" != 0) break;
-    } else return true;
-    const types = r.static_pool.get(rec).custom_type.field_types;
-    ip.enter(r.bodies.get(r.body_of.get(r.static_pool.get(rec).custom_type.decl) orelse return true).?);
+    var framed = false;
+    for (fields, 0..) |f, i| framed = framed or r.param(f).@"else" != 0 or r.param(f).default != 0 and ip.mem.buf[at + i].is(.none);
+    if (!framed) {
+        for (0..fields.len) |i| if (ip.mem.buf[at + i].is(.none)) ip.fill(at + i, ip.zero(field(ip, rec, i)), field(ip, rec, i));
+        return true;
+    }
+    const decl = r.static_pool.get(rec).custom_type.decl;
+    const bi = r.body_of.get(decl) orelse {
+        _ = ip.fail(r.dp(.node, decl).*, .not_static, 0, 0);
+        return false;
+    };
+    ip.enter(r.bodies.get(bi).?);
     defer ip.leave(false);
     const base = ip.top().base;
     for (0..fields.len) |i| ip.mem.buf[base + i] = ip.mem.buf[at + i];
+    for (fields, 0..) |f, i| if (ip.mem.buf[base + i].is(.none)) {
+        const d = r.param(f).default;
+        const x = if (d != 0) ip.eval(d) else ip.zero(field(ip, rec, i));
+        if (x.is(.poison_type)) return false;
+        ip.fill(base + i, x, field(ip, rec, i));
+    };
     for (fields, 0..) |f, i| {
         const p = r.param(f);
         if (p.where == 0 or p.@"else" == 0) continue;
@@ -272,8 +280,12 @@ fn guard(ip: *Interpreter, rec: Index, at: u32) bool {
         if (w.bits != 0) continue;
         const e = ip.eval(p.@"else");
         if (e.is(.poison_type)) return false;
-        if (r.nk(p.@"else") != .assign) ip.fill(base + i, e, types[i]);
+        if (r.nk(p.@"else") != .assign) ip.fill(base + i, e, field(ip, rec, i));
     }
-    for (0..fields.len) |i| ip.fill(at + i, ip.mem.buf[base + i], types[i]);
+    for (0..fields.len) |i| ip.fill(at + i, ip.mem.buf[base + i], field(ip, rec, i));
     return true;
+}
+
+fn field(ip: *Interpreter, rec: Index, i: usize) Index {
+    return ip.res().static_pool.get(rec).custom_type.field_types[i];
 }
