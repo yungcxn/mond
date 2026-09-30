@@ -151,8 +151,8 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
                 n += 1;
             };
         }
-        if (ctx.interpreted and std.mem.indexOfScalar(StaticPool.Index, lens[0..n], .none) != null) {
-            self.node_decl[node] = callee;
+        if (std.mem.indexOfScalar(StaticPool.Index, lens[0..n], .none) != null) {
+            if (ctx.interpreted) self.node_decl[node] = callee;
             return .poison_type;
         }
         for (lens[0..n]) |l| if (l != .none and sp.tag(l) == .template_type) {

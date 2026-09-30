@@ -51,8 +51,7 @@ fun ent_kind = (Ent e) -> u32: ret match e {
     Ent(cell = Cell.Wall, hp = _) => 1,
     Ent(cell = Cell.Item(k, q), hp = 0) => 2 + (k as u32 + q) * 10,
     Ent(cell = Cell.Item(_, _), hp = h) => 3 + h as u32 * 10,
-    # BUG: a record pattern that omits a field and holds only literals (`Ent(hp = 255)`) panics the compiler in has_vars, so every field is named
-    Ent(cell = _, hp = 255) => 4,
+    Ent(hp = 255) => 4,
     Ent(cell = c, hp = h) => 5,
 }
 

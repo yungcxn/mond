@@ -1541,7 +1541,8 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
     const t = self.ty(n);
     const callee = self.arg(n, 0);
     const args = self.r.kids(self.arg(n, 1));
-    const d = self.decl(n);
+    if (self.realized(n)) |f| return self.fn_value(f);
+    const d = self.realized(callee) orelse self.decl(n);
     if (d != .none and Resolver.is_fn(self.r.dp(.kind, d).*)) return self.direct(d, callee, args, t);
     const ct = self.ty(callee);
     if (self.sp.tag(ct) == .meta_type or self.sp.tag(ct) == .variant_case_type) return self.construct(t, args);
@@ -1556,6 +1557,13 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
     const at = self.list(self.tmp.buf[mark..self.tmp.head]);
     self.tmp.head = mark;
     return self.emit(.call, t, @intFromEnum(f), at);
+}
+
+// a stcfun call producing a function stands for its realization
+fn realized(self: *HighLowerer, n: NodeId) ?Decl.Index {
+    if (self.nk(n) != .fun_call) return null;
+    const g = self.decl(self.arg(n, 0));
+    return if (g != .none and self.r.dp(.kind, g).* == .static_function and self.decl(n) != .none) self.decl(n) else null;
 }
 
 fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId, t: Index) Ref {

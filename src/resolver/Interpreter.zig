@@ -197,7 +197,7 @@ pub fn elem(ip: *Interpreter, v: Value, i: u32) Value {
 pub fn escapes(ip: *Interpreter, v: Value) bool {
     if (v.is_ref()) return true;
     if (!v.is_heap()) return false;
-    for (0..v.len()) |i| if (ip.escapes(ip.mem.buf[v.at() + i])) return true;
+    for (0..v.len()) |i| if (ip.mem.buf[v.at() + i].is(.none) or ip.escapes(ip.mem.buf[v.at() + i])) return true;
     return false;
 }
 
@@ -258,6 +258,7 @@ pub fn zero(ip: *Interpreter, t: Index) Value {
     if (t == .bool_type) return .boolean(false);
     if (t == .none or t == .poison_type) return .empty;
     if (sp.tag(t) == .record_type) return calls.construct(ip, t, &.{});
+    if (sp.tag(t) == .variant_type) return ip.zero_case(sp.get(t).variant_type);
     if (sp.tag(t) != .array_type or sp.tag(sp.get(t).array_type.len) != .int_value) return .empty;
     const n: u32 = @intCast(sp.get(sp.get(t).array_type.len).int.bits);
     const at = ip.alloc(n);
@@ -266,6 +267,17 @@ pub fn zero(ip: *Interpreter, t: Index) Value {
         ip.mem.buf[at + i] = x;
     }
     return .block(t, at, n);
+}
+
+// all-zero bytes: the case tagged 0, or for `tagof self` the payload holding 0
+fn zero_case(ip: *Interpreter, v: StaticPool.VariantType) Value {
+    const sp = &ip.res().static_pool;
+    var payload: Index = .none;
+    for (v.cases) |c| {
+        const cs = sp.get(c).variant_case_type;
+        if (v.tag_mode == .self and cs.payload != .none) payload = c else if (sp.tag(cs.tag) == .int_value and sp.get(cs.tag).int.bits == 0) return calls.construct(ip, c, &.{});
+    }
+    return if (payload != .none) calls.construct(ip, payload, &.{}) else .empty;
 }
 
 pub fn eval(ip: *Interpreter, n: NodeId) Value {

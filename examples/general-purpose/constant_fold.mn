@@ -332,9 +332,7 @@ type Opt = *(
 }
 
 fun report = (&[]Ins prog, u32 x, u32 y) -> [9]u32 {
-    # BUG: matching on an element of a zero-initialised variant array that was never written is not_static, so every slot is filled first
     mut [24]Ins code;
-    for i in 0..<24: code[i] = Ins.Nop;
     for i in 0..<prog.$len: code[i] = prog.*[i];
     mut [16]bool known;
     mut [16]u32 kv;

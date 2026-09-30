@@ -73,8 +73,9 @@ stc u64 SZ = sizeof Matrix(u16, 3, 5); #= SZ 30
 stc u64 SF = sizeof Matrix(f32, 4, 4); #= SF 64
 
 $main = () {
-    # BUG: a runtime call of a stcfun with more static than runtime args (`f(A, B)(m)`) panics the lowerer (HighLowerer.direct params index out of bounds), only stcfun contexts call `matmul` and `transpose`
     Matrix(u32, 2, 2) m = Matrix(u32, 2, 2)(rows = [[1, 2], [3, 4]]);
+    sq = matmul(Matrix(u32, 2, 2), Matrix(u32, 2, 2), Matrix(u32, 2, 2))(m, m); #: sq *([2][2]u32 rows)
+    tr = transpose(Matrix(u32, 2, 2), Matrix(u32, 2, 2))(sq); #: tr *([2][2]u32 rows)
     t = m.trace(); #: t u32
     c = m.cells(); #: c u32
     r = m.rows; #: r [2][2]u32

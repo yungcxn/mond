@@ -176,7 +176,6 @@ fun vowels = (&[]u8 s) -> u32 {
     ret n;
 }
 
-# BUG: `buf.& as &[n]u8` with a runtime n panics the compiler in has_vars instead of reporting not_static
 fun parse_and_render = (i64 v) -> i64 {
     mut [24]u8 buf;
     do itoa(buf.&, v);
