@@ -85,6 +85,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
     const tagof = w.tagof;
     const ck = self.nk(c);
     const is_trait = ck == .def_trait or ck == .def_trait_implof;
+    var first = self.decls.len();
     // reserved first (or already by h20), so fields can point back at the type (`*Tree`)
     if (self.dp(.value, decl).* == .none) self.dp(.value, decl).* = sp.reserve_nominal(decl);
     const ty = self.dp(.value, decl).*;
@@ -170,7 +171,8 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
                 names[i] = self.name_at(p, i);
             }
             sp.complete_nominal(ty, .{ .custom_type = .{ .decl = decl, .is_packed = ck == .def_type_packed, .field_names = names[0..fields.len], .field_types = types[0..fields.len], .traits = traits[0..nt] } });
-            // defaults and where-clauses see the fields by name
+            // defaults and where-clauses see the fields by name, the snapshot's locals start at the first field
+            first = self.decls.len();
             for (fields, 0..) |f, i| {
                 const fd = self.h02_declare_local(names[i], f, .field, types[i]);
                 self.dp(.flags, fd).is_mut = self.param(f).is_mut;
@@ -191,7 +193,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
     if (!is_trait) {
         for (traits[0..nt]) |t| if (t != own and sp.tag(t) == .trait_type) conform(self, ty, own, t, node);
         if (sp.layout(ty).state == .infinite) _ = self.report(.recursive_by_value_type, node, ty, .none);
-        statics.snapshot(self, decl, node, self.decls.len());
+        statics.snapshot(self, decl, node, first);
     }
     if (w.size != 0) {
         const v = statics.h08_eval_static(self, ctx, w.size);

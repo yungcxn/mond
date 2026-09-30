@@ -123,7 +123,7 @@ pub fn detached(ip: *Interpreter, n: NodeId) Value {
     return ip.eval(n);
 }
 
-fn top(ip: *Interpreter) Frame {
+pub fn top(ip: *Interpreter) Frame {
     return ip.frames.buf[ip.frames.head - 1];
 }
 

@@ -1639,6 +1639,7 @@ fn construct(self: *HighLowerer, target: Index, args: []const NodeId) Ref {
         const x = if (dflt != 0) self.expr_to(dflt, sp.get(rec).custom_type.field_types[i]) else self.emit(.zeroed, sp.get(rec).custom_type.field_types[i], 0, 0);
         self.tmp.buf[mark + i] = @intFromEnum(x);
     };
+    self.guard(rec, mark);
     const at = self.list(self.tmp.buf[mark..self.tmp.head]);
     self.tmp.head = mark;
     const agg = self.emit(.aggregate, rec, 0, at);
@@ -1663,9 +1664,34 @@ fn with(self: *HighLowerer, n: NodeId) Ref {
         const x = self.expr_to(self.r.arg_value(a), self.sp.get(bt).custom_type.field_types[fi]);
         self.tmp.buf[mark + fi] = @intFromEnum(x);
     }
+    const saved = self.body;
+    defer self.body = saved;
+    if (self.body_of.get(self.sp.get(bt).custom_type.decl)) |bi| self.body = self.r.bodies.get(bi).?;
+    self.guard(bt, mark);
     const at = self.list(self.tmp.buf[mark..self.tmp.head]);
     self.tmp.head = mark;
     return self.emit(.aggregate, bt, 0, at);
+}
+
+// a field's `where .. else` repairs the fields in tmp[mark..], they are the locals of the type's body
+fn guard(self: *HighLowerer, rec: Index, mark: u32) void {
+    const fields = self.r.fields_of(rec);
+    for (fields) |f| {
+        if (self.r.param(f).@"else" != 0) break;
+    } else return;
+    for (0..fields.len) |i| self.declare_var(@enumFromInt(self.body.first + i), @enumFromInt(self.tmp.buf[mark + i]));
+    for (fields, 0..) |f, i| {
+        const p = self.r.param(f);
+        if (p.where == 0 or p.@"else" == 0) continue;
+        const ok = self.block();
+        const els = self.block();
+        self.cond(self.expr_to(p.where, .bool_type), ok, els);
+        self.goto(els);
+        if (self.nk(p.@"else") == .assign) _ = self.expr(p.@"else") else self.store_var(@enumFromInt(self.body.first + i), self.expr_to(p.@"else", self.sp.get(rec).custom_type.field_types[i]));
+        self.br(ok);
+        self.goto(ok);
+    }
+    for (0..fields.len) |i| self.tmp.buf[mark + i] = @intFromEnum(self.load_var(@enumFromInt(self.body.first + i)));
 }
 
 fn member(self: *HighLowerer, n: NodeId) Ref {
