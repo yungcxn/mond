@@ -650,6 +650,7 @@ pub fn implements(self: *const StaticPool, ty: Index, trait: Index) bool {
 // the trait body's own row, so member i of a body with decl d is decl d + 1 + i
 fn trait_member(self: *const StaticPool, traits: []const Index, name: NamePool.Index, dynamic: bool) Member {
     for (traits) |t| {
+        if (self.tag(t) != .trait_type) continue;
         const tt = self.get(t).trait_type;
         for (tt.member_names, 0..) |n, i| if (n == name) return if (dynamic)
             .{ .trait_method = .{ .trait = t, .index = @intCast(i) } }

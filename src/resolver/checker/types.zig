@@ -96,12 +96,13 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
 
     var traits: [32]StaticPool.Index = undefined;
     var nt: usize = 0;
-    var own: StaticPool.Index = .none; // the anonymous `!{..}` body
-    if (!is_trait and body != 0) {
+    // the anonymous `!{..}` body, completed after the type: member signatures may realize types that construct this one
+    var own: StaticPool.Index = .none;
+    const members = if (!is_trait and body != 0) self.arg(body, if (self.nk(body) == .def_trait_implof) 1 else 0) else 0;
+    if (members != 0) {
         const impls = if (self.nk(body) == .def_trait_implof) self.kids(self.arg(body, 0)) else &[_]NodeId{};
-        const members = self.arg(body, if (self.nk(body) == .def_trait_implof) 1 else 0);
         if (self.kids(members).len > 0) {
-            own = trait_body(self, ctx, members, .none, ty, &.{}, decl);
+            own = sp.reserve_nominal(decl);
             traits[0] = own;
             nt = 1;
         }
@@ -171,19 +172,24 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
                 names[i] = self.name_at(p, i);
             }
             sp.complete_nominal(ty, .{ .custom_type = .{ .decl = decl, .is_packed = ck == .def_type_packed, .field_names = names[0..fields.len], .field_types = types[0..fields.len], .traits = traits[0..nt] } });
-            // defaults and where-clauses see the fields by name, the snapshot's locals start at the first field
-            first = self.decls.len();
-            for (fields, 0..) |f, i| {
-                const fd = self.h02_declare_local(names[i], f, .field, types[i]);
-                self.dp(.flags, fd).is_mut = self.param(f).is_mut;
-                calls.link(self, self.param(f).name, fd, types[i]);
-            }
-            for (fields, 0..) |f, i| {
-                const p = self.param(f);
-                if (p.default != 0) _ = self.check(ctx, p.default, types[i]);
-                self.check_guards(ctx, p, types[i]);
-            }
         },
+    }
+    if (own != .none and !is_trait) _ = trait_body(self, ctx, members, own, ty, &.{}, decl);
+    if (sp.tag(ty) == .record_type) {
+        // defaults and where-clauses see the fields by name, the snapshot's locals start at the first field
+        const fields = self.fields_of_node(c);
+        first = self.decls.len();
+        for (fields, 0..) |f, i| {
+            const t = sp.get(ty).custom_type.field_types[i];
+            const fd = self.h02_declare_local(sp.get(ty).custom_type.field_names[i], f, .field, t);
+            self.dp(.flags, fd).is_mut = self.param(f).is_mut;
+            calls.link(self, self.param(f).name, fd, t);
+        }
+        for (fields, 0..) |f, i| {
+            const p = self.param(f);
+            if (p.default != 0) _ = self.check(ctx, p.default, sp.get(ty).custom_type.field_types[i]);
+            self.check_guards(ctx, p, sp.get(ty).custom_type.field_types[i]);
+        }
     }
     // member bodies once the type is complete, then trait conformance
     if (own != .none) {
