@@ -28,7 +28,6 @@ fun reverse_in_place = (*[]i32 a) {
     }
 }
 
-# LIMIT: the compile time interpreter has no ordering of pointers and cannot hold a pointer inside a variant payload (not_static), so the functions below are only checked, never called from a stc
 fun reverse_until = (*[]i32 a) {
     mut *i32 lo = a.*[0].&;
     mut *i32 hi = a.*[0].& + (a.$len - 1);
@@ -59,6 +58,7 @@ fun max_ptr = (*[]i32 a) -> *i32 {
     ret best;
 }
 
+# LIMIT: the compile time interpreter cannot hold a pointer inside a variant payload (not_static), so find_ptr is only checked, never called from a stc
 fun find_ptr = (*[]i32 a, i32 key) -> Opt(*i32) {
     for i in 0..<a.$len: if a.*[i] == key: ret Opt(*i32).Some(a.*[i].&);
     ret Opt(*i32).None;
@@ -187,7 +187,14 @@ stcfun comparisons = () -> u32 {
     ret (p == r) as u32 + (p != q) as u32 * 10 + (q == p) as u32 * 100;
 }
 
+stcfun reversed_ptrs = () -> i32 {
+    mut [5]i32 a = [1, 2, 3, 4, 5];
+    reverse_until(a.&);
+    ret a[0] * 10000 + a[1] * 1000 + a[2] * 100 + a[3] * 10 + a[4];
+}
+
 stc i32 SW = swaps(); #= SW 8040513
+stc i32 RP = reversed_ptrs(); #= RP 54321
 stc u32 OU = outs(); #= OU 902
 stc i32 RV = reversal(); #= RV 4615010
 stc i32 FI = fills(); #= FI 236212

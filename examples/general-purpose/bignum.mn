@@ -65,8 +65,7 @@ type Big = *(mut [16]u32 l, mut u32 n) !{
         mut Big r;
         for i in 0..<16 {
             mut u64 carry = 0;
-            # LIMIT: a parenthesised range end (`0..<(16 - i)`) reports IllegalForFormat, so the parentheses are dropped
-            for j in 0..<16 - i {
+            for j in 0..<(16 - i) {
                 u64 t = (r.l[i + j] as u64) + (self.l[i] as u64) * (o.l[j] as u64) + carry;
                 r.l[i + j] = (t % 1000000000) as u32;
                 carry = t / 1000000000;

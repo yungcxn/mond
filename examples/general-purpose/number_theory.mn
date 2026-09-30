@@ -64,8 +64,7 @@ fun witness = (u64 n, u64 a) -> bool {
     }
     mut u64 x = pow_mod(a, d, n);
     if x == 1 or x == n - 1: ret false;
-    # LIMIT: a parenthesised range end (`0..<(s - 1)`) reports IllegalForFormat, so the parentheses are dropped
-    for 0..<s - 1 {
+    for 0..<(s - 1) {
         x = mul_mod(x, x, n);
         if x == n - 1: ret false;
     }

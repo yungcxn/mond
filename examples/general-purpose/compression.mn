@@ -69,8 +69,7 @@ fun packbits = (&[]u8 src, u32 n, *[]u8 out) -> u32 {
             i += run;
         } else {
             mut u32 lit = 1;
-            # LIMIT: a `while` condition ending in a parenthesised group before `:` is parsed as a lambda (IllegalWhileFormat), so the test moved into a helper
-            while i + lit < n and lit < 128 and !starts_run(src, i + lit, n): lit += 1;
+            while i + lit < n and lit < 128 and (!starts_run(src, i + lit, n)): lit += 1;
             out.*[p] = (lit - 1) as u8;
             p += 1;
             for k in 0..<lit {

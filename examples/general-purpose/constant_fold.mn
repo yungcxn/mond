@@ -135,10 +135,8 @@ type Opt = *(
                 ret;
             }
         }
-        # LIMIT: `if a and (b) {` (condition ending in a parenthesised group before the block) is IllegalIfFormat, so the tail is hoisted into locals
         u32 rhs_unit = if op == 1: 0 else: 1;
-        bool drops_rhs = (op == 1 or op == 3) and kb and vb == rhs_unit;
-        if drops_rhs {
+        if kb and vb == rhs_unit and (op == 1 or op == 3) {
             self.set_copy(at, d, a);
             ret;
         }

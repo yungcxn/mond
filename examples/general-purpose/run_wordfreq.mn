@@ -3,38 +3,29 @@ fun print = (&u8 fmt, u32 a);
 fun print = (&u8 fmt, &u8 a);
 fun print = (&u8 fmt, &u8 a, u32 b);
 
-# LIMIT: a `&u8` cannot be indexed, so C strings are read through a fixed size view
-type Text = &[48]u8;
-
-fun text_of = (&u8 s) -> Text: ret s as Text;
-
 fun text_len = (&u8 s) -> u32 {
-    Text t = text_of(s);
     mut u32 n = 0;
-    while n < 48 and t.*[n] != 0: n += 1;
+    while n < 48 and s[n] != 0: n += 1;
     ret n;
 }
 
 fun lower = (u8 c) -> u8: ret if c >= 'A' and c <= 'Z': c + 32 else: c;
 
 fun same_word = (&u8 a, &u8 b) -> bool {
-    Text x = text_of(a);
-    Text y = text_of(b);
     mut u32 i = 0;
     while i < 48 {
-        if lower(x.*[i]) != lower(y.*[i]): ret false;
-        if x.*[i] == 0: ret true;
+        if lower(a[i]) != lower(b[i]): ret false;
+        if a[i] == 0: ret true;
         i += 1;
     }
     ret true;
 }
 
 fun hash_word = (&u8 s) -> u32 {
-    Text t = text_of(s);
     mut u32 h = 5381;
     mut u32 i = 0;
-    while i < 48 and t.*[i] != 0 {
-        h = h *% 33 +% lower(t.*[i]) as u32;
+    while i < 48 and s[i] != 0 {
+        h = h *% 33 +% lower(s[i]) as u32;
         i += 1;
     }
     ret h;

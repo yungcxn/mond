@@ -167,9 +167,7 @@ type Lc = *(
         }
         if c >= '0' and c <= '9' {
             mut u32 inner = self.var(0);
-            # LIMIT: `for 0..<(c - '0') {` (range ending in a parenthesised group before the block) is IllegalForFormat
-            u8 count = c - '0';
-            for 0..<count {
+            for 0..<(c - '0') {
                 u32 one = self.var(1);
                 inner = self.app(one, inner);
             }

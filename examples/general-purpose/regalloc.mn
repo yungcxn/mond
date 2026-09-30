@@ -42,9 +42,7 @@ type Alloc = *(
     fun next_start = () -> u32 {
         mut u32 pick = 99;
         for i in 0..<self.n {
-            # LIMIT: `if a and (b or c): x;` (condition ending in a parenthesised group) is IllegalIfFormat, so the group is hoisted into a local
-            bool better = pick == 99 or self.s.*[i] < self.s.*[pick];
-            if !self.done[i] and better: pick = i;
+            if !self.done[i] and (pick == 99 or self.s.*[i] < self.s.*[pick]): pick = i;
         }
         ret pick;
     }

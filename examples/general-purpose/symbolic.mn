@@ -153,9 +153,7 @@ type Arena = *(mut &[]u8 src, mut u32 pos, mut u32 bad, mut [160]E nodes, mut u3
         self.pos = e;
         u8 c = self.src.*[s];
         if e - s == 1 and c == 'x': ret self.mk(E.X);
-        # LIMIT: `if a and (b or c) {` (condition ending in a parenthesised group before the block) is IllegalIfFormat
-        bool binary = c == '+' or c == '*';
-        if e - s == 1 and binary {
+        if e - s == 1 and (c == '+' or c == '*') {
             u32 a = self.parse();
             u32 b = self.parse();
             ret self.mk(if c == '+': E.Add(a, b) else: E.Mul(a, b));

@@ -39,9 +39,7 @@ fun decode = (&[]u8 s, u32 at) -> Dec {
         cp = (cp << 6) | ((s.*[at + k] as u32) & 0x3F);
     }
     if need == 2 and cp < 0x800: ret Dec.Bad;
-    # LIMIT: an `if` condition ending in a parenthesised group before `:` is parsed as a lambda (IllegalIfFormat), so the group goes into a variable
-    bool out_of_range = cp < 0x10000 or cp > 0x10FFFF;
-    if need == 3 and out_of_range: ret Dec.Bad;
+    if need == 3 and (cp < 0x10000 or cp > 0x10FFFF): ret Dec.Bad;
     if cp >= 0xD800 and cp <= 0xDFFF: ret Dec.Bad;
     ret Dec.Ok(cp, need + 1);
 }

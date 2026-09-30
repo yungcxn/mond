@@ -128,7 +128,8 @@ pub fn cell(ip: *Interpreter, n: NodeId) ?u32 {
         if (!p.is(.poison_type)) _ = ip.report(.not_static, n, 0, 0);
         return null;
     }
-    if (k != .array_index and k != .member) {
+    // a constant of a type (`Light.Green`) is a value like any other
+    if (k != .array_index and k != .member or k == .member and ip.res().static_pool.tag(ip.checked(r.arg(n, 0))) == .meta_type) {
         const v = ip.eval(n);
         return if (v.is(.poison_type)) null else ip.put(ip.own(v));
     }

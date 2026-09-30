@@ -1069,6 +1069,7 @@ pub fn coerce(self: *StaticPool, vars: *AbstractPool, from0: Index, to0: Index) 
         return .incompatible;
     }
     if (t == .trait_type and self.implements(from, to)) return .impl_to_trait;
+    if (f == .ptr_type and t == .ptr_type and (f.ptr_type.mutable or !t.ptr_type.mutable) and self.tag(t.ptr_type.child) == .trait_type and self.implements(f.ptr_type.child, t.ptr_type.child)) return .impl_to_trait;
     const payload = self.single_payload(to);
     if (payload != .none and f != .variant_type and self.coerce(vars, from, payload) != .incompatible) return .payload_to_self_tagged;
     return .incompatible;

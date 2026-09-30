@@ -96,9 +96,7 @@ stcfun type_checks = () -> u32 {
     if (typeof l.cells[0]) == Cell: r += 1000;
     if (typeof pair[1]) == u16: r += 10000;
     if (typeof pair) == [2]u16: r += 100000;
-    # LIMIT: `if a == (b): ..` reads `(b): ..` as a lambda (IllegalIfFormat), so the type is named first
-    last = typeof l.cells[3];
-    if (typeof c) == last: r += 1000000;
+    if (typeof c) == (typeof l.cells[3]): r += 1000000;
     if sizeof l == 4 * sizeof c: r += 10000000;
     if Plain oftype Sized: r += 100000000;
     ret r;

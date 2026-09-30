@@ -89,18 +89,17 @@ stcfun cycle = () -> u32 {
     ret total * 100 + stops * 10 + l.seconds() / 5;
 }
 
-# LIMIT: the compile time interpreter cannot cast a variant value to an integer (not_static), so `as` on tagged cases is only checked and called from $main
 fun casts = (Level a, Coin c) -> u32: ret a as u32 * 100 + c as u32;
+
+stc u32 CS = casts(Level.High, Coin.Dime); #= CS 2010
 
 stcfun tags = () -> u32 {
     ret Level.Mid.$tag as u32 * 100 + Coin.Dime.$tag as u32 * 10 + Light.Yellow.$tag as u32;
 }
 
-# LIMIT: a method called on a case constant (`Light.Green.next()`) is reported impure_stcfun, the receiver has to be a variable
 stcfun equality = () -> u32 {
     Light a = Light.Green;
-    Light g = Light.Green;
-    Light b = g.next();
+    Light b = Light.Green.next();
     Vend v = Vend.Has(50);
     ret (a == Light.Green) as u32 + (a == b) as u32 * 10 + (a != b) as u32 * 100 + (v == Vend.Has(50)) as u32 * 1000 + (v == Vend.Has(40)) as u32 * 10000 + (v != Vend.Idle) as u32 * 100000;
 }

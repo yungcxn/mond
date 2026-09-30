@@ -114,10 +114,9 @@ fun fnv1a = (&[]u8 s) -> u32 {
     ret h;
 }
 
-# LIMIT: `for i in 0..=(expr) {` parses the parenthesis as a function, so the bound is written without them
 fun find = (&[]u8 hay, &[]u8 needle) -> i64 {
     if needle.$len > hay.$len: ret -1;
-    for i in 0..=hay.$len - needle.$len {
+    for i in 0..=(hay.$len - needle.$len) {
         mut bool ok = true;
         for j in 0..<needle.$len: if hay.*[i + j] != needle.*[j]: ok = false;
         if ok: ret i as i64;

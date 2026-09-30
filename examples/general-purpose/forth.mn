@@ -46,9 +46,7 @@ type Forth = *(
 
     fun is = (u32 s, u32 e, &[]u8 w) -> bool {
         if (e - s) as u64 != w.$len: ret false;
-        # LIMIT: `for k in 0..<(e - s) {` (header ending in a parenthesised group before the block) is IllegalForFormat
-        u32 n = e - s;
-        for k in 0..<n {
+        for k in 0..<(e - s) {
             if self.src.*[s + k] != w.*[k]: ret false;
         }
         ret true;
