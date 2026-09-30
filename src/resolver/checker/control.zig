@@ -5,6 +5,7 @@ const calls = @import("calls.zig");
 const statics = @import("statics.zig");
 const types = @import("types.zig");
 const StaticPool = @import("../StaticPool.zig");
+const NamePool = @import("../NamePool.zig");
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
 const class = Resolver.class;
@@ -124,7 +125,11 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
     const at_exit = self.uninit;
     self.loop_exits.push(0);
     ctx.loop_depth += 1;
+    // a stc loop body is static per iteration: checked like a stcfun body, evaluated with the loop
+    const outer = ctx.interpreted;
+    ctx.interpreted = outer or class(k).stc;
     const bt = self.h09_check_expr(ctx, lp.body, if (expected == .none) .none else if (elem_hint != .none) elem_hint else self.fresh_var(lp.body));
+    ctx.interpreted = outer;
     ctx.loop_depth -= 1;
     self.loop_exits.head -= 1;
     self.uninit = self.loop_exits.buf[self.loop_exits.head] | if (lp.cond != 0 or lp.seq != 0) at_exit else 0;
@@ -219,10 +224,32 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
             return .{ .all = true };
         },
         .partial__match_case_pattern_or => {
+            // every alternative binds the same names, sharing the declarations of the first one
             var r = Pat{};
-            for (self.kids(p)) |alt| {
+            const names = &self.local_names;
+            const from = names.head;
+            var first = from;
+            for (self.kids(p), 0..) |alt, i| {
+                const mark = names.head;
                 const s = pattern(self, ctx, alt, st);
                 r = .{ .mask = r.mask | s.mask, .all = r.all or s.all };
+                if (i == 0) {
+                    first = names.head;
+                    continue;
+                }
+                for (names.buf[from..first]) |n| if (std.mem.indexOfScalar(NamePool.Index, names.buf[mark..names.head], n) == null) self.doc.h21_report(.undefined_name, alt, n, 0);
+                for (mark..names.head) |j| {
+                    const id = self.dp(.node, self.local_decls.buf[j]).*;
+                    const k = std.mem.indexOfScalar(NamePool.Index, names.buf[from..first], names.buf[j]) orelse {
+                        self.doc.h21_report(.undefined_name, id, names.buf[j], 0);
+                        continue;
+                    };
+                    self.node_decl[id] = self.local_decls.buf[from + k];
+                    const t = self.dp(.ty, self.node_decl[id]).*;
+                    if (self.node_type[id] != t and self.node_type[id] != .poison_type and t != .poison_type) _ = self.report(.type_mismatch, id, self.node_type[id], t);
+                }
+                names.head = mark;
+                self.local_decls.head = mark;
             }
             return r;
         },

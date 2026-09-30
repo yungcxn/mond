@@ -1,7 +1,6 @@
 stc u32 POLY = 0xEDB88320;
 
-# BUG: a stcfun called with the variable of a stcfor reports not_static although the value is computed, so the helpers below are plain funs
-fun crc_entry = (u32 n) -> u32 {
+stcfun crc_entry = (u32 n) -> u32 {
     mut u32 c = n;
     for 0..<8: c = if (c & 1) == 1: POLY ^ (c >> 1) else: c >> 1;
     ret c;
@@ -56,7 +55,7 @@ stc [2][3]u8 GRID = [[1, 2, 3], [4, 5, 6]]; #= GRID [[1, 2, 3], [4, 5, 6]]
 stc u8 CORNER = GRID[1][2]; #= CORNER 6
 stc []u8 FLAT = stcfor r in GRID: r[0] + r[2]; #= FLAT [4, 10]
 
-fun is_prime = (u32 n) -> bool {
+stcfun is_prime = (u32 n) -> bool {
     if n < 2: ret false;
     for d in 2..<n {
         if d * d > n: brk;

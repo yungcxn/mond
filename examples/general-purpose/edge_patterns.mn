@@ -66,9 +66,7 @@ fun expr_class = (Expr e) -> u32: ret match e {
     Expr.Lit(0) => 1,
     Expr.Lit(v) => if v < 0: 2 else: 3,
     Expr.Neg(_) => 4,
-    # BUG: an or-pattern whose alternatives bind the same names resolves but is not_static when executed, so the alternatives are separate arms
-    Expr.Bin('+', l, r) => 5 + l * 10 + r * 100,
-    Expr.Bin('-', l, r) => 5 + l * 10 + r * 100,
+    Expr.Bin('+', l, r) | Expr.Bin('-', l, r) => 5 + l * 10 + r * 100,
     Expr.Bin('*', 1, r) => 6 + r * 10,
     Expr.Bin(op, _, _) => 7 + op as u32 * 1000,
     Expr.Var('x'..='z') => 8,
