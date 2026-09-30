@@ -148,11 +148,18 @@ stcfun local_recursion = () -> i64 {
     ret fact(10);
 }
 
-fun is_even = (i64 n) -> bool: ret if n == 0: true else: is_odd(n - 1);
-fun is_odd = (i64 n) -> bool: ret if n == 0: false else: is_even(n - 1);
+stcfun mutual = () -> i64 {
+    fun is_even = (i64 n) -> bool: ret if n == 0: true else: is_odd(n - 1);
+    fun is_odd = (i64 n) -> bool: ret if n == 0: false else: is_even(n - 1);
+    ret is_even(10) as i64 * 10 + is_odd(10) as i64;
+}
 
-# LIMIT: local functions are not hoisted, a local mutual recursion reports undefined_name, so this pair lives at the top level
-stcfun mutual = () -> i64: ret is_even(10) as i64 * 10 + is_odd(10) as i64;
+fun parity = (i64 n) -> bool {
+    b = odd(n);
+    fun even = (i64 k) -> bool: ret if k == 0: true else: odd(k - 1);
+    fun odd = (i64 k) -> bool: ret if k == 0: false else: even(k - 1);
+    ret b;
+}
 
 stc i64 R2 = run_map(); #= R2 110
 stc u32 R3 = run_pred(); #= R3 445
@@ -166,6 +173,7 @@ stc i64 SH = shadowing(); #= SH 11
 stc i64 NC = nested_closures(4); #= NC 16
 stc i64 LR = local_recursion(); #= LR 3628800
 stc i64 MU = mutual(); #= MU 10
+stc bool PA = parity(7); #= PA true
 
 $main = () {
     IntFn inc = adder(1);

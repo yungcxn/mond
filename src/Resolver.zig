@@ -582,6 +582,14 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             defer self.h04_pop_scope();
             var last: StaticPool.Index = .unit_type;
             const stmts = self.kids(node);
+            // local functions are visible in their whole block
+            for (stmts) |s| {
+                const st = self.statement(s);
+                if (st.kind != .function or st.ids.len != 1) continue;
+                const d = self.h02_declare_local(self.name_of(st.ids[0]), st.node, .function, .none);
+                self.dp(.flags, d).* = st.flags;
+                self.node_decl[st.ids[0]] = d;
+            }
             for (stmts, 0..) |s, i| {
                 const declares = class(self.nk(s)).declares;
                 if (!declares) self.h03_push_scope();
@@ -1041,9 +1049,9 @@ fn declare(self: *Resolver, id: NodeId, stmt: NodeId, kind: Decl.Kind, ty: Stati
     return d;
 }
 
-// s1 rows of this very statement are reused instead of declared again
+// s1 rows and hoisted local functions of this very statement are reused instead of declared again
 fn pre_declared(self: *Resolver, d: Decl.Index, stmt: NodeId) bool {
-    return d != .none and self.dp(.flags, d).is_global and self.dp(.node, d).* == stmt;
+    return d != .none and self.dp(.node, d).* == stmt and (self.dp(.flags, d).is_global or self.h01_lookup(self.dp(.name, d).*) == d);
 }
 
 // a scope for a declaration: globals get a barrier so they never see their user's locals
