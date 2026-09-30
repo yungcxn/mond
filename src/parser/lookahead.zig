@@ -166,6 +166,9 @@ pub const binary_compute = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_+")] = .{ .f = &eval.templ_binary(.binary_add, 10), .prec = 10 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .{ .f = &eval.templ_binary(.binary_sub, 10), .prec = 10 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = .{ .f = &eval.templ_binary(.binary_mul, 11), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_+%")] = .{ .f = &eval.templ_binary(.binary_add_wrap, 10), .prec = 10 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_-%")] = .{ .f = &eval.templ_binary(.binary_sub_wrap, 10), .prec = 10 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_*%")] = .{ .f = &eval.templ_binary(.binary_mul_wrap, 11), .prec = 11 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .f = &eval.templ_binary(.binary_div, 11), .prec = 11 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .f = &eval.templ_binary(.binary_mod, 11), .prec = 11 };
 

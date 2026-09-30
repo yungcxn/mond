@@ -34,7 +34,7 @@ fun delta_pack = (&[]i64 xs, *[]u8 out) -> u32 {
     mut u32 p = 0;
     mut i64 prev = 0;
     for x in xs.* {
-        p = put_varint(out, p, zigzag(x - prev));
+        p = put_varint(out, p, zigzag(x -% prev));
         prev = x;
     }
     ret p;
@@ -46,7 +46,7 @@ fun delta_unpack = (&[]u8 src, u32 len, *[]i64 out) -> u32 {
     mut i64 prev = 0;
     while p < len {
         Read r = get_varint(src, p);
-        prev += unzigzag(r.v);
+        prev = prev +% unzigzag(r.v);
         out.*[n] = prev;
         n += 1;
         p = r.at;
@@ -568,7 +568,7 @@ fun bwt_hash = (&[]u8 s) -> u64 {
     mut [16]u8 last;
     do bwt(s, last.&);
     mut u64 h = 0;
-    for i in 0..<s.$len: h = h * 131 + last[i] as u64;
+    for i in 0..<s.$len: h = h *% 131 +% last[i] as u64;
     ret h;
 }
 

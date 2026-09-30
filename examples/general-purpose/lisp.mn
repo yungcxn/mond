@@ -264,7 +264,7 @@ type Lisp = *(
         }
         if self.sym_is(id, "*".&) {
             mut i64 s = 1;
-            for k in 0..<n: s *= iv(a.*[k]);
+            for k in 0..<n: s = s *% iv(a.*[k]);
             ret Val.Int(s);
         }
         if self.sym_is(id, "-".&) {

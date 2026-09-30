@@ -532,7 +532,7 @@ type Loser = *(u32 unused = 0) implof Player !{
 
 type Rando = *(mut u32 s) implof Player !{
     fun play = (Move last) -> Move {
-        self.s = self.s * 1664525 + 1013904223;
+        self.s = self.s *% 1664525 +% 1013904223;
         ret match (self.s >> 16) % 3 {
             0 => Move.Rock,
             1 => Move.Paper,

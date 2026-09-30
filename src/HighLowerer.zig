@@ -768,9 +768,9 @@ fn constant(self: *HighLowerer, v: Index, t: Index) Ref {
 
 fn arith(k: Kind) ?Op {
     return switch (k) {
-        .binary_add, .assign_add, .inc_prefix, .inc_postfix => .add,
-        .binary_sub, .assign_sub, .dec_prefix, .dec_postfix => .sub,
-        .binary_mul, .assign_mul => .mul,
+        .binary_add, .binary_add_wrap, .assign_add, .inc_prefix, .inc_postfix => .add,
+        .binary_sub, .binary_sub_wrap, .assign_sub, .dec_prefix, .dec_postfix => .sub,
+        .binary_mul, .binary_mul_wrap, .assign_mul => .mul,
         .binary_div, .assign_div => .div,
         .binary_mod, .assign_mod => .rem,
         .binary_shift_left => .shl,

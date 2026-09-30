@@ -153,7 +153,7 @@ pub fn framed(ip: *Interpreter) bool {
 }
 
 pub fn hint(ip: *Interpreter, n: NodeId) Index {
-    return if (ip.framed()) ip.info(.ty, n) else .none;
+    return if (ip.framed()) ip.info(.ty, n) else ip.res().node_type[n];
 }
 
 pub fn checked(ip: *Interpreter, n: NodeId) Index {
@@ -325,7 +325,7 @@ pub fn eval(ip: *Interpreter, n: NodeId) Value {
             const l = ip.eval(a0);
             break :blk if (l.ty == .bool_type and (l.bits != 0) == (k == .binary_logic_or)) l else ip.arith(n, k, l, ip.eval(a1));
         },
-        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_eq, .binary_neq, .binary_less, .binary_greater, .binary_less_eq, .binary_greater_eq, .binary_logic_xor => ip.arith(n, k, ip.eval(a0), ip.eval(a1)),
+        .binary_add, .binary_sub, .binary_mul, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_eq, .binary_neq, .binary_less, .binary_greater, .binary_less_eq, .binary_greater_eq, .binary_logic_xor => ip.arith(n, k, ip.eval(a0), ip.eval(a1)),
         .if_then, .stcif_then, .if_else, .stcif_else => control.branch(ip, n, k),
         .match, .stcmatch => control.match(ip, n),
         .for_seq, .stcfor_seq, .for_var_in_seq, .stcfor_var_in_seq, .@"while", .stcwhile, .while_with_repeat_stmt, .stcwhile_with_repeat_stmt, .loop, .stcloop, .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => control.loop(ip, n),
@@ -349,7 +349,7 @@ pub fn eval(ip: *Interpreter, n: NodeId) Value {
 
 fn unary(ip: *Interpreter, n: NodeId, k: Kind, v: Value) Value {
     if (v.is(.poison_type)) return v;
-    return Value.unary(k, v, ip.hint(n)) orelse ip.fail(n, .not_static, ip.pool(v), 0);
+    return Value.unary(k, v, ip.hint(n)) catch |e| ip.fail(n, if (e == error.Invalid) .static_eval_failed else .not_static, ip.pool(v), 0);
 }
 
 pub fn arith(ip: *Interpreter, n: NodeId, k: Kind, a: Value, b: Value) Value {

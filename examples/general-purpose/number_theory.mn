@@ -88,8 +88,8 @@ fun fib_pair = (u64 n) -> Congruence {
     Congruence h = fib_pair(n / 2);
     i64 a = h.r;
     i64 b = h.m;
-    i64 c = a * (2 * b - a);
-    i64 d = a * a + b * b;
+    i64 c = a *% (2 *% b -% a);
+    i64 d = a *% a +% b *% b;
     ret if (n & 1) == 0: Congruence(c, d) else: Congruence(d, c + d);
 }
 
@@ -162,7 +162,10 @@ fun iroot = (u64 n, u32 k) -> u64 {
         mut u64 p = 1;
         mut bool over = false;
         for 0..<k {
-            if p > n / mid: over = true;
+            if p > n / mid {
+                over = true;
+                brk;
+            }
             p *= mid;
         }
         if over or p > n: hi = mid - 1 else: lo = mid;
