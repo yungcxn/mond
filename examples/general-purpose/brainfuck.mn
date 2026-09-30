@@ -85,8 +85,7 @@ fun steps_taken = (&[]u8 prog) -> u32 {
 stc u64 B1 = output("++++++++[>++++++++<-]>+.".&, "".&); #= B1 65
 stc u64 B2 = output("+++[>+++++<-]>[>++<-]>.".&, "".&); #= B2 30
 stc u64 B3 = output(",[.,]".&, "abc".&); #= B3 6382179
-# LIMIT: only \n \t \r \0 \\ \" are escapes, `\x02` silently lexes as the letter x, so raw bytes come from an array
-stc u64 B4 = output(",>,<[->+<]>.".&, [2, 3].&); #= B4 5
+stc u64 B4 = output(",>,<[->+<]>.".&, "\x02\x03".&); #= B4 5
 stc u32 B5 = out_count("++++[>++++<-]>[.-]".&); #= B5 16
 stc u64 B6 = output("+[-]+++.".&, "".&); #= B6 3
 stc u64 B7 = output("-.".&, "".&); #= B7 255

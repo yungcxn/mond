@@ -1,4 +1,3 @@
-# LIMIT: `as` does not bind into the right operand of * / %, so `a / n as f64` needs parentheses around the cast
 fun abs = (f64 x) -> f64: ret if x < 0.0: -x else: x;
 
 fun sqrt_newton = (f64 x) -> f64 {
@@ -12,7 +11,7 @@ fun exp_series = (f64 x) -> f64 {
     mut f64 term = 1.0;
     mut f64 sum = 1.0;
     for n in 1..<30 {
-        term = term * x / (n as f64);
+        term = term * x / n as f64;
         sum += term;
     }
     ret sum;
@@ -29,7 +28,7 @@ fun sin_series = (f64 x) -> f64 {
 }
 
 fun integrate = (f64 a, f64 b, u32 n) -> f64 {
-    f64 h = (b - a) / (n as f64);
+    f64 h = (b - a) / n as f64;
     mut f64 s = 0.0;
     for i in 0..<n {
         f64 x = a + (i as f64 + 0.5) * h;
@@ -72,7 +71,7 @@ fun round_half_up = (f64 x) -> i64: ret floor(x + 0.5);
 fun mean = (&[]f32 xs) -> f32 {
     mut f32 s = 0.0;
     for x in xs.*: s += x;
-    ret s / (xs.$len as f32);
+    ret s / xs.$len as f32;
 }
 
 fun variance = (&[]f32 xs) -> f32 {
@@ -92,7 +91,7 @@ fun to_fixed = (f64 x, u32 places) -> i64 {
 
 fun harmonic = (u32 n) -> f64 {
     mut f64 s = 0.0;
-    for i in 1..=n: s += 1.0 / (i as f64);
+    for i in 1..=n: s += 1.0 / i as f64;
     ret s;
 }
 

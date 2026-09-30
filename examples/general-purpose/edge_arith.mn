@@ -156,9 +156,8 @@ stcfun negations = () -> i32 {
     ret b * 10000 + c * 1000 + d * 100 + e;
 }
 
-# LIMIT: only 0x 0b 0o literals accept `_` separators, `1_000` lexes as the literal 1 followed by the identifier _000
 stcfun literals = () -> u64 {
-    u64 a = 0xFF + 0b101 + 0o17 + 1000;
+    u64 a = 0xFF + 0b101 + 0o17 + 1_000;
     u64 b = 0xDEAD_BEEF;
     u64 c = '\n' as u64 + '\t' as u64 + '\0' as u64 + '\\' as u64;
     ret a * 1000000000000 + b % 1000000 + c;
@@ -197,6 +196,11 @@ stc i32 ID = incdec(); #= ID 57755
 stc i32 CP = compound(); #= CP 7
 stc i32 NG = negations(); #= NG -44495
 stc u64 LT = literals(); #= LT 1275000000928670
+stc u8 HX = '\x41'; #= HX 65
+stc [3]u8 HS = "\x01b\xff";
+stc u32 HB = HS[0] as u32 * 1000 + HS[2] as u32; #= HB 1255
+stc u32 SEP = 1_000_000; #= SEP 1000000
+stc f64 SEF = 1_000.25; #= SEF 1000.25
 stc i64 MM = minmax(); #= MM 9223372036854775807
 stc u32 CS = cmp_signed(); #= CS 1111
 
