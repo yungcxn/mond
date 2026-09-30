@@ -105,7 +105,7 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
     if (lp.repeat != 0) _ = self.h09_check_expr(ctx, lp.repeat, .none);
     if (lp.cond != 0 and lp.repeat != 0) _ = self.set(lp.head, .unit_type);
     if (lp.seq != 0) {
-        const st = sp.pointee(sp.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, lp.seq, if (elem_hint != .none and is_range_kind(self.nk(lp.seq))) exp else .none)));
+        const st = sp.pointee(sp.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, lp.seq, if (elem_hint != .none and sp.class(elem_hint).is_integer and is_range_kind(self.nk(lp.seq))) exp else .none)));
         const elem = switch (sp.lookup_member(st, if (sp.get(st) == .array_type) .len else .next)) {
             .builtin_len => sp.get(st).array_type.elem,
             .method => |m| self.fn_ret(m),
@@ -124,7 +124,7 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
     const at_exit = self.uninit;
     self.loop_exits.push(0);
     ctx.loop_depth += 1;
-    const bt = self.h09_check_expr(ctx, lp.body, if (expected != .none) elem_hint else .none);
+    const bt = self.h09_check_expr(ctx, lp.body, if (expected == .none) .none else if (elem_hint != .none) elem_hint else self.fresh_var(lp.body));
     ctx.loop_depth -= 1;
     self.loop_exits.head -= 1;
     self.uninit = self.loop_exits.buf[self.loop_exits.head] | if (lp.cond != 0 or lp.seq != 0) at_exit else 0;

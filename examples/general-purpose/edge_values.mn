@@ -90,10 +90,15 @@ stcfun array_in_array_swap = () -> u32 {
     ret rows[0][0] * 100000 + rows[0][1] * 10000 + rows[1][0] * 1000 + rows[2][0] * 100 + rows[2][1] * 10 + row[0];
 }
 
-# BUG: a `for` as the body of a value `for` (`for i in 0..<3: for j in 0..<2: i * 2 + j`) does not produce an array element, the outer array is typed () or [2]u32 mismatches u32, so rows are built as array literals
 stcfun loop_value_arrays = () -> u32 {
     grid = for i in 0..<3: [i * 3, i * 3 + 1, i * 3 + 2];
     ret grid[0][0] * 100000 + grid[1][2] * 10000 + grid[2][1] * 1000 + grid[2][2] * 100 + grid.$len as u32;
+}
+
+stcfun nested_loop_values = () -> u32 {
+    grid = for i in 0..<3: for j in 0..<2: i * 2 + j;
+    [2][3]u32 typed = for i in 0..<2: for j in 0..<3: i * 3 + j;
+    ret grid[2][1] * 10000 + grid[1][0] * 1000 + grid.$len as u32 * 100 + typed[1][2] * 10 + grid[0].$len as u32;
 }
 
 stcfun element_alias = () -> u32 {
@@ -122,6 +127,7 @@ stc u32 AE = array_equality(); #= AE 101
 stc u32 RE = record_equality(); #= RE 101
 stc u32 AS = array_in_array_swap(); #= AS 563121
 stc u32 LV = loop_value_arrays(); #= LV 57803
+stc u32 NV = nested_loop_values(); #= NV 52352
 stc u32 EA = element_alias(); #= EA 5200
 stc u32 SC = struct_array_copy(); #= SC 1021200
 
