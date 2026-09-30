@@ -61,6 +61,7 @@ pub fn expr(p: *Parser, prec: u8) anyerror!NodeId {
     while (p.tok_cursor < p.tokens.len()) {
         const tok = try p.peek_tok();
         if (prec >= lookahead.prec_unary and (tok == .kw_as or tok == .kw_asbits)) break;
+        if (prec > lookahead.prec_unary and (tok == .@"xpct_.." or tok == .@"xpct_..=" or tok == .@"xpct_..<")) break;
         const post_f = lookahead.post[@intFromEnum(tok)] orelse break;
 
         p.tok_cursor += 1;

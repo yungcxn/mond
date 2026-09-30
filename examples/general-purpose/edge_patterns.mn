@@ -4,12 +4,11 @@ variant Pt = +(At(i32 x, i32 y), Off) tagof u8;
 type Line = *(Pt a, Pt b);
 type Ent = *(Cell cell, u8 hp);
 
-# BUG: `-10..=-2` parses as `-(10..=-2)` and reports type_mismatch (a sequence), so a negative lower bound is parenthesized
-fun neg_lit = (i32 n) -> i32: ret match n { -1 => 100, (-10)..=-2 => 200, 0 => 300, _ => 400 }
+fun neg_lit = (i32 n) -> i32: ret match n { -1 => 100, -10..=-2 => 200, 0 => 300, _ => 400 }
 
 fun sign_word = (i64 n) -> u8: ret match n {
     ..<-1000000 => 0,
-    (-1000000)..<0 => 1,
+    -1000000..<0 => 1,
     0 => 2,
     1..=1000000 => 3,
     _ => 4,
