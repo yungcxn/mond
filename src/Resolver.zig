@@ -624,11 +624,14 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             const j = self.pair(ctx, node, a0, a1, .none);
             break :blk if (j == .poison_type) j else .bool_type;
         },
-        .binary_logic_or, .binary_logic_xor, .binary_logic_and => blk: {
+        .binary_logic_or, .binary_logic_and => blk: {
+            const w = self.condition(ctx, node);
+            self.uninit = w[0] | w[1];
+            break :blk .bool_type;
+        },
+        .binary_logic_xor => blk: {
             _ = self.check(ctx, a0, .bool_type);
-            const before = self.uninit;
             _ = self.check(ctx, a1, .bool_type);
-            if (k != .binary_logic_xor) self.uninit = before;
             break :blk .bool_type;
         },
         .neg_logic => blk: { // `!` is logical on bools and bitwise on integers
@@ -757,6 +760,25 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         else => if (class(k).type_expr or k == .unify_variants or self.type_kind(node) != .variable) (if (statics.deferred(self, ctx, node)) |v| sp.type_of(v) else types.meta_of(self, node)) else .unit_type,
     };
     return self.set(node, t);
+}
+
+// the locals not written yet when a condition is true and when it is false: `and` runs its right side only after a true left one
+pub fn condition(self: *Resolver, ctx: *FnCtx, n: NodeId) [2]u64 {
+    const k = self.nk(n);
+    if (k == .capture) {
+        const w = self.condition(ctx, self.arg(n, 0));
+        _ = self.set(n, self.node_type[self.arg(n, 0)]);
+        return w;
+    }
+    if (k != .binary_logic_and and k != .binary_logic_or) {
+        _ = self.check(ctx, n, .bool_type);
+        return .{ self.uninit, self.uninit };
+    }
+    const l = self.condition(ctx, self.arg(n, 0));
+    self.uninit = l[@intFromBool(k == .binary_logic_or)];
+    const r = self.condition(ctx, self.arg(n, 1));
+    _ = self.set(n, .bool_type);
+    return if (k == .binary_logic_and) .{ r[0], l[1] | r[1] } else .{ l[0] | r[0], r[1] };
 }
 
 pub fn h10_expect(self: *Resolver, node: ParseTree.NodeId, actual: StaticPool.Index, expected: StaticPool.Index) StaticPool.Index {

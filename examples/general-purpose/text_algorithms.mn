@@ -200,7 +200,6 @@ stcfun roman_round = (u32 n) -> u32 {
     ret from_roman(buf.&) * 100 + len;
 }
 
-# LIMIT: a stcfun parameter is a static value and a pointer is not one (`not_static`), so this one is a plain fun, which runs at compile time just as well
 fun b64 = (&[]u8 data) -> u64 {
     mut [32]u8 out;
     u32 n = base64(data, out.&);

@@ -77,13 +77,14 @@ pub fn h15_check_branching(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId,
     }
     // binders of the condition (`x ?<- v`) are visible in the then branch only
     self.h03_push_scope();
-    _ = self.check(ctx, cond, .bool_type);
-    const before = self.uninit;
+    const w = self.condition(ctx, cond);
+    self.uninit = w[0];
     const tt = branch(self, ctx, then, expected);
     const after_then = if (tt == .never_type) 0 else self.uninit;
-    self.uninit = before;
+    self.uninit = w[1];
     self.h04_pop_scope();
     if (!has_else) {
+        self.uninit |= after_then;
         const valued = tt != .never_type and tt != .runit_type and tt != .poison_type and tt != .unit_type;
         return if (self.concrete(expected) and valued) self.report(.runit_mixing, node, tt, .unit_type) else merge(self, node, tt, .unit_type, if (valued) .none else expected);
     }

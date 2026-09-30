@@ -169,8 +169,13 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
                 parent = p.tree.push_node(.array);
                 p.tree.set_children(parent, children.view());
             },
-            .@"pct_]" => { // no comma -> type
+            .@"pct_]" => { // no comma -> type, unless nothing that can be a type follows
                 p.tok_cursor += 1;
+                if (lookahead.pre[@intFromEnum(try p.peek_tok())] == null) {
+                    const one = p.tree.push_node(.array);
+                    p.tree.set_children(one, &[_]NodeId{parent});
+                    return one;
+                }
                 const def: Node.LayoutStruct(.type_array) = .{
                     .length = parent,
                     .type = try any(p, .forbid_assign, 0),

@@ -124,7 +124,6 @@ fun small_while = (Small a, Small b) -> u32 {
     ret n;
 }
 
-# LIMIT: `<-` labels the operand right before it (`a + b <- s` names b), so labelled expressions are parenthesized
 fun label_arrows = (i32 a, i32 b) -> i32 {
     if ((a + b) <- s) > 10: ret s * 100;
     if ((a * b) <- p) < 0: ret p;

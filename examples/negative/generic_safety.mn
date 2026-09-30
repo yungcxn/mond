@@ -1,5 +1,3 @@
-# LIMIT: the initialisation analysis is conservative in `if c and { z = 1; true; }: use(z)`, where z is initialised when the branch runs
-
 variant Opt = (type T): ++(Some(T), None) tagof u8;
 type Pair = (type A, type B): *(mut A first, mut B second);
 type Stack = (type T, u32 N): *(mut [N]T items, mut u32 len = 0) !{
@@ -98,4 +96,13 @@ fun lifetimes = (&Stack(u8, 4) s) {
     v = r.id;
     s.peek();
     s.push(1); #! write_through_immutable_pointer
+}
+
+fun conditions = (bool c) -> u32 {
+    mut u32 z;
+    if c and { z = 1; true; }: ret z;
+    mut u32 y;
+    if c or { y = 1; true; }: ret y; #! use_before_initialization
+    mut u32 x;
+    if !c or { x = 2; false; } { ret 0; } else { ret x; }
 }

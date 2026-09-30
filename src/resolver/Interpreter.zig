@@ -193,7 +193,7 @@ pub fn deref(ip: *Interpreter, v: Value) Value {
 
 pub fn count(ip: *Interpreter, v: Value) ?u32 {
     const t = ip.vtype(v);
-    return if (t == .none or ip.res().static_pool.tag(t) == .record_type) null else ip.span(v);
+    return if (t == .none or ip.res().static_pool.tag(t) == .record_type or ip.res().static_pool.tag(t) == .variant_case_type) null else ip.span(v);
 }
 
 pub fn span(ip: *Interpreter, v: Value) ?u32 {

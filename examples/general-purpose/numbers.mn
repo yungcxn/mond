@@ -32,7 +32,6 @@ fun sieve = (u32 limit) -> u32 {
     ret c;
 }
 
-# LIMIT: & binds looser than ==, so masks are parenthesized
 fun pow_mod = (u64 base, u64 exp, u64 m) -> u64 {
     mut u64 r = 1;
     mut u64 b = base % m;
@@ -40,7 +39,7 @@ fun pow_mod = (u64 base, u64 exp, u64 m) -> u64 {
     while e > 0 {
         if (e & 1) == 1: r = r * b % m;
         b = b * b % m;
-        e = e >> 1; # LIMIT: no compound shift assignment
+        e = e >> 1;
     }
     ret r;
 }

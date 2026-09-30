@@ -223,7 +223,7 @@ pub fn construct(ip: *Interpreter, target: Index, args: []const NodeId) Value {
     if (!complete(ip, rec, at)) return .poison;
     const agg: Value = .block(rec, at, len);
     if (!is_case) return agg;
-    if (ip.escapes(agg) and args.len > 0) return ip.fail(args[0], .not_static, 0, 0);
+    if (ip.escapes(agg)) return .block(target, at, len);
     return .pooled(sp.intern(.{ .variant_value = .{ .case = target, .payload = ip.pool(agg) } }));
 }
 
