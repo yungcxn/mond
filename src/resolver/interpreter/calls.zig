@@ -66,15 +66,17 @@ pub fn call(ip: *Interpreter, n: NodeId) Value {
         .function_value => invoke(ip, n, sp.get(c).function, args, .empty),
         .generic => blk: {
             const g = sp.get(c).static_fun.decl;
-            const want = sp.get(r.dp(.ty, g).*).function_type.params.len;
-            if (args.len != want) break :blk ip.fail(n, .wrong_arity, args.len, want);
+            const params = sp.get(r.dp(.ty, g).*).function_type.params;
+            if (args.len != params.len) break :blk ip.fail(n, .wrong_arity, args.len, params.len);
             const mark = ip.ids.head;
             defer ip.ids.head = mark;
-            for (args) |a| {
+            for (args, params) |a, p| {
                 const x = ip.eval(r.arg_value(a));
                 if (x.is(.poison_type)) break :blk x;
                 const i = ip.pool(x);
-                ip.ids.push(i);
+                const ok = if (sp.tag(p) == .meta_type) p == .type_type and sp.class(i).is_type or sp.type_of(i) == p else !sp.class(p).is_integer or sp.tag(i) == .int_value and sp.fits(i, p);
+                if (!ok) break :blk ip.fail(r.arg_value(a), .type_mismatch, sp.type_of(i), p);
+                ip.ids.push(r.retype(i, p));
             }
             const tuple = sp.intern(.{ .aggregate = .{ .ty = .none, .elems = ip.ids.buf[mark..ip.ids.head] } });
             break :blk .of(sp, r.h20_instantiate(g, tuple));

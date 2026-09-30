@@ -81,7 +81,7 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
         if (ctx.interpreted and ret != .fun_type) return ret;
         var vals: [64]StaticPool.Index = undefined;
         for (all_args, 0..) |a, i| {
-            vals[i] = statics.h08_eval_static(self, ctx, self.arg_value(a));
+            vals[i] = statics.retype(self, statics.h08_eval_static(self, ctx, self.arg_value(a)), self.sig(first).params[i]);
             if (statics.holds_template(self, vals[i])) return .poison_type;
         }
         const r = statics.h20_instantiate(self, first, sp.intern(.{ .aggregate = .{ .ty = .none, .elems = vals[0..all_args.len] } }));
