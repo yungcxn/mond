@@ -454,20 +454,7 @@ fn is_ssa(self: *HighLowerer, n: NodeId) bool {
 fn captures(self: *HighLowerer, d: Decl.Index) []const Decl.Index {
     if (self.caps_of.get(d)) |c| return self.cap_list.buf[c[0]..][0..c[1]];
     const start = self.cap_list.head;
-    if (self.body_of.get(d)) |bi| {
-        const b = self.r.bodies.get(bi).?;
-        const ds = self.r.body_nodes.sliced_field(.decl)[b.start..][0..b.len];
-        for (ds) |x| {
-            if (x == .none or std.mem.indexOfScalar(Decl.Index, self.cap_list.buf[start..self.cap_list.head], x) != null) continue;
-            const flags = self.r.dp(.flags, x).*;
-            const node = self.r.dp(.node, x).*;
-            const local = switch (self.r.dp(.kind, x).*) {
-                .variable, .parameter, .loop_variable, .pattern_binder, .arrow_binder, .autoins_it, .autoins_arg, .self => true,
-                else => false,
-            };
-            if (local and !flags.is_global and !(flags.is_stc and self.r.dp(.value, x).* != .none) and (node < b.lo or node >= b.lo + b.len)) self.cap_list.push(x);
-        }
-    }
+    self.r.captures(d, &self.cap_list);
     put(self.alloc, &self.caps_of, d, [2]u32{ start, self.cap_list.head - start });
     return self.cap_list.buf[start..self.cap_list.head];
 }

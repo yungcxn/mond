@@ -50,7 +50,7 @@ pub fn static(ip: *Interpreter, n: NodeId, k: Kind) Value {
     const r = ip.res();
     if (!ip.framed()) return .pooled(r.static_type(ip.ctx, n));
     return switch (k) {
-        .def_fun => .of(&r.static_pool, r.dp(.value, ip.info(.decl, n)).*),
+        .def_fun => ip.closure(ip.info(.decl, n)),
         .type_array, .type_array_unlengthed, .type_ptr, .type_ptrmut, .unify_variants => build(ip, n),
         else => .pooled(define(ip, n)),
     };

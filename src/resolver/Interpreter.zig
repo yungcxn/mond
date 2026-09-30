@@ -19,7 +19,8 @@ const step_budget: u32 = 1_000_000;
 pub const max_depth: u32 = 256;
 pub const no_cell = std.math.maxInt(u32);
 
-const Frame = struct { body: Resolver.Body, base: u32 };
+// env: the closure a frame was called through, its captures resolve to the closure's cells
+const Frame = struct { body: Resolver.Body, base: u32, env: Value = .empty };
 const Session = struct { ctx: *Resolver.FnCtx, mem: u32, adopted: u32 };
 const Adopted = struct { decl: Decl.Index, cell: u32 };
 const Defer = struct { node: NodeId, cell: u32 };
@@ -37,13 +38,16 @@ defers: DynBuf(Defer),
 // a block stored into a cell older than its frame stays until that cell is gone
 floor: u32 = 0,
 floor_cell: u32 = no_cell,
+caps: std.AutoHashMapUnmanaged(Decl.Index, [2]u32) = .empty,
+cap_list: DynBuf(Decl.Index),
 
 pub fn init(a: std.mem.Allocator) Interpreter {
-    return .{ .frames = .init(a, 64), .mem = .init(a, 1024), .list = .init(a, 256), .ids = .init(a, 256), .adopted = .init(a, 16), .defers = .init(a, 16) };
+    return .{ .frames = .init(a, 64), .mem = .init(a, 1024), .list = .init(a, 256), .ids = .init(a, 256), .adopted = .init(a, 16), .defers = .init(a, 16), .cap_list = .init(a, 64) };
 }
 
 pub fn deinit(ip: *Interpreter) void {
-    inline for (.{ &ip.frames, &ip.mem, &ip.list, &ip.ids, &ip.adopted, &ip.defers }) |b| b.deinit();
+    inline for (.{ &ip.frames, &ip.mem, &ip.list, &ip.ids, &ip.adopted, &ip.defers, &ip.cap_list }) |b| b.deinit();
+    ip.caps.deinit(ip.frames.alloc);
 }
 
 pub fn res(ip: *Interpreter) *Resolver {
@@ -214,7 +218,7 @@ pub fn elem(ip: *Interpreter, v: Value, i: u32) Value {
 }
 
 pub fn escapes(ip: *Interpreter, v: Value) bool {
-    if (v.is_ref()) return true;
+    if (v.is_ref() or v.is_heap() and ip.res().static_pool.tag(v.ty) == .function_type) return true;
     if (!v.is_heap()) return false;
     for (0..v.len()) |i| if (ip.mem.buf[v.at() + i].is(.none) or ip.escapes(ip.mem.buf[v.at() + i])) return true;
     return false;
@@ -297,6 +301,38 @@ fn zero_case(ip: *Interpreter, v: StaticPool.VariantType) Value {
         if (v.tag_mode == .self and cs.payload != .none) payload = c else if (sp.tag(cs.tag) == .int_value and sp.get(cs.tag).int.bits == 0) return calls.construct(ip, c, &.{});
     }
     return if (payload != .none) calls.construct(ip, payload, &.{}) else .empty;
+}
+
+pub fn captures(ip: *Interpreter, d: Decl.Index) []const Decl.Index {
+    if (ip.caps.get(d)) |c| return ip.cap_list.buf[c[0]..][0..c[1]];
+    const start = ip.cap_list.head;
+    ip.res().captures(d, &ip.cap_list);
+    ip.caps.put(ip.frames.alloc, d, .{ start, ip.cap_list.head - start }) catch @panic("OOM");
+    return ip.cap_list.buf[start..ip.cap_list.head];
+}
+
+// a function as a value: with captures a block of the function and its environment, like the lowerer's closure
+pub fn closure(ip: *Interpreter, d: Decl.Index) Value {
+    const r = ip.res();
+    const f: Value = .of(&r.static_pool, r.dp(.value, d).*);
+    const caps = ip.captures(d);
+    if (caps.len == 0) return f;
+    const at = ip.alloc(@intCast(caps.len + 1));
+    ip.mem.buf[at] = f;
+    for (caps, 1..) |c, i| {
+        const s = places.slot(ip, c);
+        const x: Value = if (s != null and r.by_ref(c)) .ref(r.self_ptr(r.dp(.ty, c).*), s.?) else ip.own(places.peek(ip, c));
+        ip.mem.buf[at + i] = x;
+    }
+    return .block(r.dp(.ty, d).*, at, @intCast(caps.len + 1));
+}
+
+// the cell of a capture of the closure a frame runs in
+pub fn captured(ip: *Interpreter, f: Frame, d: Decl.Index) ?u32 {
+    if (!f.env.is_heap() or f.body.decl == .none) return null;
+    const k = std.mem.indexOfScalar(Decl.Index, ip.captures(f.body.decl), d) orelse return null;
+    const c = f.env.at() + 1 + @as(u32, @intCast(k));
+    return if (ip.mem.buf[c].is_ref() and ip.res().by_ref(d)) ip.mem.buf[c].at() else c;
 }
 
 pub fn eval(ip: *Interpreter, n: NodeId) Value {

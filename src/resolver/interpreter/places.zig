@@ -12,7 +12,7 @@ pub fn named(k: Kind) bool {
     return k == .identifier or k == .identifier_self;
 }
 
-fn slot(ip: *Interpreter, d: Decl.Index) ?u32 {
+pub fn slot(ip: *Interpreter, d: Decl.Index) ?u32 {
     const x = @intFromEnum(d);
     var i = ip.frames.head;
     while (i > 0) {
@@ -20,6 +20,7 @@ fn slot(ip: *Interpreter, d: Decl.Index) ?u32 {
         const f = ip.frames.buf[i];
         if (f.body.len == 0) break;
         if (x -% f.body.first < f.body.locals) return f.base + x - f.body.first;
+        if (ip.captured(f, d)) |c| return c;
     }
     var j = ip.adopted.head;
     while (j > 0) {
@@ -72,6 +73,7 @@ pub fn peek(ip: *Interpreter, d: Decl.Index) Value {
 pub fn load(ip: *Interpreter, n: NodeId) Value {
     const d = decl_of(ip, n);
     if (d == .none) return if (ip.framed()) ip.fail(n, .undefined_name, ip.res().name_of(n), 0) else .poison;
+    if (ip.framed() and ip.res().dp(.kind, d).* == .function and !ip.res().dp(.flags, d).is_global) return ip.closure(d);
     const v = peek(ip, d);
     return if (v.is(.none)) stored(ip, n, d) else v;
 }

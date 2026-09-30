@@ -2,7 +2,6 @@ type IntFn = (i64) -> i64;
 type Pred = (i64) -> bool;
 type Fold = (i64, i64) -> i64;
 
-# LIMIT: a closure that captures and escapes its frame cannot be evaluated at compile time (not_static), so these are only checked and lowered, never called from a stc
 fun compose = (IntFn f, IntFn g): (i64 x): f(g(x));
 fun twice = (IntFn f): (i64 x): f(f(x));
 fun adder = (i64 n): (i64 x): x + n;
@@ -161,6 +160,22 @@ fun parity = (i64 n) -> bool {
     ret b;
 }
 
+stcfun closures = () -> i64 {
+    IntFn inc = adder(1);
+    IntFn dbl = multiplier(2);
+    IntFn f = compose(inc, dbl);
+    i64 a = f(5) + twice(dbl)(3) + curry_add(1)(2)(3) + flip((i64 x, i64 y): x - y)(1, 10) + counter_from(5)(6) + church(7)(100);
+    ret a * 10 + filter_count([1, 2, 3].&, negate((i64 x): x > 1)) as i64;
+}
+
+stcfun counting = () -> i64 {
+    mut i64 n = 0;
+    bump = (): n += 1;
+    bump();
+    bump();
+    ret n;
+}
+
 stc i64 R2 = run_map(); #= R2 110
 stc u32 R3 = run_pred(); #= R3 445
 stc u32 R4 = run_quant(); #= R4 101
@@ -173,6 +188,8 @@ stc i64 SH = shadowing(); #= SH 11
 stc i64 NC = nested_closures(4); #= NC 16
 stc i64 LR = local_recursion(); #= LR 3628800
 stc i64 MU = mutual(); #= MU 10
+stc i64 CL = closures(); #= CL 1561
+stc i64 CN = counting(); #= CN 2
 stc bool PA = parity(7); #= PA true
 
 $main = () {

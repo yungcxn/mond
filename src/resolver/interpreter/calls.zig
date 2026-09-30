@@ -53,17 +53,18 @@ pub fn call(ip: *Interpreter, n: NodeId) Value {
     const d = ip.info(.decl, n);
     const cd = ip.info(.decl, callee);
     if (d != .none and Resolver.is_fn(r.dp(.kind, d).*) and (cd == .none or r.dp(.kind, cd).* != .static_function)) {
-        if (r.self_off(r.real(d)) == 0 or r.nk(callee) != .member or sp.tag(ip.info(.ty, r.arg(callee, 0))) == .meta_type) return invoke(ip, n, d, args, .empty);
+        if (r.self_off(r.real(d)) == 0 or r.nk(callee) != .member or sp.tag(ip.info(.ty, r.arg(callee, 0))) == .meta_type) return invoke(ip, n, d, args, .empty, .empty);
         const c = places.cell(ip, r.arg(callee, 0)) orelse return .poison;
-        return invoke(ip, n, d, args, if (ip.mem.buf[c].is_ref()) ip.mem.buf[c] else .ref(r.self_ptr(ip.vtype(ip.mem.buf[c])), c));
+        return invoke(ip, n, d, args, if (ip.mem.buf[c].is_ref()) ip.mem.buf[c] else .ref(r.self_ptr(ip.vtype(ip.mem.buf[c])), c), .empty);
     }
     const cv = ip.eval(callee);
+    if (cv.is_heap() and sp.tag(cv.ty) == .function_type) return invoke(ip, n, sp.get(ip.mem.buf[cv.at()].index()).function, args, .empty, cv);
     if (!cv.is_pool() or cv.is(.poison_type)) return if (cv.is(.poison_type)) cv else ip.fail(n, .not_static, 0, 0);
     const c = cv.index();
     if (!ip.framed() and ip.ctx.interpreted and sp.tag(c) == .generic and sp.get(c).static_fun.decl == ip.ctx.decl) return .poison;
     return switch (sp.tag(c)) {
         .record_type, .variant_case_type => construct(ip, c, args),
-        .function_value => invoke(ip, n, sp.get(c).function, args, .empty),
+        .function_value => invoke(ip, n, sp.get(c).function, args, .empty, .empty),
         .generic => blk: {
             const g = sp.get(c).static_fun.decl;
             const params = sp.get(r.dp(.ty, g).*).function_type.params;
@@ -87,7 +88,7 @@ pub fn call(ip: *Interpreter, n: NodeId) Value {
 
 pub fn method(ip: *Interpreter, n: NodeId, t: Index, name: NamePool.Index, self: Value) Value {
     return switch (ip.res().static_pool.lookup_member(t, name)) {
-        .method => |m| invoke(ip, n, m, &.{}, self),
+        .method => |m| invoke(ip, n, m, &.{}, self, .empty),
         else => ip.fail(n, .not_static, 0, 0),
     };
 }
@@ -96,12 +97,12 @@ pub fn deinit(ip: *Interpreter, n: NodeId, c: u32) void {
     const r = ip.res();
     const t = ip.vtype(ip.mem.buf[c]);
     switch (r.static_pool.lookup_member(t, .deinit)) {
-        .method => |m| _ = invoke(ip, n, m, &.{}, .ref(r.self_ptr(t), c)),
+        .method => |m| _ = invoke(ip, n, m, &.{}, .ref(r.self_ptr(t), c), .empty),
         else => {},
     }
 }
 
-fn invoke(ip: *Interpreter, n: NodeId, d0: Decl.Index, all: []const NodeId, self0: Value) Value {
+fn invoke(ip: *Interpreter, n: NodeId, d0: Decl.Index, all: []const NodeId, self0: Value, env: Value) Value {
     const r = ip.res();
     const sp = &r.static_pool;
     if (ip.frames.head > Interpreter.max_depth) return ip.fail(n, .static_eval_failed, 0, 0);
@@ -131,7 +132,7 @@ fn invoke(ip: *Interpreter, n: NodeId, d0: Decl.Index, all: []const NodeId, self
     var c = d;
     while (c != .none) : (c = r.dp(.next_overload, c).*) {
         if (c != d and !r.same_params(c, d)) continue;
-        if (attempt(ip, n, r.real(c), args, base, self)) |v| return v;
+        if (attempt(ip, n, r.real(c), args, base, self, env)) |v| return v;
     }
     return ip.fail(n, .no_matching_overload, args.len, 0);
 }
@@ -161,7 +162,7 @@ fn realize(ip: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, bas
     return sp.get(f).function;
 }
 
-fn attempt(ip: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, base: u32, self: Value) ?Value {
+fn attempt(ip: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, base: u32, self: Value, env: Value) ?Value {
     const r = ip.res();
     r.h05_ensure_signature(d);
     r.h06_check_body(d);
@@ -175,6 +176,7 @@ fn attempt(ip: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, bas
     const caller = ip.frames.buf[ip.frames.head - 1].body.decl;
     const unchecked = caller != .none and r.dp(.kind, caller).* == .static_function;
     ip.enter(body);
+    ip.frames.buf[ip.frames.head - 1].env = env;
     var keep = false;
     defer ip.leave(keep);
     if (r.self_off(d) == 1) places.bind(ip, @enumFromInt(body.first), self);

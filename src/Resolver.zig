@@ -585,7 +585,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             // local functions are visible in their whole block
             for (stmts) |s| {
                 const st = self.statement(s);
-                if (st.kind != .function or st.ids.len != 1) continue;
+                if (st.kind != .function or st.ids.len != 1 or st.type == 0 or self.nk(st.type) != .type_fun) continue;
                 const d = self.h02_declare_local(self.name_of(st.ids[0]), st.node, .function, .none);
                 self.dp(.flags, d).* = st.flags;
                 self.node_decl[st.ids[0]] = d;
@@ -784,6 +784,13 @@ pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) St
             self.dp(.value, d).* = t orelse .none;
         }
         return .unit_type;
+    }
+    if (kind == .function and parts.type == 0 and parts.ids.len == 1) {
+        const e = self.h01_lookup(self.name_of(parts.ids[0]));
+        if (e != .none and !is_fn(self.dp(.kind, e).*) and self.dp(.ty, e).* != .none and sp.tag(sp.apply_vars(&self.abstract_pool, self.dp(.ty, e).*)) == .function_type) {
+            self.node_decl[parts.ids[0]] = e;
+            return self.h11_check_assign(ctx, node);
+        }
     }
     if (kind != .variable) { // local function / type / trait
         for (parts.ids) |id| {
@@ -1073,6 +1080,29 @@ fn owner_of(self: *Resolver, decl: Decl.Index) StaticPool.Index {
     return self.decls.pool.value.buf[d];
 }
 
+// the locals a function body reads from the bodies around it, its environment as a closure
+pub fn captures(self: *Resolver, d: Decl.Index, out: *DynBuf(Decl.Index)) void {
+    const start = out.head;
+    const b = self.bodies.get(self.body_of.get(d) orelse return).?;
+    for (self.body_nodes.sliced_field(.decl)[b.start..][0..b.len]) |x| {
+        if (x == .none or std.mem.indexOfScalar(Decl.Index, out.buf[start..out.head], x) != null) continue;
+        const flags = self.dp(.flags, x).*;
+        const node = self.dp(.node, x).*;
+        const local = switch (self.dp(.kind, x).*) {
+            .variable, .parameter, .loop_variable, .pattern_binder, .arrow_binder, .autoins_it, .autoins_arg, .self => true,
+            else => false,
+        };
+        if (local and !flags.is_global and !(flags.is_stc and self.dp(.value, x).* != .none) and (node < b.lo or node >= b.lo + b.len)) out.push(x);
+    }
+}
+
+// a closure holds a pointer to a mutable or aggregate local, a copy of anything else
+pub fn by_ref(self: *Resolver, c: Decl.Index) bool {
+    const sp = &self.static_pool;
+    const t = sp.apply_vars(&self.abstract_pool, self.dp(.ty, c).*);
+    return self.dp(.flags, c).is_mut or t != .none and (sp.tag(t) == .record_type or sp.tag(t) == .array_type and sp.get(t).array_type.len != StaticPool.dyn_len);
+}
+
 pub fn value_node(self: *Resolver, d: Decl.Index) NodeId {
     const n = self.dp(.node, d).*;
     return switch (self.nk(n)) {
@@ -1159,7 +1189,10 @@ pub fn statement(self: *const Resolver, n0: NodeId) Stmt {
     var flags = Decl.Flags{};
     const n = self.unwrap_mods(n0, &flags);
     const p = self.stmt_parts(n);
-    return .{ .node = n, .flags = flags, .kind = self.decl_kind(p.type, p.value), .type = p.type, .ids = p.ids, .value = p.value, .values = if (p.value == 0) &.{} else self.list_at(n, 1, .partial__assign_multival) };
+    // `f = (..): ..` on a visible variable of function type assigns it, h11 links the name
+    const d = if (p.ids.len == 1) self.node_decl[p.ids[0]] else .none;
+    const assigns = p.type == 0 and d != .none and !is_fn(self.decls.pool.kind.buf[@intFromEnum(d)]);
+    return .{ .node = n, .flags = flags, .kind = if (assigns) .variable else self.decl_kind(p.type, p.value), .type = p.type, .ids = p.ids, .value = p.value, .values = if (p.value == 0) &.{} else self.list_at(n, 1, .partial__assign_multival) };
 }
 
 fn stmt_parts(self: *const Resolver, n: NodeId) Parts {
