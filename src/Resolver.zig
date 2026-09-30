@@ -175,6 +175,8 @@ static_scope: std.AutoHashMapUnmanaged(Decl.Index, StaticPool.AbstractKey) = .em
 init_tracked: DynBuf(Decl.Index),
 uninit: u64 = 0,
 deferrals: u32 = 0,
+// brk and cont seen so far: a loop without a brk never ends, one without either yields one element per step
+jumps: [2]u32 = .{ 0, 0 },
 loop_exits: DynBuf(u64),
 
 // global names -> first declaration with that name
@@ -503,6 +505,7 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
         const p = self.param(pn);
         const pt = sp.get(ty).function_type.params[i + off];
         if (p.default != 0) _ = self.check(&ctx, p.default, pt);
+        for (self.params_of(v)[0..i], 0..) |q, j| if (self.param_name(q, j) == self.name_at(p, i)) self.doc.h21_report(.duplicate_declaration, pn, self.name_at(p, i), decl);
         const pd = self.h02_declare_local(self.name_at(p, i), pn, .parameter, pt);
         self.node_decl[pn] = pd;
         const gp = if (g) |t| self.sig(t).params[i + off] else pt;
@@ -537,9 +540,10 @@ pub fn check_unit(self: *Resolver, ctx: *FnCtx, body: NodeId) void {
         _ = self.check(ctx, body, ctx.ret_type);
         return;
     }
-    _ = self.h09_check_expr(ctx, body, .none);
-    // a `{}` body that never returns a value returns unit
-    if (sp.tag(sp.apply_vars(&self.abstract_pool, ctx.ret_type)) == .type_var) _ = sp.unify(&self.abstract_pool, ctx.ret_type, .unit_type);
+    const t = self.h09_check_expr(ctx, body, .none);
+    const r = sp.apply_vars(&self.abstract_pool, ctx.ret_type);
+    // a `{}` body that never returns a value returns unit, a body with a result returns it on every path (`$main` falls off with 0)
+    if (r != .none and sp.tag(r) == .type_var) _ = sp.unify(&self.abstract_pool, ctx.ret_type, .unit_type) else if (r != .none and (ctx.decl == .none or self.dp(.name, ctx.decl).* != .main) and r != .unit_type and r != .runit_type and r != .poison_type and t != .never_type and t != .poison_type and !self.doc.has(body)) _ = self.report(.missing_ret, body, 0, 0);
 }
 
 pub const prim_types = blk: {
@@ -629,6 +633,11 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             st = sp.pointee(st);
             // pointers index like arrays (`*u8 buf; buf[i]`), arrays auto-deref once
             const elem = if (sp.get(st) == .array_type) sp.get(st).array_type.elem else if (through_ptr) st else break :blk self.report(.type_mismatch, a0, st, .none);
+            // lengths of realizations and stcfun bodies are the interpreter's to check, their constant indices may be guarded
+            if (!ctx.interpreted and !(ctx.decl != .none and self.template_of.contains(ctx.decl)) and sp.get(st) == .array_type and sp.tag(sp.get(st).array_type.len) == .int_value and self.is_literal(a1)) {
+                const i = statics.static_int(self, ctx, a1) orelse break :blk elem;
+                if (i < 0 or i >= sp.get(sp.get(st).array_type.len).int.bits) _ = self.report(.static_eval_failed, a1, 0, 0);
+            }
             break :blk elem;
         },
         .dereference => blk: {
@@ -703,6 +712,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         },
         .ret_void => if (ctx.ret_type != .none and sp.coerce(ap, .unit_type, ctx.ret_type) == .incompatible) self.report(.ret_type_mismatch, node, .unit_type, ctx.ret_type) else .never_type,
         .brk, .cont => if (ctx.loop_depth > 0) blk: {
+            self.jumps[@intFromBool(k == .cont)] += 1;
             if (k == .brk and self.loop_exits.head > 0) self.loop_exits.buf[self.loop_exits.head - 1] |= self.uninit;
             break :blk .never_type;
         } else self.report(if (k == .brk) .brk_outside_loop else .cont_outside_loop, node, 0, 0),
@@ -814,6 +824,9 @@ pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) St
             // an unlengthed static takes the length of its value
             const v = self.dp(.value, d).*;
             if (v != .none and sp.tag(v) == .aggregate_value and sp.has_vars(self.dp(.ty, d).*)) _ = sp.unify(&self.abstract_pool, self.dp(.ty, d).*, sp.type_of(v));
+            const dt = self.dp(.ty, d).*;
+            if (v != .none and sp.tag(v) == .aggregate_value and sp.tag(dt) == .array_type and sp.tag(sp.get(dt).array_type.len) == .int_value and sp.get(sp.get(dt).array_type.len).int.bits != sp.get(v).aggregate.elems.len)
+                _ = self.report(.type_mismatch, values[@min(i, values.len - 1)], sp.type_of(v), dt);
         }
     }
     return .unit_type;
@@ -962,7 +975,10 @@ pub fn init_leave(self: *Resolver, s: InitState) void {
 }
 
 pub fn check(self: *Resolver, ctx: *FnCtx, n: NodeId, expected: StaticPool.Index) StaticPool.Index {
-    return self.h10_expect(n, self.h09_check_expr(ctx, n, expected), expected);
+    const t = self.h09_check_expr(ctx, n, expected);
+    // a case with a payload is a constructor, a value of it needs the payload
+    if (t != .poison_type and self.nk(n) == .member and self.static_pool.tag(t) == .variant_case_type and self.static_pool.get(t).variant_case_type.payload != .none) return self.report(.type_mismatch, n, t, expected);
+    return self.h10_expect(n, t, expected);
 }
 
 pub const Class = packed struct(u8) { stc: bool = false, loop: bool = false, range: bool = false, type_expr: bool = false, declares: bool = false, runit: bool = false, literal: bool = false, _pad: u1 = 0 };

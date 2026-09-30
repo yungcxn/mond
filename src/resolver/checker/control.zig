@@ -123,18 +123,37 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
     const at_exit = self.uninit;
     self.loop_exits.push(0);
     ctx.loop_depth += 1;
+    const jumps = self.jumps;
     // a stc loop body is static per iteration: checked like a stcfun body, evaluated with the loop
     const outer = ctx.interpreted;
     ctx.interpreted = outer or class(k).stc;
     const bt = self.h09_check_expr(ctx, lp.body, if (expected == .none) .none else if (elem_hint != .none) elem_hint else self.fresh_var(lp.body));
     ctx.interpreted = outer;
     ctx.loop_depth -= 1;
+    const broke = self.jumps[0] != jumps[0];
+    const stepped = !broke and self.jumps[1] == jumps[1];
+    self.jumps = jumps;
     self.loop_exits.head -= 1;
     self.uninit = self.loop_exits.buf[self.loop_exits.head] | if (lp.cond != 0 or lp.seq != 0) at_exit else 0;
     if (!ctx.interpreted and !ctx.abstract and class(k).stc) _ = statics.static_of(self, ctx, node);
-    // used as a value: an array of the body values; brk ends it without adding one
-    if (expected == .none) return .unit_type;
-    return sp.intern(.{ .array_type = .{ .len = self.fresh_var(node), .elem = if (bt == .never_type or bt == .runit_type) (if (elem_hint != .none) elem_hint else .unit_type) else bt } });
+    // used as a value: an array of the body values; brk ends it without adding one, cont skips one
+    if (expected == .none) return if (lp.cond == 0 and lp.seq == 0 and !broke) .never_type else .unit_type;
+    const n = if (stepped and lp.seq != 0) steps(self, ctx, lp.seq) else null;
+    return sp.intern(.{ .array_type = .{ .len = if (n) |x| sp.intern(.{ .int = .{ .ty = .u64_type, .bits = x } }) else self.fresh_var(node), .elem = if (bt == .never_type or bt == .runit_type) (if (elem_hint != .none) elem_hint else .unit_type) else bt } });
+}
+
+// the static number of steps of a `for` over a range with static bounds or an array of static length
+fn steps(self: *Resolver, ctx: *FnCtx, seq: NodeId) ?u64 {
+    const sp = &self.static_pool;
+    if (!is_range_kind(self.nk(seq))) {
+        const st = sp.pointee(sp.apply_vars(&self.abstract_pool, self.node_type[seq]));
+        return if (st != .poison_type and sp.tag(st) == .array_type and sp.tag(sp.get(st).array_type.len) == .int_value) sp.get(sp.get(st).array_type.len).int.bits else null;
+    }
+    const g = self.range(seq);
+    if (g.hi == 0) return null;
+    const lo = if (g.lo == 0) 0 else statics.static_int(self, ctx, g.lo) orelse return null;
+    const hi = (statics.static_int(self, ctx, g.hi) orelse return null) + @intFromBool(g.incl);
+    return if (hi > lo) @intCast(hi - lo) else 0;
 }
 
 // binders belong to their statement: a block scopes every non-declaring statement, a declaration its values

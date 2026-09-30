@@ -1,3 +1,4 @@
+const std = @import("std");
 const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const calls = @import("calls.zig");
@@ -144,6 +145,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
                 }
                 const tv = if (tag_node == 0) sp.intern(.{ .int = .{ .ty = .u64_type, .bits = next_tag } }) else statics.h08_eval_static(self, ctx, tag_node);
                 if (sp.tag(tv) == .int_value) next_tag = sp.get(tv).int.bits +% 1;
+                for (cases[0..i]) |prev| if (sp.get(prev).variant_case_type.name == self.name_of(self.arg(q, 0))) self.doc.h21_report(.duplicate_declaration, pn, self.name_of(self.arg(q, 0)), decl);
                 cases[i] = self.set(self.arg(q, 0), sp.intern(.{ .variant_case_type = .{ .variant = ty, .case = @intCast(i), .name = self.name_of(self.arg(q, 0)), .tag = tv, .payload = payload } }));
             }
             // variants are always tagged, without tagof by the smallest tag type for their case count
@@ -170,6 +172,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
                 const p = self.param(f);
                 types[i] = dynify(self, realized_type(self, ctx, p.ty));
                 names[i] = self.name_at(p, i);
+                if (std.mem.indexOfScalar(NamePool.Index, names[0..i], names[i]) != null) self.doc.h21_report(.duplicate_declaration, f, names[i], decl);
             }
             sp.complete_nominal(ty, .{ .custom_type = .{ .decl = decl, .is_packed = ck == .def_type_packed, .field_names = names[0..fields.len], .field_types = types[0..fields.len], .traits = traits[0..nt] } });
         },
@@ -248,12 +251,12 @@ fn conform(self: *Resolver, ty: StaticPool.Index, own: StaticPool.Index, trait: 
     const sp = &self.static_pool;
     for (0..sp.get(trait).trait_type.member_names.len) |i| {
         const tt = sp.get(trait).trait_type;
-        if (self.nk(self.value_node(tt.decl.member(i))) == .def_fun) continue;
         const name = tt.member_names[i];
         const want = tt.member_types[i];
         const m = if (own == .none) StaticPool.Member.none else sp.lookup_member(own, name);
+        // members with a default may be left out, an override keeps the signature
         if (m != .trait_method) {
-            self.doc.h21_report(.trait_member_missing, node, name, trait);
+            if (self.nk(self.value_node(tt.decl.member(i))) != .def_fun) self.doc.h21_report(.trait_member_missing, node, name, trait);
             continue;
         }
         const have = sp.apply_vars(&self.abstract_pool, sp.get(own).trait_type.member_types[m.trait_method.index]);

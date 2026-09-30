@@ -575,7 +575,7 @@ fn candidate(self: *HighLowerer, m: Decl.Index) bool {
     const body = self.arg(v, 1);
     if (self.nk(body) == .block) {
         _ = self.expr(body);
-        if (!self.dead) _ = if (has_value(self.ret_ty)) self.emit(.@"unreachable", .unit_type, 0, 0) else self.ret(.none);
+        if (!self.dead and !has_value(self.ret_ty)) self.ret(.none) else if (!self.dead and self.r.dp(.name, m).* == .main) self.ret(self.int(self.ret_ty, 0)) else if (!self.dead) _ = self.emit(.@"unreachable", .unit_type, 0, 0);
     } else self.ret(self.expr_to(body, self.ret_ty));
     self.goto(fail);
     return tested;
