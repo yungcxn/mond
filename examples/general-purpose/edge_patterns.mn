@@ -34,12 +34,11 @@ fun bool_pair = (bool a, bool b) -> u8: ret match a {
     false => match b { true => 1, false => 0 },
 }
 
-# LIMIT: exhaustiveness is decided per case, `Door(true)` and `Door(false)` together do not cover Door, and the same holds for every combination of payload or field patterns (line_kind), so a catch-all closes them
 fun cell_kind = (Cell c) -> u32: ret match c {
     Cell.Empty => 0,
     Cell.Wall => 1,
     Cell.Door(true) => 2,
-    Cell.Door(_) => 3,
+    Cell.Door(false) => 3,
     Cell.Item(0, _) => 4,
     Cell.Item(k, 0) => 5 + k as u32 * 100,
     Cell.Item(1..=3, q) => 6 + q * 1000,
@@ -58,7 +57,7 @@ fun line_kind = (Line l) -> i32: ret match l {
     Line(a = Pt.At(x1, y1), b = Pt.At(x2, y2)) => (x2 - x1) * 100 + (y2 - y1),
     Line(a = Pt.Off, b = Pt.Off) => -1,
     Line(a = Pt.At(x, y), b = Pt.Off) => x + y,
-    _ => 0,
+    Line(a = Pt.Off, b = Pt.At(x, y)) => 0,
 }
 
 fun expr_class = (Expr e) -> u32: ret match e {

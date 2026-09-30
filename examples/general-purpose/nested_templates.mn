@@ -22,11 +22,10 @@ fun flatten = (Opt(Opt(u8)) o) -> Opt(u8): ret match o {
     Opt(Opt(u8)).None => Opt(u8).None,
 };
 
-# BUG: exhaustiveness is per outer case, so the nested payload arms need a `_` arm
 fun depth = (Opt(Opt(u8)) o) -> u32: ret match o {
     Opt(Opt(u8)).Some(Opt(u8).Some(x)) => 2,
     Opt(Opt(u8)).Some(Opt(u8).None) => 1,
-    _ => 0,
+    Opt(Opt(u8)).None => 0,
 };
 
 stcfun opts = () -> u32 {

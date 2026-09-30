@@ -2,6 +2,7 @@ variant V = +(A, B(u8));
 variant W = +(X, Y);
 variant P = +(I(i32 v), U(u8 v), Two(i32 a, i32 b));
 type R = *(i32 a, i32 b);
+type Flags = *(bool on, bool up);
 
 fun f = (V v, i32 n, R r) {
     match v { W.X => 1, _ => 2 } #! type_mismatch
@@ -19,4 +20,11 @@ fun g = (P p) -> i32: ret match p {
     P.I(k) | P.U(k) => 1, #! type_mismatch
     P.Two(a, 1) | P.Two(1, b) => 2, #! undefined_name undefined_name
     _ => 3,
+}
+
+fun holes = (P p, Flags f) {
+    match p { P.Two(0, _) => 1, P.I(_) | P.U(_) => 2 } #! non_exhaustive_match
+    match f { Flags(true, _) => 1, Flags(false, true) => 2 } #! non_exhaustive_match
+    match f { Flags(true, _) => 1, Flags(false, true) => 2, Flags(up = false) => 3 }
+    match p { P.Two(..<0, _) | P.Two(1.., _) => 1, P.Two(0, b) => 4, P.I(_) => 2, P.U(_) => 3 }
 }
