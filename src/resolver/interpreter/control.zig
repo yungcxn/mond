@@ -259,6 +259,7 @@ fn name(ip: *Interpreter, id: NodeId, v: Value) void {
 
 fn label(ip: *Interpreter, l: NodeId, v: Value) void {
     const r = ip.res();
+    if (r.tree.kind(l) != .partial__destructure) return name(ip, l, v);
     for (r.tree.kids(l), 0..) |id, i| name(ip, id, if (i < (ip.span(v) orelse 0)) ip.elem(v, @intCast(i)) else .poison);
 }
 
