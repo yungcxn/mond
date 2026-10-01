@@ -59,11 +59,11 @@ pub fn static(ip: *Interpreter, n: NodeId, k: Kind) Value {
 fn build(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
     const sp = &r.static_pool;
-    const k = r.nk(n);
+    const k = r.tree.kind(n);
     if (k == .unify_variants) {
         const mark = ip.ids.head;
         defer ip.ids.head = mark;
-        for ([_]NodeId{ r.arg(n, 0), r.arg(n, 1) }) |side| {
+        for ([_]NodeId{ r.tree.arg(n, 0), r.tree.arg(n, 1) }) |side| {
             const t = of(ip, side) orelse return .poison;
             switch (sp.tag(t)) {
                 .variant_union_type => ip.ids.append(sp.get(t).variant_union_type),
@@ -73,11 +73,11 @@ fn build(ip: *Interpreter, n: NodeId) Value {
         }
         return .pooled(sp.intern(.{ .variant_union_type = ip.ids.buf[mark..ip.ids.head] }));
     }
-    const child = of(ip, r.arg(n, if (k == .type_array) 1 else 0)) orelse return .poison;
+    const child = of(ip, r.tree.arg(n, if (k == .type_array) 1 else 0)) orelse return .poison;
     if (k == .type_ptr or k == .type_ptrmut) return .pooled(sp.intern(.{ .ptr_type = .{ .child = child, .mutable = k == .type_ptrmut } }));
     if (k == .type_array_unlengthed) return .pooled(sp.intern(.{ .array_type = .{ .len = StaticPool.dyn_len, .elem = child } }));
-    const len = ip.eval(r.arg(n, 0));
-    if (!Value.is_int(len.ty)) return if (len.is(.poison_type)) len else ip.fail(r.arg(n, 0), .not_static, ip.pool(len), 0);
+    const len = ip.eval(r.tree.arg(n, 0));
+    if (!Value.is_int(len.ty)) return if (len.is(.poison_type)) len else ip.fail(r.tree.arg(n, 0), .not_static, ip.pool(len), 0);
     return .pooled(array_type(ip, len.bits, child));
 }
 
@@ -90,7 +90,7 @@ fn define(ip: *Interpreter, n: NodeId) Index {
     for (s[0]..s[1]) |i| {
         const id: NodeId = @intCast(i);
         const d = ip.info(.decl, id);
-        if (!places.named(r.nk(id)) or d == .none or r.dp(.flags, d).is_global) continue;
+        if (!places.named(r.tree.kind(id)) or d == .none or r.dp(.flags, d).is_global) continue;
         const v = places.peek(ip, d);
         if (v.is(.none)) continue;
         const x = ip.pool(v);
@@ -102,8 +102,8 @@ fn define(ip: *Interpreter, n: NodeId) Index {
 pub fn cast(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
     const sp = &r.static_pool;
-    const a0 = r.arg(n, 0);
-    const a1 = r.arg(n, 1);
+    const a0 = r.tree.arg(n, 0);
+    const a1 = r.tree.arg(n, 1);
     const framed = ip.framed();
     const x = ip.eval(a0);
     if (!framed or ip.info(.ty, n) != .poison_type) {
@@ -133,7 +133,7 @@ fn shrink(ip: *Interpreter, n: NodeId, x: Value, t: Index) Value {
     const ptr = sp.is_ptr(t);
     const at = sp.pointee(t);
     if (sp.tag(sp.get(at).array_type.len) != .int_value) return if (ptr and x.is_ref()) .ref(t, x.at()) else x;
-    const g = r.narrowed(r.arg(n, 1));
+    const g = r.narrowed(r.tree.arg(n, 1));
     const lo: u32 = if (g != 0) @truncate(ip.eval(g).bits) else 0;
     const c0 = if (x.is_ref()) x.at() else ip.put(x);
     const c = if (ip.span(ip.mem.buf[c0]) != null) ip.thaw(c0).at() else c0;
@@ -143,16 +143,16 @@ fn shrink(ip: *Interpreter, n: NodeId, x: Value, t: Index) Value {
 
 pub fn asbits(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
-    const x = Value.fit(ip.eval(r.arg(n, 0)), ip.info(.ty, r.arg(n, 0)));
+    const x = Value.fit(ip.eval(r.tree.arg(n, 0)), ip.info(.ty, r.tree.arg(n, 0)));
     if (x.is(.poison_type)) return x;
-    return Value.reinterpret(x, if (ip.framed()) ip.info(.ty, n) else r.h07_lower_type(ip.ctx, r.arg(n, 1))) orelse ip.fail(n, .not_static, ip.pool(x), 0);
+    return Value.reinterpret(x, if (ip.framed()) ip.info(.ty, n) else r.h07_lower_type(ip.ctx, r.tree.arg(n, 1))) orelse ip.fail(n, .not_static, ip.pool(x), 0);
 }
 
 pub fn oftype(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
     const sp = &r.static_pool;
-    const a0 = r.arg(n, 0);
-    const a1 = r.arg(n, 1);
+    const a0 = r.tree.arg(n, 0);
+    const a1 = r.tree.arg(n, 1);
     const framed = ip.framed();
     const st = if (framed) Index.none else r.deref(r.h09_check_expr(ip.ctx, a0, .none));
     const known = st != .none and st != .poison_type and sp.tag(st) != .meta_type and sp.tag(st) != .trait_type and r.templated(st) == .none;
@@ -168,7 +168,7 @@ pub fn oftype(ip: *Interpreter, n: NodeId) Value {
 pub fn sizeof(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
     const sp = &r.static_pool;
-    const a0 = r.arg(n, 0);
+    const a0 = r.tree.arg(n, 0);
     const t = ip.checked(a0);
     const ty = if (sp.tag(t) == .meta_type) ip.pool(ip.eval(a0)) else sp.apply_vars(&r.abstract_pool, t);
     if (r.is_template(ip.info(.decl, a0)) or ty != .poison_type and r.holds_template(ty)) return ip.fail(a0, .unrealized_template, ty, 0);

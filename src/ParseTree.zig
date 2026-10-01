@@ -299,3 +299,29 @@ pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, span_idx: u32)
 
     return new_node_idx;
 }
+
+// utility for navigating the tree structure
+
+pub inline fn kind(self: *const @This(), n: NodeId) Node.Kind {
+    return self.ast_nodes.pool.nk.buf[n];
+}
+
+pub inline fn arg(self: *const @This(), n: NodeId, i: u1) NodeId {
+    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.pool.args.buf[n]);
+    return slots[i];
+}
+
+pub fn kids(self: *const @This(), n: NodeId) []const NodeId {
+    const a = self.ast_nodes.pool.args.buf[n];
+    return self.extra_childrefs.buf[a[0]..][0..a[1]];
+}
+
+// child i as a list: the children of a `wrapper` node, or the child alone
+pub fn list_at(self: *const @This(), n: NodeId, comptime i: u1, comptime wrapper: Node.Kind) []const NodeId {
+    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.pool.args.buf[n]);
+    return if (self.kind(slots[i]) == wrapper) self.kids(slots[i]) else slots[i..][0..1];
+}
+
+pub fn span(self: *const @This(), n: NodeId) Lexer.TextSpan {
+    return self.span_store[self.arg(n, 0)];
+}

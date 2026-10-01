@@ -55,6 +55,8 @@ pub fn deinit(self: *Interpreter) void {
     self.cap_list.deinit();
 }
 
+// TODO NEXT wtf
+
 pub fn res(self: *Interpreter) *Resolver {
     return @alignCast(@fieldParentPtr("interpreter", self));
 }
@@ -349,9 +351,9 @@ pub fn eval(self: *Interpreter, n: NodeId) Value {
         const c = r.body_nodes.pool.value.buf[b.start + n - b.lo];
         if (c != .none) return .of(sp, c);
     }
-    const k = r.nk(n);
-    const a0 = r.arg(n, 0);
-    const a1 = r.arg(n, 1);
+    const k = r.tree.kind(n);
+    const a0 = r.tree.arg(n, 0);
+    const a1 = r.tree.arg(n, 1);
     return switch (k) {
         .int, .char, .float, .string, .boolean_true, .boolean_false => .fit(.of(sp, r.literal_value(n, false)), self.hint(n)),
         .neg_num => if (r.is_literal(n)) .fit(.of(sp, r.literal_value(a0, true)), self.hint(n)) else self.unary(n, k, self.eval(a0)),
@@ -407,7 +409,7 @@ pub fn arith(self: *Interpreter, n: NodeId, k: Kind, a: Value, b: Value) Value {
 
 fn array(self: *Interpreter, n: NodeId) Value {
     const r = self.res();
-    const elems = if (r.nk(n) == .array) r.kids(n) else &[_]NodeId{};
+    const elems = if (r.tree.kind(n) == .array) r.tree.kids(n) else &[_]NodeId{};
     const len: u32 = @intCast(elems.len);
     const ct = r.static_pool.apply_vars(&r.abstract_pool, self.hint(n));
     var et = types.elem_type(self, ct);
@@ -424,10 +426,10 @@ fn array(self: *Interpreter, n: NodeId) Value {
 
 fn index(self: *Interpreter, n: NodeId) Value {
     const r = self.res();
-    const base = self.eval(r.arg(n, 0));
+    const base = self.eval(r.tree.arg(n, 0));
     if (base.is(.poison_type)) return base;
     const agg = self.deref(base);
-    const i = self.eval(r.arg(n, 1));
+    const i = self.eval(r.tree.arg(n, 1));
     if (i.is(.poison_type)) return i;
     if (!Value.is_int(i.ty)) return self.fail(n, .not_static, 0, 0);
     const len = self.count(agg) orelse return if (base.is_ref()) self.mem.buf[base.at() + @as(u32, @intCast(i.bits))] else self.fail(n, .not_static, 0, 0);

@@ -24,7 +24,7 @@ pub fn deferred(self: *Resolver, ctx: *FnCtx, node: NodeId) ?StaticPool.Index {
     self.node_value[node] = .none;
     self.deferrals += 1;
     const s = self.subtree(node);
-    for (s[0]..s[1]) |i| switch (self.nk(@intCast(i))) {
+    for (s[0]..s[1]) |i| switch (self.tree.kind(@intCast(i))) {
         .identifier, .identifier_self => {
             const d = self.h01_lookup(self.name_of(@intCast(i)));
             if (d != .none) self.node_decl[i] = d;
@@ -48,7 +48,7 @@ pub fn try_static(self: *Resolver, ctx: *FnCtx, node: NodeId) ?StaticPool.Index 
 }
 
 pub fn static_of(self: *Resolver, ctx: *FnCtx, n: NodeId) StaticPool.Index {
-    const c = Resolver.node_props[@intFromEnum(self.nk(n))];
+    const c = Resolver.node_props[@intFromEnum(self.tree.kind(n))];
     return if (c.stc and c.loop and self.node_value[n] != .none) self.node_value[n] else h08_eval_static(self, ctx, n);
 }
 
@@ -66,16 +66,21 @@ pub fn literal_value(self: *Resolver, node: NodeId, negated: bool) StaticPool.In
     var neg = negated;
     const n = self.literal_core(node, &neg);
     var buf: [4096]u8 = undefined;
-    switch (self.nk(n)) {
+    switch (self.tree.kind(n)) {
         .boolean_true => return .bool_true,
         .boolean_false => return .bool_false,
-        .string => return sp.intern(.{ .string = unescape(self.text(n), &buf) }),
+        .string => {
+            const s = self.tree.span(n);
+            return sp.intern(.{ .string = unescape(self.src_bytes[s[0]..s[1]], &buf) });
+        },
         .float => {
-            const f = std.fmt.parseFloat(f64, self.text(n)) catch return self.report(.type_mismatch, n, .none, .none);
+            const s = self.tree.span(n);
+            const f = std.fmt.parseFloat(f64, self.src_bytes[s[0]..s[1]]) catch return self.report(.type_mismatch, n, .none, .none);
             return sp.intern(.{ .float = .{ .ty = .f64_type, .value = if (neg) -f else f } });
         },
         else => {
-            const bits: u64 = if (self.nk(n) == .char) unescape(self.text(n), &buf)[0] else std.fmt.parseInt(u64, self.text(n), 0) catch return self.report(.type_mismatch, n, .none, .u64_type);
+            const s = self.tree.span(n);
+            const bits: u64 = if (self.tree.kind(n) == .char) unescape(self.src_bytes[s[0]..s[1]], &buf)[0] else std.fmt.parseInt(u64, self.src_bytes[s[0]..s[1]], 0) catch return self.report(.type_mismatch, n, .none, .u64_type);
             return sp.intern(.{ .int = if (neg) .{ .ty = .i64_type, .bits = 0 -% bits } else .{ .ty = .u64_type, .bits = bits } });
         },
     }
@@ -86,7 +91,7 @@ pub fn literal_type(self: *Resolver, node: NodeId, expected: StaticPool.Index) S
     const sp = &self.static_pool;
     var neg = false;
     const n = self.literal_core(node, &neg);
-    const k = self.nk(n);
+    const k = self.tree.kind(n);
     if (k == .boolean_true or k == .boolean_false) return .bool_type;
     const v = literal_value(self, n, neg);
     var target = sp.apply_vars(&self.abstract_pool, expected);
@@ -167,7 +172,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
         const w = self.param(pn).where;
         if (w != 0 and h08_eval_static(self, &ctx, w) == .bool_false) _ = self.report(.stcwhere_violated, w, generic, args);
     }
-    const unit = self.arg(v, 1);
+    const unit = self.tree.arg(v, 1);
     const kind = self.type_kind(unit);
     if (kind != .variable) { // a type: memoized before its body, so it can mention itself (`Stream(Child)` inside Stream)
         const d = self.push_decl(self.dp(.name, generic).*, unit, kind, .none, .{});
@@ -177,7 +182,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
         memo(self, key, self.dp(.value, d).*);
         return types.h19_check_type_def(self, &ctx, d, unit);
     }
-    if (self.nk(unit) == .def_fun) {
+    if (self.tree.kind(unit) == .def_fun) {
         const d = self.push_decl(self.dp(.name, generic).*, unit, .function, .none, .{});
         const fv = sp.intern(.{ .function = d });
         memo(self, key, fv);
@@ -200,7 +205,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
         memo(self, key, .poison_type);
         return .poison_type;
     }
-    for (vars..self.abstract_pool.count()) |i| switch (self.nk(self.abstract_pool.pool.sliced_field(.origin)[i])) {
+    for (vars..self.abstract_pool.count()) |i| switch (self.tree.kind(self.abstract_pool.pool.sliced_field(.origin)[i])) {
         .@"while", .while_with_repeat_stmt, .loop, .loop_with_repeat_stmt => if (self.abstract_pool.binding(@enumFromInt(i)) == .none) self.abstract_pool.bind(@enumFromInt(i), StaticPool.dyn_len),
         else => {},
     };
@@ -365,7 +370,7 @@ pub fn template_member(self: *Resolver, node: NodeId, t: StaticPool.Index, name:
     const kind = self.template(g);
     if (kind == .variable) return self.report(.generic_member, node, name, t);
     const v = self.value_node(g);
-    const unit = self.arg(v, 1);
+    const unit = self.tree.arg(v, 1);
     var ctx = FnCtx{ .in_static = true };
     self.open_scope(true, .none, 0);
     defer self.h04_pop_scope();
@@ -375,7 +380,7 @@ pub fn template_member(self: *Resolver, node: NodeId, t: StaticPool.Index, name:
     };
     const w = self.definition(unit);
     const tr = if (self.type_kind(w.core) == .trait) w.core else if (w.body != 0) w.body else return self.report(.unknown_member, node, name, t);
-    for (self.kids(self.arg(tr, if (self.nk(tr) == .def_trait_implof) 1 else 0))) |s| {
+    for (self.tree.kids(self.tree.arg(tr, if (self.tree.kind(tr) == .def_trait_implof) 1 else 0))) |s| {
         const parts = self.statement(s);
         if (parts.ids.len != 1 or self.name_of(parts.ids[0]) != name or !is_fn(parts.kind)) continue;
         return if (self.signature_mentions(parts.value, v)) self.report(.generic_member, node, name, t) else types.fun_type(self, &ctx, parts.value, .default, .poison_type, .none);

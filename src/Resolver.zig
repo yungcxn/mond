@@ -31,6 +31,7 @@ pub const templated = statics.templated;
 pub const realizes = statics.realizes;
 pub const holds_template = statics.holds_template;
 const none_node: NodeId = std.math.maxInt(NodeId);
+// TODO NEXT
 const NodeId = ParseTree.NodeId;
 const NodeKind = ParseTree.Node.Kind;
 
@@ -124,15 +125,6 @@ pub const Decl = struct {
             return @enumFromInt(@intFromEnum(d) + 1 + i);
         }
     };
-};
-
-// per-body state that would otherwise be globals. lives on the machine stack while a body is
-// checked and is passed down by pointer - no table, no allocation.
-// ret_type is a type var for induced return types; every `ret` unifies with it.
-pub const EphemeralNodeInfo = struct {
-    ty: StaticPool.Index,
-    decl: Decl.Index,
-    value: StaticPool.Index,
 };
 
 pub const Body = struct {
@@ -299,6 +291,13 @@ pub const node_props = blk: {
     break :blk t;
 };
 
+// per-body state that would otherwise be globals. lives on the machine stack while a body is checked
+pub const EphemeralNodeInfo = struct {
+    ty: StaticPool.Index,
+    decl: Decl.Index,
+    value: StaticPool.Index,
+};
+
 alloc: std.mem.Allocator,
 tree: *ParseTree,
 src_bytes: []const u8,
@@ -402,7 +401,7 @@ pub inline fn deinit(self: *Resolver) void {
     self.body_of.deinit(self.alloc);
     self.template_of.deinit(self.alloc);
     self.realized_args.deinit(self.alloc);
-    self.staticscope.deinit(self.alloc);
+    self.static_scope.deinit(self.alloc);
     self.globals.deinit(self.alloc);
 
     self.alloc.free(self.node_type);
@@ -504,13 +503,13 @@ fn s3_apply_inferred_types(self: *Resolver) void {
         const root = @intFromEnum(self.abstract_pool.find(@enumFromInt(i)));
         if (vs.binding[root] != .none) continue;
         const origin = vs.origin[i];
-        const k = self.nk(origin);
+        const k = self.tree.kind(origin);
         const counted = switch (k) {
             .for_seq, .for_var_in_seq => blk: {
-                const f = if (k == .for_var_in_seq) self.arg(origin, 0) else origin;
-                const seq = self.arg(f, 0);
+                const f = if (k == .for_var_in_seq) self.tree.arg(origin, 0) else origin;
+                const seq = self.tree.arg(f, 0);
                 const st = self.deref(sp.apply_vars(&self.abstract_pool, self.node_type[seq]));
-                break :blk (is_range_kind(self.nk(seq)) and self.nk(seq) != .gen_lowerbound) or (st != .none and sp.tag(st) == .array_type) or control.is_ptr_array(self, self.node_type[seq]);
+                break :blk (is_range_kind(self.tree.kind(seq)) and self.tree.kind(seq) != .gen_lowerbound) or (st != .none and sp.tag(st) == .array_type) or control.is_ptr_array(self, self.node_type[seq]);
             },
             .@"while", .while_with_repeat_stmt, .loop, .loop_with_repeat_stmt => false,
             .type_array_unlengthed, .array_index, .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => true,
@@ -604,7 +603,7 @@ pub fn h05_ensure_signature(self: *Resolver, decl: Decl.Index) void {
     const sp = &self.static_pool;
     const kind = self.dp(.kind, decl).*;
     const s = self.statement(self.dp(.node, decl).*);
-    if (s.type != 0 and self.nk(s.type) == .type_fun and switch (self.dp(.name, decl).*) {
+    if (s.type != 0 and self.tree.kind(s.type) == .type_fun and switch (self.dp(.name, decl).*) {
         .init, .deinit, .main, .has_next, .next => true,
         else => false,
     }) _ = self.report(.redundant_fun, s.type, 0, 0);
@@ -613,16 +612,16 @@ pub fn h05_ensure_signature(self: *Resolver, decl: Decl.Index) void {
     const v = self.value_node(decl);
     self.open_scope(flags.is_global, if (self.self_off(decl) == 1) ctx.self_type else .none, v);
     switch (kind) {
-        .function, .static_function, .inlined_function, .trait_member => if (self.nk(v) == .def_fun or self.nk(v) == .def_fun_declaration) {
+        .function, .static_function, .inlined_function, .trait_member => if (self.tree.kind(v) == .def_fun or self.tree.kind(v) == .def_fun_declaration) {
             // stcfun: the first tuple is static, whatever the body produces is the result (a second tuple belongs to the produced function)
-            const unit = self.arg(v, 1);
+            const unit = self.tree.arg(v, 1);
             const tk = self.template(decl);
             const uk = self.type_kind(unit);
             if (kind == .static_function and tk == .variable and uk != .variable) _ = self.report(.missing_ret, unit, 0, 0);
-            const res = if (self.nk(unit) == .ret) self.arg(unit, 0) else unit;
+            const res = if (self.tree.kind(unit) == .ret) self.tree.arg(unit, 0) else unit;
             const ret: StaticPool.Index = if (kind == .static_function)
-                meta(self.type_kind(res), if (self.nk(res) == .def_fun or self.nk(res) == .def_fun_declaration) .fun_type else .poison_type)
-            else if (self.nk(v) == .def_fun_declaration or self.nk(self.arg(v, 0)) == .partial__fun_def_header_ret) .unit_type else self.fresh_var(v);
+                meta(self.type_kind(res), if (self.tree.kind(res) == .def_fun or self.tree.kind(res) == .def_fun_declaration) .fun_type else .poison_type)
+            else if (self.tree.kind(v) == .def_fun_declaration or self.tree.kind(self.tree.arg(v, 0)) == .partial__fun_def_header_ret) .unit_type else self.fresh_var(v);
             if (tk != .variable and uk == .variable) {
                 _ = self.report(.redundant_ret, unit, 0, 0);
             } else if (tk != .variable and uk != tk) _ = self.report(.type_mismatch, unit, ret, meta(tk, .trait_type));
@@ -668,7 +667,7 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     // stcfun bodies are checked per realization, length-generic ones per length (h20); `main` is realized once, by the runtime
     const generic = statics.length_generic(self, ty) and !self.template_of.contains(decl);
     const abstract = generic and statics.only_templates(self, ty);
-    if (kind == .static_function or !is_fn(kind) or self.nk(v) != .def_fun or generic and !abstract) {
+    if (kind == .static_function or !is_fn(kind) or self.tree.kind(v) != .def_fun or generic and !abstract) {
         state.* = .done;
         return;
     }
@@ -703,7 +702,7 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
         calls.link(self, p.name, pd, pt);
         self.check_guards(&ctx, p, pt);
     }
-    self.check_unit(&ctx, self.arg(v, 1));
+    self.check_unit(&ctx, self.tree.arg(v, 1));
     self.h04_pop_scope();
     if (off == 1 and self.dp(.flags, @enumFromInt(first)).writes) self.dp(.flags, decl).writes = true;
     self.dp(.state, decl).* = if (self.errors_since(mark, v)) .failed else .done;
@@ -722,7 +721,7 @@ pub fn errors_since(self: *Resolver, mark: usize, v: NodeId) bool {
 
 pub fn check_unit(self: *Resolver, ctx: *FnCtx, body: NodeId) void {
     const sp = &self.static_pool;
-    if (self.nk(body) != .block) {
+    if (self.tree.kind(body) != .block) {
         _ = self.check(ctx, body, ctx.ret_type);
         return;
     }
@@ -749,9 +748,9 @@ pub const prim_types = blk: {
 pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
     const ap = &self.abstract_pool;
-    const a0 = self.arg(node, 0);
-    const a1 = self.arg(node, 1);
-    const k = self.nk(node);
+    const a0 = self.tree.arg(node, 0);
+    const a1 = self.tree.arg(node, 1);
+    const k = self.tree.kind(node);
     if (ctx.interpreted and node_props[@intFromEnum(k)].stc and !self.doc.has(node)) _ = self.report(.redundant_stc, node, 0, 0);
     const t: StaticPool.Index = switch (k) {
         .int, .float, .char, .string, .boolean_true, .boolean_false => statics.literal_type(self, node, expected),
@@ -767,17 +766,17 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             self.h03_push_scope();
             defer self.h04_pop_scope();
             var last: StaticPool.Index = .unit_type;
-            const stmts = self.kids(node);
+            const stmts = self.tree.kids(node);
             // local functions are visible in their whole block
             for (stmts) |s| {
                 const st = self.statement(s);
-                if (st.kind != .function or st.ids.len != 1 or st.type == 0 or self.nk(st.type) != .type_fun) continue;
+                if (st.kind != .function or st.ids.len != 1 or st.type == 0 or self.tree.kind(st.type) != .type_fun) continue;
                 const d = self.h02_declare_local(self.name_of(st.ids[0]), st.node, .function, .none);
                 self.dp(.flags, d).* = st.flags;
                 self.node_decl[st.ids[0]] = d;
             }
             for (stmts, 0..) |s, i| {
-                const declares = node_props[@intFromEnum(self.nk(s))].declares;
+                const declares = node_props[@intFromEnum(self.tree.kind(s))].declares;
                 if (!declares) self.h03_push_scope();
                 last = self.h09_check_expr(ctx, s, if (i + 1 == stmts.len) expected else .none);
                 if (!declares) self.h04_pop_scope();
@@ -829,7 +828,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         .member => self.h13_check_member(ctx, node),
         .array_index => blk: {
             var st = sp.apply_vars(ap, self.h09_check_expr(ctx, a0, .none));
-            if (is_range_kind(self.nk(a1))) break :blk self.report(.genexpr_index, a1, 0, 0);
+            if (is_range_kind(self.tree.kind(a1))) break :blk self.report(.genexpr_index, a1, 0, 0);
             const it = self.h09_check_expr(ctx, a1, .none);
             if (!sp.get_tag_prop(it).is_integer) _ = self.mismatch(a1, it, .u64_type);
             if (st == .poison_type) break :blk st;
@@ -849,7 +848,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             break :blk if (sp.is_ptr(st)) sp.pointee(st) else self.mismatch(node, st, .none);
         },
         .address_of => blk: {
-            if (self.nk(a0) == .identifier) self.uninit &= ~self.init_bit(self.h01_lookup(self.name_of(a0)));
+            if (self.tree.kind(a0) == .identifier) self.uninit &= ~self.init_bit(self.h01_lookup(self.name_of(a0)));
             const exp = sp.apply_vars(ap, expected);
             const st = self.h09_check_expr(ctx, a0, if (sp.is_ptr(exp)) sp.pointee(exp) else .none);
             // write access only to what could be written directly
@@ -860,7 +859,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         .array, .array_empty => blk: {
             const exp = sp.apply_vars(ap, expected);
             var elem = sp.array_elem(exp);
-            const elems = if (k == .array) self.kids(node) else &[_]NodeId{};
+            const elems = if (k == .array) self.tree.kids(node) else &[_]NodeId{};
             for (elems) |e| {
                 const et = self.h09_check_expr(ctx, e, elem);
                 if (elem == .none) elem = et else _ = self.h10_expect(e, et, elem);
@@ -890,7 +889,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         },
         .typeof, .sizeof => blk: {
             _ = self.h09_check_expr(ctx, a0, .none);
-            if (self.nk(a0) == .identifier and statics.is_template(self, self.node_decl[a0])) break :blk self.report(.unrealized_template, a0, 0, 0);
+            if (self.tree.kind(a0) == .identifier and statics.is_template(self, self.node_decl[a0])) break :blk self.report(.unrealized_template, a0, 0, 0);
             _ = statics.try_static(self, ctx, node);
             break :blk if (k == .typeof) .type_type else .u64_type;
         },
@@ -928,7 +927,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             const st = self.h09_check_expr(ctx, a0, if (k == .deinit) .none else expected);
             self.need_deinit(node, st);
             // a deinitialized local has to be written again before it is read
-            if (k == .deinit and self.nk(a0) == .identifier and self.node_decl[a0] != .none and !self.dp(.flags, self.node_decl[a0]).is_global) {
+            if (k == .deinit and self.tree.kind(a0) == .identifier and self.node_decl[a0] != .none and !self.dp(.flags, self.node_decl[a0]).is_global) {
                 const bit = self.init_bit(self.node_decl[a0]);
                 if (bit != 0) self.uninit |= bit else self.track(self.node_decl[a0]);
             }
@@ -950,19 +949,19 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
 
 // the locals not written yet when a condition is true and when it is false: `and` runs its right side only after a true left one
 pub fn condition(self: *Resolver, ctx: *FnCtx, n: NodeId) [2]u64 {
-    const k = self.nk(n);
+    const k = self.tree.kind(n);
     if (k == .capture) {
-        const w = self.condition(ctx, self.arg(n, 0));
-        _ = self.set(n, self.node_type[self.arg(n, 0)]);
+        const w = self.condition(ctx, self.tree.arg(n, 0));
+        _ = self.set(n, self.node_type[self.tree.arg(n, 0)]);
         return w;
     }
     if (k != .binary_logic_and and k != .binary_logic_or) {
         _ = self.check(ctx, n, .bool_type);
         return .{ self.uninit, self.uninit };
     }
-    const l = self.condition(ctx, self.arg(n, 0));
+    const l = self.condition(ctx, self.tree.arg(n, 0));
     self.uninit = l[@intFromBool(k == .binary_logic_or)];
-    const r = self.condition(ctx, self.arg(n, 1));
+    const r = self.condition(ctx, self.tree.arg(n, 1));
     _ = self.set(n, .bool_type);
     return if (k == .binary_logic_and) .{ r[0], l[1] | r[1] } else .{ l[0] | r[0], r[1] };
 }
@@ -1064,8 +1063,8 @@ pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) St
 
 fn h13_check_member(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
     const sp = &self.static_pool;
-    const parent = self.arg(node, 0);
-    const name = self.name_of(self.arg(node, 1));
+    const parent = self.tree.arg(node, 0);
+    const name = self.name_of(self.tree.arg(node, 1));
     const pt = self.h09_check_expr(ctx, parent, .none);
     if (pt == .poison_type) return pt;
     // `Type.Case`, `Type.init`, `Stream(i32).None` are members of the type value
@@ -1074,7 +1073,7 @@ fn h13_check_member(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Static
     if (base == .poison_type) return base;
     if (sp.tag(base) == .type_var) return self.report(.uninferable_type, parent, base, .none);
     if (statics.templated(self, base) != .none) return statics.template_member(self, node, statics.templated(self, base), name);
-    const view = if (self.nk(parent) == .identifier and self.node_decl[parent] != .none) self.dp(.flags, self.node_decl[parent]).is_view else false;
+    const view = if (self.tree.kind(parent) == .identifier and self.node_decl[parent] != .none) self.dp(.flags, self.node_decl[parent]).is_view else false;
     if (view and statics.source_of(self, base) != .none and statics.template_member(self, node, sp.intern(.{ .template_type = statics.source_of(self, base) }), name) == .poison_type) return .poison_type;
     return switch (sp.lookup_member(base, name)) {
         .field => |f| if (on_type) self.report(.unknown_member, node, name, base) else f.ty,
@@ -1107,11 +1106,11 @@ pub fn write_access(self: *Resolver, node: NodeId, a: Access) void {
 // a write into a place rooted at `self` (not through a pointer it holds) makes its method one that writes self
 fn wrote(self: *Resolver, place: NodeId) void {
     var n = place;
-    while (self.nk(n) != .identifier_self) switch (self.nk(n)) {
-        .capture => n = self.arg(n, 0),
+    while (self.tree.kind(n) != .identifier_self) switch (self.tree.kind(n)) {
+        .capture => n = self.tree.arg(n, 0),
         .member, .array_index, .dereference => {
-            const p = self.arg(n, 0);
-            if (self.nk(p) != .identifier_self and (self.nk(n) == .dereference or self.static_pool.is_ptr(self.node_type[p]))) return;
+            const p = self.tree.arg(n, 0);
+            if (self.tree.kind(p) != .identifier_self and (self.tree.kind(n) == .dereference or self.static_pool.is_ptr(self.node_type[p]))) return;
             n = p;
         },
         else => return,
@@ -1129,37 +1128,15 @@ const autoinserted_dollarnames = blk: {
     break :blk t;
 };
 
-pub inline fn nk(self: *const Resolver, n: NodeId) NodeKind {
-    return self.tree.ast_nodes.pool.nk.buf[n];
-}
-
-pub inline fn arg(self: *const Resolver, n: NodeId, i: u1) NodeId {
-    const slots: *const [2]NodeId = @ptrCast(&self.tree.ast_nodes.pool.args.buf[n]);
-    return slots[i];
-}
-
-pub fn kids(self: *const Resolver, n: NodeId) []const NodeId {
-    const a = self.tree.ast_nodes.pool.args.buf[n];
-    return self.tree.extra_childrefs.buf[a[0]..][0..a[1]];
-}
-
-// child i as a list: the children of a `wrapper` node, or the child alone
-pub fn list_at(self: *const Resolver, n: NodeId, comptime i: u1, comptime wrapper: NodeKind) []const NodeId {
-    const slots: *const [2]NodeId = @ptrCast(&self.tree.ast_nodes.pool.args.buf[n]);
-    return if (self.nk(slots[i]) == wrapper) self.kids(slots[i]) else slots[i..][0..1];
-}
-
-pub fn text(self: *const Resolver, n: NodeId) []const u8 {
-    const span = self.tree.span_store[self.arg(n, 0)];
-    return self.src_bytes[span[0]..span[1]];
-}
-
 pub fn name_of(self: *Resolver, n: NodeId) NamePool.Index {
-    return switch (self.nk(n)) {
-        .identifier => self.name_pool.intern(self.text(n)),
-        .identifier_self => .self,
-        else => .none,
-    };
+    switch (self.tree.kind(n)) {
+        .identifier => {
+            const s = self.tree.span(n);
+            return self.name_pool.intern(self.src_bytes[s[0]..s[1]]);
+        },
+        .identifier_self => return .self,
+        else => return .none,
+    }
 }
 
 pub inline fn dp(self: *Resolver, comptime f: @EnumLiteral(), d: Decl.Index) *@FieldType(Decl, @tagName(f)) {
@@ -1178,7 +1155,7 @@ pub fn report(self: *Resolver, code: Doctor.Disorder, n: NodeId, a: anytype, b: 
 
 pub fn check_guards(self: *Resolver, ctx: *FnCtx, p: Param, t: StaticPool.Index) void {
     if (p.where != 0) _ = self.check(ctx, p.where, .bool_type);
-    if (p.@"else" != 0) _ = if (self.nk(p.@"else") == .assign) self.h09_check_expr(ctx, p.@"else", .none) else self.check(ctx, p.@"else", t);
+    if (p.@"else" != 0) _ = if (self.tree.kind(p.@"else") == .assign) self.h09_check_expr(ctx, p.@"else", .none) else self.check(ctx, p.@"else", t);
 }
 
 pub fn init_enter(self: *Resolver) struct { tracked: u32, uninit: u64 } {
@@ -1194,7 +1171,7 @@ pub fn init_leave(self: *Resolver, tracked: u32, uninit: u64) void {
 pub fn check(self: *Resolver, ctx: *FnCtx, n: NodeId, expected: StaticPool.Index) StaticPool.Index {
     const t = self.h09_check_expr(ctx, n, expected);
     // a case with a payload is a constructor, a value of it needs the payload
-    if (t != .poison_type and self.nk(n) == .member and self.static_pool.tag(t) == .variant_case_type and self.static_pool.get(t).variant_case_type.payload != .none) return self.report(.type_mismatch, n, t, expected);
+    if (t != .poison_type and self.tree.kind(n) == .member and self.static_pool.tag(t) == .variant_case_type and self.static_pool.get(t).variant_case_type.payload != .none) return self.report(.type_mismatch, n, t, expected);
     return self.h10_expect(n, t, expected);
 }
 
@@ -1281,18 +1258,18 @@ pub fn by_ref(self: *Resolver, c: Decl.Index) bool {
 
 pub fn value_node(self: *Resolver, d: Decl.Index) NodeId {
     const n = self.dp(.node, d).*;
-    return switch (self.nk(n)) {
-        .assign, .assign_typed => self.arg(n, 1),
+    return switch (self.tree.kind(n)) {
+        .assign, .assign_typed => self.tree.arg(n, 1),
         else => n,
     };
 }
 
 pub fn definition(self: *const Resolver, n: NodeId) Def {
     var d = Def{ .core = n };
-    while (true) : (d.core = self.arg(d.core, 0)) switch (self.nk(d.core)) {
-        .def_type_implof, .def_variant_implof => d.body = self.arg(d.core, 1),
-        .def_type_assertsize, .def_variant_assertsize => d.size = self.arg(d.core, 1),
-        .def_variant_tagof => d.tagof = self.arg(d.core, 1),
+    while (true) : (d.core = self.tree.arg(d.core, 0)) switch (self.tree.kind(d.core)) {
+        .def_type_implof, .def_variant_implof => d.body = self.tree.arg(d.core, 1),
+        .def_type_assertsize, .def_variant_assertsize => d.size = self.tree.arg(d.core, 1),
+        .def_variant_tagof => d.tagof = self.tree.arg(d.core, 1),
         else => return d,
     };
 }
@@ -1311,7 +1288,7 @@ pub fn meta(kind: Decl.Kind, other: StaticPool.Index) StaticPool.Index {
 }
 
 pub fn type_kind(self: *const Resolver, n: NodeId) Decl.Kind {
-    return switch (self.nk(self.core(n))) {
+    return switch (self.tree.kind(self.core(n))) {
         .def_type, .def_type_packed => .record,
         .def_variant, .def_variant_unionsized => .variant,
         .def_trait, .def_trait_implof => .trait,
@@ -1321,23 +1298,25 @@ pub fn type_kind(self: *const Resolver, n: NodeId) Decl.Kind {
 
 fn decl_kind(self: *const Resolver, type_node: NodeId, value: NodeId) Decl.Kind {
     const tk = self.type_kind(value);
-    return switch (self.nk(type_node)) {
+    return switch (self.tree.kind(type_node)) {
         .type_fun => .function,
         .type_stcfun => .static_function,
         .type_inlfun => .inlined_function,
-        .type_type, .type_variant, .type_trait => if (value != 0 and self.nk(value) == .def_fun) .static_function else switch (self.nk(type_node)) {
+        .type_type, .type_variant, .type_trait => if (value != 0 and self.tree.kind(value) == .def_fun) .static_function else switch (self.tree.kind(type_node)) {
             .type_type => if (tk == .record) .record else .type_alias,
             .type_variant => if (tk == .variant) .variant else .type_alias,
             else => if (tk == .trait) .trait else .type_alias,
         },
-        .none => if (value != 0 and (self.nk(value) == .def_fun or self.nk(value) == .def_fun_declaration)) .function else .variable,
+        .none => if (value != 0 and (self.tree.kind(value) == .def_fun or self.tree.kind(value) == .def_fun_declaration)) .function else .variable,
         else => .variable,
     };
 }
 
+// assignments could have modifiers, which result in non-flat repres. in ast
+// -> flat out by
 fn unwrap_mods(self: *const Resolver, n0: NodeId, flags: *Decl.Flags) NodeId {
     var n = n0;
-    while (true) : (n = self.arg(n, 0)) switch (self.nk(n)) {
+    while (true) : (n = self.tree.arg(n, 0)) switch (self.tree.kind(n)) {
         .mod_pub => flags.is_pub = true,
         .mod_mut => flags.is_mut = true,
         .mod_stc => flags.is_stc = true,
@@ -1360,15 +1339,17 @@ pub fn statement(self: *const Resolver, n0: NodeId) Stmt {
         .type = p.type,
         .ids = p.ids,
         .value = p.value,
-        .values = if (p.value == 0) &.{} else self.list_at(n, 1, .partial__assign_multival),
+        .values = if (p.value == 0) &.{} else self.tree.list_at(n, 1, .partial__assign_multival),
     };
 }
 
+// TODO NEXT: all pure tree ops must be in ParseTree
+
 fn stmt_parts(self: *const Resolver, n: NodeId) Parts {
-    return switch (self.nk(n)) {
-        .def_var => .{ .type = self.arg(n, 0), .ids = self.list_at(n, 1, .partial__destructure) },
-        .assign_typed => .{ .type = self.arg(self.arg(n, 0), 0), .ids = self.list_at(self.arg(n, 0), 1, .partial__destructure), .value = self.arg(n, 1) },
-        .assign => .{ .ids = self.list_at(n, 0, .partial__destructure), .value = self.arg(n, 1) },
+    return switch (self.tree.kind(n)) {
+        .def_var => .{ .type = self.tree.arg(n, 0), .ids = self.tree.list_at(n, 1, .partial__destructure) },
+        .assign_typed => .{ .type = self.tree.arg(self.tree.arg(n, 0), 0), .ids = self.tree.list_at(self.tree.arg(n, 0), 1, .partial__destructure), .value = self.tree.arg(n, 1) },
+        .assign => .{ .ids = self.tree.list_at(n, 0, .partial__destructure), .value = self.tree.arg(n, 1) },
         else => .{},
     };
 }
@@ -1377,18 +1358,18 @@ pub fn param(self: *const Resolver, n0: NodeId) Param {
     var p = Param{};
     var n = n0;
     while (true) {
-        switch (self.nk(n)) {
-            .partial__fun_def_param_named, .partial__type_def_param_named => p.name = self.arg(n, 1),
-            .partial__fun_def_param_default, .partial__type_def_param_default => p.default = self.arg(n, 1),
-            .partial__fun_def_param_where, .partial__type_def_param_where => p.where = self.arg(n, 1),
+        switch (self.tree.kind(n)) {
+            .partial__fun_def_param_named, .partial__type_def_param_named => p.name = self.tree.arg(n, 1),
+            .partial__fun_def_param_default, .partial__type_def_param_default => p.default = self.tree.arg(n, 1),
+            .partial__fun_def_param_where, .partial__type_def_param_where => p.where = self.tree.arg(n, 1),
             .partial__fun_def_param_stcwhere => {
-                p.where = self.arg(n, 1);
+                p.where = self.tree.arg(n, 1);
                 p.stc = true;
             },
-            .partial__fun_def_param_where_else, .partial__type_def_param_where_else => p.@"else" = self.arg(n, 1),
+            .partial__fun_def_param_where_else, .partial__type_def_param_where_else => p.@"else" = self.tree.arg(n, 1),
             .partial__type_def_param_mut => p.is_mut = true,
             .partial__fun_def_param, .partial__type_def_param => {
-                p.ty = self.arg(n, 0);
+                p.ty = self.tree.arg(n, 0);
                 return p;
             },
             else => {
@@ -1396,7 +1377,7 @@ pub fn param(self: *const Resolver, n0: NodeId) Param {
                 return p;
             },
         }
-        n = self.arg(n, 0);
+        n = self.tree.arg(n, 0);
     }
 }
 
@@ -1410,17 +1391,17 @@ pub fn name_at(self: *Resolver, p: Param, i: usize) NamePool.Index {
 }
 
 pub fn template_field(self: *Resolver, g: Decl.Index, name: NamePool.Index) ?NodeId {
-    for (self.fields_of_node(self.core(self.arg(self.value_node(g), 1))), 0..) |f, i| if (self.param_name(f, i) == name) return f;
+    for (self.fields_of_node(self.core(self.tree.arg(self.value_node(g), 1))), 0..) |f, i| if (self.param_name(f, i) == name) return f;
     return null;
 }
 
 pub fn params_of(self: *const Resolver, v: NodeId) []const NodeId {
-    if (self.nk(v) != .def_fun and self.nk(v) != .def_fun_declaration) return &.{};
-    return self.kids(self.arg(self.arg(v, 0), 0));
+    if (self.tree.kind(v) != .def_fun and self.tree.kind(v) != .def_fun_declaration) return &.{};
+    return self.tree.kids(self.tree.arg(self.tree.arg(v, 0), 0));
 }
 
 pub fn fields_of_node(self: *const Resolver, c: NodeId) []const NodeId {
-    return if (self.nk(c) == .partial__type_def_param_tuple) self.kids(c) else self.kids(self.arg(c, 0));
+    return if (self.tree.kind(c) == .partial__type_def_param_tuple) self.tree.kids(c) else self.tree.kids(self.tree.arg(c, 0));
 }
 
 pub fn fields_of(self: *Resolver, rec: StaticPool.Index) []const NodeId {
@@ -1477,8 +1458,8 @@ pub fn group_head(self: *Resolver, first: Decl.Index, d: Decl.Index) Decl.Index 
 
 pub fn template(self: *Resolver, d: Decl.Index) Decl.Kind {
     const n = self.dp(.node, d).*;
-    if (self.nk(n) != .assign_typed or self.nk(self.arg(n, 1)) != .def_fun) return .variable;
-    return switch (self.nk(self.arg(self.arg(n, 0), 0))) {
+    if (self.tree.kind(n) != .assign_typed or self.tree.kind(self.tree.arg(n, 1)) != .def_fun) return .variable;
+    return switch (self.tree.kind(self.tree.arg(self.tree.arg(n, 0), 0))) {
         .type_type => .record,
         .type_variant => .variant,
         .type_trait => .trait,
@@ -1494,15 +1475,15 @@ fn elem_ptr(self: *Resolver, t0: StaticPool.Index) bool {
 }
 
 pub fn integer(self: *Resolver, ctx: *FnCtx, n: NodeId) bool {
-    const t = self.operand(ctx, n, if (self.nk(n) == .neg_num) .i64_type else .u64_type);
+    const t = self.operand(ctx, n, if (self.tree.kind(n) == .neg_num) .i64_type else .u64_type);
     if (t == .poison_type or self.static_pool.get_tag_prop(t).is_integer) return true;
     _ = self.report(.type_mismatch, n, t, .u64_type);
     return false;
 }
 
 pub fn signature_mentions(self: *Resolver, f: NodeId, v: NodeId) bool {
-    const header = self.arg(f, 0);
-    if (self.nk(header) != .partial__fun_def_header_ret or self.mentions(self.arg(header, 1), v)) return true;
+    const header = self.tree.arg(f, 0);
+    if (self.tree.kind(header) != .partial__fun_def_header_ret or self.mentions(self.tree.arg(header, 1), v)) return true;
     for (self.params_of(f)) |pn| if (self.mentions(self.param(pn).ty, v)) return true;
     return false;
 }
@@ -1511,19 +1492,21 @@ pub fn mentions(self: *Resolver, n: NodeId, v: NodeId) bool {
     const params = self.params_of(v);
     const s = self.subtree(n);
     for (s[0]..s[1]) |i| {
-        if (self.nk(@intCast(i)) != .identifier) continue;
+        if (self.tree.kind(@intCast(i)) != .identifier) continue;
         const nm = self.name_of(@intCast(i));
         for (params, 0..) |pn, j| if (self.param_name(pn, j) == nm) return true;
     }
     return false;
 }
 
+// TODO next must be in ParseTree
+
 pub fn children(self: *const Resolver, n: NodeId) []const NodeId {
     const slots: *const [2]NodeId = @ptrCast(&self.tree.ast_nodes.pool.args.buf[n]);
-    return switch (ParseTree.Node.nk_childc[@intFromEnum(self.nk(n))]) {
+    return switch (ParseTree.Node.nk_childc[@intFromEnum(self.tree.kind(n))]) {
         .one => slots[0..1],
         .two => slots,
-        .many => self.kids(n),
+        .many => self.tree.kids(n),
         else => &.{},
     };
 }
@@ -1538,7 +1521,7 @@ pub fn subtree(self: *const Resolver, n: NodeId) [2]NodeId {
 }
 
 pub fn arg_value(self: *const Resolver, a: NodeId) NodeId {
-    return if (self.nk(a) == .partial__fun_call_assigned_param) self.arg(a, 1) else a;
+    return if (self.tree.kind(a) == .partial__fun_call_assigned_param) self.tree.arg(a, 1) else a;
 }
 
 pub fn concrete(self: *Resolver, t: StaticPool.Index) bool {
@@ -1550,7 +1533,7 @@ fn is_numeric(self: *Resolver, t: StaticPool.Index) bool {
 }
 
 fn folded(self: *Resolver, n: NodeId) bool {
-    return self.is_literal(n) or self.node_value[n] != .none and switch (self.nk(n)) {
+    return self.is_literal(n) or self.node_value[n] != .none and switch (self.tree.kind(n)) {
         .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap => true,
         else => false,
     };
@@ -1573,8 +1556,8 @@ fn operand(self: *Resolver, ctx: *FnCtx, n: NodeId, hint: StaticPool.Index) Stat
 fn pair(self: *Resolver, ctx: *FnCtx, node: NodeId, l: NodeId, r: NodeId, hint: StaticPool.Index) StaticPool.Index {
     const swap = self.is_literal(l) and !self.is_literal(r);
     const t1 = self.operand(ctx, if (swap) r else l, hint);
-    const add = self.nk(node) == .binary_add;
-    if ((add or !swap and self.nk(node) == .binary_sub) and self.elem_ptr(t1)) return if (self.integer(ctx, if (swap) l else r)) t1 else .poison_type;
+    const add = self.tree.kind(node) == .binary_add;
+    if ((add or !swap and self.tree.kind(node) == .binary_sub) and self.elem_ptr(t1)) return if (self.integer(ctx, if (swap) l else r)) t1 else .poison_type;
     const t2 = self.operand(ctx, if (swap) l else r, t1);
     if (add and self.elem_ptr(t2) and self.static_pool.get_tag_prop(t1).is_integer) return t2;
     if (t1 == .poison_type or t2 == .poison_type) return .poison_type;
@@ -1591,8 +1574,8 @@ fn need_deinit(self: *Resolver, node: NodeId, t0: StaticPool.Index) void {
 }
 
 pub fn writable(self: *Resolver, node: NodeId) Access {
-    return switch (self.nk(node)) {
-        .capture => self.writable(self.arg(node, 0)),
+    return switch (self.tree.kind(node)) {
+        .capture => self.writable(self.tree.arg(node, 0)),
         .identifier, .identifier_self => blk: {
             const d = self.node_decl[node];
             if (d == .none) break :blk .ok;
@@ -1600,11 +1583,11 @@ pub fn writable(self: *Resolver, node: NodeId) Access {
             break :blk if (f.is_mut or f.is_stc or self.dp(.kind, d).* == .self) .ok else .immutable;
         },
         .member => blk: {
-            const base = self.through(self.arg(node, 0), true);
-            break :blk if (base != .ok) base else if (self.field_mut(self.node_type[self.arg(node, 0)], self.name_of(self.arg(node, 1)))) .ok else .immutable;
+            const base = self.through(self.tree.arg(node, 0), true);
+            break :blk if (base != .ok) base else if (self.field_mut(self.node_type[self.tree.arg(node, 0)], self.name_of(self.tree.arg(node, 1)))) .ok else .immutable;
         },
-        .array_index => self.through(self.arg(node, 0), true),
-        .dereference => self.through(self.arg(node, 0), false),
+        .array_index => self.through(self.tree.arg(node, 0), true),
+        .dereference => self.through(self.tree.arg(node, 0), false),
         else => .immutable,
     };
 }
@@ -1661,48 +1644,48 @@ pub fn node_info(self: *const Resolver, b: Body, comptime field: @EnumLiteral(),
 }
 
 pub fn field_of(self: *Resolver, rec: StaticPool.Index, a: NodeId, i: usize) ?u32 {
-    if (self.nk(a) != .partial__fun_call_assigned_param) return @intCast(i);
-    return switch (self.static_pool.lookup_member(rec, self.name_of(self.arg(a, 0)))) {
+    if (self.tree.kind(a) != .partial__fun_call_assigned_param) return @intCast(i);
+    return switch (self.static_pool.lookup_member(rec, self.name_of(self.tree.arg(a, 0)))) {
         .field => |f| f.index,
         else => null,
     };
 }
 
 pub fn narrowed(self: *const Resolver, target: NodeId) NodeId {
-    const inner = if (self.nk(target) == .type_ptr or self.nk(target) == .type_ptrmut) self.arg(target, 0) else target;
-    return if (self.nk(inner) == .type_array) self.range(self.arg(inner, 0)).lo else 0;
+    const inner = if (self.tree.kind(target) == .type_ptr or self.tree.kind(target) == .type_ptrmut) self.tree.arg(target, 0) else target;
+    return if (self.tree.kind(inner) == .type_array) self.range(self.tree.arg(inner, 0)).lo else 0;
 }
 
 pub fn loop_parts(self: *const Resolver, n: NodeId) Loop {
-    const a0 = self.arg(n, 0);
-    const a1 = self.arg(n, 1);
-    return switch (self.nk(n)) {
+    const a0 = self.tree.arg(n, 0);
+    const a1 = self.tree.arg(n, 1);
+    return switch (self.tree.kind(n)) {
         .@"while", .stcwhile => .{ .cond = a0, .body = a1 },
-        .while_with_repeat_stmt, .stcwhile_with_repeat_stmt => .{ .cond = self.arg(a0, 0), .repeat = a1, .head = a0, .body = self.arg(a0, 1) },
+        .while_with_repeat_stmt, .stcwhile_with_repeat_stmt => .{ .cond = self.tree.arg(a0, 0), .repeat = a1, .head = a0, .body = self.tree.arg(a0, 1) },
         .loop, .stcloop => .{ .body = a0 },
         .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => .{ .repeat = a0, .body = a1 },
-        .for_var_in_seq, .stcfor_var_in_seq => .{ .head = a0, .seq = self.arg(a0, 0), .variable = a1, .body = self.arg(a0, 1) },
+        .for_var_in_seq, .stcfor_var_in_seq => .{ .head = a0, .seq = self.tree.arg(a0, 0), .variable = a1, .body = self.tree.arg(a0, 1) },
         else => .{ .head = n, .seq = a0, .body = a1 },
     };
 }
 
 pub fn range(self: *const Resolver, n: NodeId) Range {
-    const k = self.nk(n);
+    const k = self.tree.kind(n);
     const two = k == .gen_incl or k == .gen_excl;
     return .{
-        .lo = if (two or k == .gen_lowerbound) self.arg(n, 0) else 0,
-        .hi = if (two) self.arg(n, 1) else if (k == .gen_lowerbound) 0 else self.arg(n, 0),
+        .lo = if (two or k == .gen_lowerbound) self.tree.arg(n, 0) else 0,
+        .hi = if (two) self.tree.arg(n, 1) else if (k == .gen_lowerbound) 0 else self.tree.arg(n, 0),
         .incl = k == .gen_incl or k == .gen_upperbound_incl,
     };
 }
 
 pub fn literal_core(self: *const Resolver, node: NodeId, neg: *bool) NodeId {
     var n = node;
-    while (true) switch (self.nk(n)) {
-        .capture => n = self.arg(n, 0),
+    while (true) switch (self.tree.kind(n)) {
+        .capture => n = self.tree.arg(n, 0),
         .neg_num => {
             neg.* = !neg.*;
-            n = self.arg(n, 0);
+            n = self.tree.arg(n, 0);
         },
         else => return n,
     };
@@ -1710,5 +1693,5 @@ pub fn literal_core(self: *const Resolver, node: NodeId, neg: *bool) NodeId {
 
 pub fn is_literal(self: *const Resolver, node: NodeId) bool {
     var neg = false;
-    return Resolver.node_props[@intFromEnum(self.nk(self.literal_core(node, &neg)))].literal;
+    return Resolver.node_props[@intFromEnum(self.tree.kind(self.literal_core(node, &neg)))].literal;
 }

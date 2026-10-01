@@ -12,7 +12,7 @@ const Kind = ParseTree.Node.Kind;
 const Decl = Resolver.Decl;
 
 pub fn jump(ip: *Interpreter, n: NodeId, k: Kind) Value {
-    const x: Value = if (k == .ret) ip.eval(ip.res().arg(n, 0)) else .unit;
+    const x: Value = if (k == .ret) ip.eval(ip.res().tree.arg(n, 0)) else .unit;
     ip.unwind = switch (k) {
         .brk => .brk,
         .cont => .cont,
@@ -23,10 +23,10 @@ pub fn jump(ip: *Interpreter, n: NodeId, k: Kind) Value {
 
 pub fn defer_(ip: *Interpreter, n: NodeId, k: Kind) Value {
     if (k == .@"defer") {
-        ip.defers.push(.{ .node = ip.res().arg(n, 0), .cell = Interpreter.no_cell });
+        ip.defers.push(.{ .node = ip.res().tree.arg(n, 0), .cell = Interpreter.no_cell });
         return .unit;
     }
-    const x = ip.eval(ip.res().arg(n, 0));
+    const x = ip.eval(ip.res().tree.arg(n, 0));
     ip.defers.push(.{ .node = n, .cell = ip.put(ip.own(x)) });
     return x;
 }
@@ -34,11 +34,11 @@ pub fn defer_(ip: *Interpreter, n: NodeId, k: Kind) Value {
 pub fn branch(ip: *Interpreter, n: NodeId, k: Kind) Value {
     const r = ip.res();
     const has_else = k == .if_else or k == .stcif_else;
-    const it = if (has_else) r.arg(n, 0) else n;
-    const c = ip.eval(r.arg(it, 0));
-    if (c.ty != .bool_type) return if (c.is(.poison_type)) c else ip.fail(r.arg(it, 0), .type_mismatch, ip.pool(c), .bool_type);
-    if (c.bits != 0) return ip.eval(r.arg(it, 1));
-    return if (has_else) ip.eval(r.arg(n, 1)) else .unit;
+    const it = if (has_else) r.tree.arg(n, 0) else n;
+    const c = ip.eval(r.tree.arg(it, 0));
+    if (c.ty != .bool_type) return if (c.is(.poison_type)) c else ip.fail(r.tree.arg(it, 0), .type_mismatch, ip.pool(c), .bool_type);
+    if (c.bits != 0) return ip.eval(r.tree.arg(it, 1));
+    return if (has_else) ip.eval(r.tree.arg(n, 1)) else .unit;
 }
 
 pub fn block(ip: *Interpreter, n: NodeId) Value {
@@ -48,7 +48,7 @@ pub fn block(ip: *Interpreter, n: NodeId) Value {
     defer if (scoped) r.h04_pop_scope();
     const mark = ip.defers.head;
     var v: Value = .unit;
-    for (r.kids(n)) |s| {
+    for (r.tree.kids(n)) |s| {
         v = ip.eval(s);
         if (ip.unwind != .none or v.is(.poison_type)) break;
     }
@@ -79,7 +79,7 @@ pub fn loop(ip: *Interpreter, n: NodeId) Value {
     var recv: Value = .empty;
     if (l.seq != 0) {
         const s = l.seq;
-        const sk = r.nk(s);
+        const sk = r.tree.kind(s);
         if (Resolver.is_range_kind(sk)) {
             const g = r.range(s);
             lo = if (g.lo != 0) ip.eval(g.lo) else .int(.u64_type, 0);
@@ -162,15 +162,15 @@ pub fn loop(ip: *Interpreter, n: NodeId) Value {
 
 pub fn match(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
-    const x = ip.eval(r.arg(n, 0));
-    const t = if (ip.framed()) ip.info(.ty, r.arg(n, 0)) else x.ty;
+    const x = ip.eval(r.tree.arg(n, 0));
+    const t = if (ip.framed()) ip.info(.ty, r.tree.arg(n, 0)) else x.ty;
     const v = if (x.is_ref() and r.deref(t) != t) ip.deref(x) else x;
     if (v.is(.poison_type) or ip.unwind != .none) return v;
     const scoped = !ip.framed();
     if (scoped) r.h03_push_scope();
     defer if (scoped) r.h04_pop_scope();
-    if (!scoped) for (r.kids(r.arg(n, 1))) |arm| if (ip.info(.value, arm) == .bool_true) return ip.eval(r.arg(arm, 1));
-    for (r.kids(r.arg(n, 1))) |arm| if (matches(ip, r.arg(arm, 0), v)) return ip.eval(r.arg(arm, 1));
+    if (!scoped) for (r.tree.kids(r.tree.arg(n, 1))) |arm| if (ip.info(.value, arm) == .bool_true) return ip.eval(r.tree.arg(arm, 1));
+    for (r.tree.kids(r.tree.arg(n, 1))) |arm| if (matches(ip, r.tree.arg(arm, 0), v)) return ip.eval(r.tree.arg(arm, 1));
     return ip.fail(n, .non_exhaustive_match, ip.pool(v), .none);
 }
 
@@ -194,31 +194,31 @@ pub fn matches(ip: *Interpreter, p: NodeId, v: Value) bool {
     const r = ip.res();
     const sp = &r.static_pool;
     const framed = ip.framed();
-    switch (r.nk(p)) {
+    switch (r.tree.kind(p)) {
         .identifier => {
             name(ip, p, v);
             return true;
         },
         .partial__match_case_pattern_or => {
-            for (r.kids(p)) |alt| if (matches(ip, alt, v)) return true;
+            for (r.tree.kids(p)) |alt| if (matches(ip, alt, v)) return true;
             return false;
         },
         .partial__match_case_pattern_typecast => {
-            const t = if (framed) ip.info(.ty, r.arg(p, 1)) else r.h07_lower_type(ip.ctx, r.arg(p, 0));
+            const t = if (framed) ip.info(.ty, r.tree.arg(p, 1)) else r.h07_lower_type(ip.ctx, r.tree.arg(p, 0));
             const c = case_of(ip, v);
             const vt = ip.vtype(v);
             const ok = if (c != .none) sp.get(c).variant_case_type.variant == t or sp.tag(t) == .variant_union_type else vt == t or sp.implements(vt, t);
-            if (ok) name(ip, r.arg(p, 1), v);
+            if (ok) name(ip, r.tree.arg(p, 1), v);
             return ok;
         },
         .labelarrow => {
-            if (!matches(ip, r.arg(p, 0), v)) return false;
-            label(ip, r.arg(p, 1), payload(ip, v) orelse v);
+            if (!matches(ip, r.tree.arg(p, 0), v)) return false;
+            label(ip, r.tree.arg(p, 1), payload(ip, v) orelse v);
             return true;
         },
         .fun_call => {
             const h = ip.hint(p);
-            const target = if (h != .none) h else ip.pool(ip.eval(r.arg(p, 0)));
+            const target = if (h != .none) h else ip.pool(ip.eval(r.tree.arg(p, 0)));
             var rec = target;
             var fields = v;
             if (sp.tag(target) == .variant_case_type) {
@@ -226,7 +226,7 @@ pub fn matches(ip: *Interpreter, p: NodeId, v: Value) bool {
                 rec = sp.get(target).variant_case_type.payload;
                 fields = if (v.is_heap()) .block(rec, v.at(), v.len()) else if (sp.tag(v.index()) == .variant_value) .of(sp, sp.get(v.index()).variant_value.payload) else .empty;
             }
-            for (r.kids(r.arg(p, 1)), 0..) |a, i| {
+            for (r.tree.kids(r.tree.arg(p, 1)), 0..) |a, i| {
                 const fi = r.field_of(rec, a, i) orelse return false;
                 if (fi >= (ip.span(fields) orelse 0) or !matches(ip, r.arg_value(a), ip.elem(fields, @intCast(fi)))) return false;
             }
@@ -259,8 +259,7 @@ fn name(ip: *Interpreter, id: NodeId, v: Value) void {
 
 fn label(ip: *Interpreter, l: NodeId, v: Value) void {
     const r = ip.res();
-    if (r.nk(l) != .partial__destructure) return name(ip, l, v);
-    for (r.kids(l), 0..) |id, i| name(ip, id, if (i < (ip.span(v) orelse 0)) ip.elem(v, @intCast(i)) else .poison);
+    for (r.tree.kids(l), 0..) |id, i| name(ip, id, if (i < (ip.span(v) orelse 0)) ip.elem(v, @intCast(i)) else .poison);
 }
 
 fn payload(ip: *Interpreter, v: Value) ?Value {
@@ -275,21 +274,21 @@ fn payload(ip: *Interpreter, v: Value) ?Value {
 
 pub fn unwrap(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
-    const k = r.nk(n);
+    const k = r.tree.kind(n);
     if (!ip.framed() and (k == .labelarrow or k == .selftag_arrow)) return ip.fail(n, .not_static, 0, 0);
-    const v = ip.eval(r.arg(n, 0));
+    const v = ip.eval(r.tree.arg(n, 0));
     if (v.is(.poison_type) or ip.unwind != .none) return v;
     if (k == .labelarrow) {
-        label(ip, r.arg(n, 1), v);
+        label(ip, r.tree.arg(n, 1), v);
         return v;
     }
     const p = payload(ip, v);
     return switch (k) {
         .selftag_arrow => blk: {
-            if (p) |x| label(ip, r.arg(n, 1), x);
+            if (p) |x| label(ip, r.tree.arg(n, 1), x);
             break :blk .boolean(p != null);
         },
-        .selftag_unwrap_fallback => p orelse ip.eval(r.arg(n, 1)),
+        .selftag_unwrap_fallback => p orelse ip.eval(r.tree.arg(n, 1)),
         else => p orelse ip.fail(n, .static_eval_failed, ip.pool(v), 0),
     };
 }

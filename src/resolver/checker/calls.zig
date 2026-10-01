@@ -10,21 +10,21 @@ const is_fn = Resolver.is_fn;
 
 pub fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
     const sp = &self.static_pool;
-    const args = self.kids(self.arg(node, 1));
-    if (self.nk(node) == .with) { // a copy of a record, the named arguments must be its fields
-        const t = self.deref(self.h09_check_expr(ctx, self.arg(node, 0), .none));
+    const args = self.tree.kids(self.tree.arg(node, 1));
+    if (self.tree.kind(node) == .with) { // a copy of a record, the named arguments must be its fields
+        const t = self.deref(self.h09_check_expr(ctx, self.tree.arg(node, 0), .none));
         for (args) |a| {
-            const m = if (self.nk(a) == .partial__fun_call_assigned_param and t != .poison_type) sp.lookup_member(t, self.name_of(self.arg(a, 0))) else StaticPool.Member.none;
-            _ = if (m == .field) self.check(ctx, self.arg(a, 1), named(self, a, m.field.ty)) else if (t == .poison_type) t else self.report(.unknown_named_argument, a, self.name_of(self.arg(a, 0)), t);
+            const m = if (self.tree.kind(a) == .partial__fun_call_assigned_param and t != .poison_type) sp.lookup_member(t, self.name_of(self.tree.arg(a, 0))) else StaticPool.Member.none;
+            _ = if (m == .field) self.check(ctx, self.tree.arg(a, 1), named(self, a, m.field.ty)) else if (t == .poison_type) t else self.report(.unknown_named_argument, a, self.name_of(self.tree.arg(a, 0)), t);
         }
         return t;
     }
-    const callee = self.arg(node, 0);
+    const callee = self.tree.arg(node, 0);
     const ct = self.h09_check_expr(ctx, callee, .none);
     // a stcfun call producing a function is called like that function
-    const d = if (self.nk(callee) != .fun_call) self.node_decl[callee] else if (self.node_decl[self.arg(callee, 0)] != .none and self.dp(.kind, self.node_decl[self.arg(callee, 0)]).* == .static_function) self.node_decl[callee] else .none;
+    const d = if (self.tree.kind(callee) != .fun_call) self.node_decl[callee] else if (self.node_decl[self.tree.arg(callee, 0)] != .none and self.dp(.kind, self.node_decl[self.tree.arg(callee, 0)]).* == .static_function) self.node_decl[callee] else .none;
     // `x.m(..)` binds x as the self argument, `Type.m(x.&, ..)` passes it like any other argument
-    const recv = if (self.nk(callee) == .member and sp.tag(self.node_type[self.arg(callee, 0)]) != .meta_type) self.arg(callee, 0) else 0;
+    const recv = if (self.tree.kind(callee) == .member and sp.tag(self.node_type[self.tree.arg(callee, 0)]) != .meta_type) self.tree.arg(callee, 0) else 0;
     if (ct != .poison_type and d != .none and is_fn(self.dp(.kind, d).*)) return call_decl(self, ctx, node, d, args, recv);
     const target = if (sp.tag(ct) != .meta_type) sp.apply_vars(&self.abstract_pool, ct) else statics.deferred(self, ctx, callee) orelse {
         for (args) |a| _ = self.h09_check_expr(ctx, self.arg_value(a), .none);
@@ -145,7 +145,7 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
     if (off == 1 and self.dp(.flags, callee).writes) {
         const r = if (recv != 0) recv else self.arg_value(all_args[0]);
         const rt = sp.apply_vars(&self.abstract_pool, self.node_type[r]);
-        const place = switch (self.nk(r)) {
+        const place = switch (self.tree.kind(r)) {
             .identifier, .identifier_self, .member, .array_index, .dereference, .capture => true,
             else => false,
         };
@@ -281,8 +281,8 @@ pub fn bind_args(self: *Resolver, params: []const NodeId, args: []const NodeId, 
     var bound: u64 = 0;
     for (args, 0..) |a, i| {
         var p: usize = i;
-        if (self.nk(a) == .partial__fun_call_assigned_param) {
-            const name = self.name_of(self.arg(a, 0));
+        if (self.tree.kind(a) == .partial__fun_call_assigned_param) {
+            const name = self.name_of(self.tree.arg(a, 0));
             p = for (params, 0..) |pn, j| {
                 if (self.param_name(pn, j) == name) break j;
             } else return false;
@@ -296,13 +296,13 @@ pub fn bind_args(self: *Resolver, params: []const NodeId, args: []const NodeId, 
 }
 
 pub fn named(self: *Resolver, a: NodeId, t: StaticPool.Index) StaticPool.Index {
-    if (self.nk(a) == .partial__fun_call_assigned_param) self.node_type[self.arg(a, 0)] = t;
+    if (self.tree.kind(a) == .partial__fun_call_assigned_param) self.node_type[self.tree.arg(a, 0)] = t;
     return t;
 }
 
 fn bad_args(self: *Resolver, node: NodeId, params: []const NodeId, args: []const NodeId) StaticPool.Index {
-    for (args) |a| if (self.nk(a) == .partial__fun_call_assigned_param) {
-        const name = self.name_of(self.arg(a, 0));
+    for (args) |a| if (self.tree.kind(a) == .partial__fun_call_assigned_param) {
+        const name = self.name_of(self.tree.arg(a, 0));
         for (params, 0..) |pn, j| {
             if (self.param_name(pn, j) == name) break;
         } else return self.report(.unknown_named_argument, a, name, .none);

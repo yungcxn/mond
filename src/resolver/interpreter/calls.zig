@@ -13,8 +13,8 @@ const Decl = Resolver.Decl;
 pub fn member(self: *Interpreter, n: NodeId) Value {
     const r = self.res();
     const sp = &r.static_pool;
-    const parent = r.arg(n, 0);
-    const name = r.name_of(r.arg(n, 1));
+    const parent = r.tree.arg(n, 0);
+    const name = r.name_of(r.tree.arg(n, 1));
     if (name == .len and !self.framed()) {
         const t = sp.pointee(sp.apply_vars(&r.abstract_pool, r.h09_check_expr(self.ctx, parent, .none)));
         if (sp.get(t) == .array_type and sp.tag(sp.get(t).array_type.len) == .int_value) return .of(sp, sp.get(t).array_type.len);
@@ -48,13 +48,13 @@ pub fn member(self: *Interpreter, n: NodeId) Value {
 pub fn call(self: *Interpreter, n: NodeId) Value {
     const r = self.res();
     const sp = &r.static_pool;
-    const callee = r.arg(n, 0);
-    const args = r.kids(r.arg(n, 1));
+    const callee = r.tree.arg(n, 0);
+    const args = r.tree.kids(r.tree.arg(n, 1));
     const d = self.info(.decl, n);
     const cd = self.info(.decl, callee);
     if (d != .none and Resolver.is_fn(r.dp(.kind, d).*) and (cd == .none or r.dp(.kind, cd).* != .static_function)) {
-        if (r.self_off(r.real(d)) == 0 or r.nk(callee) != .member or sp.tag(self.info(.ty, r.arg(callee, 0))) == .meta_type) return invoke(self, n, d, args, .empty, .empty);
-        const c = places.cell(self, r.arg(callee, 0)) orelse return .poison;
+        if (r.self_off(r.real(d)) == 0 or r.tree.kind(callee) != .member or sp.tag(self.info(.ty, r.tree.arg(callee, 0))) == .meta_type) return invoke(self, n, d, args, .empty, .empty);
+        const c = places.cell(self, r.tree.arg(callee, 0)) orelse return .poison;
         return invoke(self, n, d, args, if (self.mem.buf[c].is_ref()) self.mem.buf[c] else .ref(r.self_ptr(self.vtype(self.mem.buf[c])), c), .empty);
     }
     const cv = self.eval(callee);
@@ -198,9 +198,9 @@ fn attempt(self: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, b
         if (p.@"else" == 0) return null;
         const e = self.eval(p.@"else");
         if (self.unwind == .ret) return self.result(e);
-        if (r.nk(p.@"else") != .assign) _ = places.store(self, pn, self.info(.decl, pn), e);
+        if (r.tree.kind(p.@"else") != .assign) _ = places.store(self, pn, self.info(.decl, pn), e);
     }
-    const out = self.result(self.eval(r.arg(v, 1)));
+    const out = self.result(self.eval(r.tree.arg(v, 1)));
     keep = out.is_boxed();
     return out;
 }
@@ -215,7 +215,7 @@ pub fn construct(self: *Interpreter, target: Index, args: []const NodeId) Value 
     const len: u32 = @intCast(fields.len);
     const at = self.alloc(len);
     for (args, 0..) |a, i| {
-        const fi = r.field_of(rec, a, i) orelse return self.fail(a, .unknown_named_argument, r.name_of(r.arg(a, 0)), rec);
+        const fi = r.field_of(rec, a, i) orelse return self.fail(a, .unknown_named_argument, r.name_of(r.tree.arg(a, 0)), rec);
         const x = self.eval(r.arg_value(a));
         if (x.is(.poison_type)) return x;
         self.fill(at + fi, x, sp.get(rec).custom_type.field_types[fi]);
@@ -230,7 +230,7 @@ pub fn construct(self: *Interpreter, target: Index, args: []const NodeId) Value 
 pub fn with(self: *Interpreter, n: NodeId) Value {
     const r = self.res();
     const sp = &r.static_pool;
-    const base = self.deref(self.eval(r.arg(n, 0)));
+    const base = self.deref(self.eval(r.tree.arg(n, 0)));
     if (base.is(.poison_type)) return base;
     const t = self.vtype(base);
     const len = self.span(base) orelse return self.fail(n, .not_static, 0, 0);
@@ -240,8 +240,8 @@ pub fn with(self: *Interpreter, n: NodeId) Value {
         const x = self.own(self.elem(base, @intCast(i)));
         self.mem.buf[at + i] = x;
     }
-    for (r.kids(r.arg(n, 1)), 0..) |a, i| {
-        const fi = r.field_of(t, a, i) orelse return self.fail(a, .unknown_named_argument, r.name_of(r.arg(a, 0)), t);
+    for (r.tree.kids(r.tree.arg(n, 1)), 0..) |a, i| {
+        const fi = r.field_of(t, a, i) orelse return self.fail(a, .unknown_named_argument, r.name_of(r.tree.arg(a, 0)), t);
         const x = self.eval(r.arg_value(a));
         if (x.is(.poison_type)) return x;
         self.fill(at + fi, x, sp.get(t).custom_type.field_types[fi]);
@@ -282,7 +282,7 @@ fn complete(self: *Interpreter, rec: Index, at: u32) bool {
         if (w.bits != 0) continue;
         const e = self.eval(p.@"else");
         if (e.is(.poison_type)) return false;
-        if (r.nk(p.@"else") != .assign) self.fill(base + i, e, field(self, rec, i));
+        if (r.tree.kind(p.@"else") != .assign) self.fill(base + i, e, field(self, rec, i));
     }
     for (0..fields.len) |i| self.fill(at + i, self.mem.buf[base + i], field(self, rec, i));
     return true;
