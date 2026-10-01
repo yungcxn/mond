@@ -13,7 +13,7 @@ const is_range_kind = Resolver.is_range_kind;
 const Pat = struct { mask: u64 = 0, all: bool = false };
 
 pub fn h14_check_match(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
-    const arms = self.tree.kids(self.tree.arg(node, 1));
+    const arms = self.tree.manychildren(self.tree.arg(node, 1));
     const st = self.deref(self.h09_check_expr(ctx, self.tree.arg(node, 0), .none));
     const is_stc = self.tree.kind(node) == .stcmatch and !ctx.interpreted and !ctx.abstract;
     for (arms) |arm| self.node_value[arm] = .none;
@@ -207,7 +207,7 @@ fn bind_label(self: *Resolver, label: NodeId, t: StaticPool.Index) void {
         return;
     }
     const rt = sp.apply_vars(&self.abstract_pool, t);
-    for (self.tree.kids(label), 0..) |id, i| {
+    for (self.tree.manychildren(label), 0..) |id, i| {
         const ft = if (sp.tag(rt) == .record_type and i < sp.get(rt).custom_type.field_types.len) sp.get(rt).custom_type.field_types[i] else self.mismatch(id, t, .none);
         self.node_decl[id] = self.h02_declare_local(self.name_of(id), id, .arrow_binder, ft);
         _ = self.set(id, ft);
@@ -245,7 +245,7 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
             const names = &self.local_names;
             const from = names.head;
             var first = from;
-            for (self.tree.kids(p), 0..) |alt, i| {
+            for (self.tree.manychildren(p), 0..) |alt, i| {
                 const mark = names.head;
                 const s = pattern(self, ctx, alt, st);
                 r = .{ .mask = r.mask | s.mask, .all = r.all or s.all };
@@ -294,13 +294,13 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
             const ct = self.h09_check_expr(ctx, callee, .none);
             const target = self.set(p, if (sp.tag(ct) == .meta_type) statics.h08_eval_static(self, ctx, callee) else ct);
             if (target == .poison_type) { // binders still exist, as poison
-                for (self.tree.kids(self.tree.arg(p, 1))) |a| _ = pattern(self, ctx, self.arg_value(a), target);
+                for (self.tree.manychildren(self.tree.arg(p, 1))) |a| _ = pattern(self, ctx, self.arg_value(a), target);
                 return .{};
             }
             if (target != st and sp.coerce(&self.abstract_pool, target, st) == .incompatible and !statics.sibling(self, ctx, target, st)) _ = self.report(.type_mismatch, p, target, st);
             const is_case = sp.tag(target) == .variant_case_type;
             const rec = if (is_case) sp.get(target).variant_case_type.payload else target;
-            const args = self.tree.kids(self.tree.arg(p, 1));
+            const args = self.tree.manychildren(self.tree.arg(p, 1));
             var map: [64]u32 = undefined;
             if (rec == .none or sp.tag(rec) != .record_type or !calls.bind_args(self, self.fields_of(rec), args, &map, true)) {
                 if (args.len > 0) _ = self.report(.wrong_arity, p, args.len, 0);
@@ -422,7 +422,7 @@ fn spread(self: *Resolver, row: []const NodeId, p0: NodeId, t: StaticPool.Index,
     while (p != 0) switch (self.tree.kind(p)) {
         .capture, .labelarrow => p = self.tree.arg(p, 0),
         .identifier => p = 0,
-        .partial__match_case_pattern_or => return for (self.tree.kids(p)) |alt| spread(self, row, alt, t, out),
+        .partial__match_case_pattern_or => return for (self.tree.manychildren(p)) |alt| spread(self, row, alt, t, out),
         .partial__match_case_pattern_typecast => {
             const x = self.node_type[self.tree.arg(p, 1)];
             if (x == t or x == .poison_type or self.static_pool.coerce(&self.abstract_pool, t, x) != .incompatible) p = 0 else break;
@@ -449,7 +449,7 @@ fn specialize(self: *Resolver, rows: []const NodeId, w: usize, k: StaticPool.Ind
         const at = out.items.len;
         out.appendNTimes(self.alloc, 0, fields.len) catch @panic("OOM");
         var map: [64]u32 = undefined;
-        const args = if (p != 0 and self.tree.kind(p) == .fun_call) self.tree.kids(self.tree.arg(p, 1)) else &[_]NodeId{};
+        const args = if (p != 0 and self.tree.kind(p) == .fun_call) self.tree.manychildren(self.tree.arg(p, 1)) else &[_]NodeId{};
         if (calls.bind_args(self, fields, args, &map, true)) for (args, 0..) |a, i| {
             out.items[at + map[i]] = self.arg_value(a);
         };

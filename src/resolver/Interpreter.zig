@@ -55,8 +55,6 @@ pub fn deinit(self: *Interpreter) void {
     self.cap_list.deinit();
 }
 
-// TODO NEXT wtf
-
 pub fn res(self: *Interpreter) *Resolver {
     return @alignCast(@fieldParentPtr("interpreter", self));
 }
@@ -409,7 +407,7 @@ pub fn arith(self: *Interpreter, n: NodeId, k: Kind, a: Value, b: Value) Value {
 
 fn array(self: *Interpreter, n: NodeId) Value {
     const r = self.res();
-    const elems = if (r.tree.kind(n) == .array) r.tree.kids(n) else &[_]NodeId{};
+    const elems = if (r.tree.kind(n) == .array) r.tree.manychildren(n) else &[_]NodeId{};
     const len: u32 = @intCast(elems.len);
     const ct = r.static_pool.apply_vars(&r.abstract_pool, self.hint(n));
     var et = types.elem_type(self, ct);

@@ -10,7 +10,7 @@ const is_fn = Resolver.is_fn;
 
 pub fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
     const sp = &self.static_pool;
-    const args = self.tree.kids(self.tree.arg(node, 1));
+    const args = self.tree.manychildren(self.tree.arg(node, 1));
     if (self.tree.kind(node) == .with) { // a copy of a record, the named arguments must be its fields
         const t = self.deref(self.h09_check_expr(ctx, self.tree.arg(node, 0), .none));
         for (args) |a| {

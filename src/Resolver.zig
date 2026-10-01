@@ -30,10 +30,6 @@ pub const generic_slot = statics.generic_slot;
 pub const templated = statics.templated;
 pub const realizes = statics.realizes;
 pub const holds_template = statics.holds_template;
-const none_node: NodeId = std.math.maxInt(NodeId);
-// TODO NEXT
-const NodeId = ParseTree.NodeId;
-const NodeKind = ParseTree.Node.Kind;
 
 // the resolver answers two questions for every ast node:
 //   1. which declaration does this identifier mean?   -> node_decl
@@ -137,19 +133,13 @@ pub const Body = struct {
 };
 
 pub const Param = struct {
-    ty: NodeId = 0,
-    name: NodeId = 0,
-    default: NodeId = 0,
-    where: NodeId = 0,
-    @"else": NodeId = 0,
+    ty: ParseTree.NodeId = 0,
+    name: ParseTree.NodeId = 0,
+    default: ParseTree.NodeId = 0,
+    where: ParseTree.NodeId = 0,
+    @"else": ParseTree.NodeId = 0,
     is_mut: bool = false,
     stc: bool = false,
-};
-
-pub const Parts = struct {
-    type: NodeId = 0,
-    ids: []const NodeId = &.{},
-    value: NodeId = 0,
 };
 
 const Access = enum {
@@ -159,20 +149,20 @@ const Access = enum {
 };
 
 pub const Def = struct {
-    core: NodeId,
-    body: NodeId = 0,
-    size: NodeId = 0,
-    tagof: NodeId = 0,
+    core: ParseTree.NodeId,
+    body: ParseTree.NodeId = 0,
+    size: ParseTree.NodeId = 0,
+    tagof: ParseTree.NodeId = 0,
 };
 
 pub const Stmt = struct {
-    node: NodeId,
+    node: ParseTree.NodeId,
     flags: Decl.Flags,
     kind: Decl.Kind,
-    type: NodeId,
-    ids: []const NodeId,
-    value: NodeId,
-    values: []const NodeId,
+    type: ParseTree.NodeId,
+    ids: []const ParseTree.NodeId,
+    value: ParseTree.NodeId,
+    values: []const ParseTree.NodeId,
 
     pub fn is_member(s: Stmt) bool {
         return s.ids.len == 1 and is_fn(s.kind);
@@ -180,17 +170,17 @@ pub const Stmt = struct {
 };
 
 pub const Loop = struct {
-    cond: NodeId = 0,
-    repeat: NodeId = 0,
-    head: NodeId = 0,
-    seq: NodeId = 0,
-    variable: NodeId = 0,
-    body: NodeId,
+    cond: ParseTree.NodeId = 0,
+    repeat: ParseTree.NodeId = 0,
+    head: ParseTree.NodeId = 0,
+    seq: ParseTree.NodeId = 0,
+    variable: ParseTree.NodeId = 0,
+    body: ParseTree.NodeId,
 };
 
 pub const Range = struct {
-    lo: NodeId,
-    hi: NodeId,
+    lo: ParseTree.NodeId,
+    hi: ParseTree.NodeId,
     incl: bool,
 };
 
@@ -218,7 +208,7 @@ pub const NodeProperties = packed struct(u8) {
 pub const node_props = blk: {
     var t: [256]NodeProperties = @splat(.{});
 
-    for ([_]NodeKind{
+    for ([_]ParseTree.Node.Kind{
         .stcif_then,
         .stcif_else,
         .stcwhile,
@@ -230,7 +220,7 @@ pub const node_props = blk: {
         .stcmatch,
     }) |k| t[@intFromEnum(k)].stc = true;
 
-    for ([_]NodeKind{
+    for ([_]ParseTree.Node.Kind{
         .@"while",
         .while_with_repeat_stmt,
         .stcwhile,
@@ -245,7 +235,7 @@ pub const node_props = blk: {
         .stcloop_with_repeat_stmt,
     }) |k| t[@intFromEnum(k)].loop = true;
 
-    for ([_]NodeKind{
+    for ([_]ParseTree.Node.Kind{
         .gen_incl,
         .gen_excl,
         .gen_lowerbound,
@@ -253,16 +243,16 @@ pub const node_props = blk: {
         .gen_upperbound_excl,
     }) |k| t[@intFromEnum(k)].range = true;
 
-    for (@intFromEnum(NodeKind.type_ptrmut)..@intFromEnum(NodeKind.type_stcfun) + 1) |i| t[i].type_expr = true;
+    for (@intFromEnum(ParseTree.Node.Kind.type_ptrmut)..@intFromEnum(ParseTree.Node.Kind.type_stcfun) + 1) |i| t[i].type_expr = true;
 
-    for ([_]NodeKind{
+    for ([_]ParseTree.Node.Kind{
         .type_array,
         .type_array_unlengthed,
         .def_fun_declaration,
         .typeof,
     }) |k| t[@intFromEnum(k)].type_expr = true;
 
-    for ([_]NodeKind{
+    for ([_]ParseTree.Node.Kind{
         .def_var,
         .assign,
         .assign_typed,
@@ -271,7 +261,7 @@ pub const node_props = blk: {
         .mod_stc,
     }) |k| t[@intFromEnum(k)].declares = true;
 
-    for ([_]NodeKind{
+    for ([_]ParseTree.Node.Kind{
         .block,
         .if_then,
         .if_else,
@@ -281,7 +271,7 @@ pub const node_props = blk: {
         .stcmatch,
     }) |k| t[@intFromEnum(k)].runit = true;
 
-    for ([_]NodeKind{
+    for ([_]ParseTree.Node.Kind{
         .int,
         .float,
         .char,
@@ -496,9 +486,9 @@ fn s3_apply_inferred_types(self: *Resolver) void {
     };
     // lengths nothing fixed are only known at runtime; a loop value then needs its element count at loop entry
     const vs = self.abstract_pool.pool.sliced();
-    const group = self.alloc.alloc(NodeId, vs.parent.len) catch @panic("OOM");
+    const group = self.alloc.alloc(ParseTree.NodeId, vs.parent.len) catch @panic("OOM");
     defer self.alloc.free(group);
-    @memset(group, none_node);
+    @memset(group, ParseTree.none_node);
     for (0..vs.parent.len) |i| {
         const root = @intFromEnum(self.abstract_pool.find(@enumFromInt(i)));
         if (vs.binding[root] != .none) continue;
@@ -515,9 +505,9 @@ fn s3_apply_inferred_types(self: *Resolver) void {
             .type_array_unlengthed, .array_index, .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => true,
             else => continue,
         };
-        if (group[root] == none_node or !counted) group[root] = if (counted) 0 else origin;
+        if (group[root] == ParseTree.none_node or !counted) group[root] = if (counted) 0 else origin;
     }
-    for (group, 0..) |g, i| if (g != none_node) {
+    for (group, 0..) |g, i| if (g != ParseTree.none_node) {
         if (g != 0) _ = self.report(.uninferable_type, g, sp.apply_vars(&self.abstract_pool, self.node_type[g]), .none);
         self.abstract_pool.bind(@enumFromInt(i), StaticPool.dyn_len);
     };
@@ -555,7 +545,7 @@ pub fn h01_lookup(self: *Resolver, name: NamePool.Index) Decl.Index {
     return self.globals.get(name) orelse .none;
 }
 
-pub fn use(self: *Resolver, node: NodeId) Decl.Index {
+pub fn use(self: *Resolver, node: ParseTree.NodeId) Decl.Index {
     const name = self.name_of(node);
     const d = self.h01_lookup(name);
     if (d == .none) {
@@ -709,17 +699,17 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     if (!abstract) statics.snapshot(self, decl, v, first);
 }
 
-pub fn errors_since(self: *Resolver, mark: usize, v: NodeId) bool {
+pub fn errors_since(self: *Resolver, mark: usize, v: ParseTree.NodeId) bool {
     const d = self.doc.diagnostics.sliced();
-    var s: ?[2]NodeId = null;
+    var s: ?[2]ParseTree.NodeId = null;
     for (d.severity[mark..], d.node[mark..]) |sev, n| if (sev == .@"error") {
-        if (s == null) s = self.subtree(v);
+        if (s == null) s = self.tree.subtree(v);
         if (n >= s.?[0] and n < s.?[1]) return true;
     };
     return false;
 }
 
-pub fn check_unit(self: *Resolver, ctx: *FnCtx, body: NodeId) void {
+pub fn check_unit(self: *Resolver, ctx: *FnCtx, body: ParseTree.NodeId) void {
     const sp = &self.static_pool;
     if (self.tree.kind(body) != .block) {
         _ = self.check(ctx, body, ctx.ret_type);
@@ -733,8 +723,8 @@ pub fn check_unit(self: *Resolver, ctx: *FnCtx, body: NodeId) void {
 
 pub const prim_types = blk: {
     var t: [256]StaticPool.Index = @splat(.none);
-    for (@typeInfo(StaticPool.Index).@"enum".fields) |f| if (std.mem.endsWith(u8, f.name, "_type") and @hasField(NodeKind, "type_" ++ f.name[0 .. f.name.len - 5])) {
-        t[@intFromEnum(@field(NodeKind, "type_" ++ f.name[0 .. f.name.len - 5]))] = @enumFromInt(f.value);
+    for (@typeInfo(StaticPool.Index).@"enum".fields) |f| if (std.mem.endsWith(u8, f.name, "_type") and @hasField(ParseTree.Node.Kind, "type_" ++ f.name[0 .. f.name.len - 5])) {
+        t[@intFromEnum(@field(ParseTree.Node.Kind, "type_" ++ f.name[0 .. f.name.len - 5]))] = @enumFromInt(f.value);
     };
     break :blk t;
 };
@@ -766,7 +756,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             self.h03_push_scope();
             defer self.h04_pop_scope();
             var last: StaticPool.Index = .unit_type;
-            const stmts = self.tree.kids(node);
+            const stmts = self.tree.manychildren(node);
             // local functions are visible in their whole block
             for (stmts) |s| {
                 const st = self.statement(s);
@@ -859,7 +849,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         .array, .array_empty => blk: {
             const exp = sp.apply_vars(ap, expected);
             var elem = sp.array_elem(exp);
-            const elems = if (k == .array) self.tree.kids(node) else &[_]NodeId{};
+            const elems = if (k == .array) self.tree.manychildren(node) else &[_]ParseTree.NodeId{};
             for (elems) |e| {
                 const et = self.h09_check_expr(ctx, e, elem);
                 if (elem == .none) elem = et else _ = self.h10_expect(e, et, elem);
@@ -901,7 +891,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             const e = sp.array_elem(exp);
             var hint = if (e != .none) e else if (self.is_numeric(exp)) exp else .none;
             const g = self.range(node);
-            for ([_]NodeId{ g.lo, g.hi }) |x| if (x != 0 and hint != .none and self.is_literal(x) and statics.literal_type(self, x, hint) != hint) {
+            for ([_]ParseTree.NodeId{ g.lo, g.hi }) |x| if (x != 0 and hint != .none and self.is_literal(x) and statics.literal_type(self, x, hint) != hint) {
                 hint = .none;
             };
             const b = if (k == .gen_incl or k == .gen_excl) self.pair(ctx, node, a0, a1, hint) else self.operand(ctx, a0, hint);
@@ -948,7 +938,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
 }
 
 // the locals not written yet when a condition is true and when it is false: `and` runs its right side only after a true left one
-pub fn condition(self: *Resolver, ctx: *FnCtx, n: NodeId) [2]u64 {
+pub fn condition(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId) [2]u64 {
     const k = self.tree.kind(n);
     if (k == .capture) {
         const w = self.condition(ctx, self.tree.arg(n, 0));
@@ -1095,7 +1085,7 @@ fn h18_check_place(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
     return t;
 }
 
-pub fn write_access(self: *Resolver, node: NodeId, a: Access) void {
+pub fn write_access(self: *Resolver, node: ParseTree.NodeId, a: Access) void {
     switch (a) {
         .ok => self.wrote(node),
         .immutable => self.doc.h21_report(.assign_to_immutable, node, 0, 0),
@@ -1104,7 +1094,7 @@ pub fn write_access(self: *Resolver, node: NodeId, a: Access) void {
 }
 
 // a write into a place rooted at `self` (not through a pointer it holds) makes its method one that writes self
-fn wrote(self: *Resolver, place: NodeId) void {
+fn wrote(self: *Resolver, place: ParseTree.NodeId) void {
     var n = place;
     while (self.tree.kind(n) != .identifier_self) switch (self.tree.kind(n)) {
         .capture => n = self.tree.arg(n, 0),
@@ -1128,7 +1118,7 @@ const autoinserted_dollarnames = blk: {
     break :blk t;
 };
 
-pub fn name_of(self: *Resolver, n: NodeId) NamePool.Index {
+pub fn name_of(self: *Resolver, n: ParseTree.NodeId) NamePool.Index {
     switch (self.tree.kind(n)) {
         .identifier => {
             const s = self.tree.span(n);
@@ -1143,12 +1133,12 @@ pub inline fn dp(self: *Resolver, comptime f: @EnumLiteral(), d: Decl.Index) *@F
     return &@field(self.decls.pool, @tagName(f)).buf[@intFromEnum(d)];
 }
 
-pub inline fn set(self: *Resolver, n: NodeId, t: StaticPool.Index) StaticPool.Index {
+pub inline fn set(self: *Resolver, n: ParseTree.NodeId, t: StaticPool.Index) StaticPool.Index {
     self.node_type[n] = t;
     return t;
 }
 
-pub fn report(self: *Resolver, code: Doctor.Disorder, n: NodeId, a: anytype, b: anytype) StaticPool.Index {
+pub fn report(self: *Resolver, code: Doctor.Disorder, n: ParseTree.NodeId, a: anytype, b: anytype) StaticPool.Index {
     self.doc.h21_report(code, n, a, b);
     return self.set(n, .poison_type);
 }
@@ -1168,7 +1158,7 @@ pub fn init_leave(self: *Resolver, tracked: u32, uninit: u64) void {
     self.uninit = uninit;
 }
 
-pub fn check(self: *Resolver, ctx: *FnCtx, n: NodeId, expected: StaticPool.Index) StaticPool.Index {
+pub fn check(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
     const t = self.h09_check_expr(ctx, n, expected);
     // a case with a payload is a constructor, a value of it needs the payload
     if (t != .poison_type and self.tree.kind(n) == .member and self.static_pool.tag(t) == .variant_case_type and self.static_pool.get(t).variant_case_type.payload != .none) return self.report(.type_mismatch, n, t, expected);
@@ -1182,11 +1172,11 @@ pub fn is_fn(kind: Decl.Kind) bool {
     };
 }
 
-pub fn is_range_kind(k: NodeKind) bool {
+pub fn is_range_kind(k: ParseTree.Node.Kind) bool {
     return node_props[@intFromEnum(k)].range;
 }
 
-pub fn push_decl(self: *Resolver, name: NamePool.Index, node: NodeId, kind: Decl.Kind, ty: StaticPool.Index, flags: Decl.Flags) Decl.Index {
+pub fn push_decl(self: *Resolver, name: NamePool.Index, node: ParseTree.NodeId, kind: Decl.Kind, ty: StaticPool.Index, flags: Decl.Flags) Decl.Index {
     const d: Decl.Index = @enumFromInt(self.decls.len());
     const lazy = flags.is_global or is_fn(kind) or is_type_decl(kind);
     self.decls.push(.{ .name = name, .node = node, .kind = kind, .flags = flags, .state = if (lazy) .unresolved else .done, .ty = ty, .value = .none, .next_overload = .none });
@@ -1198,7 +1188,7 @@ pub fn is_type_decl(kind: Decl.Kind) bool {
 }
 
 // a declared global row is reused, anything else becomes a new local
-fn declare(self: *Resolver, id: NodeId, stmt: NodeId, kind: Decl.Kind, ty: StaticPool.Index, flags: Decl.Flags) Decl.Index {
+fn declare(self: *Resolver, id: ParseTree.NodeId, stmt: ParseTree.NodeId, kind: Decl.Kind, ty: StaticPool.Index, flags: Decl.Flags) Decl.Index {
     var d = self.node_decl[id];
     if (!self.pre_declared(d, stmt)) {
         d = self.h02_declare_local(self.name_of(id), stmt, kind, ty);
@@ -1210,12 +1200,12 @@ fn declare(self: *Resolver, id: NodeId, stmt: NodeId, kind: Decl.Kind, ty: Stati
 }
 
 // s1 rows and hoisted local functions of this very statement are reused instead of declared again
-fn pre_declared(self: *Resolver, d: Decl.Index, stmt: NodeId) bool {
+fn pre_declared(self: *Resolver, d: Decl.Index, stmt: ParseTree.NodeId) bool {
     return d != .none and self.dp(.node, d).* == stmt and (self.dp(.flags, d).is_global or self.h01_lookup(self.dp(.name, d).*) == d);
 }
 
 // a scope for a declaration: globals get a barrier so they never see their user's locals
-pub fn open_scope(self: *Resolver, barrier: bool, self_type: StaticPool.Index, node: NodeId) void {
+pub fn open_scope(self: *Resolver, barrier: bool, self_type: StaticPool.Index, node: ParseTree.NodeId) void {
     self.h03_push_scope();
     if (barrier) {
         self.local_names.push(.none);
@@ -1256,7 +1246,7 @@ pub fn by_ref(self: *Resolver, c: Decl.Index) bool {
     return self.dp(.flags, c).is_mut or t != .none and (sp.tag(t) == .record_type or sp.tag(t) == .array_type and sp.get(t).array_type.len != StaticPool.dyn_len);
 }
 
-pub fn value_node(self: *Resolver, d: Decl.Index) NodeId {
+pub fn value_node(self: *Resolver, d: Decl.Index) ParseTree.NodeId {
     const n = self.dp(.node, d).*;
     return switch (self.tree.kind(n)) {
         .assign, .assign_typed => self.tree.arg(n, 1),
@@ -1264,7 +1254,7 @@ pub fn value_node(self: *Resolver, d: Decl.Index) NodeId {
     };
 }
 
-pub fn definition(self: *const Resolver, n: NodeId) Def {
+pub fn definition(self: *const Resolver, n: ParseTree.NodeId) Def {
     var d = Def{ .core = n };
     while (true) : (d.core = self.tree.arg(d.core, 0)) switch (self.tree.kind(d.core)) {
         .def_type_implof, .def_variant_implof => d.body = self.tree.arg(d.core, 1),
@@ -1274,7 +1264,7 @@ pub fn definition(self: *const Resolver, n: NodeId) Def {
     };
 }
 
-fn core(self: *const Resolver, n: NodeId) NodeId {
+fn core(self: *const Resolver, n: ParseTree.NodeId) ParseTree.NodeId {
     return self.definition(n).core;
 }
 
@@ -1287,7 +1277,7 @@ pub fn meta(kind: Decl.Kind, other: StaticPool.Index) StaticPool.Index {
     };
 }
 
-pub fn type_kind(self: *const Resolver, n: NodeId) Decl.Kind {
+pub fn type_kind(self: *const Resolver, n: ParseTree.NodeId) Decl.Kind {
     return switch (self.tree.kind(self.core(n))) {
         .def_type, .def_type_packed => .record,
         .def_variant, .def_variant_unionsized => .variant,
@@ -1296,7 +1286,7 @@ pub fn type_kind(self: *const Resolver, n: NodeId) Decl.Kind {
     };
 }
 
-fn decl_kind(self: *const Resolver, type_node: NodeId, value: NodeId) Decl.Kind {
+fn decl_kind(self: *const Resolver, type_node: ParseTree.NodeId, value: ParseTree.NodeId) Decl.Kind {
     const tk = self.type_kind(value);
     return switch (self.tree.kind(type_node)) {
         .type_fun => .function,
@@ -1312,49 +1302,59 @@ fn decl_kind(self: *const Resolver, type_node: NodeId, value: NodeId) Decl.Kind 
     };
 }
 
-// assignments could have modifiers, which result in non-flat repres. in ast
-// -> flat out by
-fn unwrap_mods(self: *const Resolver, n0: NodeId, flags: *Decl.Flags) NodeId {
-    var n = n0;
-    while (true) : (n = self.tree.arg(n, 0)) switch (self.tree.kind(n)) {
-        .mod_pub => flags.is_pub = true,
-        .mod_mut => flags.is_mut = true,
-        .mod_stc => flags.is_stc = true,
-        else => return n,
-    };
-}
-
-pub fn statement(self: *const Resolver, n0: NodeId) Stmt {
+pub fn statement(self: *const Resolver, n0: ParseTree.NodeId) Stmt {
     var flags = Decl.Flags{};
-    const n = self.unwrap_mods(n0, &flags);
-    const p = self.stmt_parts(n);
+
+    // assignments could have modifiers, which result in non-flat repres. in ast
+    // -> flat out and put into decl flags by walking l.son->l.son->l.son
+    const non_assignmoded_root = blk: {
+        var n = n0;
+        outer: while (true) : (n = self.tree.arg(n, 0)) switch (self.tree.kind(n)) {
+            .mod_pub => flags.is_pub = true,
+            .mod_mut => flags.is_mut = true,
+            .mod_stc => flags.is_stc = true,
+            else => break :outer,
+        };
+        break :blk n;
+    };
+
+    var stmt_type: ParseTree.NodeId = 0;
+    var stmt_ids: []const ParseTree.NodeId = &.{};
+    var stmt_value: ParseTree.NodeId = 0;
+    switch (self.tree.kind(non_assignmoded_root)) {
+        .def_var => {
+            stmt_type = self.tree.arg(non_assignmoded_root, 0);
+            stmt_ids = self.tree.list_at(non_assignmoded_root, 1, .partial__destructure);
+        },
+        .assign_typed => {
+            stmt_type = self.tree.arg(self.tree.arg(non_assignmoded_root, 0), 0);
+            stmt_ids = self.tree.list_at(self.tree.arg(non_assignmoded_root, 0), 1, .partial__destructure);
+            stmt_value = self.tree.arg(non_assignmoded_root, 1);
+        },
+        .assign => {
+            stmt_ids = self.tree.list_at(non_assignmoded_root, 0, .partial__destructure);
+            stmt_value = self.tree.arg(non_assignmoded_root, 1);
+        },
+        else => {},
+    }
+
+    // TODO NEXT where i left off
     // `f = (..): ..` on a visible variable of function type assigns it, h11 links the name
-    const d = if (p.ids.len == 1) self.node_decl[p.ids[0]] else .none;
-    const assigns = p.type == 0 and d != .none and !is_fn(self.decls.pool.kind.buf[@intFromEnum(d)]);
+    const d = if (stmt_ids.len == 1) self.node_decl[stmt_ids[0]] else .none;
+    const assigns = stmt_type == 0 and d != .none and !is_fn(self.decls.pool.kind.buf[@intFromEnum(d)]);
 
     return .{
-        .node = n,
+        .node = non_assignmoded_root,
         .flags = flags,
-        .kind = if (assigns) .variable else self.decl_kind(p.type, p.value),
-        .type = p.type,
-        .ids = p.ids,
-        .value = p.value,
-        .values = if (p.value == 0) &.{} else self.tree.list_at(n, 1, .partial__assign_multival),
+        .kind = if (assigns) .variable else self.decl_kind(stmt_type, stmt_value),
+        .type = stmt_type,
+        .ids = stmt_ids,
+        .value = stmt_value,
+        .values = if (stmt_value == 0) &.{} else self.tree.list_at(non_assignmoded_root, 1, .partial__assign_multival),
     };
 }
 
-// TODO NEXT: all pure tree ops must be in ParseTree
-
-fn stmt_parts(self: *const Resolver, n: NodeId) Parts {
-    return switch (self.tree.kind(n)) {
-        .def_var => .{ .type = self.tree.arg(n, 0), .ids = self.tree.list_at(n, 1, .partial__destructure) },
-        .assign_typed => .{ .type = self.tree.arg(self.tree.arg(n, 0), 0), .ids = self.tree.list_at(self.tree.arg(n, 0), 1, .partial__destructure), .value = self.tree.arg(n, 1) },
-        .assign => .{ .ids = self.tree.list_at(n, 0, .partial__destructure), .value = self.tree.arg(n, 1) },
-        else => .{},
-    };
-}
-
-pub fn param(self: *const Resolver, n0: NodeId) Param {
+pub fn param(self: *const Resolver, n0: ParseTree.NodeId) Param {
     var p = Param{};
     var n = n0;
     while (true) {
@@ -1382,7 +1382,7 @@ pub fn param(self: *const Resolver, n0: NodeId) Param {
 }
 
 // unnamed parameters and fields are `$0`, `$1`, ...
-pub fn param_name(self: *Resolver, pn: NodeId, i: usize) NamePool.Index {
+pub fn param_name(self: *Resolver, pn: ParseTree.NodeId, i: usize) NamePool.Index {
     return self.name_at(self.param(pn), i);
 }
 
@@ -1390,21 +1390,21 @@ pub fn name_at(self: *Resolver, p: Param, i: usize) NamePool.Index {
     return if (p.name != 0) self.name_of(p.name) else self.name_pool.intern(autoinserted_dollarnames[@min(i, 63)]);
 }
 
-pub fn template_field(self: *Resolver, g: Decl.Index, name: NamePool.Index) ?NodeId {
+pub fn template_field(self: *Resolver, g: Decl.Index, name: NamePool.Index) ?ParseTree.NodeId {
     for (self.fields_of_node(self.core(self.tree.arg(self.value_node(g), 1))), 0..) |f, i| if (self.param_name(f, i) == name) return f;
     return null;
 }
 
-pub fn params_of(self: *const Resolver, v: NodeId) []const NodeId {
+pub fn params_of(self: *const Resolver, v: ParseTree.NodeId) []const ParseTree.NodeId {
     if (self.tree.kind(v) != .def_fun and self.tree.kind(v) != .def_fun_declaration) return &.{};
-    return self.tree.kids(self.tree.arg(self.tree.arg(v, 0), 0));
+    return self.tree.manychildren(self.tree.arg(self.tree.arg(v, 0), 0));
 }
 
-pub fn fields_of_node(self: *const Resolver, c: NodeId) []const NodeId {
-    return if (self.tree.kind(c) == .partial__type_def_param_tuple) self.tree.kids(c) else self.tree.kids(self.tree.arg(c, 0));
+pub fn fields_of_node(self: *const Resolver, c: ParseTree.NodeId) []const ParseTree.NodeId {
+    return if (self.tree.kind(c) == .partial__type_def_param_tuple) self.tree.manychildren(c) else self.tree.manychildren(self.tree.arg(c, 0));
 }
 
-pub fn fields_of(self: *Resolver, rec: StaticPool.Index) []const NodeId {
+pub fn fields_of(self: *Resolver, rec: StaticPool.Index) []const ParseTree.NodeId {
     return self.fields_of_node(self.core(self.value_node(self.static_pool.get(rec).custom_type.decl)));
 }
 
@@ -1430,7 +1430,7 @@ pub fn deref(self: *Resolver, t0: StaticPool.Index) StaticPool.Index {
     return if (sp.get_tag_prop(c).is_nominal or sp.get_tag_prop(c).is_variant) c else t;
 }
 
-pub fn fresh_var(self: *Resolver, origin: NodeId) StaticPool.Index {
+pub fn fresh_var(self: *Resolver, origin: ParseTree.NodeId) StaticPool.Index {
     return self.static_pool.intern(.{ .abstract_type = self.abstract_pool.fresh(origin) });
 }
 
@@ -1439,7 +1439,7 @@ pub fn fn_ret(self: *Resolver, d: Decl.Index) StaticPool.Index {
     return if (self.static_pool.tag(t) == .function_type) self.static_pool.get(t).function_type.ret else .poison_type;
 }
 
-pub fn method(self: *Resolver, node: NodeId, m: Decl.Index) StaticPool.Index {
+pub fn method(self: *Resolver, node: ParseTree.NodeId, m: Decl.Index) StaticPool.Index {
     self.node_decl[node] = m;
     return types.decl_type(self, m);
 }
@@ -1474,23 +1474,23 @@ fn elem_ptr(self: *Resolver, t0: StaticPool.Index) bool {
     return sp.is_ptr(t) and sp.get(sp.pointee(t)) != .array_type;
 }
 
-pub fn integer(self: *Resolver, ctx: *FnCtx, n: NodeId) bool {
+pub fn integer(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId) bool {
     const t = self.operand(ctx, n, if (self.tree.kind(n) == .neg_num) .i64_type else .u64_type);
     if (t == .poison_type or self.static_pool.get_tag_prop(t).is_integer) return true;
     _ = self.report(.type_mismatch, n, t, .u64_type);
     return false;
 }
 
-pub fn signature_mentions(self: *Resolver, f: NodeId, v: NodeId) bool {
+pub fn signature_mentions(self: *Resolver, f: ParseTree.NodeId, v: ParseTree.NodeId) bool {
     const header = self.tree.arg(f, 0);
     if (self.tree.kind(header) != .partial__fun_def_header_ret or self.mentions(self.tree.arg(header, 1), v)) return true;
     for (self.params_of(f)) |pn| if (self.mentions(self.param(pn).ty, v)) return true;
     return false;
 }
 
-pub fn mentions(self: *Resolver, n: NodeId, v: NodeId) bool {
+pub fn mentions(self: *Resolver, n: ParseTree.NodeId, v: ParseTree.NodeId) bool {
     const params = self.params_of(v);
-    const s = self.subtree(n);
+    const s = self.tree.subtree(n);
     for (s[0]..s[1]) |i| {
         if (self.tree.kind(@intCast(i)) != .identifier) continue;
         const nm = self.name_of(@intCast(i));
@@ -1499,28 +1499,9 @@ pub fn mentions(self: *Resolver, n: NodeId, v: NodeId) bool {
     return false;
 }
 
-// TODO next must be in ParseTree
+// TODO NEXT was ist hier noch rausnehmbar?
 
-pub fn children(self: *const Resolver, n: NodeId) []const NodeId {
-    const slots: *const [2]NodeId = @ptrCast(&self.tree.ast_nodes.pool.args.buf[n]);
-    return switch (ParseTree.Node.nk_childc[@intFromEnum(self.tree.kind(n))]) {
-        .one => slots[0..1],
-        .two => slots,
-        .many => self.tree.kids(n),
-        else => &.{},
-    };
-}
-
-pub fn subtree(self: *const Resolver, n: NodeId) [2]NodeId {
-    var s: [2]NodeId = .{ n, n + 1 };
-    for (self.children(n)) |c| {
-        const x = self.subtree(c);
-        s = .{ @min(s[0], x[0]), @max(s[1], x[1]) };
-    }
-    return s;
-}
-
-pub fn arg_value(self: *const Resolver, a: NodeId) NodeId {
+pub fn arg_value(self: *const Resolver, a: ParseTree.NodeId) ParseTree.NodeId {
     return if (self.tree.kind(a) == .partial__fun_call_assigned_param) self.tree.arg(a, 1) else a;
 }
 
@@ -1532,28 +1513,28 @@ fn is_numeric(self: *Resolver, t: StaticPool.Index) bool {
     return t != .none and (self.static_pool.get_tag_prop(t).is_integer or self.static_pool.get_tag_prop(t).is_float);
 }
 
-fn folded(self: *Resolver, n: NodeId) bool {
+fn folded(self: *Resolver, n: ParseTree.NodeId) bool {
     return self.is_literal(n) or self.node_value[n] != .none and switch (self.tree.kind(n)) {
         .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap => true,
         else => false,
     };
 }
 
-fn numeric(self: *Resolver, node: NodeId, t: StaticPool.Index, result: StaticPool.Index) StaticPool.Index {
+fn numeric(self: *Resolver, node: ParseTree.NodeId, t: StaticPool.Index, result: StaticPool.Index) StaticPool.Index {
     if (self.is_numeric(t) or self.static_pool.tag(t) == .type_var) return if (result == .none) t else result;
     return self.mismatch(node, t, .none);
 }
 
-pub fn mismatch(self: *Resolver, n: NodeId, t: StaticPool.Index, want: StaticPool.Index) StaticPool.Index {
+pub fn mismatch(self: *Resolver, n: ParseTree.NodeId, t: StaticPool.Index, want: StaticPool.Index) StaticPool.Index {
     return if (t == .poison_type) t else self.report(.type_mismatch, n, t, want);
 }
 
-fn operand(self: *Resolver, ctx: *FnCtx, n: NodeId, hint: StaticPool.Index) StaticPool.Index {
+fn operand(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId, hint: StaticPool.Index) StaticPool.Index {
     return if (self.is_literal(n)) self.check(ctx, n, hint) else self.h09_check_expr(ctx, n, hint);
 }
 
 // both sides of a binary operator: the non-literal side first, so a literal takes its type
-fn pair(self: *Resolver, ctx: *FnCtx, node: NodeId, l: NodeId, r: NodeId, hint: StaticPool.Index) StaticPool.Index {
+fn pair(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, l: ParseTree.NodeId, r: ParseTree.NodeId, hint: StaticPool.Index) StaticPool.Index {
     const swap = self.is_literal(l) and !self.is_literal(r);
     const t1 = self.operand(ctx, if (swap) r else l, hint);
     const add = self.tree.kind(node) == .binary_add;
@@ -1567,13 +1548,13 @@ fn pair(self: *Resolver, ctx: *FnCtx, node: NodeId, l: NodeId, r: NodeId, hint: 
     return if (j.ty == .none) self.report(.type_mismatch, node, t1, t2) else j.ty;
 }
 
-fn need_deinit(self: *Resolver, node: NodeId, t0: StaticPool.Index) void {
+fn need_deinit(self: *Resolver, node: ParseTree.NodeId, t0: StaticPool.Index) void {
     const t = self.static_pool.apply_vars(&self.abstract_pool, t0);
     if (t != .poison_type and self.static_pool.lookup_member(t, .deinit) == .none)
         self.doc.h21_report(.no_deinit, node, t, 0);
 }
 
-pub fn writable(self: *Resolver, node: NodeId) Access {
+pub fn writable(self: *Resolver, node: ParseTree.NodeId) Access {
     return switch (self.tree.kind(node)) {
         .capture => self.writable(self.tree.arg(node, 0)),
         .identifier, .identifier_self => blk: {
@@ -1593,7 +1574,7 @@ pub fn writable(self: *Resolver, node: NodeId) Access {
 }
 
 // writing through a parent: `*T` allows it, `&T` never, anything else if the parent itself is writable
-pub fn through(self: *Resolver, parent: NodeId, or_place: bool) Access {
+pub fn through(self: *Resolver, parent: ParseTree.NodeId, or_place: bool) Access {
     const sp = &self.static_pool;
     const pt = self.node_type[parent];
     if (pt == .none or pt == .poison_type) return .ok;
@@ -1630,7 +1611,7 @@ fn init_bit(self: *Resolver, d: Decl.Index) u64 {
     } else 0;
 }
 
-fn check_init(self: *Resolver, node: NodeId, d: Decl.Index) void {
+fn check_init(self: *Resolver, node: ParseTree.NodeId, d: Decl.Index) void {
     if (self.uninit == 0) return;
     const bit = self.init_bit(d);
     if (self.uninit & bit == 0) return;
@@ -1638,12 +1619,12 @@ fn check_init(self: *Resolver, node: NodeId, d: Decl.Index) void {
     self.uninit &= ~bit;
 }
 
-pub fn node_info(self: *const Resolver, b: Body, comptime field: @EnumLiteral(), n: NodeId) @FieldType(EphemeralNodeInfo, @tagName(field)) {
+pub fn node_info(self: *const Resolver, b: Body, comptime field: @EnumLiteral(), n: ParseTree.NodeId) @FieldType(EphemeralNodeInfo, @tagName(field)) {
     if (n -% b.lo < b.len) return @field(self.body_nodes.pool, @tagName(field)).buf[b.start + n - b.lo];
     return @field(self, if (field == .ty) "node_type" else "node_" ++ @tagName(field))[n];
 }
 
-pub fn field_of(self: *Resolver, rec: StaticPool.Index, a: NodeId, i: usize) ?u32 {
+pub fn field_of(self: *Resolver, rec: StaticPool.Index, a: ParseTree.NodeId, i: usize) ?u32 {
     if (self.tree.kind(a) != .partial__fun_call_assigned_param) return @intCast(i);
     return switch (self.static_pool.lookup_member(rec, self.name_of(self.tree.arg(a, 0)))) {
         .field => |f| f.index,
@@ -1651,12 +1632,12 @@ pub fn field_of(self: *Resolver, rec: StaticPool.Index, a: NodeId, i: usize) ?u3
     };
 }
 
-pub fn narrowed(self: *const Resolver, target: NodeId) NodeId {
+pub fn narrowed(self: *const Resolver, target: ParseTree.NodeId) ParseTree.NodeId {
     const inner = if (self.tree.kind(target) == .type_ptr or self.tree.kind(target) == .type_ptrmut) self.tree.arg(target, 0) else target;
     return if (self.tree.kind(inner) == .type_array) self.range(self.tree.arg(inner, 0)).lo else 0;
 }
 
-pub fn loop_parts(self: *const Resolver, n: NodeId) Loop {
+pub fn loop_parts(self: *const Resolver, n: ParseTree.NodeId) Loop {
     const a0 = self.tree.arg(n, 0);
     const a1 = self.tree.arg(n, 1);
     return switch (self.tree.kind(n)) {
@@ -1669,7 +1650,7 @@ pub fn loop_parts(self: *const Resolver, n: NodeId) Loop {
     };
 }
 
-pub fn range(self: *const Resolver, n: NodeId) Range {
+pub fn range(self: *const Resolver, n: ParseTree.NodeId) Range {
     const k = self.tree.kind(n);
     const two = k == .gen_incl or k == .gen_excl;
     return .{
@@ -1679,7 +1660,7 @@ pub fn range(self: *const Resolver, n: NodeId) Range {
     };
 }
 
-pub fn literal_core(self: *const Resolver, node: NodeId, neg: *bool) NodeId {
+pub fn literal_core(self: *const Resolver, node: ParseTree.NodeId, neg: *bool) ParseTree.NodeId {
     var n = node;
     while (true) switch (self.tree.kind(n)) {
         .capture => n = self.tree.arg(n, 0),
@@ -1691,7 +1672,7 @@ pub fn literal_core(self: *const Resolver, node: NodeId, neg: *bool) NodeId {
     };
 }
 
-pub fn is_literal(self: *const Resolver, node: NodeId) bool {
+pub fn is_literal(self: *const Resolver, node: ParseTree.NodeId) bool {
     var neg = false;
     return Resolver.node_props[@intFromEnum(self.tree.kind(self.literal_core(node, &neg)))].literal;
 }

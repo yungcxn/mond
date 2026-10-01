@@ -4,6 +4,7 @@ const DynBuf = @import("ds/dynbuf.zig").DynBuf;
 const Lexer = @import("Lexer.zig");
 
 pub const NodeId = u32;
+pub const none_node: NodeId = std.math.maxInt(NodeId);
 
 pub const Node = struct {
     nk: Kind,
@@ -300,7 +301,7 @@ pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, span_idx: u32)
     return new_node_idx;
 }
 
-// utility for navigating the tree structure
+// utility for navigating the tree structure //
 
 pub inline fn kind(self: *const @This(), n: NodeId) Node.Kind {
     return self.ast_nodes.pool.nk.buf[n];
@@ -311,17 +312,36 @@ pub inline fn arg(self: *const @This(), n: NodeId, i: u1) NodeId {
     return slots[i];
 }
 
-pub fn kids(self: *const @This(), n: NodeId) []const NodeId {
+// we assert for this, that `n` is an id for a node that has "many" children
+pub inline fn manychildren(self: *const @This(), n: NodeId) []const NodeId {
     const a = self.ast_nodes.pool.args.buf[n];
     return self.extra_childrefs.buf[a[0]..][0..a[1]];
 }
 
 // child i as a list: the children of a `wrapper` node, or the child alone
-pub fn list_at(self: *const @This(), n: NodeId, comptime i: u1, comptime wrapper: Node.Kind) []const NodeId {
+pub inline fn list_at(self: *const @This(), n: NodeId, comptime i: u1, comptime wrapper: Node.Kind) []const NodeId {
     const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.pool.args.buf[n]);
-    return if (self.kind(slots[i]) == wrapper) self.kids(slots[i]) else slots[i..][0..1];
+    return if (self.kind(slots[i]) == wrapper) self.manychildren(slots[i]) else slots[i..][0..1];
 }
 
-pub fn span(self: *const @This(), n: NodeId) Lexer.TextSpan {
+pub inline fn span(self: *const @This(), n: NodeId) Lexer.TextSpan {
     return self.span_store[self.arg(n, 0)];
+}
+
+pub fn subtree(self: *const @This(), n: NodeId) [2]NodeId {
+    var s: [2]NodeId = .{ n, n + 1 };
+
+    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.pool.args.buf[n]);
+    const children = switch (Node.nk_childc[@intFromEnum(self.kind(n))]) {
+        .one => slots[0..1],
+        .two => slots,
+        .many => self.manychildren(n),
+        else => &.{},
+    };
+
+    for (children) |c| {
+        const x = self.subtree(c);
+        s = .{ @min(s[0], x[0]), @max(s[1], x[1]) };
+    }
+    return s;
 }

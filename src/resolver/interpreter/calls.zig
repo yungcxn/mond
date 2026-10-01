@@ -49,7 +49,7 @@ pub fn call(self: *Interpreter, n: NodeId) Value {
     const r = self.res();
     const sp = &r.static_pool;
     const callee = r.tree.arg(n, 0);
-    const args = r.tree.kids(r.tree.arg(n, 1));
+    const args = r.tree.manychildren(r.tree.arg(n, 1));
     const d = self.info(.decl, n);
     const cd = self.info(.decl, callee);
     if (d != .none and Resolver.is_fn(r.dp(.kind, d).*) and (cd == .none or r.dp(.kind, cd).* != .static_function)) {
@@ -240,7 +240,7 @@ pub fn with(self: *Interpreter, n: NodeId) Value {
         const x = self.own(self.elem(base, @intCast(i)));
         self.mem.buf[at + i] = x;
     }
-    for (r.tree.kids(r.tree.arg(n, 1)), 0..) |a, i| {
+    for (r.tree.manychildren(r.tree.arg(n, 1)), 0..) |a, i| {
         const fi = r.field_of(t, a, i) orelse return self.fail(a, .unknown_named_argument, r.name_of(r.tree.arg(a, 0)), t);
         const x = self.eval(r.arg_value(a));
         if (x.is(.poison_type)) return x;

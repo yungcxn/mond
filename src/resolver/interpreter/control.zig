@@ -48,7 +48,7 @@ pub fn block(ip: *Interpreter, n: NodeId) Value {
     defer if (scoped) r.h04_pop_scope();
     const mark = ip.defers.head;
     var v: Value = .unit;
-    for (r.tree.kids(n)) |s| {
+    for (r.tree.manychildren(n)) |s| {
         v = ip.eval(s);
         if (ip.unwind != .none or v.is(.poison_type)) break;
     }
@@ -169,8 +169,8 @@ pub fn match(ip: *Interpreter, n: NodeId) Value {
     const scoped = !ip.framed();
     if (scoped) r.h03_push_scope();
     defer if (scoped) r.h04_pop_scope();
-    if (!scoped) for (r.tree.kids(r.tree.arg(n, 1))) |arm| if (ip.info(.value, arm) == .bool_true) return ip.eval(r.tree.arg(arm, 1));
-    for (r.tree.kids(r.tree.arg(n, 1))) |arm| if (matches(ip, r.tree.arg(arm, 0), v)) return ip.eval(r.tree.arg(arm, 1));
+    if (!scoped) for (r.tree.manychildren(r.tree.arg(n, 1))) |arm| if (ip.info(.value, arm) == .bool_true) return ip.eval(r.tree.arg(arm, 1));
+    for (r.tree.manychildren(r.tree.arg(n, 1))) |arm| if (matches(ip, r.tree.arg(arm, 0), v)) return ip.eval(r.tree.arg(arm, 1));
     return ip.fail(n, .non_exhaustive_match, ip.pool(v), .none);
 }
 
@@ -200,7 +200,7 @@ pub fn matches(ip: *Interpreter, p: NodeId, v: Value) bool {
             return true;
         },
         .partial__match_case_pattern_or => {
-            for (r.tree.kids(p)) |alt| if (matches(ip, alt, v)) return true;
+            for (r.tree.manychildren(p)) |alt| if (matches(ip, alt, v)) return true;
             return false;
         },
         .partial__match_case_pattern_typecast => {
@@ -226,7 +226,7 @@ pub fn matches(ip: *Interpreter, p: NodeId, v: Value) bool {
                 rec = sp.get(target).variant_case_type.payload;
                 fields = if (v.is_heap()) .block(rec, v.at(), v.len()) else if (sp.tag(v.index()) == .variant_value) .of(sp, sp.get(v.index()).variant_value.payload) else .empty;
             }
-            for (r.tree.kids(r.tree.arg(p, 1)), 0..) |a, i| {
+            for (r.tree.manychildren(r.tree.arg(p, 1)), 0..) |a, i| {
                 const fi = r.field_of(rec, a, i) orelse return false;
                 if (fi >= (ip.span(fields) orelse 0) or !matches(ip, r.arg_value(a), ip.elem(fields, @intCast(fi)))) return false;
             }
@@ -260,7 +260,7 @@ fn name(ip: *Interpreter, id: NodeId, v: Value) void {
 fn label(ip: *Interpreter, l: NodeId, v: Value) void {
     const r = ip.res();
     if (r.tree.kind(l) != .partial__destructure) return name(ip, l, v);
-    for (r.tree.kids(l), 0..) |id, i| name(ip, id, if (i < (ip.span(v) orelse 0)) ip.elem(v, @intCast(i)) else .poison);
+    for (r.tree.manychildren(l), 0..) |id, i| name(ip, id, if (i < (ip.span(v) orelse 0)) ip.elem(v, @intCast(i)) else .poison);
 }
 
 fn payload(ip: *Interpreter, v: Value) ?Value {

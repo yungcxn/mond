@@ -100,8 +100,8 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
     var own: StaticPool.Index = .none;
     const members = if (!is_trait and body != 0) self.tree.arg(body, if (self.tree.kind(body) == .def_trait_implof) 1 else 0) else 0;
     if (members != 0) {
-        const impls = if (self.tree.kind(body) == .def_trait_implof) self.tree.kids(self.tree.arg(body, 0)) else &[_]NodeId{};
-        if (self.tree.kids(members).len > 0) {
+        const impls = if (self.tree.kind(body) == .def_trait_implof) self.tree.manychildren(self.tree.arg(body, 0)) else &[_]NodeId{};
+        if (self.tree.manychildren(members).len > 0) {
             own = sp.reserve_nominal(decl);
             traits[0] = own;
             nt = 1;
@@ -115,12 +115,12 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
     switch (ck) {
         .def_trait, .def_trait_implof => {
             var supers: [32]StaticPool.Index = undefined;
-            const impls = if (ck == .def_trait_implof) self.tree.kids(self.tree.arg(c, 0)) else &[_]NodeId{};
+            const impls = if (ck == .def_trait_implof) self.tree.manychildren(self.tree.arg(c, 0)) else &[_]NodeId{};
             for (impls, 0..) |t, i| supers[i] = h07_lower_type(self, ctx, t);
             own = trait_body(self, ctx, self.tree.arg(c, if (ck == .def_trait_implof) 1 else 0), ty, .none, supers[0..impls.len], decl);
         },
         .def_variant, .def_variant_unionsized => {
-            const params = self.tree.kids(self.tree.arg(c, 0));
+            const params = self.tree.manychildren(self.tree.arg(c, 0));
             var cases: [256]StaticPool.Index = undefined;
             var payload_case: ?usize = null;
             var payloads: usize = 0;
@@ -222,14 +222,14 @@ fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.I
     self.dp(.value, b).* = if (self_ty != .none) self_ty else tr;
     var names: [64]NamePool.Index = undefined;
     var n: usize = 0;
-    for (self.tree.kids(body)) |s| {
+    for (self.tree.manychildren(body)) |s| {
         const m = self.statement(s);
         if (!m.is_member()) continue;
         names[n] = self.name_of(m.ids[0]);
         self.node_decl[m.ids[0]] = self.push_decl(names[n], m.node, .trait_member, .none, m.flags);
         n += 1;
     }
-    for (self.tree.kids(body)) |s| if (!self.statement(s).is_member()) {
+    for (self.tree.manychildren(body)) |s| if (!self.statement(s).is_member()) {
         _ = self.h11_check_assign(ctx, s);
     };
     var types: [64]StaticPool.Index = undefined;

@@ -23,7 +23,7 @@ pub fn deferred(self: *Resolver, ctx: *FnCtx, node: NodeId) ?StaticPool.Index {
     if (v != null and self.deferrals == before) return v;
     self.node_value[node] = .none;
     self.deferrals += 1;
-    const s = self.subtree(node);
+    const s = self.tree.subtree(node);
     for (s[0]..s[1]) |i| switch (self.tree.kind(@intCast(i))) {
         .identifier, .identifier_self => {
             const d = self.h01_lookup(self.name_of(@intCast(i)));
@@ -380,7 +380,7 @@ pub fn template_member(self: *Resolver, node: NodeId, t: StaticPool.Index, name:
     };
     const w = self.definition(unit);
     const tr = if (self.type_kind(w.core) == .trait) w.core else if (w.body != 0) w.body else return self.report(.unknown_member, node, name, t);
-    for (self.tree.kids(self.tree.arg(tr, if (self.tree.kind(tr) == .def_trait_implof) 1 else 0))) |s| {
+    for (self.tree.manychildren(self.tree.arg(tr, if (self.tree.kind(tr) == .def_trait_implof) 1 else 0))) |s| {
         const parts = self.statement(s);
         if (parts.ids.len != 1 or self.name_of(parts.ids[0]) != name or !is_fn(parts.kind)) continue;
         return if (self.signature_mentions(parts.value, v)) self.report(.generic_member, node, name, t) else types.fun_type(self, &ctx, parts.value, .default, .poison_type, .none);
@@ -395,7 +395,7 @@ pub fn snapshot(self: *Resolver, decl: Decl.Index, root: NodeId, first: u32) voi
 }
 
 fn capture(self: *Resolver, decl: Decl.Index, root: NodeId, first: u32) Body {
-    const lo, const hi = self.subtree(root);
+    const lo, const hi = self.tree.subtree(root);
     const b = Body{ .decl = decl, .lo = lo, .len = hi - lo, .start = self.body_nodes.len(), .first = first, .locals = self.decls.len() - first };
     self.body_nodes.pool.ty.append(self.node_type[lo..hi]);
     self.body_nodes.pool.decl.append(self.node_decl[lo..hi]);

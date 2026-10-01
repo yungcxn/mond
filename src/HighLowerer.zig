@@ -181,15 +181,6 @@ fn static_of(self: *HighLowerer, n: NodeId) ?Index {
     return if (v == .none or v == .poison_type) null else v;
 }
 
-// TODO NEXT
-fn nk(self: *HighLowerer, n: NodeId) Kind {
-    return self.r.tree.kind(n);
-}
-
-fn arg(self: *HighLowerer, n: NodeId, i: u1) NodeId {
-    return self.r.tree.arg(n, i);
-}
-
 fn ptr(self: *HighLowerer, t: Index) Index {
     return self.sp.intern(.{ .ptr_type = .{ .child = t, .mutable = true } });
 }
@@ -470,7 +461,7 @@ fn store_var(self: *HighLowerer, d: Decl.Index, x: Ref) void {
 
 fn is_ssa(self: *HighLowerer, n: NodeId) bool {
     const d = self.decl(n);
-    return switch (self.nk(n)) {
+    return switch (self.r.tree.kind(n)) {
         .identifier, .identifier_self => d != .none and !self.global_of.contains(d) and !self.slots.contains(d),
         else => false,
     };
@@ -540,13 +531,13 @@ fn scan_taken(self: *HighLowerer) void {
     for (b.lo..b.lo + b.len) |i| {
         const n: NodeId = @intCast(i);
         var target: NodeId = 0;
-        if (self.nk(n) == .address_of) target = self.arg(n, 0);
-        if (self.nk(n) == .fun_call and self.nk(self.arg(n, 0)) == .member) {
+        if (self.r.tree.kind(n) == .address_of) target = self.r.tree.arg(n, 0);
+        if (self.r.tree.kind(n) == .fun_call and self.r.tree.kind(self.r.tree.arg(n, 0)) == .member) {
             const d = self.decl(n);
-            if (d != .none and self.r.self_off(d) == 1) target = self.arg(self.arg(n, 0), 0);
+            if (d != .none and self.r.self_off(d) == 1) target = self.r.tree.arg(self.r.tree.arg(n, 0), 0);
         }
-        while (target != 0 and self.nk(target) == .capture) target = self.arg(target, 0);
-        if (target != 0 and self.nk(target) == .identifier and !self.is_ptr(self.ty(target))) put(self.alloc, &self.taken, self.decl(target), {});
+        while (target != 0 and self.r.tree.kind(target) == .capture) target = self.r.tree.arg(target, 0);
+        if (target != 0 and self.r.tree.kind(target) == .identifier and !self.is_ptr(self.ty(target))) put(self.alloc, &self.taken, self.decl(target), {});
         const d = self.decl(n);
         if (d != .none and Resolver.is_fn(self.r.dp(.kind, d).*) and self.body_of.contains(d)) {
             const node = self.r.dp(.node, d).*;
@@ -602,12 +593,12 @@ fn candidate(self: *HighLowerer, m: Decl.Index) bool {
         const els = self.block();
         self.cond(self.expr_to(p.where, .bool_type), ok, els);
         self.goto(els);
-        if (self.nk(p.@"else") == .assign or self.nk(p.@"else") == .ret) _ = self.expr(p.@"else") else self.store_var(self.decl(pn), self.expr_to(p.@"else", self.ty(pn)));
+        if (self.r.tree.kind(p.@"else") == .assign or self.r.tree.kind(p.@"else") == .ret) _ = self.expr(p.@"else") else self.store_var(self.decl(pn), self.expr_to(p.@"else", self.ty(pn)));
         self.br(ok);
         self.goto(ok);
     }
-    const body = self.arg(v, 1);
-    if (self.nk(body) == .block) {
+    const body = self.r.tree.arg(v, 1);
+    if (self.r.tree.kind(body) == .block) {
         _ = self.expr(body);
         if (!self.dead and !has_value(self.ret_ty)) self.ret(.none) else if (!self.dead and self.r.dp(.name, m).* == .main) self.ret(self.int(self.ret_ty, 0)) else if (!self.dead) _ = self.emit(.@"unreachable", .unit_type, 0, 0);
     } else self.ret(self.expr_to(body, self.ret_ty));
@@ -620,7 +611,7 @@ fn lower_init(self: *HighLowerer) void {
     self.body = .{};
     self.ret_ty = .unit_type;
     self.goto(self.block());
-    for (self.r.roots) |root| switch (self.nk(root)) {
+    for (self.r.roots) |root| switch (self.r.tree.kind(root)) {
         .assign, .assign_typed, .def_var, .mod_pub, .mod_mut, .mod_stc => self.assign(root),
         else => _ = self.expr(root),
     };
@@ -826,9 +817,9 @@ fn arith(k: Kind) ?Op {
 fn expr(self: *HighLowerer, n: NodeId) Ref {
     const t = self.ty(n);
     if (self.static_of(n)) |v| return self.constant(v, t);
-    const a0 = self.arg(n, 0);
-    const a1 = self.arg(n, 1);
-    const k = self.nk(n);
+    const a0 = self.r.tree.arg(n, 0);
+    const a1 = self.r.tree.arg(n, 1);
+    const k = self.r.tree.kind(n);
     if (arith(k)) |op| switch (k) {
         .binary_eq, .binary_neq, .binary_less, .binary_greater, .binary_less_eq, .binary_greater_eq => return self.compare(op, a0, a1),
         .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => {
@@ -853,7 +844,7 @@ fn expr(self: *HighLowerer, n: NodeId) Ref {
         .block => blk: {
             const mark = self.defers.head;
             var last = unit();
-            for (self.r.tree.kids(n)) |s| last = self.expr(s);
+            for (self.r.tree.manychildren(n)) |s| last = self.expr(s);
             self.run_defers(mark);
             self.defers.head = mark;
             break :blk last;
@@ -874,7 +865,7 @@ fn expr(self: *HighLowerer, n: NodeId) Ref {
         .array, .array_empty => blk: {
             const elem = if (self.sp.get(t) == .array_type) self.sp.get(t).array_type.elem else t;
             const mark = self.tmp.head;
-            const kids = if (k == .array) self.r.tree.kids(n) else &[_]NodeId{};
+            const kids = if (k == .array) self.r.tree.manychildren(n) else &[_]NodeId{};
             for (kids) |e| {
                 const x = self.expr_to(e, elem);
                 self.tmp.push(@intFromEnum(x));
@@ -989,7 +980,7 @@ fn update(self: *HighLowerer, target: NodeId, op: Op, rhs: Ref, post: bool) Ref 
 }
 
 fn store_to(self: *HighLowerer, target: NodeId, x: Ref) void {
-    if (self.is_ssa(target) or self.global_of.contains(self.decl(target)) and (self.nk(target) == .identifier)) return self.store_var(self.decl(target), x);
+    if (self.is_ssa(target) or self.global_of.contains(self.decl(target)) and (self.r.tree.kind(target) == .identifier)) return self.store_var(self.decl(target), x);
     _ = self.e2(.store, .unit_type, self.place(target), x);
 }
 
@@ -1015,15 +1006,15 @@ fn assign(self: *HighLowerer, n0: NodeId) void {
 
 fn logic(self: *HighLowerer, n: NodeId, is_and: bool) Ref {
     var budget: u8 = 3;
-    if (self.cheap(self.arg(n, 1), &budget)) return self.e2(if (is_and) .bit_and else .bit_or, .bool_type, self.expr_to(self.arg(n, 0), .bool_type), self.expr_to(self.arg(n, 1), .bool_type));
+    if (self.cheap(self.r.tree.arg(n, 1), &budget)) return self.e2(if (is_and) .bit_and else .bit_or, .bool_type, self.expr_to(self.r.tree.arg(n, 0), .bool_type), self.expr_to(self.r.tree.arg(n, 1), .bool_type));
     const res = self.temp(.bool_type);
-    const l = self.expr_to(self.arg(n, 0), .bool_type);
+    const l = self.expr_to(self.r.tree.arg(n, 0), .bool_type);
     self.write(res, self.cur, l);
     const rhs = self.block();
     const done = self.block();
     if (is_and) self.cond(l, rhs, done) else self.cond(l, done, rhs);
     self.goto(rhs);
-    const r = self.expr_to(self.arg(n, 1), .bool_type);
+    const r = self.expr_to(self.r.tree.arg(n, 1), .bool_type);
     if (!self.dead) self.write(res, self.cur, r);
     self.br(done);
     self.goto(done);
@@ -1037,19 +1028,19 @@ fn scalar(self: *HighLowerer, t: Index) bool {
 fn cheap(self: *HighLowerer, n: NodeId, budget: *u8) bool {
     if (!self.scalar(self.ty(n))) return false;
     if (self.static_of(n) != null) return true;
-    const k = self.nk(n);
+    const k = self.r.tree.kind(n);
     switch (k) {
         .identifier, .identifier_self => return self.is_ssa(n) and !Resolver.is_fn(self.r.dp(.kind, self.decl(n)).*),
-        .capture => return self.cheap(self.arg(n, 0), budget),
+        .capture => return self.cheap(self.r.tree.arg(n, 0), budget),
         .int, .char, .float, .string, .boolean_true, .boolean_false => return true,
         .neg_num => if (self.r.is_literal(n)) return true,
         .if_else => {
             if (budget.* == 0) return false;
             budget.* -= 1;
-            const it = self.arg(n, 0);
-            return self.cheap(self.arg(it, 0), budget) and self.cheap(self.arg(it, 1), budget) and self.cheap(self.arg(n, 1), budget);
+            const it = self.r.tree.arg(n, 0);
+            return self.cheap(self.r.tree.arg(it, 0), budget) and self.cheap(self.r.tree.arg(it, 1), budget) and self.cheap(self.r.tree.arg(n, 1), budget);
         },
-        .block => return self.r.tree.kids(n).len == 1 and self.cheap(self.r.tree.kids(n)[0], budget),
+        .block => return self.r.tree.manychildren(n).len == 1 and self.cheap(self.r.tree.manychildren(n)[0], budget),
         else => {},
     }
     const binary = switch (k) {
@@ -1057,9 +1048,9 @@ fn cheap(self: *HighLowerer, n: NodeId, budget: *u8) bool {
         .neg_num, .neg_logic => false,
         else => return false,
     };
-    if (budget.* == 0 or self.is_ptr(self.ty(self.arg(n, 0))) or binary and self.is_ptr(self.ty(self.arg(n, 1)))) return false;
+    if (budget.* == 0 or self.is_ptr(self.ty(self.r.tree.arg(n, 0))) or binary and self.is_ptr(self.ty(self.r.tree.arg(n, 1)))) return false;
     budget.* -= 1;
-    return self.cheap(self.arg(n, 0), budget) and (!binary or self.cheap(self.arg(n, 1), budget));
+    return self.cheap(self.r.tree.arg(n, 0), budget) and (!binary or self.cheap(self.r.tree.arg(n, 1), budget));
 }
 
 fn arm(self: *HighLowerer, n: NodeId, t: Index, res: u32, merge: u32) void {
@@ -1071,31 +1062,31 @@ fn arm(self: *HighLowerer, n: NodeId, t: Index, res: u32, merge: u32) void {
 
 fn branching(self: *HighLowerer, n: NodeId) Ref {
     const t = self.ty(n);
-    const k = self.nk(n);
+    const k = self.r.tree.kind(n);
     const has_else = k == .if_else or k == .stcif_else;
-    const it = if (has_else) self.arg(n, 0) else n;
+    const it = if (has_else) self.r.tree.arg(n, 0) else n;
     if (k == .stcif_then or k == .stcif_else) {
-        const taken_then = (self.static_of(self.arg(it, 0)) orelse .bool_false) == .bool_true;
-        return if (taken_then) self.expr_to(self.arg(it, 1), t) else if (has_else) self.expr_to(self.arg(n, 1), t) else unit();
+        const taken_then = (self.static_of(self.r.tree.arg(it, 0)) orelse .bool_false) == .bool_true;
+        return if (taken_then) self.expr_to(self.r.tree.arg(it, 1), t) else if (has_else) self.expr_to(self.r.tree.arg(n, 1), t) else unit();
     }
     var budget: [2]u8 = .{ 3, 3 };
-    if (has_else and self.scalar(t) and self.cheap(self.arg(it, 1), &budget[0]) and self.cheap(self.arg(n, 1), &budget[1])) {
-        const c = self.expr_to(self.arg(it, 0), .bool_type);
-        if (c.is_const()) return self.expr_to(if (c.value() == .bool_true) self.arg(it, 1) else self.arg(n, 1), t);
-        const x = self.expr_to(self.arg(it, 1), t);
-        const y = self.expr_to(self.arg(n, 1), t);
+    if (has_else and self.scalar(t) and self.cheap(self.r.tree.arg(it, 1), &budget[0]) and self.cheap(self.r.tree.arg(n, 1), &budget[1])) {
+        const c = self.expr_to(self.r.tree.arg(it, 0), .bool_type);
+        if (c.is_const()) return self.expr_to(if (c.value() == .bool_true) self.r.tree.arg(it, 1) else self.r.tree.arg(n, 1), t);
+        const x = self.expr_to(self.r.tree.arg(it, 1), t);
+        const y = self.expr_to(self.r.tree.arg(n, 1), t);
         return if (x == y) x else self.emit(.select, t, @intFromEnum(c), self.list(&.{ @intFromEnum(x), @intFromEnum(y) }));
     }
     const res = if (has_value(t)) self.temp(t) else none;
     const tb = self.block();
     const eb = if (has_else) self.block() else none;
     const m = self.block();
-    self.cond(self.expr_to(self.arg(it, 0), .bool_type), tb, if (has_else) eb else m);
+    self.cond(self.expr_to(self.r.tree.arg(it, 0), .bool_type), tb, if (has_else) eb else m);
     self.goto(tb);
-    self.arm(self.arg(it, 1), t, res, m);
+    self.arm(self.r.tree.arg(it, 1), t, res, m);
     if (has_else) {
         self.goto(eb);
-        self.arm(self.arg(n, 1), t, res, m);
+        self.arm(self.r.tree.arg(n, 1), t, res, m);
     }
     self.goto(m);
     return if (res == none or self.dead) unit() else self.read(res, self.cur);
@@ -1103,10 +1094,10 @@ fn branching(self: *HighLowerer, n: NodeId) Ref {
 
 fn match(self: *HighLowerer, n: NodeId) Ref {
     const t = self.ty(n);
-    const arms = self.r.tree.kids(self.arg(n, 1));
-    if (self.nk(n) == .stcmatch) for (arms) |a| if ((self.static_of(a) orelse .none) == .bool_true) return self.expr_to(self.arg(a, 1), t);
-    var st = self.ty(self.arg(n, 0));
-    var s = self.expr(self.arg(n, 0));
+    const arms = self.r.tree.manychildren(self.r.tree.arg(n, 1));
+    if (self.r.tree.kind(n) == .stcmatch) for (arms) |a| if ((self.static_of(a) orelse .none) == .bool_true) return self.expr_to(self.r.tree.arg(a, 1), t);
+    var st = self.ty(self.r.tree.arg(n, 0));
+    var s = self.expr(self.r.tree.arg(n, 0));
     if (self.is_ptr(st) and self.r.deref(st) != st) {
         s = self.e2(.load, self.child(st), s, .none);
         st = self.child(st);
@@ -1120,9 +1111,9 @@ fn match(self: *HighLowerer, n: NodeId) Ref {
     for (arms) |a| {
         const body = self.block();
         const next = self.block();
-        self.pattern(self.arg(a, 0), s, st, body, next);
+        self.pattern(self.r.tree.arg(a, 0), s, st, body, next);
         self.goto(body);
-        self.arm(self.arg(a, 1), t, res, m);
+        self.arm(self.r.tree.arg(a, 1), t, res, m);
         self.goto(next);
     }
     if (!self.dead) _ = self.emit(.@"unreachable", .unit_type, 0, 0);
@@ -1164,14 +1155,14 @@ fn is_key(self: *HighLowerer, p: NodeId, st: Index, tagged: bool) ?bool {
     const pt = self.ty(p);
     const case = pt != .none and self.sp.tag(pt) == .variant_case_type;
     if (case and !self.owns(st, pt)) return null;
-    return switch (self.nk(p)) {
+    return switch (self.r.tree.kind(p)) {
         .identifier => false,
-        .partial__match_case_pattern_or => for (self.r.tree.kids(p)) |alt| {
+        .partial__match_case_pattern_or => for (self.r.tree.manychildren(p)) |alt| {
             if ((self.is_key(alt, st, tagged) orelse false) == false) return null;
         } else true,
-        .labelarrow => if (self.is_key(self.arg(p, 0), st, tagged) == true) true else null,
-        .fun_call => if (!case or !tagged) null else for (self.r.tree.kids(self.arg(p, 1))) |a| {
-            if (self.nk(self.r.arg_value(a)) != .identifier) return null;
+        .labelarrow => if (self.is_key(self.r.tree.arg(p, 0), st, tagged) == true) true else null,
+        .fun_call => if (!case or !tagged) null else for (self.r.tree.manychildren(self.r.tree.arg(p, 1))) |a| {
+            if (self.r.tree.kind(self.r.arg_value(a)) != .identifier) return null;
         } else true,
         .partial__match_case_pattern_typecast, .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl, .string => null,
         else => if (case == tagged and (case or self.r.is_literal(p) or self.static_of(p) != null)) true else null,
@@ -1179,9 +1170,9 @@ fn is_key(self: *HighLowerer, p: NodeId, st: Index, tagged: bool) ?bool {
 }
 
 fn keys(self: *HighLowerer, p: NodeId, st: Index, b: u32, mark: u32) void {
-    switch (self.nk(p)) {
-        .partial__match_case_pattern_or => for (self.r.tree.kids(p)) |alt| self.keys(alt, st, b, mark),
-        .labelarrow => self.keys(self.arg(p, 0), st, b, mark),
+    switch (self.r.tree.kind(p)) {
+        .partial__match_case_pattern_or => for (self.r.tree.manychildren(p)) |alt| self.keys(alt, st, b, mark),
+        .labelarrow => self.keys(self.r.tree.arg(p, 0), st, b, mark),
         else => {
             const pt = self.ty(p);
             const v: u32 = @intFromEnum(if (self.sp.tag(pt) == .variant_case_type) self.tag_of(st, pt) else self.constant(self.static_of(p) orelse self.r.literal_value(p, false), st));
@@ -1194,17 +1185,17 @@ fn keys(self: *HighLowerer, p: NodeId, st: Index, b: u32, mark: u32) void {
 }
 
 fn bind(self: *HighLowerer, p: NodeId, v: Ref, vt: Index) void {
-    switch (self.nk(p)) {
+    switch (self.r.tree.kind(p)) {
         .identifier => if (self.r.name_of(p) != .underscore) self.declare_var(self.decl(p), v),
         .labelarrow => {
-            const ct = self.ty(self.arg(p, 0));
-            self.bind_label(self.arg(p, 1), if (self.sp.tag(ct) == .variant_case_type) self.payload(self.narrow(v, vt, self.sp.get(ct).variant_case_type.variant), ct) else v);
+            const ct = self.ty(self.r.tree.arg(p, 0));
+            self.bind_label(self.r.tree.arg(p, 1), if (self.sp.tag(ct) == .variant_case_type) self.payload(self.narrow(v, vt, self.sp.get(ct).variant_case_type.variant), ct) else v);
         },
         .fun_call => {
             const c = self.sp.get(self.ty(p)).variant_case_type;
             if (c.payload == .none or self.sp.tag(c.payload) != .record_type) return;
             const container = self.e2(.variant_payload, c.payload, self.narrow(v, vt, c.variant), @enumFromInt(c.case));
-            for (self.r.tree.kids(self.arg(p, 1)), 0..) |a, i| {
+            for (self.r.tree.manychildren(self.r.tree.arg(p, 1)), 0..) |a, i| {
                 const fi = self.field_index(c.payload, a, i);
                 const ft = self.sp.get(c.payload).custom_type.field_types[fi];
                 self.bind(self.r.arg_value(a), self.emit(.extract, ft, @intFromEnum(container), fi), ft);
@@ -1222,7 +1213,7 @@ fn switched(self: *HighLowerer, arms: []const NodeId, s: Ref, st: Index, t: Inde
     var count: usize = 0;
     var keyed: usize = 0;
     for (arms) |a| {
-        const k = self.is_key(self.arg(a, 0), st, tagged) orelse return false;
+        const k = self.is_key(self.r.tree.arg(a, 0), st, tagged) orelse return false;
         count += 1;
         keyed += @intFromBool(k);
         if (!k) break;
@@ -1233,7 +1224,7 @@ fn switched(self: *HighLowerer, arms: []const NodeId, s: Ref, st: Index, t: Inde
     const first = self.blocks.len();
     for (arms[0..count]) |a| {
         const b = self.block();
-        if (self.is_key(self.arg(a, 0), st, tagged) == true) self.keys(self.arg(a, 0), st, b, mark) else self.tmp.buf[mark] = b;
+        if (self.is_key(self.r.tree.arg(a, 0), st, tagged) == true) self.keys(self.r.tree.arg(a, 0), st, b, mark) else self.tmp.buf[mark] = b;
     }
     const dflt = if (self.tmp.buf[mark] == none) self.block() else self.tmp.buf[mark];
     self.tmp.buf[mark] = dflt;
@@ -1255,8 +1246,8 @@ fn switched(self: *HighLowerer, arms: []const NodeId, s: Ref, st: Index, t: Inde
     self.tmp.head = mark;
     for (arms[0..count], 0..) |a, i| {
         self.goto(first + @as(u32, @intCast(i)));
-        self.bind(self.arg(a, 0), s, st);
-        self.arm(self.arg(a, 1), t, res, m);
+        self.bind(self.r.tree.arg(a, 0), s, st);
+        self.arm(self.r.tree.arg(a, 1), t, res, m);
     }
     if (dflt == first + count) {
         self.goto(dflt);
@@ -1276,13 +1267,13 @@ fn field_index(self: *HighLowerer, rec: Index, a: NodeId, i: usize) u32 {
 
 fn pattern(self: *HighLowerer, p: NodeId, v: Ref, vt: Index, ok: u32, fail: u32) void {
     const pt = self.ty(p);
-    switch (self.nk(p)) {
+    switch (self.r.tree.kind(p)) {
         .identifier => {
             if (self.r.name_of(p) != .underscore) self.declare_var(self.decl(p), v);
             self.br(ok);
         },
         .partial__match_case_pattern_or => {
-            for (self.r.tree.kids(p)) |alt| {
+            for (self.r.tree.manychildren(p)) |alt| {
                 const next = self.block();
                 self.pattern(alt, v, vt, ok, next);
                 self.goto(next);
@@ -1290,7 +1281,7 @@ fn pattern(self: *HighLowerer, p: NodeId, v: Ref, vt: Index, ok: u32, fail: u32)
             self.br(fail);
         },
         .partial__match_case_pattern_typecast => {
-            const t = self.ty(self.arg(p, 1));
+            const t = self.ty(self.r.tree.arg(p, 1));
             if (vt != .none and self.sp.tag(vt) == .variant_union_type and self.sp.tag(t) == .variant_type) {
                 const tt = self.sp.union_tag_type(vt);
                 const tag = self.e2(.variant_tag, tt, v, .none);
@@ -1301,28 +1292,28 @@ fn pattern(self: *HighLowerer, p: NodeId, v: Ref, vt: Index, ok: u32, fail: u32)
                 self.goto(mid);
                 self.cond(self.e2(.lt, .bool_type, tag, self.int(tt, lo + self.sp.tag_range(t))), in, fail);
                 self.goto(in);
-                self.declare_var(self.decl(self.arg(p, 1)), self.narrow(v, vt, t));
+                self.declare_var(self.decl(self.r.tree.arg(p, 1)), self.narrow(v, vt, t));
             } else if (vt == t or self.sp.coerce(&self.r.abstract_pool, vt, t) != .incompatible) {
-                self.declare_var(self.decl(self.arg(p, 1)), self.coerce(v, vt, t));
+                self.declare_var(self.decl(self.r.tree.arg(p, 1)), self.coerce(v, vt, t));
             } else if (self.sp.tag(t) == .variant_case_type and self.owns(vt, t)) {
                 const in = self.block();
                 self.cond(self.is_case(v, vt, t), in, fail);
                 self.goto(in);
-                self.declare_var(self.decl(self.arg(p, 1)), self.narrow(v, vt, self.sp.get(t).variant_case_type.variant));
+                self.declare_var(self.decl(self.r.tree.arg(p, 1)), self.narrow(v, vt, self.sp.get(t).variant_case_type.variant));
             } else if (vt != .none and self.sp.tag(vt) == .trait_type) {
                 const in = self.block();
                 self.cond(self.emit(.type_test, .bool_type, @intFromEnum(v), @intFromEnum(t)), in, fail);
                 self.goto(in);
-                self.declare_var(self.decl(self.arg(p, 1)), self.emit(.cast, t, @intFromEnum(v), @intFromEnum(StaticPool.CastKind.trait_narrow)));
+                self.declare_var(self.decl(self.r.tree.arg(p, 1)), self.emit(.cast, t, @intFromEnum(v), @intFromEnum(StaticPool.CastKind.trait_narrow)));
             } else return self.br(fail);
             self.br(ok);
         },
         .labelarrow => {
             const mid = self.block();
-            self.pattern(self.arg(p, 0), v, vt, mid, fail);
+            self.pattern(self.r.tree.arg(p, 0), v, vt, mid, fail);
             self.goto(mid);
-            const ct = self.ty(self.arg(p, 0));
-            self.bind_label(self.arg(p, 1), if (self.sp.tag(ct) == .variant_case_type) self.payload(self.narrow(v, vt, self.sp.get(ct).variant_case_type.variant), ct) else v);
+            const ct = self.ty(self.r.tree.arg(p, 0));
+            self.bind_label(self.r.tree.arg(p, 1), if (self.sp.tag(ct) == .variant_case_type) self.payload(self.narrow(v, vt, self.sp.get(ct).variant_case_type.variant), ct) else v);
             self.br(ok);
         },
         .fun_call => {
@@ -1335,7 +1326,7 @@ fn pattern(self: *HighLowerer, p: NodeId, v: Ref, vt: Index, ok: u32, fail: u32)
             }
             const rec = if (is_c) self.sp.get(pt).variant_case_type.payload else pt;
             const container = if (is_c) self.e2(.variant_payload, rec, self.narrow(v, vt, self.sp.get(pt).variant_case_type.variant), @enumFromInt(self.sp.get(pt).variant_case_type.case)) else v;
-            if (rec != .none and self.sp.tag(rec) == .record_type) for (self.r.tree.kids(self.arg(p, 1)), 0..) |a, i| {
+            if (rec != .none and self.sp.tag(rec) == .record_type) for (self.r.tree.manychildren(self.r.tree.arg(p, 1)), 0..) |a, i| {
                 const fi = self.field_index(rec, a, i);
                 const ft = self.sp.get(rec).custom_type.field_types[fi];
                 const next = self.block();
@@ -1345,23 +1336,23 @@ fn pattern(self: *HighLowerer, p: NodeId, v: Ref, vt: Index, ok: u32, fail: u32)
             self.br(ok);
         },
         .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => {
-            const k = self.nk(p);
+            const k = self.r.tree.kind(p);
             const has_lo = k == .gen_incl or k == .gen_excl or k == .gen_lowerbound;
             const has_hi = k != .gen_lowerbound;
             if (has_lo) {
                 const mid = self.block();
-                self.cond(self.e2(.ge, .bool_type, v, self.expr_to(self.arg(p, 0), vt)), mid, fail);
+                self.cond(self.e2(.ge, .bool_type, v, self.expr_to(self.r.tree.arg(p, 0), vt)), mid, fail);
                 self.goto(mid);
             }
             if (has_hi) {
-                const hi = self.expr_to(self.arg(p, if (has_lo) 1 else 0), vt);
+                const hi = self.expr_to(self.r.tree.arg(p, if (has_lo) 1 else 0), vt);
                 self.cond(self.e2(if (k == .gen_incl or k == .gen_upperbound_incl) .le else .lt, .bool_type, v, hi), ok, fail);
             } else self.br(ok);
         },
         else => {
             if (self.sp.tag(pt) == .variant_case_type) return if (self.owns(vt, pt)) self.cond(self.is_case(v, vt, pt), ok, fail) else self.br(fail);
             const lit = self.expr_to(p, vt);
-            const text = self.nk(p) == .string or (self.is_ptr(vt) and self.child(vt) == .u8_type);
+            const text = self.r.tree.kind(p) == .string or (self.is_ptr(vt) and self.child(vt) == .u8_type);
             self.cond(self.e2(if (text) .bytes_eq else .eq, .bool_type, v, lit), ok, fail);
         },
     }
@@ -1376,26 +1367,26 @@ fn payload(self: *HighLowerer, v: Ref, case: Index) Ref {
 }
 
 fn bind_label(self: *HighLowerer, label: NodeId, v: Ref) void {
-    if (self.nk(label) != .partial__destructure) return self.declare_var(self.decl(label), v);
+    if (self.r.tree.kind(label) != .partial__destructure) return self.declare_var(self.decl(label), v);
     const vt = self.ref_ty(v);
-    for (self.r.tree.kids(label), 0..) |id, i| self.declare_var(self.decl(id), self.emit(.extract, self.ty(id), @intFromEnum(v), @intCast(i)));
+    for (self.r.tree.manychildren(label), 0..) |id, i| self.declare_var(self.decl(id), self.emit(.extract, self.ty(id), @intFromEnum(v), @intCast(i)));
     _ = vt;
 }
 
 fn unwrap(self: *HighLowerer, n: NodeId) Ref {
-    const k = self.nk(n);
+    const k = self.r.tree.kind(n);
     const t = self.ty(n);
-    const v = self.expr(self.arg(n, 0));
-    const vt = self.r.deref(self.ty(self.arg(n, 0)));
+    const v = self.expr(self.r.tree.arg(n, 0));
+    const vt = self.r.deref(self.ty(self.r.tree.arg(n, 0)));
     if (k == .labelarrow) {
-        self.bind_label(self.arg(n, 1), v);
+        self.bind_label(self.r.tree.arg(n, 1), v);
         return v;
     }
     if (self.sp.tag(vt) != .variant_type) return .none;
     const case = self.sp.get(vt).variant_type.cases[self.payload_case(vt)];
     const test_ = self.is_case(v, vt, case);
     if (k == .selftag_arrow) {
-        self.bind_label(self.arg(n, 1), self.payload(v, case));
+        self.bind_label(self.r.tree.arg(n, 1), self.payload(v, case));
         return test_;
     }
     const ok = self.block();
@@ -1413,16 +1404,16 @@ fn unwrap(self: *HighLowerer, n: NodeId) Ref {
     self.write(res, self.cur, self.coerce(self.payload(v, case), self.r.payload_of(vt), t));
     self.br(m);
     self.goto(bad);
-    self.arm(self.arg(n, 1), t, res, m);
+    self.arm(self.r.tree.arg(n, 1), t, res, m);
     self.goto(m);
     return if (self.dead) .none else self.read(res, self.cur);
 }
 
 fn loop(self: *HighLowerer, n: NodeId) Ref {
     if (self.dead) return .none;
-    const k = self.nk(n);
-    const a0 = self.arg(n, 0);
-    const a1 = self.arg(n, 1);
+    const k = self.r.tree.kind(n);
+    const a0 = self.r.tree.arg(n, 0);
+    const a1 = self.r.tree.arg(n, 1);
     const t = self.ty(n);
     var out: Ref = if (self.sp.get(t) == .array_type and self.sp.tag(self.sp.get(t).array_type.len) == .int_value) self.alloca(t) else .none;
     const cap: u64 = if (out != .none) self.sp.get(self.sp.get(t).array_type.len).int.bits else 0;
@@ -1441,10 +1432,10 @@ fn loop(self: *HighLowerer, n: NodeId) Ref {
         .@"while", .stcwhile, .while_with_repeat_stmt, .stcwhile_with_repeat_stmt => {
             const w = if (k == .@"while" or k == .stcwhile) n else a0;
             if (w != n) repeat = a1;
-            body = self.arg(w, 1);
+            body = self.r.tree.arg(w, 1);
             self.br(head);
             self.enter(head);
-            self.cond(self.expr_to(self.arg(w, 0), .bool_type), body_b, exit);
+            self.cond(self.expr_to(self.r.tree.arg(w, 0), .bool_type), body_b, exit);
         },
         .loop, .stcloop, .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => {
             body = if (k == .loop or k == .stcloop) a0 else a1;
@@ -1456,10 +1447,10 @@ fn loop(self: *HighLowerer, n: NodeId) Ref {
         else => {
             const has_var = k == .for_var_in_seq or k == .stcfor_var_in_seq;
             const f = if (has_var) a0 else n;
-            const seq = self.arg(f, 0);
-            body = self.arg(f, 1);
+            const seq = self.r.tree.arg(f, 0);
+            body = self.r.tree.arg(f, 1);
             each.decl = self.decl(if (has_var) a1 else f);
-            const sk = self.nk(seq);
+            const sk = self.r.tree.kind(seq);
             const st = self.ty(seq);
             const range = switch (sk) {
                 .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => true,
@@ -1469,8 +1460,8 @@ fn loop(self: *HighLowerer, n: NodeId) Ref {
                 const et = self.sp.get(st).array_type.elem;
                 const has_lo = sk == .gen_incl or sk == .gen_excl or sk == .gen_lowerbound;
                 const i = self.temp(et);
-                self.write(i, self.cur, if (has_lo) self.expr_to(self.arg(seq, 0), et) else self.int(et, 0));
-                const hi: Ref = if (sk == .gen_lowerbound) .none else self.expr_to(self.arg(seq, if (has_lo) 1 else 0), et);
+                self.write(i, self.cur, if (has_lo) self.expr_to(self.r.tree.arg(seq, 0), et) else self.int(et, 0));
+                const hi: Ref = if (sk == .gen_lowerbound) .none else self.expr_to(self.r.tree.arg(seq, if (has_lo) 1 else 0), et);
                 if (dyn and hi != .none) {
                     const lo = self.read(i, self.cur);
                     var span = self.e2(.sub, et, hi, lo);
@@ -1544,9 +1535,9 @@ fn advance(self: *HighLowerer, t: Index, base: Ref, sub: bool, x: Ref) Ref {
 
 fn shrink(self: *HighLowerer, n: NodeId) Ref {
     const t = self.ty(n);
-    const a0 = self.arg(n, 0);
+    const a0 = self.r.tree.arg(n, 0);
     const at = self.sp.pointee(t);
-    const g = self.r.narrowed(self.arg(n, 1));
+    const g = self.r.narrowed(self.r.tree.arg(n, 1));
     const lo = if (g != 0) self.static_of(g) else null;
     const base = if (self.is_ptr(self.ty(a0))) self.expr(a0) else self.place(a0);
     const mutable = !self.is_ptr(self.ty(a0)) or self.sp.get(self.ty(a0)).ptr_type.mutable;
@@ -1574,8 +1565,8 @@ fn fn_ret(self: *HighLowerer, d: Decl.Index) Index {
 
 fn call(self: *HighLowerer, n: NodeId) Ref {
     const t = self.ty(n);
-    const callee = self.arg(n, 0);
-    const args = self.r.tree.kids(self.arg(n, 1));
+    const callee = self.r.tree.arg(n, 0);
+    const args = self.r.tree.manychildren(self.r.tree.arg(n, 1));
     if (self.realized(n)) |f| return self.fn_value(f);
     const d = self.decl(n);
     if (d != .none and Resolver.is_fn(self.r.dp(.kind, d).*)) return self.direct(d, callee, args, t);
@@ -1596,8 +1587,8 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
 
 // a stcfun call producing a function stands for its realization
 fn realized(self: *HighLowerer, n: NodeId) ?Decl.Index {
-    if (self.nk(n) != .fun_call) return null;
-    const g = self.decl(self.arg(n, 0));
+    if (self.r.tree.kind(n) != .fun_call) return null;
+    const g = self.decl(self.r.tree.arg(n, 0));
     return if (g != .none and self.r.dp(.kind, g).* == .static_function and self.decl(n) != .none) self.decl(n) else null;
 }
 
@@ -1616,8 +1607,8 @@ fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId
     var args = all;
     var dynamic = false;
     if (off == 1) {
-        const bound = self.nk(callee) == .member and self.sp.tag(self.ty(self.arg(callee, 0))) != .meta_type;
-        const recv = if (bound) self.arg(callee, 0) else self.r.arg_value(args[0]);
+        const bound = self.r.tree.kind(callee) == .member and self.sp.tag(self.ty(self.r.tree.arg(callee, 0))) != .meta_type;
+        const recv = if (bound) self.r.tree.arg(callee, 0) else self.r.arg_value(args[0]);
         const x = if (!bound) self.expr_to(recv, self.sp.get(ft).function_type.params[0]) else if (self.is_ptr(self.ty(recv))) self.expr(recv) else self.place(recv);
         self.tmp.push(@intFromEnum(x));
         if (!bound) args = args[1..];
@@ -1627,8 +1618,8 @@ fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId
     for (pnodes) |_| self.tmp.push(none);
     for (args, 0..) |a, i| {
         var j = i;
-        if (self.nk(a) == .partial__fun_call_assigned_param) {
-            const name = self.r.name_of(self.arg(a, 0));
+        if (self.r.tree.kind(a) == .partial__fun_call_assigned_param) {
+            const name = self.r.name_of(self.r.tree.arg(a, 0));
             for (pnodes, 0..) |pn, q| if (self.r.param_name(pn, q) == name) {
                 j = q;
             };
@@ -1674,8 +1665,8 @@ fn construct(self: *HighLowerer, target: Index, args: []const NodeId) Ref {
 }
 
 fn with(self: *HighLowerer, n: NodeId) Ref {
-    var bt = self.ty(self.arg(n, 0));
-    var base = self.expr(self.arg(n, 0));
+    var bt = self.ty(self.r.tree.arg(n, 0));
+    var base = self.expr(self.r.tree.arg(n, 0));
     if (self.is_ptr(bt)) {
         base = self.e2(.load, self.child(bt), base, .none);
         bt = self.child(bt);
@@ -1686,7 +1677,7 @@ fn with(self: *HighLowerer, n: NodeId) Ref {
         const x = self.emit(.extract, self.sp.get(bt).custom_type.field_types[i], @intFromEnum(base), @intCast(i));
         self.tmp.push(@intFromEnum(x));
     }
-    for (self.r.tree.kids(self.arg(n, 1)), 0..) |a, i| {
+    for (self.r.tree.manychildren(self.r.tree.arg(n, 1)), 0..) |a, i| {
         const fi = self.field_index(bt, a, i);
         const x = self.expr_to(self.r.arg_value(a), self.sp.get(bt).custom_type.field_types[fi]);
         self.tmp.buf[mark + fi] = @intFromEnum(x);
@@ -1711,10 +1702,10 @@ fn complete(self: *HighLowerer, rec: Index, mark: u32) void {
         const p = self.r.param(f);
         if (p.@"else" != 0) guarded |= @as(u64, 1) << @intCast(i);
         for ([_]NodeId{ if (self.tmp.buf[mark + i] == none) p.default else 0, if (p.@"else" != 0) p.where else 0, p.@"else" }) |x| if (x != 0) {
-            const sub = self.r.subtree(x);
+            const sub = self.r.tree.subtree(x);
             for (sub[0]..sub[1]) |n| {
                 const d = @intFromEnum(self.decl(@intCast(n))) -% self.body.first;
-                if (self.nk(@intCast(n)) == .identifier and d < fields.len) locals |= @as(u64, 1) << @intCast(d);
+                if (self.r.tree.kind(@intCast(n)) == .identifier and d < fields.len) locals |= @as(u64, 1) << @intCast(d);
             }
         };
     };
@@ -1733,7 +1724,7 @@ fn complete(self: *HighLowerer, rec: Index, mark: u32) void {
         const els = self.block();
         self.cond(self.expr_to(p.where, .bool_type), ok, els);
         self.goto(els);
-        if (self.nk(p.@"else") == .assign) _ = self.expr(p.@"else") else self.store_var(@enumFromInt(self.body.first + i), self.expr_to(p.@"else", self.sp.get(rec).custom_type.field_types[i]));
+        if (self.r.tree.kind(p.@"else") == .assign) _ = self.expr(p.@"else") else self.store_var(@enumFromInt(self.body.first + i), self.expr_to(p.@"else", self.sp.get(rec).custom_type.field_types[i]));
         self.br(ok);
         self.goto(ok);
     };
@@ -1743,9 +1734,9 @@ fn complete(self: *HighLowerer, rec: Index, mark: u32) void {
 }
 
 fn member(self: *HighLowerer, n: NodeId) Ref {
-    const parent = self.arg(n, 0);
+    const parent = self.r.tree.arg(n, 0);
     const pt = self.ty(parent);
-    const name = self.r.name_of(self.arg(n, 1));
+    const name = self.r.name_of(self.r.tree.arg(n, 1));
     const base_t = if (self.sp.tag(pt) == .meta_type) (self.static_of(parent) orelse return .none) else self.r.deref(pt);
     return switch (self.sp.lookup_member(base_t, name)) {
         .field => |f| if (self.is_ptr(pt) or self.is_place(parent)) self.e2(.load, f.ty, self.place(n), .none) else self.emit(.extract, f.ty, @intFromEnum(self.expr(parent)), f.index),
@@ -1763,10 +1754,10 @@ fn member(self: *HighLowerer, n: NodeId) Ref {
 }
 
 fn is_place(self: *HighLowerer, n: NodeId) bool {
-    return switch (self.nk(n)) {
-        .capture => self.is_place(self.arg(n, 0)),
+    return switch (self.r.tree.kind(n)) {
+        .capture => self.is_place(self.r.tree.arg(n, 0)),
         .identifier, .identifier_self => self.global_of.contains(self.decl(n)) or self.slots.contains(self.decl(n)),
-        .member => self.is_ptr(self.ty(self.arg(n, 0))) or self.is_place(self.arg(n, 0)),
+        .member => self.is_ptr(self.ty(self.r.tree.arg(n, 0))) or self.is_place(self.r.tree.arg(n, 0)),
         .array_index, .dereference => true,
         else => false,
     };
@@ -1774,29 +1765,29 @@ fn is_place(self: *HighLowerer, n: NodeId) bool {
 
 fn place(self: *HighLowerer, n: NodeId) Ref {
     const t = self.ty(n);
-    switch (self.nk(n)) {
-        .capture => return self.place(self.arg(n, 0)),
+    switch (self.r.tree.kind(n)) {
+        .capture => return self.place(self.r.tree.arg(n, 0)),
         .identifier, .identifier_self => {
             const d = self.decl(n);
             if (self.global_of.get(d)) |g| return Ref.global(g);
             if (self.slots.get(d)) |s| return s;
         },
         .member => {
-            const parent = self.arg(n, 0);
+            const parent = self.r.tree.arg(n, 0);
             const pt = self.ty(parent);
             const base = if (self.is_ptr(pt)) self.expr(parent) else self.place(parent);
-            switch (self.sp.lookup_member(self.r.deref(pt), self.r.name_of(self.arg(n, 1)))) {
+            switch (self.sp.lookup_member(self.r.deref(pt), self.r.name_of(self.r.tree.arg(n, 1)))) {
                 .field => |f| return self.emit(.field_ptr, self.ptr(f.ty), @intFromEnum(base), f.index),
                 else => {},
             }
         },
         .array_index => {
-            const ix = self.arg(n, 0);
+            const ix = self.r.tree.arg(n, 0);
             const it = self.ty(ix);
             const base = if (self.is_ptr(it) or self.is_dyn(it)) self.expr(ix) else self.place(ix);
-            return self.e2(.index_ptr, self.ptr(t), base, self.expr(self.arg(n, 1)));
+            return self.e2(.index_ptr, self.ptr(t), base, self.expr(self.r.tree.arg(n, 1)));
         },
-        .dereference => return self.expr(self.arg(n, 0)),
+        .dereference => return self.expr(self.r.tree.arg(n, 0)),
         else => {},
     }
     const x = self.expr(n);

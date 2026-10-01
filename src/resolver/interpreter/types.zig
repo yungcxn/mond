@@ -86,7 +86,7 @@ fn define(ip: *Interpreter, n: NodeId) Index {
     var ctx = Resolver.FnCtx{ .decl = .none, .ret_type = .none, .self_type = .none, .loop_depth = 0, .in_static = true };
     r.open_scope(true, .none, 0);
     defer r.h04_pop_scope();
-    const s = r.subtree(n);
+    const s = r.tree.subtree(n);
     for (s[0]..s[1]) |i| {
         const id: NodeId = @intCast(i);
         const d = ip.info(.decl, id);
