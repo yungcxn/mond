@@ -1,8 +1,9 @@
 variant Opt = (type T): ++(Some(T), None) tagof u8;
 variant Result = (type T, type E): +(Ok(T), Err(E)) tagof u8;
 
-# BUG: a template applied to its own parameters in swapped order inside its own body (`Pair(B, A)`) reports not_callable / not_static, so the swap is a free function
-type Pair = (type A, type B): *(A first, B second);
+type Pair = (type A, type B): *(A first, B second) !{
+    fun swap = () -> Pair(B, A): ret Pair(B, A)(first = self.second, second = self.first);
+}
 
 type Array = (type T, u32 N): *(mut [N]T items) !{
     fun get = (u32 i) -> Opt(T): ret if i < N: Opt(T).Some(self.items[i]) else: Opt(T).None;
@@ -36,14 +37,13 @@ stcfun max_of = (type T where T oftype Ord(T)): (T a, T b) -> T: ret if a.lt(b):
 stcfun min_of = (type T where T oftype Ord(T)): (T a, T b) -> T: ret if a.lt(b): a else: b;
 stcfun clamp_to = (type T where T oftype Ord(T)): (T x, T lo, T hi) -> T: ret max_of(T)(lo, min_of(T)(x, hi));
 
-# BUG: a generic slice pointer parameter `&[]T` rejects `*[N]T` with type_mismatch (the non generic `&[]u32` accepts it), so the length is a static parameter
-stcfun largest = (type T where T oftype Ord(T), u32 N): (&[N]T xs) -> T {
+stcfun largest = (type T where T oftype Ord(T)): (&[]T xs) -> T {
     mut T best = xs.*[0];
     for i in 1..<xs.$len: best = max_of(T)(best, xs.*[i]);
     ret best;
 }
 
-stcfun sum_of = (type T, u32 N): (&[N]T xs) -> T {
+stcfun sum_of = (type T): (&[]T xs) -> T {
     mut T s = xs.*[0];
     for i in 1..<xs.$len: s = s + xs.*[i];
     ret s;
@@ -55,7 +55,6 @@ stcfun pick = (bool wide) -> type: ret if wide: u64 else: u8;
 
 stcfun unwrap_or = (type T): (Opt(T) o, T fallback) -> T: ret o ?? fallback;
 
-fun swap_pair = (Pair(u8, u32) p) -> Pair(u32, u8): ret Pair(u32, u8)(first = p.second as u32, second = p.first as u8);
 
 fun safe_div = (i32 a, i32 b) -> Result(i32, u8): ret if b == 0: Result(i32, u8).Err(1) else: Result(i32, u8).Ok(a / b);
 
@@ -84,7 +83,7 @@ stcfun arrays = () -> u32 {
 
 stcfun pairs = () -> u32 {
     Pair(u8, u32) p = Pair(u8, u32)(first = 3, second = 400);
-    Pair(u32, u8) q = swap_pair(p);
+    Pair(u32, u8) q = p.swap();
     ret q.first * 10 + q.second as u32;
 }
 
@@ -107,7 +106,7 @@ stcfun scans = () -> i64 {
     [4]Money ms = [Money(5), Money(50), Money(-3), Money(7)];
     [3]i64 nums = [10, 20, 30];
     [3]f32 fs = [0.5, 0.25, 0.25];
-    ret largest(Money, 4)(ms.&).cents * 1000 + sum_of(i64, 3)(nums.&) + (sum_of(f32, 3)(fs.&) * 1000000.0) as i64;
+    ret largest(Money)(ms.&).cents * 1000 + sum_of(i64)(nums.&) + (sum_of(f32)(fs.&) * 1000000.0) as i64;
 }
 
 stcfun widths = () -> u64: ret width_of(u8) * 1000000 + width_of(pick(true)) * 10000 + width_of(pick(false)) * 100 + width_of(Pair(u8, u64));

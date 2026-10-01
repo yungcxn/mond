@@ -21,7 +21,8 @@ pub fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
     }
     const callee = self.arg(node, 0);
     const ct = self.h09_check_expr(ctx, callee, .none);
-    const d = if (self.nk(callee) == .fun_call) .none else self.node_decl[callee];
+    // a stcfun call producing a function is called like that function
+    const d = if (self.nk(callee) != .fun_call) self.node_decl[callee] else if (self.node_decl[self.arg(callee, 0)] != .none and self.dp(.kind, self.node_decl[self.arg(callee, 0)]).* == .static_function) self.node_decl[callee] else .none;
     // `x.m(..)` binds x as the self argument, `Type.m(x.&, ..)` passes it like any other argument
     const recv = if (self.nk(callee) == .member and sp.tag(self.node_type[self.arg(callee, 0)]) != .meta_type) self.arg(callee, 0) else 0;
     if (ct != .poison_type and d != .none and is_fn(self.dp(.kind, d).*)) return call_decl(self, ctx, node, d, args, recv);
@@ -68,7 +69,11 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
                 continue;
             }
             if (sp.tag(p) != .meta_type) {
-                if (self.check(ctx, self.arg_value(a), p) == .poison_type) bad = true;
+                if (sp.has_vars(p)) {
+                    const at = self.h09_check_expr(ctx, self.arg_value(a), p);
+                    if (at != .poison_type and statics.arg_len(self, at, p) == .none) _ = self.report(.type_mismatch, self.arg_value(a), at, p);
+                    bad = bad or at == .poison_type or statics.arg_len(self, at, p) == .none;
+                } else if (self.check(ctx, self.arg_value(a), p) == .poison_type) bad = true;
                 continue;
             }
             const at = self.h09_check_expr(ctx, self.arg_value(a), p);
@@ -81,7 +86,7 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
         if (ctx.interpreted and ret != .fun_type) return ret;
         var vals: [64]StaticPool.Index = undefined;
         for (all_args, 0..) |a, i| {
-            vals[i] = statics.h08_eval_static(self, ctx, self.arg_value(a));
+            vals[i] = statics.retype(self, statics.h08_eval_static(self, ctx, self.arg_value(a)), self.sig(first).params[i]);
             if (statics.holds_template(self, vals[i])) return .poison_type;
         }
         const r = statics.h20_instantiate(self, first, sp.intern(.{ .aggregate = .{ .ty = .none, .elems = vals[0..all_args.len] } }));
@@ -102,7 +107,8 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
             if (rt != .poison_type and p0 != .poison_type and rt != child and !sp.implements(rt, child) and sp.coerce(&self.abstract_pool, rt, p0) == .incompatible)
                 _ = self.report(.type_mismatch, recv, rt, p0);
         } else if (args.len > 0) {
-            _ = self.check(ctx, self.arg_value(args[0]), p0);
+            // a method that does not write `self` takes a read only one as well
+            _ = self.check(ctx, self.arg_value(args[0]), if (sp.is_ptr(p0)) sp.intern(.{ .ptr_type = .{ .child = sp.pointee(p0), .mutable = false } }) else p0);
             args = args[1..];
         } else return self.report(.wrong_arity, node, 0, 1);
     }
@@ -136,6 +142,19 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
     }
     if (ambiguous) _ = self.report(.ambiguous_overload, node, best, 0);
     var callee = self.real(best);
+    if (off == 1 and self.dp(.flags, callee).writes) {
+        const r = if (recv != 0) recv else self.arg_value(all_args[0]);
+        const rt = sp.apply_vars(&self.abstract_pool, self.node_type[r]);
+        const place = switch (self.nk(r)) {
+            .identifier, .identifier_self, .member, .array_index, .dereference, .capture => true,
+            else => false,
+        };
+        if (recv == 0) {
+            if (sp.tag(rt) == .ptr_type) _ = self.report(.type_mismatch, r, rt, self.sig(callee).params[0]);
+        } else if (sp.is_ptr(rt)) {
+            if (sp.tag(rt) == .ptr_type) self.write_access(r, .through_ptr);
+        } else if (place) self.write_access(r, self.writable(r));
+    }
     const pnodes = self.params_of(self.value_node(callee));
     _ = bind_args(self, pnodes, args, &map, false);
     check_stcwhere(self, ctx, node, callee, pnodes, args, map[0..args.len]);
@@ -151,8 +170,8 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
                 n += 1;
             };
         }
-        if (ctx.interpreted and std.mem.indexOfScalar(StaticPool.Index, lens[0..n], .none) != null) {
-            self.node_decl[node] = callee;
+        if (std.mem.indexOfScalar(StaticPool.Index, lens[0..n], .none) != null) {
+            if (ctx.interpreted) self.node_decl[node] = callee;
             return .poison_type;
         }
         for (lens[0..n]) |l| if (l != .none and sp.tag(l) == .template_type) {
@@ -242,11 +261,19 @@ pub fn has_where(self: *Resolver, d: Decl.Index) bool {
     return false;
 }
 
-pub fn same_params(self: *Resolver, a: StaticPool.Index, b: StaticPool.Index) bool {
+// one dispatch group: the same parameter types under the same names
+pub fn same_params(self: *Resolver, a0: Decl.Index, b0: Decl.Index) bool {
     const sp = &self.static_pool;
-    if (a == b) return true;
-    if (a == .none or b == .none or sp.tag(a) != .function_type or sp.tag(b) != .function_type) return false;
-    return std.mem.eql(StaticPool.Index, sp.get(a).function_type.params, sp.get(b).function_type.params);
+    const a = self.real(a0);
+    const b = self.real(b0);
+    const ta = self.dp(.ty, a).*;
+    const tb = self.dp(.ty, b).*;
+    if (ta != tb and (ta == .none or tb == .none or sp.tag(ta) != .function_type or sp.tag(tb) != .function_type or !std.mem.eql(StaticPool.Index, sp.get(ta).function_type.params, sp.get(tb).function_type.params))) return false;
+    const pa = self.params_of(self.value_node(a));
+    const pb = self.params_of(self.value_node(b));
+    if (pa.len != pb.len) return false;
+    for (pa, pb, 0..) |x, y, i| if (self.param_name(x, i) != self.param_name(y, i)) return false;
+    return true;
 }
 
 pub fn bind_args(self: *Resolver, params: []const NodeId, args: []const NodeId, map: []u32, partial: bool) bool {

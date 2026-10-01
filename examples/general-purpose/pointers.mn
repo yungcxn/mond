@@ -1,4 +1,4 @@
-type Node = *(i32 val, mut Opt(*Node) next);
+type Node = *(mut i32 val, mut Opt(*Node) next);
 variant Opt = (type T): ++(Some(T), None) tagof u8;
 
 fun swap = (*i32 a, *i32 b) {
@@ -28,7 +28,6 @@ fun reverse_in_place = (*[]i32 a) {
     }
 }
 
-# LIMIT: the compile time interpreter has no ordering of pointers and cannot hold a pointer inside a variant payload (not_static), so the functions below are only checked, never called from a stc
 fun reverse_until = (*[]i32 a) {
     mut *i32 lo = a.*[0].&;
     mut *i32 hi = a.*[0].& + (a.$len - 1);
@@ -181,13 +180,28 @@ stcfun array_of_pointers = () -> i32 {
 
 stcfun comparisons = () -> u32 {
     [4]i32 a = [1, 2, 3, 4];
-    *i32 p = a[0].&;
-    *i32 q = a[3].&;
-    *i32 r = a[0].&;
+    &i32 p = a[0].&;
+    &i32 q = a[3].&;
+    &i32 r = a[0].&;
     ret (p == r) as u32 + (p != q) as u32 * 10 + (q == p) as u32 * 100;
 }
 
+stcfun reversed_ptrs = () -> i32 {
+    mut [5]i32 a = [1, 2, 3, 4, 5];
+    reverse_until(a.&);
+    ret a[0] * 10000 + a[1] * 1000 + a[2] * 100 + a[3] * 10 + a[4];
+}
+
+stcfun found = () -> i32 {
+    mut [4]i32 a = [3, 7, 9, 7];
+    if find_ptr(a.&, 7) ?<- p: p.* = 70;
+    i32 miss = if find_ptr(a.&, 5) ?<- q: 1 else: 0;
+    ret a[1] * 10 + a[3] + miss;
+}
+
 stc i32 SW = swaps(); #= SW 8040513
+stc i32 RP = reversed_ptrs(); #= RP 54321
+stc i32 FP = found(); #= FP 707
 stc u32 OU = outs(); #= OU 902
 stc i32 RV = reversal(); #= RV 4615010
 stc i32 FI = fills(); #= FI 236212

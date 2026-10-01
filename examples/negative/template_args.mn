@@ -1,8 +1,3 @@
-# BUG: accepted without a diagnostic, but the value does not fit the declared static parameter
-#   type Buf = (u32 N): *([N]u8 data);  Buf(-1) a;  Buf(5000000000) b;     template value arguments are not checked against the parameter type
-#   stcfun Word = (u32 bits) -> type: ...;  Word(-1) w;                     same for a stcfun called as a type (a plain call `sq(-1)` is a type_mismatch)
-# BUG: a wrong kind of template argument (`Stack(u8, u8)`, `Stack(4, u8)`, `Stack(u8, "s")`) is reported at the template declaration as not_static / not_a_type, never at the offending argument
-
 variant Opt = (type T): ++(Some(T), None) tagof u8;
 type Pair = (type A, type B): *(mut A first, mut B second);
 type Stack = (type T, u32 N): *(mut [N]T items, mut u32 len = 0) !{
@@ -14,6 +9,8 @@ type Stack = (type T, u32 N): *(mut [N]T items, mut u32 len = 0) !{
     }
 }
 type Plain = *(u8 v);
+type Buf = (u32 N): *([N]u8 data);
+stcfun Word = (u32 bits) -> type: ret if bits <= 8: u8 else: u64;
 type Small = (type T stcwhere sizeof T <= 4): *(T v); #! stcwhere_violated
 type Ring = (type T, u32 N stcwhere N > 1 and N < 256): *(mut [N]T buf, mut u32 head = 0); #! stcwhere_violated stcwhere_violated
 type Lst = (type T): *(T value, *Lst(T) next);
@@ -44,6 +41,12 @@ fun args = () {
     Pair(u8, u16) p1 = Pair(u8, u16)(first = 300, second = 1); #! type_mismatch
     Pair(u8, u16) p2 = Pair(u8, u16)(first = 1, second = -1); #! type_mismatch
     Pair(u8, u16) p3 = Pair(u8, u16)(second = 1, first = 2, third = 3); #! unknown_named_argument
+    Buf(-1) b1; #! type_mismatch
+    Buf(5000000000) b2; #! type_mismatch
+    Word(-1) w; #! type_mismatch
+    Stack(u8, u8) k1; #! type_mismatch
+    Stack(4, u8) k2; #! type_mismatch
+    Stack(u8, "s") k3; #! type_mismatch
 }
 
 fun instances = () {

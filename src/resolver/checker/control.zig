@@ -5,9 +5,11 @@ const calls = @import("calls.zig");
 const statics = @import("statics.zig");
 const types = @import("types.zig");
 const StaticPool = @import("../StaticPool.zig");
+const NamePool = @import("../NamePool.zig");
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
 const class = Resolver.class;
+const NodeKind = ParseTree.Node.Kind;
 const is_range_kind = Resolver.is_range_kind;
 
 const Pat = struct { mask: u64 = 0, all: bool = false };
@@ -30,8 +32,6 @@ pub fn h14_check_match(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, exp
         };
         return self.report(.non_exhaustive_match, node, v, .none);
     }
-    var ivs: std.ArrayList([2]i128) = .empty;
-    defer ivs.deinit(self.alloc);
     var quiet = statics.opened(self, ctx);
     var covered: u64 = 0;
     var catch_all = false;
@@ -44,7 +44,6 @@ pub fn h14_check_match(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, exp
         self.h03_push_scope();
         const mark = self.doc.diagnostics.len();
         const pat = pattern(self, ctx, self.arg(arm, 0), st);
-        intervals(self, ctx, self.arg(arm, 0), &ivs);
         if (!quiet and (catch_all or (!pat.all and pat.mask != 0 and pat.mask & ~covered == 0))) self.doc.h21_report(.redundant_match_arm, arm, 0, 0);
         quiet = quiet or self.errors_since(mark, arm);
         covered |= pat.mask;
@@ -54,10 +53,10 @@ pub fn h14_check_match(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, exp
         self.h04_pop_scope();
         result = merge(self, arm, result, t, expected);
     }
-    // variants, unions and bools by their case bits, integers by interval coverage, strings only with `_` or a binder
-    const cases = case_count(self, st);
-    const all_cases = cases <= 64 and covered == @as(u64, std.math.maxInt(u64)) >> @intCast(64 - cases);
-    if (!catch_all and st != .poison_type and !all_cases and !covers(self, st, ivs.items))
+    var rows: std.ArrayList(NodeId) = .empty;
+    defer rows.deinit(self.alloc);
+    for (arms) |arm| rows.append(self.alloc, self.arg(arm, 0)) catch @panic("OOM");
+    if (!catch_all and st != .poison_type and !exhaustive(self, ctx, &.{st}, rows.items, arms.len))
         _ = self.report(.non_exhaustive_match, node, st, .none);
     return if (result == .none) .unit_type else result;
 }
@@ -78,13 +77,14 @@ pub fn h15_check_branching(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId,
     }
     // binders of the condition (`x ?<- v`) are visible in the then branch only
     self.h03_push_scope();
-    _ = self.check(ctx, cond, .bool_type);
-    const before = self.uninit;
+    const w = self.condition(ctx, cond);
+    self.uninit = w[0];
     const tt = branch(self, ctx, then, expected);
     const after_then = if (tt == .never_type) 0 else self.uninit;
-    self.uninit = before;
+    self.uninit = w[1];
     self.h04_pop_scope();
     if (!has_else) {
+        self.uninit |= after_then;
         const valued = tt != .never_type and tt != .runit_type and tt != .poison_type and tt != .unit_type;
         return if (self.concrete(expected) and valued) self.report(.runit_mixing, node, tt, .unit_type) else merge(self, node, tt, .unit_type, if (valued) .none else expected);
     }
@@ -105,7 +105,7 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
     if (lp.repeat != 0) _ = self.h09_check_expr(ctx, lp.repeat, .none);
     if (lp.cond != 0 and lp.repeat != 0) _ = self.set(lp.head, .unit_type);
     if (lp.seq != 0) {
-        const st = sp.pointee(sp.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, lp.seq, if (elem_hint != .none and is_range_kind(self.nk(lp.seq))) exp else .none)));
+        const st = sp.pointee(sp.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, lp.seq, if (elem_hint != .none and sp.class(elem_hint).is_integer and is_range_kind(self.nk(lp.seq))) exp else .none)));
         const elem = switch (sp.lookup_member(st, if (sp.get(st) == .array_type) .len else .next)) {
             .builtin_len => sp.get(st).array_type.elem,
             .method => |m| self.fn_ret(m),
@@ -124,14 +124,37 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
     const at_exit = self.uninit;
     self.loop_exits.push(0);
     ctx.loop_depth += 1;
-    const bt = self.h09_check_expr(ctx, lp.body, if (expected != .none) elem_hint else .none);
+    const jumps = self.jumps;
+    // a stc loop body is static per iteration: checked like a stcfun body, evaluated with the loop
+    const outer = ctx.interpreted;
+    ctx.interpreted = outer or class(k).stc;
+    const bt = self.h09_check_expr(ctx, lp.body, if (expected == .none) .none else if (elem_hint != .none) elem_hint else self.fresh_var(lp.body));
+    ctx.interpreted = outer;
     ctx.loop_depth -= 1;
+    const broke = self.jumps[0] != jumps[0];
+    const stepped = !broke and self.jumps[1] == jumps[1];
+    self.jumps = jumps;
     self.loop_exits.head -= 1;
     self.uninit = self.loop_exits.buf[self.loop_exits.head] | if (lp.cond != 0 or lp.seq != 0) at_exit else 0;
     if (!ctx.interpreted and !ctx.abstract and class(k).stc) _ = statics.static_of(self, ctx, node);
-    // used as a value: an array of the body values; brk ends it without adding one
-    if (expected == .none) return .unit_type;
-    return sp.intern(.{ .array_type = .{ .len = self.fresh_var(node), .elem = if (bt == .never_type or bt == .runit_type) (if (elem_hint != .none) elem_hint else .unit_type) else bt } });
+    // used as a value: an array of the body values; brk ends it without adding one, cont skips one
+    if (expected == .none) return if (lp.cond == 0 and lp.seq == 0 and !broke) .never_type else .unit_type;
+    const n = if (stepped and lp.seq != 0) steps(self, ctx, lp.seq) else null;
+    return sp.intern(.{ .array_type = .{ .len = if (n) |x| sp.intern(.{ .int = .{ .ty = .u64_type, .bits = x } }) else self.fresh_var(node), .elem = if (bt == .never_type or bt == .runit_type) (if (elem_hint != .none) elem_hint else .unit_type) else bt } });
+}
+
+// the static number of steps of a `for` over a range with static bounds or an array of static length
+fn steps(self: *Resolver, ctx: *FnCtx, seq: NodeId) ?u64 {
+    const sp = &self.static_pool;
+    if (!is_range_kind(self.nk(seq))) {
+        const st = sp.pointee(sp.apply_vars(&self.abstract_pool, self.node_type[seq]));
+        return if (st != .poison_type and sp.tag(st) == .array_type and sp.tag(sp.get(st).array_type.len) == .int_value) sp.get(sp.get(st).array_type.len).int.bits else null;
+    }
+    const g = self.range(seq);
+    if (g.hi == 0) return null;
+    const lo = if (g.lo == 0) 0 else statics.static_int(self, ctx, g.lo) orelse return null;
+    const hi = (statics.static_int(self, ctx, g.hi) orelse return null) + @intFromBool(g.incl);
+    return if (hi > lo) @intCast(hi - lo) else 0;
 }
 
 // binders belong to their statement: a block scopes every non-declaring statement, a declaration its values
@@ -219,10 +242,32 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
             return .{ .all = true };
         },
         .partial__match_case_pattern_or => {
+            // every alternative binds the same names, sharing the declarations of the first one
             var r = Pat{};
-            for (self.kids(p)) |alt| {
+            const names = &self.local_names;
+            const from = names.head;
+            var first = from;
+            for (self.kids(p), 0..) |alt, i| {
+                const mark = names.head;
                 const s = pattern(self, ctx, alt, st);
                 r = .{ .mask = r.mask | s.mask, .all = r.all or s.all };
+                if (i == 0) {
+                    first = names.head;
+                    continue;
+                }
+                for (names.buf[from..first]) |n| if (std.mem.indexOfScalar(NamePool.Index, names.buf[mark..names.head], n) == null) self.doc.h21_report(.undefined_name, alt, n, 0);
+                for (mark..names.head) |j| {
+                    const id = self.dp(.node, self.local_decls.buf[j]).*;
+                    const k = std.mem.indexOfScalar(NamePool.Index, names.buf[from..first], names.buf[j]) orelse {
+                        self.doc.h21_report(.undefined_name, id, names.buf[j], 0);
+                        continue;
+                    };
+                    self.node_decl[id] = self.local_decls.buf[from + k];
+                    const t = self.dp(.ty, self.node_decl[id]).*;
+                    if (self.node_type[id] != t and self.node_type[id] != .poison_type and t != .poison_type) _ = self.report(.type_mismatch, id, self.node_type[id], t);
+                }
+                names.head = mark;
+                self.local_decls.head = mark;
             }
             return r;
         },
@@ -281,39 +326,160 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
     }
 }
 
-// the integer values a pattern covers as closed intervals, for exhaustiveness over integer scrutinees
-fn intervals(self: *Resolver, ctx: *FnCtx, p: NodeId, out: *std.ArrayList([2]i128)) void {
-    const k = self.nk(p);
-    if (k == .partial__match_case_pattern_or) return for (self.kids(p)) |alt| intervals(self, ctx, alt, out);
-    if (!is_range_kind(k)) {
-        const v = statics.static_int(self, ctx, p) orelse return;
-        return out.append(self.alloc, .{ v, v }) catch @panic("OOM");
+// exhaustiveness as the usefulness of a wildcard: rows of patterns over columns of types, 0 is a wildcard.
+// a column splits by the constructors of its type: bools, variant cases with their payload fields, the fields of
+// a record, the integer segments between the pattern bounds; any other type is covered by wildcards only
+fn exhaustive(self: *Resolver, ctx: *FnCtx, cols: []const StaticPool.Index, rows: []const NodeId, n: usize) bool {
+    if (n == 0) return false;
+    if (cols.len == 0) return true;
+    const sp = &self.static_pool;
+    const w = cols.len;
+    const t = cols[0];
+    var flat: std.ArrayList(NodeId) = .empty;
+    defer flat.deinit(self.alloc);
+    for (0..n) |r| spread(self, rows[r * w ..][0..w], rows[r * w], t, &flat);
+    var next: std.ArrayList(NodeId) = .empty;
+    defer next.deinit(self.alloc);
+    var tys: [64]StaticPool.Index = undefined;
+    if (t == .bool_type) {
+        for ([_]StaticPool.Index{ .bool_true, .bool_false }) |k| {
+            next.clearRetainingCapacity();
+            const m = specialize(self, flat.items, w, k, &.{}, &next);
+            if (!exhaustive(self, ctx, cols[1..], next.items, m)) return false;
+        }
+        return true;
     }
-    const g = self.range(p);
-    const lo = if (g.lo == 0) std.math.minInt(i128) else statics.static_int(self, ctx, g.lo);
-    const hi = if (g.hi == 0) std.math.maxInt(i128) else (statics.static_int(self, ctx, g.hi) orelse return) - @intFromBool(!g.incl);
-    out.append(self.alloc, .{ lo orelse return, hi }) catch @panic("OOM");
+    switch (sp.tag(t)) {
+        .variant_type, .variant_union_type, .record_type => {
+            var ks: [256]StaticPool.Index = undefined;
+            var nk: usize = 0;
+            if (sp.tag(t) == .record_type) {
+                ks[0] = t;
+                nk = 1;
+            } else for (0..if (sp.tag(t) == .variant_type) 1 else sp.get(t).variant_union_type.len) |mi| {
+                const m = if (sp.tag(t) == .variant_type) t else sp.get(t).variant_union_type[mi];
+                for (0..sp.get(m).variant_type.cases.len) |ci| {
+                    ks[nk] = sp.get(m).variant_type.cases[ci];
+                    nk += 1;
+                }
+            }
+            for (ks[0..nk]) |k| {
+                const rec = if (sp.tag(k) == .variant_case_type) sp.get(k).variant_case_type.payload else k;
+                const fields = if (rec == .none) &[_]NodeId{} else self.fields_of(rec);
+                for (0..fields.len) |i| tys[i] = sp.get(rec).custom_type.field_types[i];
+                @memcpy(tys[fields.len..][0 .. w - 1], cols[1..]);
+                next.clearRetainingCapacity();
+                const m = specialize(self, flat.items, w, k, fields, &next);
+                if (!exhaustive(self, ctx, tys[0 .. fields.len + w - 1], next.items, m)) return false;
+            }
+            return true;
+        },
+        .int_type => {
+            const it = sp.get(t).int_type;
+            const bits: u7 = @intCast(it.bits);
+            const one: i128 = 1;
+            const min: i128 = if (it.signedness == .signed) -(one << (bits - 1)) else 0;
+            const max: i128 = if (it.signedness == .signed) (one << (bits - 1)) - 1 else (one << bits) - 1;
+            var cuts: std.ArrayList(i128) = .empty;
+            defer cuts.deinit(self.alloc);
+            cuts.append(self.alloc, min) catch @panic("OOM");
+            for (0..flat.items.len / w) |r| if (flat.items[r * w] != 0) if (interval(self, ctx, flat.items[r * w])) |iv| {
+                cuts.appendSlice(self.alloc, &.{ iv[0], iv[1] +| 1 }) catch @panic("OOM");
+            };
+            std.mem.sort(i128, cuts.items, {}, std.sort.asc(i128));
+            for (cuts.items, 0..) |lo, ci| {
+                if (lo < min or lo > max or ci > 0 and cuts.items[ci - 1] == lo) continue;
+                var hi = max;
+                for (cuts.items[ci..]) |c| if (c > lo) {
+                    hi = @min(c - 1, max);
+                    break;
+                };
+                next.clearRetainingCapacity();
+                var m: usize = 0;
+                for (0..flat.items.len / w) |r| {
+                    const p = flat.items[r * w];
+                    const iv = if (p == 0) null else interval(self, ctx, p);
+                    if (p != 0 and (iv == null or iv.?[0] > lo or iv.?[1] < hi)) continue;
+                    next.appendSlice(self.alloc, flat.items[r * w + 1 ..][0 .. w - 1]) catch @panic("OOM");
+                    m += 1;
+                }
+                if (!exhaustive(self, ctx, cols[1..], next.items, m)) return false;
+            }
+            return true;
+        },
+        else => {
+            var m: usize = 0;
+            for (0..flat.items.len / w) |r| if (flat.items[r * w] == 0) {
+                next.appendSlice(self.alloc, flat.items[r * w + 1 ..][0 .. w - 1]) catch @panic("OOM");
+                m += 1;
+            };
+            return exhaustive(self, ctx, cols[1..], next.items, m);
+        },
+    }
 }
 
-fn covers(self: *Resolver, st: StaticPool.Index, ivs: [][2]i128) bool {
+// a row with its first pattern normalized: binders and widening type patterns are wildcards, alternatives are rows of their own
+fn spread(self: *Resolver, row: []const NodeId, p0: NodeId, t: StaticPool.Index, out: *std.ArrayList(NodeId)) void {
+    var p = p0;
+    while (p != 0) switch (self.nk(p)) {
+        .capture, .labelarrow => p = self.arg(p, 0),
+        .identifier => p = 0,
+        .partial__match_case_pattern_or => return for (self.kids(p)) |alt| spread(self, row, alt, t, out),
+        .partial__match_case_pattern_typecast => {
+            const x = self.node_type[self.arg(p, 1)];
+            if (x == t or x == .poison_type or self.static_pool.coerce(&self.abstract_pool, t, x) != .incompatible) p = 0 else break;
+        },
+        else => break,
+    };
+    out.append(self.alloc, p) catch @panic("OOM");
+    out.appendSlice(self.alloc, row[1..]) catch @panic("OOM");
+}
+
+// the rows of constructor k (a case, a record or a bool), the first column replaced by the patterns of its fields
+fn specialize(self: *Resolver, rows: []const NodeId, w: usize, k: StaticPool.Index, fields: []const NodeId, out: *std.ArrayList(NodeId)) usize {
     const sp = &self.static_pool;
-    if (st == .none or sp.get(st) != .int_type) return false;
-    const t = sp.get(st).int_type;
-    const bits: u7 = @intCast(t.bits);
-    const one: i128 = 1;
-    var cur: i128 = if (t.signedness == .signed) -(one << (bits - 1)) else 0;
-    const max: i128 = if (t.signedness == .signed) (one << (bits - 1)) - 1 else (one << bits) - 1;
-    std.mem.sort([2]i128, ivs, {}, struct {
-        fn lt(_: void, a: [2]i128, b: [2]i128) bool {
-            return a[0] < b[0];
-        }
-    }.lt);
-    for (ivs) |iv| {
-        if (iv[0] > cur) return false;
-        if (iv[1] >= max) return true;
-        cur = @max(cur, iv[1] + 1);
+    var n: usize = 0;
+    for (0..rows.len / w) |r| {
+        const p = rows[r * w];
+        const pt = if (p == 0) .none else if (self.nk(p) == .partial__match_case_pattern_typecast) self.node_type[self.arg(p, 1)] else self.node_type[p];
+        const hit = p == 0 or switch (sp.tag(k)) {
+            .variant_case_type => pt == sp.get(k).variant_case_type.variant or same(self, pt, k),
+            .record_type => same(self, pt, k),
+            else => self.nk(p) == (if (k == .bool_true) NodeKind.boolean_true else NodeKind.boolean_false),
+        };
+        if (!hit) continue;
+        const at = out.items.len;
+        out.appendNTimes(self.alloc, 0, fields.len) catch @panic("OOM");
+        var map: [64]u32 = undefined;
+        const args = if (p != 0 and self.nk(p) == .fun_call) self.kids(self.arg(p, 1)) else &[_]NodeId{};
+        if (calls.bind_args(self, fields, args, &map, true)) for (args, 0..) |a, i| {
+            out.items[at + map[i]] = self.arg_value(a);
+        };
+        out.appendSlice(self.alloc, rows[r * w + 1 ..][0 .. w - 1]) catch @panic("OOM");
+        n += 1;
     }
-    return false;
+    return n;
+}
+
+// a constructor of another realization of the same template stands for this one
+fn same(self: *Resolver, a: StaticPool.Index, b: StaticPool.Index) bool {
+    const sp = &self.static_pool;
+    if (a == b) return true;
+    if (a == .none or sp.tag(a) != sp.tag(b)) return false;
+    const g = statics.source_of(self, a);
+    return g != .none and g == statics.source_of(self, b) and (sp.tag(a) != .variant_case_type or sp.get(a).variant_case_type.case == sp.get(b).variant_case_type.case);
+}
+
+// the integer values a literal or range pattern covers, as a closed interval
+fn interval(self: *Resolver, ctx: *FnCtx, p: NodeId) ?[2]i128 {
+    if (!is_range_kind(self.nk(p))) {
+        const v = statics.static_int(self, ctx, p) orelse return null;
+        return .{ v, v };
+    }
+    const g = self.range(p);
+    const lo = if (g.lo == 0) std.math.minInt(i128) else statics.static_int(self, ctx, g.lo) orelse return null;
+    const hi = if (g.hi == 0) std.math.maxInt(i128) else (statics.static_int(self, ctx, g.hi) orelse return null) - @intFromBool(!g.incl);
+    return .{ lo, hi };
 }
 
 fn case_base(self: *Resolver, variant: StaticPool.Index, st: StaticPool.Index) ?u64 {
@@ -326,16 +492,6 @@ fn case_base(self: *Resolver, variant: StaticPool.Index, st: StaticPool.Index) ?
         base += sp.get(m).variant_type.cases.len;
     }
     return null;
-}
-
-fn case_count(self: *Resolver, st: StaticPool.Index) usize {
-    const sp = &self.static_pool;
-    if (st == .bool_type) return 2;
-    if (sp.tag(st) == .variant_type) return sp.get(st).variant_type.cases.len;
-    if (sp.tag(st) != .variant_union_type) return 65;
-    var n: usize = 0;
-    for (sp.get(st).variant_union_type) |m| n += sp.get(m).variant_type.cases.len;
-    return n;
 }
 
 fn case_bit(self: *Resolver, case: StaticPool.Index, st: StaticPool.Index) u64 {

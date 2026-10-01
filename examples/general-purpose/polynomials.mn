@@ -1,4 +1,3 @@
-# BUG: a template method parameter typed `Poly(N)` (the template applied to its own params) is a different type than the realised `Poly(8)` (type_mismatch with identical printed types for arguments and for `P x = p.add(..)`), so operands are passed as `[N]i64` coefficient arrays and results are unwrapped with `.c`
 type Poly = (u32 N): *(mut [N]i64 c) !{
     fun eval = (i64 x) -> i64 {
         mut i64 acc = 0;
@@ -19,15 +18,15 @@ type Poly = (u32 N): *(mut [N]i64 c) !{
         ret -1;
     }
 
-    fun add = ([N]i64 o) -> Poly(N) {
+    fun add = (Poly(N) o) -> Poly(N) {
         mut Poly(N) r;
-        for i in 0..<N: r.c[i] = self.c[i] + o[i];
+        for i in 0..<N: r.c[i] = self.c[i] + o.c[i];
         ret r;
     }
 
-    fun sub = ([N]i64 o) -> Poly(N) {
+    fun sub = (Poly(N) o) -> Poly(N) {
         mut Poly(N) r;
-        for i in 0..<N: r.c[i] = self.c[i] - o[i];
+        for i in 0..<N: r.c[i] = self.c[i] - o.c[i];
         ret r;
     }
 
@@ -37,11 +36,11 @@ type Poly = (u32 N): *(mut [N]i64 c) !{
         ret r;
     }
 
-    fun mul = ([N]i64 o) -> Poly(N) {
+    fun mul = (Poly(N) o) -> Poly(N) {
         mut Poly(N) r;
         for i in 0..<N {
             if self.c[i] == 0: cont;
-            for j in 0..<N: if i + j < N: r.c[i + j] += self.c[i] * o[j];
+            for j in 0..<N: if i + j < N: r.c[i + j] += self.c[i] * o.c[j];
         }
         ret r;
     }
@@ -52,7 +51,7 @@ type Poly = (u32 N): *(mut [N]i64 c) !{
         ret r;
     }
 
-    fun compose = ([N]i64 q) -> Poly(N) {
+    fun compose = (Poly(N) q) -> Poly(N) {
         mut Poly(N) r;
         mut u32 i = N;
         while i > 0 {
@@ -66,7 +65,7 @@ type Poly = (u32 N): *(mut [N]i64 c) !{
     fun pow = (u32 e) -> Poly(N) {
         mut Poly(N) r;
         r.c[0] = 1;
-        for 0..<e: r = r.mul(self.c);
+        for 0..<e: r = r.mul(self.*);
         ret r;
     }
 
@@ -88,8 +87,8 @@ type Poly = (u32 N): *(mut [N]i64 c) !{
         ret q;
     }
 
-    fun eq = ([N]i64 o) -> bool {
-        for i in 0..<N: if self.c[i] != o[i]: ret false;
+    fun eq = (Poly(N) o) -> bool {
+        for i in 0..<N: if self.c[i] != o.c[i]: ret false;
         ret true;
     }
 }
@@ -103,15 +102,15 @@ fun poly = (&[]i64 cs) -> P {
 }
 
 fun chebyshev = (u32 n) -> P {
-    mut [8]i64 a = poly([1,].&).c;
-    mut [8]i64 b = poly([0, 1].&).c;
-    if n == 0: ret poly(a.&);
+    mut P a = poly([1,].&);
+    mut P b = poly([0, 1].&);
+    if n == 0: ret a;
     for 0..<n - 1 {
-        [8]i64 next = poly(b.&).shift_up(1).scale(2).sub(a).c;
+        P next = b.shift_up(1).scale(2).sub(a);
         a = b;
         b = next;
     }
-    ret poly(b.&);
+    ret b;
 }
 
 fun int_roots = (P p, i64 lo, i64 hi) -> u32 {
@@ -145,19 +144,19 @@ stc i64 S5 = poly([1, 1].&).pow(0).eval(9); #= S5 1
 stc i64 S6 = poly([1, 1].&).pow(9).c[7]; #= S6 36
 stc i64 S7 = poly([1, 1].&).pow(9).c[0]; #= S7 1
 
-stc i64 M1 = poly([1, 2, 3].&).mul(poly([4, 5].&).c).eval(1); #= M1 54
-stc i64 M2 = poly([1, 2, 3].&).mul(poly([4, 5].&).c).c[3]; #= M2 15
-stc i64 M3 = poly([1, 2, 3].&).mul(poly([0,].&).c).degree(); #= M3 -1
-stc i64 M4 = poly([-1, 1].&).mul(poly([1, 1].&).c).c[0]; #= M4 -1
-stc i64 M5 = poly([1, 1].&).mul(poly([1, 1].&).c).eq(poly([1, 2, 1].&).c) as i64; #= M5 1
-stc i64 M6 = poly([1, 1].&).mul(poly([1, 1].&).c).eq(poly([1, 2, 2].&).c) as i64; #= M6 0
-stc i64 M7 = poly([0, 0, 0, 0, 0, 0, 1, 0].&).mul(poly([0, 0, 0, 1].&).c).eval(3); #= M7 0
-stc i64 M8 = poly([0, 0, 0, 0, 0, 0, 1, 0].&).mul(poly([0, 0, 1].&).c).eval(3); #= M8 0
-stc i64 M9 = poly([1, 1].&).mul(poly([1, 1].&).c).scale(-3).c[1]; #= M9 -6
+stc i64 M1 = poly([1, 2, 3].&).mul(poly([4, 5].&)).eval(1); #= M1 54
+stc i64 M2 = poly([1, 2, 3].&).mul(poly([4, 5].&)).c[3]; #= M2 15
+stc i64 M3 = poly([1, 2, 3].&).mul(poly([0,].&)).degree(); #= M3 -1
+stc i64 M4 = poly([-1, 1].&).mul(poly([1, 1].&)).c[0]; #= M4 -1
+stc i64 M5 = poly([1, 1].&).mul(poly([1, 1].&)).eq(poly([1, 2, 1].&)) as i64; #= M5 1
+stc i64 M6 = poly([1, 1].&).mul(poly([1, 1].&)).eq(poly([1, 2, 2].&)) as i64; #= M6 0
+stc i64 M7 = poly([0, 0, 0, 0, 0, 0, 1, 0].&).mul(poly([0, 0, 0, 1].&)).eval(3); #= M7 0
+stc i64 M8 = poly([0, 0, 0, 0, 0, 0, 1, 0].&).mul(poly([0, 0, 1].&)).eval(3); #= M8 0
+stc i64 M9 = poly([1, 1].&).mul(poly([1, 1].&)).scale(-3).c[1]; #= M9 -6
 
-stc i64 A1 = poly([1, 2, 3].&).add(poly([4, 5].&).c).eval(10); #= A1 375
-stc i64 A2 = poly([1, 2, 3].&).sub(poly([1, 2, 3].&).c).degree(); #= A2 -1
-stc i64 A3 = poly([1, 2, 3].&).sub(poly([4, 5].&).c).c[0]; #= A3 -3
+stc i64 A1 = poly([1, 2, 3].&).add(poly([4, 5].&)).eval(10); #= A1 375
+stc i64 A2 = poly([1, 2, 3].&).sub(poly([1, 2, 3].&)).degree(); #= A2 -1
+stc i64 A3 = poly([1, 2, 3].&).sub(poly([4, 5].&)).c[0]; #= A3 -3
 
 stc i64 D1 = poly([5, 4, 3, 2, 1].&).deriv().eval(2); #= D1 72
 stc i64 D2 = poly([5, 4, 3, 2, 1].&).deriv().deriv().deriv().deriv().degree(); #= D2 0
@@ -165,11 +164,11 @@ stc i64 D3 = poly([5, 4, 3, 2, 1].&).deriv().deriv().deriv().deriv().deriv().deg
 stc i64 D4 = poly([9,].&).deriv().degree(); #= D4 -1
 stc i64 D5 = poly([0, 1].&).pow(5).deriv().c[4]; #= D5 5
 
-stc i64 C1 = poly([1, 2, 1].&).compose(poly([1, 1].&).c).eval(3); #= C1 25
-stc i64 C2 = poly([0, 0, 1].&).compose(poly([1, 1].&).c).c[1]; #= C2 2
-stc i64 C3 = poly([1, 0, 1].&).compose(poly([1, 0, 1].&).c).c[2]; #= C3 2
-stc i64 C4 = poly([2, 3].&).compose(poly([5,].&).c).eval(100); #= C4 17
-stc i64 C5 = poly([0, 1].&).compose(poly([3, 1, 4].&).c).eval(2); #= C5 21
+stc i64 C1 = poly([1, 2, 1].&).compose(poly([1, 1].&)).eval(3); #= C1 25
+stc i64 C2 = poly([0, 0, 1].&).compose(poly([1, 1].&)).c[1]; #= C2 2
+stc i64 C3 = poly([1, 0, 1].&).compose(poly([1, 0, 1].&)).c[2]; #= C3 2
+stc i64 C4 = poly([2, 3].&).compose(poly([5,].&)).eval(100); #= C4 17
+stc i64 C5 = poly([0, 1].&).compose(poly([3, 1, 4].&)).eval(2); #= C5 21
 
 stc i64 Q1 = poly([-6, 11, -6, 1].&).quotient_linear(1).eval(100); #= Q1 9506
 stc i64 Q2 = poly([-6, 11, -6, 1].&).eval(1); #= Q2 0

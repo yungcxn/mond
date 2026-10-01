@@ -650,6 +650,7 @@ pub fn implements(self: *const StaticPool, ty: Index, trait: Index) bool {
 // the trait body's own row, so member i of a body with decl d is decl d + 1 + i
 fn trait_member(self: *const StaticPool, traits: []const Index, name: NamePool.Index, dynamic: bool) Member {
     for (traits) |t| {
+        if (self.tag(t) != .trait_type) continue;
         const tt = self.get(t).trait_type;
         for (tt.member_names, 0..) |n, i| if (n == name) return if (dynamic)
             .{ .trait_method = .{ .trait = t, .index = @intCast(i) } }
@@ -1042,7 +1043,10 @@ pub fn coerce(self: *StaticPool, vars: *AbstractPool, from0: Index, to0: Index) 
     if (from == .poison_type or to == .poison_type) return .poison;
     if (from == .never_type) return .never_to_any;
     if (from == .unit_type and to == .runit_type) return .unit_to_runit;
-    if (self.has_vars(from) or self.has_vars(to)) return if (self.unify(vars, from, to) == .ok) .unified else .incompatible;
+    if (self.has_vars(from) or self.has_vars(to)) {
+        const ptrs = self.is_ptr(from) and self.is_ptr(to) and (self.tag(from) == .ptr_mut_type or self.tag(to) == .ptr_type);
+        return if (self.unify(vars, if (ptrs) self.pointee(from) else from, if (ptrs) self.pointee(to) else to) == .ok) .unified else .incompatible;
+    }
     const f = self.get(from);
     const t = self.get(to);
     if (f == .int_type and t == .int_type) {
@@ -1065,6 +1069,7 @@ pub fn coerce(self: *StaticPool, vars: *AbstractPool, from0: Index, to0: Index) 
         return .incompatible;
     }
     if (t == .trait_type and self.implements(from, to)) return .impl_to_trait;
+    if (f == .ptr_type and t == .ptr_type and (f.ptr_type.mutable or !t.ptr_type.mutable) and self.tag(t.ptr_type.child) == .trait_type and self.implements(f.ptr_type.child, t.ptr_type.child)) return .impl_to_trait;
     const payload = self.single_payload(to);
     if (payload != .none and f != .variant_type and self.coerce(vars, from, payload) != .incompatible) return .payload_to_self_tagged;
     return .incompatible;

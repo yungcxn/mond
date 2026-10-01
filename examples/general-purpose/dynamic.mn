@@ -126,8 +126,9 @@ fun palindromic_substrings = (&[]u8 s) -> u32 {
 }
 
 stc u32 KS = knapsack([1, 3, 4, 5].&, [1, 4, 5, 7].&, 7); #= KS 9
-# LIMIT: a one element array literal needs a trailing comma, `[5]` is an array type
-stc u32 KS0 = knapsack([5,].&, [10,].&, 4); #= KS0 0
+stc u32 KS0 = knapsack([5].&, [10].&, 4); #= KS0 0
+stc [1]u8 ONE = [7]; #= ONE [7]
+stc [2][1]u8 NEST = [[1], [2]]; #= NEST [[1], [2]]
 stc u32 LC = lcs("AGGTAB".&, "GXTXAYB".&); #= LC 4
 stc u32 LC0 = lcs("abc".&, "xyz".&); #= LC0 0
 stc u32 ED = edit_distance("kitten".&, "sitting".&); #= ED 3

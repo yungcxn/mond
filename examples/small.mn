@@ -322,7 +322,7 @@ fun safe_div_ovl2 = (f32 a, f32 b) -> f32 {
 ### POINTERS AND ARRAYS ###
 # pointers and pointers-to-immutables
 fun test = () {
-    u32 storage = 42;
+    mut u32 storage = 42;
     u32 other_storage = 99;
 
     *u32 myptr = storage.&;

@@ -134,10 +134,10 @@ type Inventory = *(mut [6]Item items, mut u32 count) !{
     }
 }
 
-# LIMIT: a variant field of a zeroed record (`mut Elevator e;`) has no value and reading it is not_static, so the record is built with every variant field given
 fun new_elevator = () -> Elevator {
-    [8]bool none;
-    ret Elevator(floor = 0, dir = Dir.Idle, open = false, requests = none, moved = 0, halted = false);
+    mut Elevator e;
+    if e.dir == Dir.Up: e.dir = Dir.Idle;
+    ret e;
 }
 
 stcfun elevator_run = () -> u32 {

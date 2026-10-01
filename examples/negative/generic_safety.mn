@@ -1,15 +1,11 @@
-# BUG: all of these are accepted without a diagnostic
-#   mut u32 z; g = (): z + 1;                        a closure reading a variable that was never initialised
-#   mut Res r = Res(id = 1); deinit r; w = r.id;     a value used after `deinit`
-#   do s.push(1)  with s: &Stack(u8, 4)              a mutating method called through a read only pointer
-# the analysis is also conservative in `if c and { z = 1; true; }: use(z)`, where z is initialised when the branch runs
-
 variant Opt = (type T): ++(Some(T), None) tagof u8;
 type Pair = (type A, type B): *(mut A first, mut B second);
 type Stack = (type T, u32 N): *(mut [N]T items, mut u32 len = 0) !{
     fun peek = () -> T: ret self.items[0];
+    fun push = (T v) { self.items[self.len] = v; self.len += 1; }
 }
 type Cell = *(mut u8 v);
+type Res = *(mut u32 id) !{ $deinit = () {} }
 
 fun make = () -> Cell: ret Cell(v = 1);
 
@@ -87,3 +83,26 @@ fun calls = () {
 }
 
 $main = () {}
+
+fun lifetimes = (&Stack(u8, 4) s) {
+    mut u32 z;
+    g = (): z + 1; #! use_before_initialization
+    z = 2;
+    h = (): z + 1;
+    mut Res r = Res(id = 1);
+    deinit r;
+    w = r.id; #! use_before_initialization
+    r = Res(id = 2);
+    v = r.id;
+    s.peek();
+    s.push(1); #! write_through_immutable_pointer
+}
+
+fun conditions = (bool c) -> u32 {
+    mut u32 z;
+    if c and { z = 1; true; }: ret z;
+    mut u32 y;
+    if c or { y = 1; true; }: ret y; #! use_before_initialization
+    mut u32 x;
+    if !c or { x = 2; false; } { ret 0; } else { ret x; }
+}

@@ -1,4 +1,4 @@
-fun class_of = (u64 c) -> u16 {
+fun class_of = (u64 c) -> u8 {
     ret match c {
         'a'..='z' | 'A'..='Z' => 0,
         '0'..='9' => 1,
@@ -63,8 +63,7 @@ fun kind_of = (u64 s) -> u8 {
     };
 }
 
-# BUG: `stc []u8 X = stcfor 0..<256: 7;` is a type_mismatch (found u32, expected u8) although every element fits, `[]u16` works
-stc []u16 CLASS = stcfor 0..<256: class_of($it);
+stc []u8 CLASS = stcfor 0..<256: class_of($it);
 stc []u8 TRANS = stcfor 0..<176: next_state($it);
 stc []u8 KIND = stcfor 0..<16: kind_of($it);
 

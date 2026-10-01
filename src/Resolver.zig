@@ -97,7 +97,9 @@ pub const Decl = struct {
         is_stc: bool = false,
         is_global: bool = false,
         is_view: bool = false,
-        _pad: u3 = 0,
+        // methods: the body writes through `self`, the `self` local: something writes through it
+        writes: bool = false,
+        _pad: u2 = 0,
     };
 
     //   unresolved -> resolving_signature -> signature_ready -> checking_body -> done   (or failed)
@@ -168,9 +170,13 @@ body_nodes: SoD(NodeInfo),
 body_of: std.AutoHashMapUnmanaged(Decl.Index, u32) = .empty,
 template_of: std.AutoHashMapUnmanaged(Decl.Index, Decl.Index) = .empty,
 realized_args: std.AutoHashMapUnmanaged(Decl.Index, StaticPool.Index) = .empty,
+// functions produced by a stcfun: the realization whose static parameters they see
+static_scope: std.AutoHashMapUnmanaged(Decl.Index, StaticPool.AbstractKey) = .empty,
 init_tracked: DynBuf(Decl.Index),
 uninit: u64 = 0,
 deferrals: u32 = 0,
+// brk and cont seen so far: a loop without a brk never ends, one without either yields one element per step
+jumps: [2]u32 = .{ 0, 0 },
 loop_exits: DynBuf(u64),
 
 // global names -> first declaration with that name
@@ -223,7 +229,7 @@ pub inline fn init(alloc: std.mem.Allocator, tree: *ParseTree, src_bytes: []cons
 
 pub inline fn deinit(self: *Resolver) void {
     inline for (.{ &self.name_pool, &self.static_pool, &self.abstract_pool, &self.decls, &self.bodies, &self.body_nodes, &self.interpreter, &self.init_tracked, &self.loop_exits, &self.local_names, &self.local_decls, &self.local_scope_marks, &self.doc.diagnostics }) |x| x.deinit();
-    inline for (.{ &self.body_of, &self.template_of, &self.realized_args, &self.globals }) |m| m.deinit(self.alloc);
+    inline for (.{ &self.body_of, &self.template_of, &self.realized_args, &self.static_scope, &self.globals }) |m| m.deinit(self.alloc);
     inline for (.{ self.node_type, self.node_decl, self.node_value }) |x| self.alloc.free(x);
 }
 
@@ -283,12 +289,11 @@ fn s2_check_globals(self: *Resolver) void {
     while (heads.next()) |h| {
         var c = h.*;
         while (c != .none) : (c = self.dp(.next_overload, c).*) {
-            const ct = self.dp(.ty, self.real(c)).*;
             if (self.group_head(h.*, c) != c) continue;
             var size: u32 = 0;
             var fallback = false;
             var m = c;
-            while (m != .none) : (m = self.dp(.next_overload, m).*) if (calls.same_params(self, self.dp(.ty, self.real(m)).*, ct)) {
+            while (m != .none) : (m = self.dp(.next_overload, m).*) if (calls.same_params(self, m, c)) {
                 size += 1;
                 fallback = fallback or !calls.dispatches(self, self.real(m));
             };
@@ -486,6 +491,8 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     const mark = self.doc.diagnostics.len();
     const outer = self.init_enter();
     defer self.init_leave(outer);
+    // a local function sees which enclosing locals are not written yet
+    if (kind == .function and !self.dp(.flags, decl).is_global) self.uninit = outer.uninit;
     const off = self.self_off(decl);
     var ctx = FnCtx{ .decl = decl, .ret_type = sp.get(ty).function_type.ret, .self_type = self.owner_of(decl), .abstract = abstract };
     self.open_scope(self.dp(.flags, decl).is_global, if (off == 1) ctx.self_type else .none, v);
@@ -498,6 +505,7 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
         const p = self.param(pn);
         const pt = sp.get(ty).function_type.params[i + off];
         if (p.default != 0) _ = self.check(&ctx, p.default, pt);
+        for (self.params_of(v)[0..i], 0..) |q, j| if (self.param_name(q, j) == self.name_at(p, i)) self.doc.h21_report(.duplicate_declaration, pn, self.name_at(p, i), decl);
         const pd = self.h02_declare_local(self.name_at(p, i), pn, .parameter, pt);
         self.node_decl[pn] = pd;
         const gp = if (g) |t| self.sig(t).params[i + off] else pt;
@@ -511,6 +519,7 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     }
     self.check_unit(&ctx, self.arg(v, 1));
     self.h04_pop_scope();
+    if (off == 1 and self.dp(.flags, @enumFromInt(first)).writes) self.dp(.flags, decl).writes = true;
     self.dp(.state, decl).* = if (self.errors_since(mark, v)) .failed else .done;
     if (!abstract) statics.snapshot(self, decl, v, first);
 }
@@ -531,9 +540,10 @@ pub fn check_unit(self: *Resolver, ctx: *FnCtx, body: NodeId) void {
         _ = self.check(ctx, body, ctx.ret_type);
         return;
     }
-    _ = self.h09_check_expr(ctx, body, .none);
-    // a `{}` body that never returns a value returns unit
-    if (sp.tag(sp.apply_vars(&self.abstract_pool, ctx.ret_type)) == .type_var) _ = sp.unify(&self.abstract_pool, ctx.ret_type, .unit_type);
+    const t = self.h09_check_expr(ctx, body, .none);
+    const r = sp.apply_vars(&self.abstract_pool, ctx.ret_type);
+    // a `{}` body that never returns a value returns unit, a body with a result returns it on every path (`$main` falls off with 0)
+    if (r != .none and sp.tag(r) == .type_var) _ = sp.unify(&self.abstract_pool, ctx.ret_type, .unit_type) else if (r != .none and (ctx.decl == .none or self.dp(.name, ctx.decl).* != .main) and r != .unit_type and r != .runit_type and r != .poison_type and t != .never_type and t != .poison_type and !self.doc.has(body)) _ = self.report(.missing_ret, body, 0, 0);
 }
 
 pub const prim_types = blk: {
@@ -572,6 +582,14 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             defer self.h04_pop_scope();
             var last: StaticPool.Index = .unit_type;
             const stmts = self.kids(node);
+            // local functions are visible in their whole block
+            for (stmts) |s| {
+                const st = self.statement(s);
+                if (st.kind != .function or st.ids.len != 1 or st.type == 0 or self.nk(st.type) != .type_fun) continue;
+                const d = self.h02_declare_local(self.name_of(st.ids[0]), st.node, .function, .none);
+                self.dp(.flags, d).* = st.flags;
+                self.node_decl[st.ids[0]] = d;
+            }
             for (stmts, 0..) |s, i| {
                 const declares = class(self.nk(s)).declares;
                 if (!declares) self.h03_push_scope();
@@ -591,19 +609,29 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             const lt = self.h18_check_place(ctx, a0);
             break :blk if (self.elem_ptr(lt)) lt else self.numeric(node, lt, lt);
         },
-        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and => blk: {
+        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap => blk: {
             const j = self.pair(ctx, node, a0, a1, if (self.is_numeric(expected)) expected else .none);
-            break :blk if ((k == .binary_add or k == .binary_sub) and self.elem_ptr(j)) j else self.numeric(node, j, j);
+            const wraps = k == .binary_add_wrap or k == .binary_sub_wrap or k == .binary_mul_wrap;
+            const r = if ((k == .binary_add or k == .binary_sub) and self.elem_ptr(j)) j else if (wraps and !sp.class(j).is_integer and sp.tag(j) != .type_var) self.mismatch(node, j, .none) else self.numeric(node, j, j);
+            // arithmetic on constants is folded, an overflow is an error as soon as it can be seen
+            if (r != .poison_type and !ctx.abstract and self.folded(a0) and self.folded(a1)) {
+                _ = self.set(node, r);
+                _ = statics.h08_eval_static(self, ctx, node);
+            }
+            break :blk r;
         },
         .binary_eq, .binary_neq, .binary_less, .binary_greater, .binary_less_eq, .binary_greater_eq => blk: {
             const j = self.pair(ctx, node, a0, a1, .none);
             break :blk if (j == .poison_type) j else .bool_type;
         },
-        .binary_logic_or, .binary_logic_xor, .binary_logic_and => blk: {
+        .binary_logic_or, .binary_logic_and => blk: {
+            const w = self.condition(ctx, node);
+            self.uninit = w[0] | w[1];
+            break :blk .bool_type;
+        },
+        .binary_logic_xor => blk: {
             _ = self.check(ctx, a0, .bool_type);
-            const before = self.uninit;
             _ = self.check(ctx, a1, .bool_type);
-            if (k != .binary_logic_xor) self.uninit = before;
             break :blk .bool_type;
         },
         .neg_logic => blk: { // `!` is logical on bools and bitwise on integers
@@ -623,6 +651,11 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             st = sp.pointee(st);
             // pointers index like arrays (`*u8 buf; buf[i]`), arrays auto-deref once
             const elem = if (sp.get(st) == .array_type) sp.get(st).array_type.elem else if (through_ptr) st else break :blk self.report(.type_mismatch, a0, st, .none);
+            // lengths of realizations and stcfun bodies are the interpreter's to check, their constant indices may be guarded
+            if (!ctx.interpreted and !(ctx.decl != .none and self.template_of.contains(ctx.decl)) and sp.get(st) == .array_type and sp.tag(sp.get(st).array_type.len) == .int_value and self.is_literal(a1)) {
+                const i = statics.static_int(self, ctx, a1) orelse break :blk elem;
+                if (i < 0 or i >= sp.get(sp.get(st).array_type.len).int.bits) _ = self.report(.static_eval_failed, a1, 0, 0);
+            }
             break :blk elem;
         },
         .dereference => blk: {
@@ -633,7 +666,10 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             if (self.nk(a0) == .identifier) self.uninit &= ~self.init_bit(self.h01_lookup(self.name_of(a0)));
             const exp = sp.apply_vars(ap, expected);
             const st = self.h09_check_expr(ctx, a0, if (sp.is_ptr(exp)) sp.pointee(exp) else .none);
-            break :blk if (st == .poison_type) st else self.self_ptr(st);
+            // write access only to what could be written directly
+            const mutable = self.writable(a0) == .ok;
+            if (mutable and exp != .none and sp.tag(exp) == .ptr_mut_type) self.wrote(a0);
+            break :blk if (st == .poison_type) st else sp.intern(.{ .ptr_type = .{ .child = st, .mutable = mutable } });
         },
         .array, .array_empty => blk: {
             const exp = sp.apply_vars(ap, expected);
@@ -678,7 +714,11 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => blk: {
             const exp = sp.apply_vars(ap, expected);
             const e = sp.array_elem(exp);
-            const hint = if (e != .none) e else if (self.is_numeric(exp)) exp else .none;
+            var hint = if (e != .none) e else if (self.is_numeric(exp)) exp else .none;
+            const g = self.range(node);
+            for ([_]NodeId{ g.lo, g.hi }) |x| if (x != 0 and hint != .none and self.is_literal(x) and statics.literal_type(self, x, hint) != hint) {
+                hint = .none;
+            };
             const b = if (k == .gen_incl or k == .gen_excl) self.pair(ctx, node, a0, a1, hint) else self.operand(ctx, a0, hint);
             if (!sp.class(b).is_integer) break :blk self.mismatch(node, b, .u64_type);
             break :blk sp.intern(.{ .array_type = .{ .len = self.fresh_var(node), .elem = b } });
@@ -690,6 +730,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         },
         .ret_void => if (ctx.ret_type != .none and sp.coerce(ap, .unit_type, ctx.ret_type) == .incompatible) self.report(.ret_type_mismatch, node, .unit_type, ctx.ret_type) else .never_type,
         .brk, .cont => if (ctx.loop_depth > 0) blk: {
+            self.jumps[@intFromBool(k == .cont)] += 1;
             if (k == .brk and self.loop_exits.head > 0) self.loop_exits.buf[self.loop_exits.head - 1] |= self.uninit;
             break :blk .never_type;
         } else self.report(if (k == .brk) .brk_outside_loop else .cont_outside_loop, node, 0, 0),
@@ -700,6 +741,11 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         .deinit, .inlined_defer_deinit => blk: {
             const st = self.h09_check_expr(ctx, a0, if (k == .deinit) .none else expected);
             self.need_deinit(node, st);
+            // a deinitialized local has to be written again before it is read
+            if (k == .deinit and self.nk(a0) == .identifier and self.node_decl[a0] != .none and !self.dp(.flags, self.node_decl[a0]).is_global) {
+                const bit = self.init_bit(self.node_decl[a0]);
+                if (bit != 0) self.uninit |= bit else self.track(self.node_decl[a0]);
+            }
             break :blk if (k == .deinit) .unit_type else st;
         },
         .selftag_unwrap, .selftag_unwrap_fallback, .selftag_arrow, .labelarrow => control.h17_check_unwrap(self, ctx, node, expected),
@@ -714,6 +760,25 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         else => if (class(k).type_expr or k == .unify_variants or self.type_kind(node) != .variable) (if (statics.deferred(self, ctx, node)) |v| sp.type_of(v) else types.meta_of(self, node)) else .unit_type,
     };
     return self.set(node, t);
+}
+
+// the locals not written yet when a condition is true and when it is false: `and` runs its right side only after a true left one
+pub fn condition(self: *Resolver, ctx: *FnCtx, n: NodeId) [2]u64 {
+    const k = self.nk(n);
+    if (k == .capture) {
+        const w = self.condition(ctx, self.arg(n, 0));
+        _ = self.set(n, self.node_type[self.arg(n, 0)]);
+        return w;
+    }
+    if (k != .binary_logic_and and k != .binary_logic_or) {
+        _ = self.check(ctx, n, .bool_type);
+        return .{ self.uninit, self.uninit };
+    }
+    const l = self.condition(ctx, self.arg(n, 0));
+    self.uninit = l[@intFromBool(k == .binary_logic_or)];
+    const r = self.condition(ctx, self.arg(n, 1));
+    _ = self.set(n, .bool_type);
+    return if (k == .binary_logic_and) .{ r[0], l[1] | r[1] } else .{ l[0] | r[0], r[1] };
 }
 
 pub fn h10_expect(self: *Resolver, node: ParseTree.NodeId, actual: StaticPool.Index, expected: StaticPool.Index) StaticPool.Index {
@@ -741,6 +806,13 @@ pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) St
             self.dp(.value, d).* = t orelse .none;
         }
         return .unit_type;
+    }
+    if (kind == .function and parts.type == 0 and parts.ids.len == 1) {
+        const e = self.h01_lookup(self.name_of(parts.ids[0]));
+        if (e != .none and !is_fn(self.dp(.kind, e).*) and self.dp(.ty, e).* != .none and sp.tag(sp.apply_vars(&self.abstract_pool, self.dp(.ty, e).*)) == .function_type) {
+            self.node_decl[parts.ids[0]] = e;
+            return self.h11_check_assign(ctx, node);
+        }
     }
     if (kind != .variable) { // local function / type / trait
         for (parts.ids) |id| {
@@ -791,8 +863,15 @@ pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) St
     for (parts.ids, 0..) |id, i| {
         const d = if (existing[i] != .none) existing[i] else self.declare(id, n, .variable, if (ty == .none) .poison_type else ty, flags);
         if (existing[i] != .none) self.uninit &= ~self.init_bit(d) else if (values.len == 0 and !self.dp(.flags, d).is_global and self.scalar(self.dp(.ty, d).*)) self.track(d);
-        if (values.len > 0 and self.node_type[values[@min(i, values.len - 1)]] != .poison_type and (existing[i] == .none or (self.interpreter.depth > 0 and !ctx.interpreted)) and (self.dp(.flags, d).is_stc or ctx.in_static))
+        if (values.len > 0 and self.node_type[values[@min(i, values.len - 1)]] != .poison_type and (existing[i] == .none or (self.interpreter.depth > 0 and !ctx.interpreted)) and (self.dp(.flags, d).is_stc or ctx.in_static)) {
             self.dp(.value, d).* = statics.retype(self, statics.static_of(self, ctx, values[@min(i, values.len - 1)]), self.dp(.ty, d).*);
+            // an unlengthed static takes the length of its value
+            const v = self.dp(.value, d).*;
+            if (v != .none and sp.tag(v) == .aggregate_value and sp.has_vars(self.dp(.ty, d).*)) _ = sp.unify(&self.abstract_pool, self.dp(.ty, d).*, sp.type_of(v));
+            const dt = self.dp(.ty, d).*;
+            if (v != .none and sp.tag(v) == .aggregate_value and sp.tag(dt) == .array_type and sp.tag(sp.get(dt).array_type.len) == .int_value and sp.get(sp.get(dt).array_type.len).int.bits != sp.get(v).aggregate.elems.len)
+                _ = self.report(.type_mismatch, values[@min(i, values.len - 1)], sp.type_of(v), dt);
+        }
     }
     return .unit_type;
 }
@@ -827,12 +906,32 @@ fn h18_check_place(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
     // self is mutable in methods; stc locals are compile-time variables and writable too
     const t = self.h09_check_expr(ctx, node, .none);
     if (t == .poison_type and self.errors_since(0, node)) return t;
-    switch (self.writable(node)) {
-        .ok => {},
+    self.write_access(node, self.writable(node));
+    return t;
+}
+
+pub fn write_access(self: *Resolver, node: NodeId, a: Access) void {
+    switch (a) {
+        .ok => self.wrote(node),
         .immutable => self.doc.h21_report(.assign_to_immutable, node, 0, 0),
         .through_ptr => self.doc.h21_report(.write_through_immutable_pointer, node, 0, 0),
     }
-    return t;
+}
+
+// a write into a place rooted at `self` (not through a pointer it holds) makes its method one that writes self
+fn wrote(self: *Resolver, place: NodeId) void {
+    var n = place;
+    while (self.nk(n) != .identifier_self) switch (self.nk(n)) {
+        .capture => n = self.arg(n, 0),
+        .member, .array_index, .dereference => {
+            const p = self.arg(n, 0);
+            if (self.nk(p) != .identifier_self and (self.nk(n) == .dereference or self.static_pool.is_ptr(self.node_type[p]))) return;
+            n = p;
+        },
+        else => return,
+    };
+    const d = self.node_decl[n];
+    if (d != .none and self.dp(.kind, d).* == .self) self.dp(.flags, d).writes = true;
 }
 
 // ------------------------------------------------------------------------------------------ //
@@ -846,7 +945,7 @@ fn h18_check_place(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
 pub const max_nesting = 256;
 pub const Param = struct { ty: NodeId = 0, name: NodeId = 0, default: NodeId = 0, where: NodeId = 0, @"else": NodeId = 0, is_mut: bool = false, stc: bool = false };
 pub const Parts = struct { type: NodeId = 0, ids: []const NodeId = &.{}, value: NodeId = 0 };
-const Access = enum { ok, immutable, through_ptr };
+pub const Access = enum { ok, immutable, through_ptr };
 
 const dollar_names = blk: {
     @setEvalBranchQuota(100_000);
@@ -920,7 +1019,10 @@ pub fn init_leave(self: *Resolver, s: InitState) void {
 }
 
 pub fn check(self: *Resolver, ctx: *FnCtx, n: NodeId, expected: StaticPool.Index) StaticPool.Index {
-    return self.h10_expect(n, self.h09_check_expr(ctx, n, expected), expected);
+    const t = self.h09_check_expr(ctx, n, expected);
+    // a case with a payload is a constructor, a value of it needs the payload
+    if (t != .poison_type and self.nk(n) == .member and self.static_pool.tag(t) == .variant_case_type and self.static_pool.get(t).variant_case_type.payload != .none) return self.report(.type_mismatch, n, t, expected);
+    return self.h10_expect(n, t, expected);
 }
 
 pub const Class = packed struct(u8) { stc: bool = false, loop: bool = false, range: bool = false, type_expr: bool = false, declares: bool = false, runit: bool = false, literal: bool = false, _pad: u1 = 0 };
@@ -976,9 +1078,9 @@ fn declare(self: *Resolver, id: NodeId, stmt: NodeId, kind: Decl.Kind, ty: Stati
     return d;
 }
 
-// s1 rows of this very statement are reused instead of declared again
+// s1 rows and hoisted local functions of this very statement are reused instead of declared again
 fn pre_declared(self: *Resolver, d: Decl.Index, stmt: NodeId) bool {
-    return d != .none and self.dp(.flags, d).is_global and self.dp(.node, d).* == stmt;
+    return d != .none and self.dp(.node, d).* == stmt and (self.dp(.flags, d).is_global or self.h01_lookup(self.dp(.name, d).*) == d);
 }
 
 // a scope for a declaration: globals get a barrier so they never see their user's locals
@@ -998,6 +1100,29 @@ fn owner_of(self: *Resolver, decl: Decl.Index) StaticPool.Index {
     var d = @intFromEnum(decl);
     while (self.decls.pool.kind.buf[d] != .trait) d -= 1;
     return self.decls.pool.value.buf[d];
+}
+
+// the locals a function body reads from the bodies around it, its environment as a closure
+pub fn captures(self: *Resolver, d: Decl.Index, out: *DynBuf(Decl.Index)) void {
+    const start = out.head;
+    const b = self.bodies.get(self.body_of.get(d) orelse return).?;
+    for (self.body_nodes.sliced_field(.decl)[b.start..][0..b.len]) |x| {
+        if (x == .none or std.mem.indexOfScalar(Decl.Index, out.buf[start..out.head], x) != null) continue;
+        const flags = self.dp(.flags, x).*;
+        const node = self.dp(.node, x).*;
+        const local = switch (self.dp(.kind, x).*) {
+            .variable, .parameter, .loop_variable, .pattern_binder, .arrow_binder, .autoins_it, .autoins_arg, .self => true,
+            else => false,
+        };
+        if (local and !flags.is_global and !(flags.is_stc and self.dp(.value, x).* != .none) and (node < b.lo or node >= b.lo + b.len)) out.push(x);
+    }
+}
+
+// a closure holds a pointer to a mutable or aggregate local, a copy of anything else
+pub fn by_ref(self: *Resolver, c: Decl.Index) bool {
+    const sp = &self.static_pool;
+    const t = sp.apply_vars(&self.abstract_pool, self.dp(.ty, c).*);
+    return self.dp(.flags, c).is_mut or t != .none and (sp.tag(t) == .record_type or sp.tag(t) == .array_type and sp.get(t).array_type.len != StaticPool.dyn_len);
 }
 
 pub fn value_node(self: *Resolver, d: Decl.Index) NodeId {
@@ -1086,7 +1211,10 @@ pub fn statement(self: *const Resolver, n0: NodeId) Stmt {
     var flags = Decl.Flags{};
     const n = self.unwrap_mods(n0, &flags);
     const p = self.stmt_parts(n);
-    return .{ .node = n, .flags = flags, .kind = self.decl_kind(p.type, p.value), .type = p.type, .ids = p.ids, .value = p.value, .values = if (p.value == 0) &.{} else self.list_at(n, 1, .partial__assign_multival) };
+    // `f = (..): ..` on a visible variable of function type assigns it, h11 links the name
+    const d = if (p.ids.len == 1) self.node_decl[p.ids[0]] else .none;
+    const assigns = p.type == 0 and d != .none and !is_fn(self.decls.pool.kind.buf[@intFromEnum(d)]);
+    return .{ .node = n, .flags = flags, .kind = if (assigns) .variable else self.decl_kind(p.type, p.value), .type = p.type, .ids = p.ids, .value = p.value, .values = if (p.value == 0) &.{} else self.list_at(n, 1, .partial__assign_multival) };
 }
 
 fn stmt_parts(self: *const Resolver, n: NodeId) Parts {
@@ -1195,9 +1323,8 @@ pub fn real(self: *Resolver, d: Decl.Index) Decl.Index {
 }
 
 pub fn group_head(self: *Resolver, first: Decl.Index, d: Decl.Index) Decl.Index {
-    const t = self.dp(.ty, self.real(d)).*;
     var h = first;
-    while (h != d and !calls.same_params(self, self.dp(.ty, self.real(h)).*, t)) h = self.dp(.next_overload, h).*;
+    while (h != d and !calls.same_params(self, h, d)) h = self.dp(.next_overload, h).*;
     return h;
 }
 
@@ -1275,6 +1402,13 @@ fn is_numeric(self: *Resolver, t: StaticPool.Index) bool {
     return t != .none and (self.static_pool.class(t).is_integer or self.static_pool.class(t).is_float);
 }
 
+fn folded(self: *Resolver, n: NodeId) bool {
+    return self.is_literal(n) or self.node_value[n] != .none and switch (self.nk(n)) {
+        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap => true,
+        else => false,
+    };
+}
+
 fn numeric(self: *Resolver, node: NodeId, t: StaticPool.Index, result: StaticPool.Index) StaticPool.Index {
     if (self.is_numeric(t) or self.static_pool.tag(t) == .type_var) return if (result == .none) t else result;
     return self.mismatch(node, t, .none);
@@ -1309,7 +1443,7 @@ fn need_deinit(self: *Resolver, node: NodeId, t0: StaticPool.Index) void {
         self.doc.h21_report(.no_deinit, node, t, 0);
 }
 
-fn writable(self: *Resolver, node: NodeId) Access {
+pub fn writable(self: *Resolver, node: NodeId) Access {
     return switch (self.nk(node)) {
         .capture => self.writable(self.arg(node, 0)),
         .identifier, .identifier_self => blk: {
@@ -1444,6 +1578,12 @@ pub fn unescape(raw: []const u8, buf: []u8) []const u8 {
         var c = raw[i];
         if (c == '\\' and i + 1 < raw.len) {
             i += 1;
+            if (raw[i] == 'x' and i + 2 < raw.len) if (std.fmt.parseInt(u8, raw[i + 1 .. i + 3], 16)) |x| {
+                buf[n] = x;
+                n += 1;
+                i += 2;
+                continue;
+            } else |_| {};
             c = switch (raw[i]) {
                 'n' => '\n',
                 't' => '\t',

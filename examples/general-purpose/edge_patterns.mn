@@ -4,12 +4,11 @@ variant Pt = +(At(i32 x, i32 y), Off) tagof u8;
 type Line = *(Pt a, Pt b);
 type Ent = *(Cell cell, u8 hp);
 
-# BUG: `-10..=-2` parses as `-(10..=-2)` and reports type_mismatch (a sequence), so a negative lower bound is parenthesized
-fun neg_lit = (i32 n) -> i32: ret match n { -1 => 100, (-10)..=-2 => 200, 0 => 300, _ => 400 }
+fun neg_lit = (i32 n) -> i32: ret match n { -1 => 100, -10..=-2 => 200, 0 => 300, _ => 400 }
 
 fun sign_word = (i64 n) -> u8: ret match n {
     ..<-1000000 => 0,
-    (-1000000)..<0 => 1,
+    -1000000..<0 => 1,
     0 => 2,
     1..=1000000 => 3,
     _ => 4,
@@ -35,12 +34,11 @@ fun bool_pair = (bool a, bool b) -> u8: ret match a {
     false => match b { true => 1, false => 0 },
 }
 
-# LIMIT: exhaustiveness is decided per case, `Door(true)` and `Door(false)` together do not cover Door, and the same holds for every combination of payload or field patterns (line_kind), so a catch-all closes them
 fun cell_kind = (Cell c) -> u32: ret match c {
     Cell.Empty => 0,
     Cell.Wall => 1,
     Cell.Door(true) => 2,
-    Cell.Door(_) => 3,
+    Cell.Door(false) => 3,
     Cell.Item(0, _) => 4,
     Cell.Item(k, 0) => 5 + k as u32 * 100,
     Cell.Item(1..=3, q) => 6 + q * 1000,
@@ -51,8 +49,7 @@ fun ent_kind = (Ent e) -> u32: ret match e {
     Ent(cell = Cell.Wall, hp = _) => 1,
     Ent(cell = Cell.Item(k, q), hp = 0) => 2 + (k as u32 + q) * 10,
     Ent(cell = Cell.Item(_, _), hp = h) => 3 + h as u32 * 10,
-    # BUG: a record pattern that omits a field and holds only literals (`Ent(hp = 255)`) panics the compiler in has_vars, so every field is named
-    Ent(cell = _, hp = 255) => 4,
+    Ent(hp = 255) => 4,
     Ent(cell = c, hp = h) => 5,
 }
 
@@ -60,16 +57,14 @@ fun line_kind = (Line l) -> i32: ret match l {
     Line(a = Pt.At(x1, y1), b = Pt.At(x2, y2)) => (x2 - x1) * 100 + (y2 - y1),
     Line(a = Pt.Off, b = Pt.Off) => -1,
     Line(a = Pt.At(x, y), b = Pt.Off) => x + y,
-    _ => 0,
+    Line(a = Pt.Off, b = Pt.At(x, y)) => 0,
 }
 
 fun expr_class = (Expr e) -> u32: ret match e {
     Expr.Lit(0) => 1,
     Expr.Lit(v) => if v < 0: 2 else: 3,
     Expr.Neg(_) => 4,
-    # BUG: an or-pattern whose alternatives bind the same names resolves but is not_static when executed, so the alternatives are separate arms
-    Expr.Bin('+', l, r) => 5 + l * 10 + r * 100,
-    Expr.Bin('-', l, r) => 5 + l * 10 + r * 100,
+    Expr.Bin('+', l, r) | Expr.Bin('-', l, r) => 5 + l * 10 + r * 100,
     Expr.Bin('*', 1, r) => 6 + r * 10,
     Expr.Bin(op, _, _) => 7 + op as u32 * 1000,
     Expr.Var('x'..='z') => 8,
@@ -129,7 +124,6 @@ fun small_while = (Small a, Small b) -> u32 {
     ret n;
 }
 
-# LIMIT: `<-` labels the operand right before it (`a + b <- s` names b), so labelled expressions are parenthesized
 fun label_arrows = (i32 a, i32 b) -> i32 {
     if ((a + b) <- s) > 10: ret s * 100;
     if ((a * b) <- p) < 0: ret p;

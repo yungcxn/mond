@@ -45,12 +45,9 @@ stc u64 A2 = sizeof [2][3]Pk; #= A2 36
 stc []u64 SIZES = stcfor T in [Pk, Sorted, Wide, Bytes, Shorts, Nested]: sizeof T; #= SIZES [6, 4, 16, 4, 8, 8]
 stc []u64 ALIGNED = stcfor T in [u8, u16, u32, u64, Pk, Wide]: (sizeof T + 3) / 4 * 4; #= ALIGNED [4, 4, 4, 8, 8, 16]
 
-# BUG: `for T in [Pk, Sorted]: t += sizeof T` inside a fun or stcfun is accepted without a diagnostic but every static evaluation of it is poison, so the type list is walked by a top level stcfor
-stc [6]u64 PARTS = stcfor T in [Pk, Sorted, Wide, Floats, Halves, Fixed]: sizeof T; #= PARTS [6, 4, 16, 16, 4, 8]
-
-stcfun total = ([6]u64 xs) -> u64 {
+stcfun total = () -> u64 {
     mut u64 t = 0;
-    for i in 0..<6: t += xs[i];
+    for T in [Pk, Sorted, Wide, Floats, Halves, Fixed]: t += sizeof T;
     ret t;
 }
 
@@ -76,7 +73,7 @@ stcfun runtime_shapes = () -> u64 {
     ret sizeof p * 1000000 + sizeof arr * 10000 + sizeof (typeof s) * 100 + sizeof arr[1];
 }
 
-stc u64 TT = total(PARTS); #= TT 54
+stc u64 TT = total(); #= TT 54
 stc u64 LO = lost(); #= LO 2337
 stc u32 KI = kinds(); #= KI 132342
 stc u64 RT = runtime_shapes(); #= RT 6120804
@@ -99,9 +96,7 @@ stcfun type_checks = () -> u32 {
     if (typeof l.cells[0]) == Cell: r += 1000;
     if (typeof pair[1]) == u16: r += 10000;
     if (typeof pair) == [2]u16: r += 100000;
-    # LIMIT: `if a == (b): ..` reads `(b): ..` as a lambda (IllegalIfFormat), so the type is named first
-    last = typeof l.cells[3];
-    if (typeof c) == last: r += 1000000;
+    if (typeof c) == (typeof l.cells[3]): r += 1000000;
     if sizeof l == 4 * sizeof c: r += 10000000;
     if Plain oftype Sized: r += 100000000;
     ret r;

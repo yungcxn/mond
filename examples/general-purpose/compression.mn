@@ -34,7 +34,7 @@ fun delta_pack = (&[]i64 xs, *[]u8 out) -> u32 {
     mut u32 p = 0;
     mut i64 prev = 0;
     for x in xs.* {
-        p = put_varint(out, p, zigzag(x - prev));
+        p = put_varint(out, p, zigzag(x -% prev));
         prev = x;
     }
     ret p;
@@ -46,7 +46,7 @@ fun delta_unpack = (&[]u8 src, u32 len, *[]i64 out) -> u32 {
     mut i64 prev = 0;
     while p < len {
         Read r = get_varint(src, p);
-        prev += unzigzag(r.v);
+        prev = prev +% unzigzag(r.v);
         out.*[n] = prev;
         n += 1;
         p = r.at;
@@ -69,8 +69,7 @@ fun packbits = (&[]u8 src, u32 n, *[]u8 out) -> u32 {
             i += run;
         } else {
             mut u32 lit = 1;
-            # LIMIT: a `while` condition ending in a parenthesised group before `:` is parsed as a lambda (IllegalWhileFormat), so the test moved into a helper
-            while i + lit < n and lit < 128 and !starts_run(src, i + lit, n): lit += 1;
+            while i + lit < n and lit < 128 and (!starts_run(src, i + lit, n)): lit += 1;
             out.*[p] = (lit - 1) as u8;
             p += 1;
             for k in 0..<lit {
@@ -377,7 +376,6 @@ stc i64 Z7 = unzigzag(zigzag(-123456789)); #= Z7 -123456789
 stc i64 Z8 = unzigzag(18446744073709551615); #= Z8 -9223372036854775808
 stc i64 Z9 = unzigzag(4); #= Z9 2
 
-# BUG: a stcfun with a `&[]T` parameter rejects `.&` arguments from a static call (type_mismatch), so the check helpers are plain funs
 fun delta_case = (&[]i64 xs) -> i64 {
     mut [64]u8 buf;
     mut [16]i64 back;
@@ -568,7 +566,7 @@ fun bwt_hash = (&[]u8 s) -> u64 {
     mut [16]u8 last;
     do bwt(s, last.&);
     mut u64 h = 0;
-    for i in 0..<s.$len: h = h * 131 + last[i] as u64;
+    for i in 0..<s.$len: h = h *% 131 +% last[i] as u64;
     ret h;
 }
 

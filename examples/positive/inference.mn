@@ -23,7 +23,7 @@ $main = () -> i32 {
     add5 = make_adder(5); #: add5 (i32) -> i32
     r = add5(1); #: r i32
     m = if x > 3: 1 else: 2; #: m u32
-    sq = for i in 1..=4: i * i; #: sq []u32
+    sq = for i in 1..=4: i * i; #: sq [4]u32
     grid = [[1, 2], [3, 4], [5, 6]]; #: grid [3][2]u32
     p = Pair(a = 1, b = 2); #: p *(i32 a, i32 b)
     first = p.a; #: first i32
@@ -32,7 +32,7 @@ $main = () -> i32 {
     u = auto ??; #: u u8
     fb = auto ?? 0; #: fb u8
     sum = (Pair(a = 1, b = 2) <- q, t).a + q + t; #: sum i32
-    ptr = x.&; #: ptr *u32
+    ptr = x.&; #: ptr &u32
     back = ptr.*; #: back u32
     fl = x as f64; #: fl f64
     same_t = (typeof x) == u32; #: same_t bool

@@ -162,7 +162,9 @@ pub fn loop(ip: *Interpreter, n: NodeId) Value {
 
 pub fn match(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
-    const v = ip.eval(r.arg(n, 0));
+    const x = ip.eval(r.arg(n, 0));
+    const t = if (ip.framed()) ip.info(.ty, r.arg(n, 0)) else x.ty;
+    const v = if (x.is_ref() and r.deref(t) != t) ip.deref(x) else x;
     if (v.is(.poison_type) or ip.unwind != .none) return v;
     const scoped = !ip.framed();
     if (scoped) r.h03_push_scope();
@@ -172,8 +174,10 @@ pub fn match(ip: *Interpreter, n: NodeId) Value {
     return ip.fail(n, .non_exhaustive_match, ip.pool(v), .none);
 }
 
+// a case value is pooled, or a block of its payload fields when they hold references
 pub fn case_of(ip: *Interpreter, v: Value) Index {
     const sp = &ip.res().static_pool;
+    if (v.is_heap() and sp.tag(v.ty) == .variant_case_type) return v.ty;
     if (!v.is_pool() or v.is(.none)) return .none;
     return switch (sp.tag(v.index())) {
         .variant_value => sp.get(v.index()).variant_value.case,
@@ -220,7 +224,7 @@ pub fn matches(ip: *Interpreter, p: NodeId, v: Value) bool {
             if (sp.tag(target) == .variant_case_type) {
                 if (case_of(ip, v) != target) return false;
                 rec = sp.get(target).variant_case_type.payload;
-                fields = if (sp.tag(v.index()) == .variant_value) .of(sp, sp.get(v.index()).variant_value.payload) else .empty;
+                fields = if (v.is_heap()) .block(rec, v.at(), v.len()) else if (sp.tag(v.index()) == .variant_value) .of(sp, sp.get(v.index()).variant_value.payload) else .empty;
             }
             for (r.kids(r.arg(p, 1)), 0..) |a, i| {
                 const fi = r.field_of(rec, a, i) orelse return false;
@@ -261,6 +265,7 @@ fn label(ip: *Interpreter, l: NodeId, v: Value) void {
 
 fn payload(ip: *Interpreter, v: Value) ?Value {
     const sp = &ip.res().static_pool;
+    if (v.is_heap() and sp.tag(v.ty) == .variant_case_type) return if (v.len() == 1) ip.mem.buf[v.at()] else .block(sp.get(v.ty).variant_case_type.payload, v.at(), v.len());
     if (!v.is_pool() or v.is(.none) or sp.tag(v.index()) != .variant_value) return null;
     const pv = sp.get(v.index()).variant_value.payload;
     if (pv == .none) return null;

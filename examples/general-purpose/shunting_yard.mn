@@ -31,9 +31,7 @@ type Sy = *(&[]u8 src, mut [24]Tok out, mut u32 nout, mut [24]u8 ops, mut u32 no
             if top == '(': brk;
             u32 p2 = prec(top);
             u32 p1 = prec(o1);
-            # LIMIT: `if a or (b) {` (parenthesised group last in the condition, followed by a block) is IllegalIfFormat
-            bool pop = p2 > p1 or (p2 == p1 and !is_right(o1));
-            if pop {
+            if p2 > p1 or (p2 == p1 and !is_right(o1)) {
                 self.emit(Tok.Op(top));
                 self.nops -= 1;
             } else {

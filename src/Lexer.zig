@@ -111,6 +111,9 @@ pub const Token = struct {
         @"xpct_*=",
         @"xpct_/=",
         @"xpct_%=",
+        @"xpct_+%",
+        @"xpct_-%",
+        @"xpct_*%",
         @"xpct_&&",
         @"xpct_*(",
         @"xpct_+(",
@@ -300,7 +303,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
                         }
                         last_dot_at = self.cursor;
                     },
-                    '0'...'9' => continue,
+                    '0'...'9', '_' => continue,
                     else => break,
                 };
                 self.push_tok(if (last_dot_at != null) .val_float else .val_int, cursor0);
@@ -314,6 +317,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
                     '\\' => {
                         const c2 = self.pop_srcbyte() orelse return error.LexingError_CharScanEOF;
                         if (c2 == '\'') return error.LexingError_CharNothingAfterEscape;
+                        if (c2 == 'x') self.cursor += 2;
                     },
                     else => {},
                 }

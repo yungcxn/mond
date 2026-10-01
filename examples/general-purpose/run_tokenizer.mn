@@ -36,9 +36,8 @@ type Line = *(mut [128]u8 bytes, mut u32 len = 0, mut u32 pos = 0) !{
     fun peek = () -> u8: ret if self.pos < self.len: self.bytes[self.pos] else: 0;
     fun bump = () { self.pos += 1; }
     fun done = () -> bool: ret self.pos >= self.len;
-    # BUG: `self.bytes[from..<to].&` passed to a `&[]u8` parameter panics the checker (has_vars index out of bounds), so the prefix of the whole buffer is written
     fun echo = (u32 from, u32 to) {
-        do write(1, self.bytes.&, to as u64);
+        do write(1, self.bytes[from].& as &[128]u8, (to - from) as u64);
     }
 }
 

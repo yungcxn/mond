@@ -20,11 +20,7 @@ type Shell = *(mut i32 acc = 0, mut u32 ran = 0, mut u32 failed = 0) !{
     fun summary = () -> u32: ret self.ran * 100 + self.failed;
 }
 
-# LIMIT: a `&u8` cannot be indexed, so C strings are read through a fixed size view
-fun digit_at = (&u8 s, u32 i) -> u8 {
-    &[16]u8 v = s as &[16]u8;
-    ret v.*[i];
-}
+fun digit_at = (&u8 s, u32 i) -> u8: ret s[i];
 
 fun parse = (&u8 s) -> i32 {
     mut i32 sign = 1;

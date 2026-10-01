@@ -1,6 +1,3 @@
-# BUG: accepted without a diagnostic, the generated array does not have the declared length
-#   stc [4]u32 T = stcfor 0..<5: $it;     (holds 5 elements)     also `stc [6]u32` and a loop value `[4]u32 a = for i in 0..<5: i;`
-
 stc [3]u32 SMALL = [1, 2, 3];
 
 fun ratio = (u32 d) -> u32: ret 100 / d; #! static_eval_failed
@@ -18,6 +15,9 @@ stc u32 MOD = 5 % 0; #! static_eval_failed
 stc []bool FLAGS = stcfor i in 0..<3: i; #! type_mismatch
 stc []u32 NARROW = stcfor i in SMALL: i as u8; #! type_mismatch
 stc u32 PICK = stcmatch 4 { 1 => 1, 2 => 2 }; #! non_exhaustive_match
+stc [4]u32 LONG = stcfor 0..<5: $it; #! type_mismatch
+stc [6]u32 SHORT = stcfor 0..<5: $it; #! type_mismatch
+stc [5]u32 EXACT = stcfor 0..<5: $it;
 
 fun runtime = (u32 n) {
     xs = stcfor 0..<n: 1; #! not_static
@@ -27,6 +27,9 @@ fun runtime = (u32 n) {
     Word(n) t; #! not_static
     ok = sq(4);
     Word(4) o;
+    [4]u32 a = for i in 0..<5: i; #! type_mismatch
+    [5]u32 b = for i in 0..<5: i;
+    [4]u32 c = for i in 0..<5 { if i == 2: cont; i; }
 }
 
 $main = () {}

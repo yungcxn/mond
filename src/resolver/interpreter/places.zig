@@ -12,7 +12,7 @@ pub fn named(k: Kind) bool {
     return k == .identifier or k == .identifier_self;
 }
 
-fn slot(ip: *Interpreter, d: Decl.Index) ?u32 {
+pub fn slot(ip: *Interpreter, d: Decl.Index) ?u32 {
     const x = @intFromEnum(d);
     var i = ip.frames.head;
     while (i > 0) {
@@ -20,6 +20,7 @@ fn slot(ip: *Interpreter, d: Decl.Index) ?u32 {
         const f = ip.frames.buf[i];
         if (f.body.len == 0) break;
         if (x -% f.body.first < f.body.locals) return f.base + x - f.body.first;
+        if (ip.captured(f, d)) |c| return c;
     }
     var j = ip.adopted.head;
     while (j > 0) {
@@ -37,7 +38,7 @@ fn impure(ip: *Interpreter, n: NodeId) bool {
         const f = ip.frames.buf[i];
         if (f.body.len == 0) return false;
         if (f.body.decl != .none and r.dp(.kind, f.body.decl).* == .static_function) {
-            _ = r.report(.impure_stcfun, n, 0, 0);
+            _ = ip.report(.impure_stcfun, n, 0, 0);
             return true;
         }
     }
@@ -72,6 +73,7 @@ pub fn peek(ip: *Interpreter, d: Decl.Index) Value {
 pub fn load(ip: *Interpreter, n: NodeId) Value {
     const d = decl_of(ip, n);
     if (d == .none) return if (ip.framed()) ip.fail(n, .undefined_name, ip.res().name_of(n), 0) else .poison;
+    if (ip.framed() and ip.res().dp(.kind, d).* == .function and !ip.res().dp(.flags, d).is_global) return ip.closure(d);
     const v = peek(ip, d);
     return if (v.is(.none)) stored(ip, n, d) else v;
 }
@@ -79,10 +81,7 @@ pub fn load(ip: *Interpreter, n: NodeId) Value {
 pub fn bind(ip: *Interpreter, d: Decl.Index, v: Value) void {
     const r = ip.res();
     if (d == .none) return;
-    if (slot(ip, d)) |s| {
-        ip.mem.buf[s] = v;
-        return;
-    }
+    if (slot(ip, d)) |s| return ip.set(s, v);
     if (r.dp(.ty, d).* == .none) r.dp(.ty, d).* = ip.vtype(v);
     r.dp(.value, d).* = ip.pool(v);
 }
@@ -108,8 +107,7 @@ fn write(ip: *Interpreter, n: NodeId, v: Value) void {
     }
     const mark = ip.adopted.head;
     const c = cell(ip, n) orelse return;
-    const x = ip.own(.fit(v, ip.mem.buf[c].ty));
-    ip.mem.buf[c] = x;
+    ip.set(c, ip.own(.fit(v, ip.mem.buf[c].ty)));
     flush(ip, mark);
 }
 
@@ -129,10 +127,11 @@ pub fn cell(ip: *Interpreter, n: NodeId) ?u32 {
     if (k == .dereference) {
         const p = ip.eval(r.arg(n, 0));
         if (p.is_ref()) return p.at();
-        if (!p.is(.poison_type)) _ = r.report(.not_static, n, 0, 0);
+        if (!p.is(.poison_type)) _ = ip.report(.not_static, n, 0, 0);
         return null;
     }
-    if (k != .array_index and k != .member) {
+    // a constant of a type (`Light.Green`) is a value like any other
+    if (k != .array_index and k != .member or k == .member and ip.res().static_pool.tag(ip.checked(r.arg(n, 0))) == .meta_type) {
         const v = ip.eval(n);
         return if (v.is(.poison_type)) null else ip.put(ip.own(v));
     }
@@ -150,11 +149,11 @@ pub fn cell(ip: *Interpreter, n: NodeId) ?u32 {
     } else 0;
     if (!agg.is_heap()) {
         if (through and k == .array_index) return c + @as(u32, @intCast(i));
-        if (!agg.is(.poison_type)) _ = r.report(.not_static, n, 0, 0);
+        if (!agg.is(.poison_type)) _ = ip.report(.not_static, n, 0, 0);
         return null;
     }
     if (i >= agg.len()) {
-        _ = r.report(.static_eval_failed, n, @as(u32, @truncate(i)), agg.len());
+        _ = ip.report(.static_eval_failed, n, @as(u32, @truncate(i)), agg.len());
         return null;
     }
     return agg.at() + @as(u32, @intCast(i));
@@ -213,8 +212,7 @@ pub fn update(ip: *Interpreter, n: NodeId, k: Kind) Value {
     const new = ip.arith(n, op, old, if (compound) operand else .int(if (Value.is_int(old.ty)) old.ty else .u64_type, 1));
     if (new.is(.poison_type)) return new;
     if (c) |i| {
-        const x = ip.own(.fit(new, old.ty));
-        ip.mem.buf[i] = x;
+        ip.set(i, ip.own(.fit(new, old.ty)));
         flush(ip, mark);
     } else write(ip, target, new);
     return if (compound) .unit else if (k == .inc_postfix or k == .dec_postfix) old else new;

@@ -8,12 +8,12 @@ fun roman_value = (u8 c) -> u32: ret match c {
 }
 
 fun from_roman = (&[]u8 s) -> u32 {
-    mut u32 total = 0;
+    mut i64 total = 0;
     for i in 0..<s.$len {
-        u32 v = roman_value(s.*[i]);
-        if i + 1 < s.$len and roman_value(s.*[i + 1]) > v: total -= v else: total += v;
+        i64 v = roman_value(s.*[i]);
+        if i + 1 < s.$len and roman_value(s.*[i + 1]) > v as u32: total -= v else: total += v;
     }
-    ret total;
+    ret total as u32;
 }
 
 fun to_roman = (u32 n, *[16]u8 out) -> u32 {
@@ -190,7 +190,7 @@ fun run_length = (&[]u8 s, *[32]u8 out) -> u32 {
 
 fun sum_bytes = (&[]u8 s, u32 n) -> u32 {
     mut u32 t = 0;
-    for i in 0..<n: t = t * 131 + s.*[i] as u32;
+    for i in 0..<n: t = t *% 131 +% s.*[i] as u32;
     ret t;
 }
 
@@ -200,7 +200,6 @@ stcfun roman_round = (u32 n) -> u32 {
     ret from_roman(buf.&) * 100 + len;
 }
 
-# BUG: a stcfun does not accept `*[N]u8` for an `&[]u8` parameter at a static call (type_mismatch, a plain fun does), so this one is a plain fun
 fun b64 = (&[]u8 data) -> u64 {
     mut [32]u8 out;
     u32 n = base64(data, out.&);

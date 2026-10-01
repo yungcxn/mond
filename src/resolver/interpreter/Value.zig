@@ -163,36 +163,54 @@ pub fn less(a: Value, b: Value) bool {
     return a.f() < b.f();
 }
 
-pub fn unary(k: Kind, v: Value, t: Index) ?Value {
-    if (k == .neg_logic) return if (v.ty == .bool_type) boolean(v.bits == 0) else if (is_int(v.ty)) int(v.ty, ~v.bits) else null;
+// integers as their exact value, results that do not fit their type are an overflow
+fn wide(v: Value) i128 {
+    return if (signed(v.ty)) @as(i64, @bitCast(v.bits)) else v.bits;
+}
+
+fn exact(r: Index, x: i128) error{ NotStatic, Invalid }!Value {
+    const w: u7 = widths[@intFromEnum(r)];
+    const one: i128 = 1;
+    const ok = if (signed(r)) x >= -(one << (w - 1)) and x < one << (w - 1) else x >= 0 and x < one << w;
+    return if (ok) int(r, @truncate(@as(u128, @bitCast(x)))) else error.Invalid;
+}
+
+pub fn unary(k: Kind, v: Value, t: Index) error{ NotStatic, Invalid }!Value {
+    if (k == .neg_logic) return if (v.ty == .bool_type) boolean(v.bits == 0) else if (is_int(v.ty)) int(v.ty, ~v.bits) else error.NotStatic;
     if (is_float(v.ty)) return float(v.ty, -v.f());
-    return if (is_int(v.ty)) int(if (is_int(t)) t else if (signed(v.ty)) v.ty else .i64_type, 0 -% v.bits) else null;
+    return if (is_int(v.ty)) exact(if (is_int(t)) t else if (signed(v.ty)) v.ty else .i64_type, -wide(v)) else error.NotStatic;
 }
 
 pub fn binary(k: Kind, a: Value, b: Value, t: Index) error{ NotStatic, Invalid }!Value {
     if (is_int(a.ty) and is_int(b.ty)) {
-        const s = signed(a.ty) or signed(b.ty);
-        const x = a.bits;
-        const y = b.bits;
-        const sx: i64 = @bitCast(x);
-        const sy: i64 = @bitCast(y);
+        const x = wide(a);
+        const y = wide(b);
         const r = if (is_int(t)) t else a.ty;
-        if ((k == .binary_div or k == .binary_mod) and y == 0 or (k == .binary_shift_left or k == .binary_shift_right) and y >= widths[@intFromEnum(r)]) return error.Invalid;
+        if ((k == .binary_div or k == .binary_mod) and y == 0 or (k == .binary_shift_left or k == .binary_shift_right) and (y < 0 or y >= widths[@intFromEnum(r)])) return error.Invalid;
         return switch (k) {
-            .binary_add => int(r, x +% y),
-            .binary_sub => int(r, x -% y),
-            .binary_mul => int(r, x *% y),
-            .binary_div => int(r, if (!s) x / y else if (sy == -1) 0 -% x else @bitCast(@divTrunc(sx, sy))),
-            .binary_mod => int(r, if (!s) x % y else if (sy == -1) 0 else @bitCast(@rem(sx, sy))),
-            .binary_shift_left => int(r, x << @truncate(y)),
-            .binary_shift_right => int(r, if (s) @bitCast(sx >> @truncate(y)) else x >> @truncate(y)),
-            .binary_num_or => int(r, x | y),
-            .binary_num_xor => int(r, x ^ y),
-            .binary_num_and => int(r, x & y),
+            .binary_add => exact(r, x + y),
+            .binary_sub => exact(r, x - y),
+            .binary_mul => exact(r, x * y),
+            .binary_add_wrap => int(r, a.bits +% b.bits),
+            .binary_sub_wrap => int(r, a.bits -% b.bits),
+            .binary_mul_wrap => int(r, a.bits *% b.bits),
+            .binary_div => exact(r, @divTrunc(x, y)),
+            .binary_mod => exact(r, @rem(x, y)),
+            .binary_shift_left => int(r, a.bits << @intCast(y)),
+            .binary_shift_right => int(r, if (signed(a.ty)) @bitCast(@as(i64, @bitCast(a.bits)) >> @intCast(y)) else a.bits >> @intCast(y)),
+            .binary_num_or => int(r, a.bits | b.bits),
+            .binary_num_xor => int(r, a.bits ^ b.bits),
+            .binary_num_and => int(r, a.bits & b.bits),
             .binary_pow => blk: {
-                var p: u64 = 1;
-                for (0..@min(y, 64)) |_| p *%= x;
-                break :blk int(r, p);
+                if (y < 0) return error.Invalid;
+                if (x == 0 or x == 1) break :blk exact(r, if (y == 0) 1 else x);
+                if (x == -1) break :blk exact(r, if (@rem(y, 2) == 0) 1 else -1);
+                var p: i128 = 1;
+                for (0..@intCast(@min(y, 128))) |_| {
+                    p *= x;
+                    _ = try exact(r, p);
+                }
+                break :blk exact(r, p);
             },
             else => compare(k, a, b),
         };

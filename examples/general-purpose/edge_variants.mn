@@ -1,12 +1,11 @@
-# BUG: `match self { .. }` and `self == Case` in a variant method are not dereferenced when executed (non_exhaustive_match / false), `self.*` is used in every method
 variant Light = +(Red, Green, Yellow) tagof u8 !{
-    fun next = () -> Light: ret match self.* {
+    fun next = () -> Light: ret match self {
         Light.Red => Light.Green,
         Light.Green => Light.Yellow,
         Light.Yellow => Light.Red,
     }
-    fun seconds = () -> u32: ret match self.* { Light.Red => 30, Light.Green => 25, Light.Yellow => 5 }
-    fun stop = () -> bool: ret self.* == Light.Red;
+    fun seconds = () -> u32: ret match self { Light.Red => 30, Light.Green => 25, Light.Yellow => 5 }
+    fun stop = () -> bool: ret self == Light.Red;
 }
 
 variant Level = +(Low = 3, Mid = 7, High = 20) tagof u8;
@@ -14,17 +13,17 @@ variant Level = +(Low = 3, Mid = 7, High = 20) tagof u8;
 variant Coin = +(Nickel = 5, Dime = 10, Quarter = 25) tagof u8;
 
 variant Vend = +(Idle, Has(u32 cents), Dispensing(u8 slot, u32 change), Broken) tagof u8 !{
-    fun insert = (Coin c) -> Vend: ret match self.* {
+    fun insert = (Coin c) -> Vend: ret match self {
         Vend.Idle => Vend.Has(c.$tag as u32),
         Vend.Has(n) => Vend.Has(n + c.$tag as u32),
         _ => self.*,
     }
-    fun press = (u8 which) -> Vend: ret match self.* {
+    fun press = (u8 which) -> Vend: ret match self {
         Vend.Has(n) => if n >= 30: Vend.Dispensing(slot = which, change = n - 30) else: self.*,
         Vend.Dispensing(s, ch) => Vend.Broken,
         _ => self.*,
     }
-    fun refund = () -> u32: ret match self.* {
+    fun refund = () -> u32: ret match self {
         Vend.Has(n) => n,
         Vend.Dispensing(_, ch) => ch,
         _ => 0,
@@ -90,18 +89,17 @@ stcfun cycle = () -> u32 {
     ret total * 100 + stops * 10 + l.seconds() / 5;
 }
 
-# LIMIT: the compile time interpreter cannot cast a variant value to an integer (not_static), so `as` on tagged cases is only checked and called from $main
 fun casts = (Level a, Coin c) -> u32: ret a as u32 * 100 + c as u32;
+
+stc u32 CS = casts(Level.High, Coin.Dime); #= CS 2010
 
 stcfun tags = () -> u32 {
     ret Level.Mid.$tag as u32 * 100 + Coin.Dime.$tag as u32 * 10 + Light.Yellow.$tag as u32;
 }
 
-# LIMIT: a method called on a case constant (`Light.Green.next()`) is reported impure_stcfun, the receiver has to be a variable
 stcfun equality = () -> u32 {
     Light a = Light.Green;
-    Light g = Light.Green;
-    Light b = g.next();
+    Light b = Light.Green.next();
     Vend v = Vend.Has(50);
     ret (a == Light.Green) as u32 + (a == b) as u32 * 10 + (a != b) as u32 * 100 + (v == Vend.Has(50)) as u32 * 1000 + (v == Vend.Has(40)) as u32 * 10000 + (v != Vend.Idle) as u32 * 100000;
 }

@@ -162,7 +162,6 @@ stc u32 RS = run_convert(Scaler, u8, u32)(Scaler(3), 7); #= RS 3021
 
 type Fn = (u32) -> u32;
 
-# BUG: known #12 form, `pick(ops[i])` with a loop variable reports not_static from a stcfun (value right), so pick is a plain fun
 fun pick = (u32 op) -> Fn {
     ret match op {
         0 => (u32 x): x + 1,

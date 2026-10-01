@@ -53,28 +53,31 @@ pub fn call(ip: *Interpreter, n: NodeId) Value {
     const d = ip.info(.decl, n);
     const cd = ip.info(.decl, callee);
     if (d != .none and Resolver.is_fn(r.dp(.kind, d).*) and (cd == .none or r.dp(.kind, cd).* != .static_function)) {
-        if (r.self_off(r.real(d)) == 0 or r.nk(callee) != .member or sp.tag(ip.info(.ty, r.arg(callee, 0))) == .meta_type) return invoke(ip, n, d, args, .empty);
+        if (r.self_off(r.real(d)) == 0 or r.nk(callee) != .member or sp.tag(ip.info(.ty, r.arg(callee, 0))) == .meta_type) return invoke(ip, n, d, args, .empty, .empty);
         const c = places.cell(ip, r.arg(callee, 0)) orelse return .poison;
-        return invoke(ip, n, d, args, if (ip.mem.buf[c].is_ref()) ip.mem.buf[c] else .ref(r.self_ptr(ip.vtype(ip.mem.buf[c])), c));
+        return invoke(ip, n, d, args, if (ip.mem.buf[c].is_ref()) ip.mem.buf[c] else .ref(r.self_ptr(ip.vtype(ip.mem.buf[c])), c), .empty);
     }
     const cv = ip.eval(callee);
+    if (cv.is_heap() and sp.tag(cv.ty) == .function_type) return invoke(ip, n, sp.get(ip.mem.buf[cv.at()].index()).function, args, .empty, cv);
     if (!cv.is_pool() or cv.is(.poison_type)) return if (cv.is(.poison_type)) cv else ip.fail(n, .not_static, 0, 0);
     const c = cv.index();
     if (!ip.framed() and ip.ctx.interpreted and sp.tag(c) == .generic and sp.get(c).static_fun.decl == ip.ctx.decl) return .poison;
     return switch (sp.tag(c)) {
         .record_type, .variant_case_type => construct(ip, c, args),
-        .function_value => invoke(ip, n, sp.get(c).function, args, .empty),
+        .function_value => invoke(ip, n, sp.get(c).function, args, .empty, .empty),
         .generic => blk: {
             const g = sp.get(c).static_fun.decl;
-            const want = sp.get(r.dp(.ty, g).*).function_type.params.len;
-            if (args.len != want) break :blk ip.fail(n, .wrong_arity, args.len, want);
+            const params = sp.get(r.dp(.ty, g).*).function_type.params;
+            if (args.len != params.len) break :blk ip.fail(n, .wrong_arity, args.len, params.len);
             const mark = ip.ids.head;
             defer ip.ids.head = mark;
-            for (args) |a| {
+            for (args, params) |a, p| {
                 const x = ip.eval(r.arg_value(a));
                 if (x.is(.poison_type)) break :blk x;
                 const i = ip.pool(x);
-                ip.ids.push(i);
+                const ok = if (sp.tag(p) == .meta_type) p == .type_type and sp.class(i).is_type or sp.type_of(i) == p else !sp.class(p).is_integer or sp.tag(i) == .int_value and sp.fits(i, p);
+                if (!ok) break :blk ip.fail(r.arg_value(a), .type_mismatch, sp.type_of(i), p);
+                ip.ids.push(r.retype(i, p));
             }
             const tuple = sp.intern(.{ .aggregate = .{ .ty = .none, .elems = ip.ids.buf[mark..ip.ids.head] } });
             break :blk .of(sp, r.h20_instantiate(g, tuple));
@@ -85,7 +88,7 @@ pub fn call(ip: *Interpreter, n: NodeId) Value {
 
 pub fn method(ip: *Interpreter, n: NodeId, t: Index, name: NamePool.Index, self: Value) Value {
     return switch (ip.res().static_pool.lookup_member(t, name)) {
-        .method => |m| invoke(ip, n, m, &.{}, self),
+        .method => |m| invoke(ip, n, m, &.{}, self, .empty),
         else => ip.fail(n, .not_static, 0, 0),
     };
 }
@@ -94,12 +97,12 @@ pub fn deinit(ip: *Interpreter, n: NodeId, c: u32) void {
     const r = ip.res();
     const t = ip.vtype(ip.mem.buf[c]);
     switch (r.static_pool.lookup_member(t, .deinit)) {
-        .method => |m| _ = invoke(ip, n, m, &.{}, .ref(r.self_ptr(t), c)),
+        .method => |m| _ = invoke(ip, n, m, &.{}, .ref(r.self_ptr(t), c), .empty),
         else => {},
     }
 }
 
-fn invoke(ip: *Interpreter, n: NodeId, d0: Decl.Index, all: []const NodeId, self0: Value) Value {
+fn invoke(ip: *Interpreter, n: NodeId, d0: Decl.Index, all: []const NodeId, self0: Value, env: Value) Value {
     const r = ip.res();
     const sp = &r.static_pool;
     if (ip.frames.head > Interpreter.max_depth) return ip.fail(n, .static_eval_failed, 0, 0);
@@ -120,17 +123,16 @@ fn invoke(ip: *Interpreter, n: NodeId, d0: Decl.Index, all: []const NodeId, self
         args = args[1..];
         base += 1;
     }
-    if (r.nk(r.value_node(d)) == .def_fun_declaration and self.is_ref()) d = switch (sp.lookup_member(ip.vtype(ip.mem.buf[self.at()]), r.dp(.name, d).*)) {
+    if (r.dp(.kind, d).* == .trait_member and self.is_ref()) d = switch (sp.lookup_member(ip.vtype(ip.mem.buf[self.at()]), r.dp(.name, d).*)) {
         .method => |m| m,
-        else => return ip.fail(n, .not_static, 0, 0),
+        else => d,
     };
     r.h05_ensure_signature(d);
     if (r.length_generic(r.dp(.ty, d).*)) d = realize(ip, n, d, args, base) orelse return .poison;
-    const ty = r.dp(.ty, d).*;
     var c = d;
     while (c != .none) : (c = r.dp(.next_overload, c).*) {
-        if (c != d and !r.same_params(r.dp(.ty, r.real(c)).*, ty)) continue;
-        if (attempt(ip, n, r.real(c), args, base, self)) |v| return v;
+        if (c != d and !r.same_params(c, d)) continue;
+        if (attempt(ip, n, r.real(c), args, base, self, env)) |v| return v;
     }
     return ip.fail(n, .no_matching_overload, args.len, 0);
 }
@@ -160,7 +162,7 @@ fn realize(ip: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, bas
     return sp.get(f).function;
 }
 
-fn attempt(ip: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, base: u32, self: Value) ?Value {
+fn attempt(ip: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, base: u32, self: Value, env: Value) ?Value {
     const r = ip.res();
     r.h05_ensure_signature(d);
     r.h06_check_body(d);
@@ -174,6 +176,7 @@ fn attempt(ip: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, bas
     const caller = ip.frames.buf[ip.frames.head - 1].body.decl;
     const unchecked = caller != .none and r.dp(.kind, caller).* == .static_function;
     ip.enter(body);
+    ip.frames.buf[ip.frames.head - 1].env = env;
     var keep = false;
     defer ip.leave(keep);
     if (r.self_off(d) == 1) places.bind(ip, @enumFromInt(body.first), self);
@@ -217,14 +220,10 @@ pub fn construct(ip: *Interpreter, target: Index, args: []const NodeId) Value {
         if (x.is(.poison_type)) return x;
         ip.fill(at + fi, x, sp.get(rec).custom_type.field_types[fi]);
     }
-    for (fields, 0..) |f, i| if (ip.mem.buf[at + i].is(.none)) {
-        const t = sp.get(rec).custom_type.field_types[i];
-        const dflt = r.param(f).default;
-        ip.fill(at + i, if (dflt != 0) ip.detached(dflt) else ip.zero(t), t);
-    };
+    if (!complete(ip, rec, at)) return .poison;
     const agg: Value = .block(rec, at, len);
     if (!is_case) return agg;
-    if (ip.escapes(agg) and args.len > 0) return ip.fail(args[0], .not_static, 0, 0);
+    if (ip.escapes(agg)) return .block(target, at, len);
     return .pooled(sp.intern(.{ .variant_value = .{ .case = target, .payload = ip.pool(agg) } }));
 }
 
@@ -247,5 +246,48 @@ pub fn with(ip: *Interpreter, n: NodeId) Value {
         if (x.is(.poison_type)) return x;
         ip.fill(at + fi, x, sp.get(t).custom_type.field_types[fi]);
     }
-    return .block(t, at, len);
+    return if (complete(ip, t, at)) .block(t, at, len) else .poison;
+}
+
+// the defaults and `where .. else` of the fields of a value being built, in the frame of the type where the fields are the locals
+fn complete(ip: *Interpreter, rec: Index, at: u32) bool {
+    const r = ip.res();
+    const fields = r.fields_of(rec);
+    var framed = false;
+    for (fields, 0..) |f, i| framed = framed or r.param(f).@"else" != 0 or r.param(f).default != 0 and ip.mem.buf[at + i].is(.none);
+    if (!framed) {
+        for (0..fields.len) |i| if (ip.mem.buf[at + i].is(.none)) ip.fill(at + i, ip.zero(field(ip, rec, i)), field(ip, rec, i));
+        return true;
+    }
+    const decl = r.static_pool.get(rec).custom_type.decl;
+    const bi = r.body_of.get(decl) orelse {
+        _ = ip.fail(r.dp(.node, decl).*, .not_static, 0, 0);
+        return false;
+    };
+    ip.enter(r.bodies.get(bi).?);
+    defer ip.leave(false);
+    const base = ip.top().base;
+    for (0..fields.len) |i| ip.mem.buf[base + i] = ip.mem.buf[at + i];
+    for (fields, 0..) |f, i| if (ip.mem.buf[base + i].is(.none)) {
+        const d = r.param(f).default;
+        const x = if (d != 0) ip.eval(d) else ip.zero(field(ip, rec, i));
+        if (x.is(.poison_type)) return false;
+        ip.fill(base + i, x, field(ip, rec, i));
+    };
+    for (fields, 0..) |f, i| {
+        const p = r.param(f);
+        if (p.where == 0 or p.@"else" == 0) continue;
+        const w = ip.eval(p.where);
+        if (w.ty != .bool_type) return false;
+        if (w.bits != 0) continue;
+        const e = ip.eval(p.@"else");
+        if (e.is(.poison_type)) return false;
+        if (r.nk(p.@"else") != .assign) ip.fill(base + i, e, field(ip, rec, i));
+    }
+    for (0..fields.len) |i| ip.fill(at + i, ip.mem.buf[base + i], field(ip, rec, i));
+    return true;
+}
+
+fn field(ip: *Interpreter, rec: Index, i: usize) Index {
+    return ip.res().static_pool.get(rec).custom_type.field_types[i];
 }

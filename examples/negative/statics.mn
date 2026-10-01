@@ -4,6 +4,12 @@ fun f = (u32 n) {
 
 stc u32 Z = 1 / 0; #! static_eval_failed
 
+stcfun span = (&[]u8 s) -> u64: ret s.$len;
+stc u64 SP = span("abc".&); #! not_static
+stcfun wide = ([]u8 s) -> u64: ret s.$len;
+stc u64 WD = wide([1, 2, 3]);
+stc u64 WS = wide(4); #! type_mismatch
+
 type Pow2 = (u32 N stcwhere N > 0 and (N & (N - 1)) == 0): *([N]u8 data); #! stcwhere_violated
 
 type Bad = Pow2(3);

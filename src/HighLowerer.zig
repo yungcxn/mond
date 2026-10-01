@@ -120,7 +120,7 @@ fn group(self: *HighLowerer, first: Decl.Index) void {
         var h = first;
         while (h != c) : (h = self.r.dp(.next_overload, h).*) {
             const rh = self.r.real(h);
-            if (!self.body_of.contains(rh) or !self.r.same_params(self.r.dp(.ty, rh).*, self.r.dp(.ty, rc).*)) continue;
+            if (!self.body_of.contains(rh) or !self.r.same_params(rh, rc)) continue;
             put(self.alloc, &self.head_of, rc, rh);
             var last = rh;
             while (self.next_of.get(last)) |n| last = n;
@@ -454,20 +454,7 @@ fn is_ssa(self: *HighLowerer, n: NodeId) bool {
 fn captures(self: *HighLowerer, d: Decl.Index) []const Decl.Index {
     if (self.caps_of.get(d)) |c| return self.cap_list.buf[c[0]..][0..c[1]];
     const start = self.cap_list.head;
-    if (self.body_of.get(d)) |bi| {
-        const b = self.r.bodies.get(bi).?;
-        const ds = self.r.body_nodes.sliced_field(.decl)[b.start..][0..b.len];
-        for (ds) |x| {
-            if (x == .none or std.mem.indexOfScalar(Decl.Index, self.cap_list.buf[start..self.cap_list.head], x) != null) continue;
-            const flags = self.r.dp(.flags, x).*;
-            const node = self.r.dp(.node, x).*;
-            const local = switch (self.r.dp(.kind, x).*) {
-                .variable, .parameter, .loop_variable, .pattern_binder, .arrow_binder, .autoins_it, .autoins_arg, .self => true,
-                else => false,
-            };
-            if (local and !flags.is_global and !(flags.is_stc and self.r.dp(.value, x).* != .none) and (node < b.lo or node >= b.lo + b.len)) self.cap_list.push(x);
-        }
-    }
+    self.r.captures(d, &self.cap_list);
     put(self.alloc, &self.caps_of, d, [2]u32{ start, self.cap_list.head - start });
     return self.cap_list.buf[start..self.cap_list.head];
 }
@@ -575,7 +562,7 @@ fn candidate(self: *HighLowerer, m: Decl.Index) bool {
     const body = self.arg(v, 1);
     if (self.nk(body) == .block) {
         _ = self.expr(body);
-        if (!self.dead) _ = if (has_value(self.ret_ty)) self.emit(.@"unreachable", .unit_type, 0, 0) else self.ret(.none);
+        if (!self.dead and !has_value(self.ret_ty)) self.ret(.none) else if (!self.dead and self.r.dp(.name, m).* == .main) self.ret(self.int(self.ret_ty, 0)) else if (!self.dead) _ = self.emit(.@"unreachable", .unit_type, 0, 0);
     } else self.ret(self.expr_to(body, self.ret_ty));
     self.goto(fail);
     return tested;
@@ -768,9 +755,9 @@ fn constant(self: *HighLowerer, v: Index, t: Index) Ref {
 
 fn arith(k: Kind) ?Op {
     return switch (k) {
-        .binary_add, .assign_add, .inc_prefix, .inc_postfix => .add,
-        .binary_sub, .assign_sub, .dec_prefix, .dec_postfix => .sub,
-        .binary_mul, .assign_mul => .mul,
+        .binary_add, .binary_add_wrap, .assign_add, .inc_prefix, .inc_postfix => .add,
+        .binary_sub, .binary_sub_wrap, .assign_sub, .dec_prefix, .dec_postfix => .sub,
+        .binary_mul, .binary_mul_wrap, .assign_mul => .mul,
         .binary_div, .assign_div => .div,
         .binary_mod, .assign_mod => .rem,
         .binary_shift_left => .shl,
@@ -1541,6 +1528,7 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
     const t = self.ty(n);
     const callee = self.arg(n, 0);
     const args = self.r.kids(self.arg(n, 1));
+    if (self.realized(n)) |f| return self.fn_value(f);
     const d = self.decl(n);
     if (d != .none and Resolver.is_fn(self.r.dp(.kind, d).*)) return self.direct(d, callee, args, t);
     const ct = self.ty(callee);
@@ -1558,6 +1546,13 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
     return self.emit(.call, t, @intFromEnum(f), at);
 }
 
+// a stcfun call producing a function stands for its realization
+fn realized(self: *HighLowerer, n: NodeId) ?Decl.Index {
+    if (self.nk(n) != .fun_call) return null;
+    const g = self.decl(self.arg(n, 0));
+    return if (g != .none and self.r.dp(.kind, g).* == .static_function and self.decl(n) != .none) self.decl(n) else null;
+}
+
 fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId, t: Index) Ref {
     const rd = self.r.real(d);
     const f = self.func(rd);
@@ -1571,12 +1566,14 @@ fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId
         self.tmp.push(@intFromEnum(x));
     }
     var args = all;
+    var dynamic = false;
     if (off == 1) {
         const bound = self.nk(callee) == .member and self.sp.tag(self.ty(self.arg(callee, 0))) != .meta_type;
         const recv = if (bound) self.arg(callee, 0) else self.r.arg_value(args[0]);
         const x = if (!bound) self.expr_to(recv, self.sp.get(ft).function_type.params[0]) else if (self.is_ptr(self.ty(recv))) self.expr(recv) else self.place(recv);
         self.tmp.push(@intFromEnum(x));
         if (!bound) args = args[1..];
+        dynamic = self.r.dp(.kind, rd).* == .trait_member and self.sp.tag(self.r.deref(self.ty(recv))) == .trait_type;
     }
     const at = self.tmp.head;
     for (pnodes) |_| self.tmp.push(none);
@@ -1603,7 +1600,6 @@ fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId
     self.body = saved;
     const list_at = self.list(self.tmp.buf[mark..self.tmp.head]);
     self.tmp.head = mark;
-    const dynamic = self.r.dp(.kind, rd).* == .trait_member and self.r.nk(self.r.value_node(rd)) == .def_fun_declaration;
     return self.emit(if (dynamic) .call_dyn else .call, if (t == .none) self.fn_ret(rd) else t, @intFromEnum(fv), list_at);
 }
 
@@ -1622,14 +1618,7 @@ fn construct(self: *HighLowerer, target: Index, args: []const NodeId) Ref {
         const x = self.expr_to(self.r.arg_value(a), sp.get(rec).custom_type.field_types[fi]);
         self.tmp.buf[mark + fi] = @intFromEnum(x);
     }
-    const saved = self.body;
-    defer self.body = saved;
-    if (self.body_of.get(sp.get(rec).custom_type.decl)) |bi| self.body = self.r.bodies.get(bi).?;
-    for (fields, 0..) |fnode, i| if (self.tmp.buf[mark + i] == none) {
-        const dflt = self.r.param(fnode).default;
-        const x = if (dflt != 0) self.expr_to(dflt, sp.get(rec).custom_type.field_types[i]) else self.emit(.zeroed, sp.get(rec).custom_type.field_types[i], 0, 0);
-        self.tmp.buf[mark + i] = @intFromEnum(x);
-    };
+    self.complete(rec, mark);
     const at = self.list(self.tmp.buf[mark..self.tmp.head]);
     self.tmp.head = mark;
     const agg = self.emit(.aggregate, rec, 0, at);
@@ -1654,9 +1643,55 @@ fn with(self: *HighLowerer, n: NodeId) Ref {
         const x = self.expr_to(self.r.arg_value(a), self.sp.get(bt).custom_type.field_types[fi]);
         self.tmp.buf[mark + fi] = @intFromEnum(x);
     }
+    self.complete(bt, mark);
     const at = self.list(self.tmp.buf[mark..self.tmp.head]);
     self.tmp.head = mark;
     return self.emit(.aggregate, bt, 0, at);
+}
+
+// the defaults and `where .. else` of the fields in tmp[mark..], the fields are the locals of the type's body
+fn complete(self: *HighLowerer, rec: Index, mark: u32) void {
+    const fields = self.r.fields_of(rec);
+    const saved = self.body;
+    defer self.body = saved;
+    const bi = self.body_of.get(self.sp.get(rec).custom_type.decl);
+    if (bi) |x| self.body = self.r.bodies.get(x).?;
+    // only the fields a default or guard reads, or a guard repairs, become locals
+    var locals: u64 = 0;
+    var guarded: u64 = 0;
+    if (bi != null) for (fields, 0..) |f, i| {
+        const p = self.r.param(f);
+        if (p.@"else" != 0) guarded |= @as(u64, 1) << @intCast(i);
+        for ([_]NodeId{ if (self.tmp.buf[mark + i] == none) p.default else 0, if (p.@"else" != 0) p.where else 0, p.@"else" }) |x| if (x != 0) {
+            const sub = self.r.subtree(x);
+            for (sub[0]..sub[1]) |n| {
+                const d = @intFromEnum(self.decl(@intCast(n))) -% self.body.first;
+                if (self.nk(@intCast(n)) == .identifier and d < fields.len) locals |= @as(u64, 1) << @intCast(d);
+            }
+        };
+    };
+    locals |= guarded;
+    for (0..fields.len) |i| if (locals >> @intCast(i) & 1 != 0 and self.tmp.buf[mark + i] != none) self.declare_var(@enumFromInt(self.body.first + i), @enumFromInt(self.tmp.buf[mark + i]));
+    for (fields, 0..) |f, i| if (self.tmp.buf[mark + i] == none) {
+        const t = self.sp.get(rec).custom_type.field_types[i];
+        const x = if (self.r.param(f).default != 0) self.expr_to(self.r.param(f).default, t) else self.emit(.zeroed, t, 0, 0);
+        self.tmp.buf[mark + i] = @intFromEnum(x);
+        if (locals >> @intCast(i) & 1 != 0) self.declare_var(@enumFromInt(self.body.first + i), x);
+    };
+    for (fields, 0..) |f, i| if (guarded >> @intCast(i) & 1 != 0) {
+        const p = self.r.param(f);
+        if (p.where == 0) continue;
+        const ok = self.block();
+        const els = self.block();
+        self.cond(self.expr_to(p.where, .bool_type), ok, els);
+        self.goto(els);
+        if (self.nk(p.@"else") == .assign) _ = self.expr(p.@"else") else self.store_var(@enumFromInt(self.body.first + i), self.expr_to(p.@"else", self.sp.get(rec).custom_type.field_types[i]));
+        self.br(ok);
+        self.goto(ok);
+    };
+    for (0..fields.len) |i| if (guarded >> @intCast(i) & 1 != 0) {
+        self.tmp.buf[mark + i] = @intFromEnum(self.load_var(@enumFromInt(self.body.first + i)));
+    };
 }
 
 fn member(self: *HighLowerer, n: NodeId) Ref {

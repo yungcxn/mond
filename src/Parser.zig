@@ -11,6 +11,8 @@ tokens: SoD(Lexer.Token),
 src_bytes: []const u8,
 alloc: std.mem.Allocator,
 tok_cursor: u32 = 0,
+// in the head of an if / while / for / match a group right before `{` or `:` is no lambda
+head: bool = false,
 global_store: DynBuf(NodeId),
 tree: ParseTree,
 

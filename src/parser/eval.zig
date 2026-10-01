@@ -60,7 +60,8 @@ pub fn expr(p: *Parser, prec: u8) anyerror!NodeId {
 
     while (p.tok_cursor < p.tokens.len()) {
         const tok = try p.peek_tok();
-        if (prec >= lookahead.prec_unary and (tok == .kw_as or tok == .kw_asbits)) break;
+        if (prec > lookahead.prec_unary and (tok == .kw_as or tok == .kw_asbits)) break;
+        if (prec > lookahead.prec_unary and (tok == .@"xpct_.." or tok == .@"xpct_..=" or tok == .@"xpct_..<")) break;
         const post_f = lookahead.post[@intFromEnum(tok)] orelse break;
 
         p.tok_cursor += 1;
@@ -79,6 +80,9 @@ pub fn expr(p: *Parser, prec: u8) anyerror!NodeId {
 }
 
 pub fn block(p: *Parser) anyerror!NodeId {
+    const outer = p.head;
+    p.head = false;
+    defer p.head = outer;
     const parent = p.tree.push_node(.block);
     var children: FixedStack(4096) = .{};
     while (!try p.peek_eq_tok(.@"pct_}")) {
@@ -97,7 +101,10 @@ pub fn paren(p: *Parser) anyerror!NodeId {
         return ee_def_fun(p, try partial.ee_fun_header(p, null));
     }
 
+    const in_head = p.head;
+    p.head = false;
     const parent = try any(p, .forbid_assign, 0);
+    p.head = in_head;
 
     switch (try p.peek_tok()) {
         .@"pct_,", .@"xpct_=", .kw_where, .identifier, .kw_self => {
@@ -105,16 +112,22 @@ pub fn paren(p: *Parser) anyerror!NodeId {
         },
         .@"pct_)" => {
             p.tok_cursor += 1;
-            switch (try p.peek_tok()) {
-                .@"xpct_->", .@"pct_:", .@"pct_{" => {
-                    p.tok_cursor -= 1;
-                    return ee_def_fun(p, try partial.ee_fun_header(p, parent));
-                },
-                else => return p.tree.push_node_with(.capture, .{ .subnode = parent }),
+            const next = try p.peek_tok();
+            if (next == .@"xpct_->" or !in_head and (next == .@"pct_:" or next == .@"pct_{")) {
+                p.tok_cursor -= 1;
+                return ee_def_fun(p, try partial.ee_fun_header(p, parent));
             }
+            return p.tree.push_node_with(.capture, .{ .subnode = parent });
         },
         else => return error.IllegalParenSyntax,
     }
+}
+
+fn head(p: *Parser) anyerror!NodeId {
+    const outer = p.head;
+    p.head = true;
+    defer p.head = outer;
+    return any(p, .forbid_assign, 0);
 }
 
 fn ee_def_fun(p: *Parser, early_function_header: NodeId) anyerror!NodeId {
@@ -156,8 +169,13 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
                 parent = p.tree.push_node(.array);
                 p.tree.set_children(parent, children.view());
             },
-            .@"pct_]" => { // no comma -> type
+            .@"pct_]" => { // no comma -> type, unless nothing that can be a type follows
                 p.tok_cursor += 1;
+                if (lookahead.pre[@intFromEnum(try p.peek_tok())] == null) {
+                    const one = p.tree.push_node(.array);
+                    p.tree.set_children(one, &[_]NodeId{parent});
+                    return one;
+                }
                 const def: Node.LayoutStruct(.type_array) = .{
                     .length = parent,
                     .type = try any(p, .forbid_assign, 0),
@@ -212,7 +230,7 @@ fn ee_if(p: *Parser, comptime then_kind: Node.Kind, comptime else_kind: Node.Kin
     var parent = p.tree.push_node(then_kind);
     var def: Node.LayoutStruct(then_kind) = undefined;
 
-    def.cond = try any(p, .forbid_assign, 0);
+    def.cond = try head(p);
 
     switch (try p.peek_tok()) {
         .@"pct_:" => p.tok_cursor += 1,
@@ -254,7 +272,7 @@ fn ee_while(p: *Parser, comptime while_kind: Node.Kind, comptime repeat_kind: No
     var def: Node.LayoutStruct(while_kind) = undefined;
     var def_with_repeat: Node.LayoutStruct(repeat_kind) = undefined;
 
-    def.cond = try any(p, .forbid_assign, 0);
+    def.cond = try head(p);
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         p.tok_cursor += 1;
@@ -290,13 +308,13 @@ fn ee_for(p: *Parser, comptime seq_kind: Node.Kind, comptime var_kind: Node.Kind
     var def: Node.LayoutStruct(seq_kind) = undefined;
     var def_var_extension: Node.LayoutStruct(var_kind) = undefined;
 
-    def.seq = try any(p, .forbid_assign, 0);
+    def.seq = try head(p);
 
     if (try p.peek_eq_tok(.kw_in)) {
         p.tok_cursor += 1;
         def_var_extension.for_seq = for_node;
         def_var_extension.variable = def.seq;
-        def.seq = try any(p, .forbid_assign, 0);
+        def.seq = try head(p);
         parent = p.tree.push_node(var_kind);
         p.tree.set_children(parent, def_var_extension);
     }
@@ -348,7 +366,7 @@ fn ee_match(p: *Parser, comptime match_kind: Node.Kind) anyerror!NodeId {
     const parent = p.tree.push_node(match_kind);
     var def: Node.LayoutStruct(match_kind) = undefined;
 
-    def.matched = try any(p, .forbid_assign, 0);
+    def.matched = try head(p);
     def.match_body = try partial.match_body(p);
 
     p.tree.set_children(parent, def);
@@ -553,6 +571,9 @@ pub fn unify_variants(p: *Parser, lhs: NodeId) anyerror!NodeId {
 }
 
 pub fn fun_call(p: *Parser, lhs: NodeId) anyerror!NodeId {
+    const outer = p.head;
+    p.head = false;
+    defer p.head = outer;
     return p.tree.push_node_with(.fun_call, .{
         .callable = lhs,
         .fun_param_tuple = try partial.fun_call_param_tuple(p),

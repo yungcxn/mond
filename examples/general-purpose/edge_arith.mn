@@ -1,45 +1,45 @@
 stcfun wrap_u8 = () -> u32 {
     u8 a = 250;
-    u8 b = a + 10;
-    u8 c = 3 - a;
-    u8 d = a * 2;
+    u8 b = a +% 10;
+    u8 c = 3 -% a;
+    u8 d = a *% 2;
     ret b as u32 * 1000000 + c as u32 * 1000 + d as u32;
 }
 
 stcfun wrap_i8 = () -> i32 {
     i8 c = -128;
-    i8 d = c - 1;
-    i8 e = c * -1;
+    i8 d = c -% 1;
+    i8 e = c *% -1;
     ret d as i32 * 1000 + e as i32;
 }
 
 stcfun wrap_u16 = () -> u32 {
     u16 a = 65535;
-    u16 b = a + 2;
+    u16 b = a +% 2;
     u16 c = 0;
-    u16 d = c - 1;
+    u16 d = c -% 1;
     ret b as u32 * 100000 + d as u32 % 100000;
 }
 
 stcfun wrap_u32 = () -> u64 {
     u32 a = 4294967295;
-    u32 b = a + 1;
-    u32 c = a * a;
-    u32 d = 0 - 1;
+    u32 b = a +% 1;
+    u32 c = a *% a;
+    u32 d = 0 -% 1;
     ret b as u64 * 1000000000000 + c as u64 * 10 + (d == a) as u64;
 }
 
 stcfun wrap_u64 = () -> u64 {
     u64 a = 18446744073709551615;
-    u64 b = a + 1;
-    u64 c = a * 3;
+    u64 b = a +% 1;
+    u64 c = a *% 3;
     ret b + c;
 }
 
 stcfun wrap_i64 = () -> i64 {
     i64 hi = 9223372036854775807;
     i64 lo = -9223372036854775807 - 1;
-    ret (hi + 1 == lo) as i64 * 10 + (lo - 1 == hi) as i64;
+    ret (hi +% 1 == lo) as i64 * 10 + (lo -% 1 == hi) as i64;
 }
 
 stcfun signed_div = () -> i32 {
@@ -156,9 +156,8 @@ stcfun negations = () -> i32 {
     ret b * 10000 + c * 1000 + d * 100 + e;
 }
 
-# LIMIT: only 0x 0b 0o literals accept `_` separators, `1_000` lexes as the literal 1 followed by the identifier _000
 stcfun literals = () -> u64 {
-    u64 a = 0xFF + 0b101 + 0o17 + 1000;
+    u64 a = 0xFF + 0b101 + 0o17 + 1_000;
     u64 b = 0xDEAD_BEEF;
     u64 c = '\n' as u64 + '\t' as u64 + '\0' as u64 + '\\' as u64;
     ret a * 1000000000000 + b % 1000000 + c;
@@ -197,6 +196,11 @@ stc i32 ID = incdec(); #= ID 57755
 stc i32 CP = compound(); #= CP 7
 stc i32 NG = negations(); #= NG -44495
 stc u64 LT = literals(); #= LT 1275000000928670
+stc u8 HX = '\x41'; #= HX 65
+stc [3]u8 HS = "\x01b\xff";
+stc u32 HB = HS[0] as u32 * 1000 + HS[2] as u32; #= HB 1255
+stc u32 SEP = 1_000_000; #= SEP 1000000
+stc f64 SEF = 1_000.25; #= SEF 1000.25
 stc i64 MM = minmax(); #= MM 9223372036854775807
 stc u32 CS = cmp_signed(); #= CS 1111
 

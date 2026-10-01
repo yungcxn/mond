@@ -95,7 +95,6 @@ stc []u32 PRIMES = stcfor n in 2..<40: if COMPOSITE[n] == 0: n else: 0; #= PRIME
 stc u32 CC = count_composites(); #= CC 26
 stc [8]u8 BIN = to_base(37, 2); #= BIN [48, 48, 49, 48, 48, 49, 48, 49]
 stc [8]u8 HEX = to_base(48879, 16); #= HEX [48, 48, 48, 48, 98, 101, 101, 102]
-# BUG: `stcmatch x {..}` on the variable of a stcfor reports not_static (value is still right, like the stcfun case), so a plain match is used
 stc []u32 CLASS = stcfor x in 0..<8: match x { 0 => 100, 1 | 2 => 200, 3..=5 => 300, _ => 400 }; #= CLASS [100, 200, 200, 300, 300, 300, 400, 400]
 stc u32 KIND = stcmatch sizeof Word(20) { 1 => 10, 4 => 40, _ => 0 }; #= KIND 40
 stc u32 P2 = 1;

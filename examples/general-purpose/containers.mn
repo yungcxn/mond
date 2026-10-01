@@ -66,7 +66,7 @@ type MinHeap = (u32 CAP): *(mut [CAP]i32 a, mut u32 n) !{
 
 type Table = (u32 CAP): *(mut [CAP]u32 keys, mut [CAP]i32 vals, mut [CAP]bool used, mut u32 count) !{
     fun slot = (u32 key) -> u32 {
-        mut u32 i = key * 2654435761 % CAP;
+        mut u32 i = key *% 2654435761 % CAP;
         while self.used[i] and self.keys[i] != key: i = (i + 1) % CAP;
         ret i;
     }
@@ -89,8 +89,7 @@ type Table = (u32 CAP): *(mut [CAP]u32 keys, mut [CAP]i32 vals, mut [CAP]bool us
 
 type Bitset = (u32 WORDS): *(mut [WORDS]u32 w) !{
     fun set = (u32 i) { self.w[i / 32] = self.w[i / 32] | 1 << i % 32; }
-    # LIMIT: there is no bitwise not, so the mask is inverted by xor with all ones
-    fun clear = (u32 i) { self.w[i / 32] = self.w[i / 32] & (0xFFFFFFFF ^ (1 << i % 32)); }
+    fun clear = (u32 i) { self.w[i / 32] = self.w[i / 32] & !(1 << i % 32); }
     fun test = (u32 i) -> bool: ret ((self.w[i / 32] >> i % 32) & 1) == 1;
     fun count = () -> u32 {
         mut u32 n = 0;
@@ -105,7 +104,6 @@ type Bitset = (u32 WORDS): *(mut [WORDS]u32 w) !{
     }
 }
 
-# BUG: storing a whole record through a pointer in a callee (`p.* = Node(..)`) leaves a dangling block, so the fields are written one by one
 type Node = *(mut i32 val, mut u32 next);
 type List = (u32 CAP): *(mut [CAP]Node nodes, mut u32 head, mut u32 free, mut u32 len) !{
     fun init_all = () {
@@ -116,8 +114,7 @@ type List = (u32 CAP): *(mut [CAP]Node nodes, mut u32 head, mut u32 free, mut u3
         if self.free == CAP: ret false;
         u32 at = self.free;
         self.free = self.nodes[at].next;
-        self.nodes[at].val = v;
-        self.nodes[at].next = self.head;
+        self.nodes[at] = Node(v, self.head);
         self.head = at;
         self.len += 1;
         ret true;
