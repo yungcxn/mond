@@ -110,7 +110,7 @@ pub fn cast(ip: *Interpreter, n: NodeId) Value {
         const from = if (framed) sp.apply_vars(&r.abstract_pool, ip.info(.ty, a0)) else ip.vtype(x);
         const t = if (framed) ip.info(.ty, n) else r.cast_target(ip.ctx, a1, from);
         const ck = sp.cast(from, t);
-        if (ck == .bit_reinterpret and Value.is_int(t) and sp.class(from).is_variant) return tag(ip, n, x, t);
+        if (ck == .bit_reinterpret and Value.is_int(t) and sp.get_tag_prop(from).is_variant) return tag(ip, n, x, t);
         return if (ck == .array_narrow or ck == .pointer_relength) shrink(ip, n, x, t) else .cast(x, t);
     }
     if (ip.info(.value, a1) != .none) return .poison;

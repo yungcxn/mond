@@ -796,7 +796,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap => blk: {
             const j = self.pair(ctx, node, a0, a1, if (self.is_numeric(expected)) expected else .none);
             const wraps = k == .binary_add_wrap or k == .binary_sub_wrap or k == .binary_mul_wrap;
-            const r = if ((k == .binary_add or k == .binary_sub) and self.elem_ptr(j)) j else if (wraps and !sp.class(j).is_integer and sp.tag(j) != .type_var) self.mismatch(node, j, .none) else self.numeric(node, j, j);
+            const r = if ((k == .binary_add or k == .binary_sub) and self.elem_ptr(j)) j else if (wraps and !sp.get_tag_prop(j).is_integer and sp.tag(j) != .type_var) self.mismatch(node, j, .none) else self.numeric(node, j, j);
             // arithmetic on constants is folded, an overflow is an error as soon as it can be seen
             if (r != .poison_type and !ctx.abstract and self.folded(a0) and self.folded(a1)) {
                 _ = self.set(node, r);
@@ -1542,6 +1542,13 @@ pub fn concrete(self: *Resolver, t: StaticPool.Index) bool {
 
 fn is_numeric(self: *Resolver, t: StaticPool.Index) bool {
     return t != .none and (self.static_pool.get_tag_prop(t).is_integer or self.static_pool.get_tag_prop(t).is_float);
+}
+
+fn folded(self: *Resolver, n: NodeId) bool {
+    return self.is_literal(n) or self.node_value[n] != .none and switch (self.nk(n)) {
+        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap => true,
+        else => false,
+    };
 }
 
 fn numeric(self: *Resolver, node: NodeId, t: StaticPool.Index, result: StaticPool.Index) StaticPool.Index {
