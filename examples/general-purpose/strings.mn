@@ -176,7 +176,7 @@ fun vowels = (&[]u8 s) -> u32 {
 
 fun parse_and_render = (i64 v) -> i64 {
     mut [24]u8 buf;
-    do itoa(buf.&, v);
+    itoa(buf.&, v);
     ret atoi(buf.&);
 }
 

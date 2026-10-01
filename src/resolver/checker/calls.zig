@@ -247,7 +247,7 @@ fn score(self: *Resolver, c: Decl.Index, args: []const NodeId, tys: []const Stat
         total += if (statics.templated(self, p) != .none)
             (if (statics.passes(self, t, p)) 5 else return -1)
         else if (t == p or t == .poison_type or (self.is_literal(v) and sp.coerce(&self.abstract_pool, statics.literal_type(self, v, p), p) == .identity))
-            @as(i32, 6) - @intFromBool(sp.class(p).is_float and !sp.class(t).is_float)
+            @as(i32, 6) - @intFromBool(sp.get_tag_prop(p).is_float and !sp.get_tag_prop(t).is_float)
         else if (sp.has_vars(p))
             (if (statics.arg_len(self, t, p) != .none) 2 else return -1)
         else if (sp.coerce(&self.abstract_pool, t, p) != .incompatible) 4 else return -1;

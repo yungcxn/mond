@@ -90,7 +90,7 @@ pub const Resolver = struct {
         const line = if (node_span(r.tree, r.src_bytes, d.node[i])) |s| line_of(starts, s[0]) + 1 else 0;
         const name = decl_name(r, @enumFromInt(i));
         const mods = 4 * (@as(usize, @intFromBool(flags.is_pub)) + @intFromBool(flags.is_mut) + @intFromBool(flags.is_stc));
-        try w.print(dim ++ "  #{d:<5}" ++ reset ++ " " ++ field_col ++ "{s}{s}{s}{s}{s}" ++ reset ++ "{s}", .{ i, if (flags.is_pub) "pub " else "", if (flags.is_mut) "mut " else "", if (flags.is_stc) "stc " else "", col, name, spaces[0 .. 24 -| (name.len + mods)] });
+        try w.print(dim ++ "  #{d:<5}" ++ reset ++ " " ++ field_col ++ "{s}{s}{s}{s}{s}" ++ reset ++ "{s}", .{ i, if (flags.is_pub) "pub " else "", if (flags.is_mut) "mut " else "", if (flags.is_stc) "stc " else "", col, name, spaces[0..24 -| (name.len + mods)] });
         try w.print(dim ++ "{s:<16} :{d:<5}" ++ reset ++ " ", .{ @tagName(kind), line });
         if (d.state[i] == .failed) try w.writeAll(err_col ++ "failed " ++ reset);
         try w.writeAll(type_col);
@@ -219,7 +219,12 @@ pub fn print_operands(w: *std.Io.Writer, r: *Res, code: Doctor.Disorder, a: u32,
         .stcwhere_violated => .{ "in", .decl, "arguments", .type },
         else => .{ "", .none, "", .none },
     };
-    inline for (.{ .{ f[0], f[1], a }, .{ f[2], f[3], b } }) |op| if (op[1] != .none and (op[1] == .int or op[2] != std.math.maxInt(u32))) {
+
+    inline for (.{ .{ f[0], f[1], a }, .{
+        f[2],
+        f[3],
+        b,
+    } }) |op| if (op[1] != .none and (op[1] == .int or op[2] != std.math.maxInt(u32))) {
         try w.print("  " ++ dim ++ "{s}" ++ reset ++ " ", .{op[0]});
         switch (op[1]) {
             .name => try w.print(bold ++ "`{s}`" ++ reset, .{if (op[2] < r.name_pool.map.count()) r.name_pool.get(@enumFromInt(op[2])) else "?"}),
@@ -554,8 +559,23 @@ pub const HighLowerer = struct {
             try w.print(" %{d} = ", .{local});
         }
         const sym: ?[]const u8 = switch (i.op) {
-            .add => "+", .sub => "-", .mul => "*", .div => "/", .rem => "%", .shl => "<<", .shr => ">>", .bit_and => "&", .bit_or => "|", .bit_xor => "^", .pow => "**",
-            .eq => "==", .ne => "!=", .lt => "<", .gt => ">", .le => "<=", .ge => ">=",
+            .add => "+",
+            .sub => "-",
+            .mul => "*",
+            .div => "/",
+            .rem => "%",
+            .shl => "<<",
+            .shr => ">>",
+            .bit_and => "&",
+            .bit_or => "|",
+            .bit_xor => "^",
+            .pow => "**",
+            .eq => "==",
+            .ne => "!=",
+            .lt => "<",
+            .gt => ">",
+            .le => "<=",
+            .ge => ">=",
             else => null,
         };
         if (sym) |s| {

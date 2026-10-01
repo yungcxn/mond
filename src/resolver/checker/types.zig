@@ -7,7 +7,6 @@ const StaticPool = @import("../StaticPool.zig");
 const Decl = Resolver.Decl;
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
-const class = Resolver.class;
 const is_range_kind = Resolver.is_range_kind;
 const meta = Resolver.meta;
 const prim_types = Resolver.prim_types;
@@ -40,7 +39,7 @@ pub fn h07_lower_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
         else => blk: {
             const v = statics.deferred(self, ctx, node) orelse .poison_type;
             if (sp.tag(v) == .generic and sp.tag(sp.get(self.dp(.ty, sp.get(v).static_fun.decl).*).function_type.ret) == .meta_type) break :blk sp.intern(.{ .template_type = sp.get(v).static_fun.decl });
-            break :blk if (v == .poison_type or sp.class(v).is_type) v else self.report(.not_a_type, node, v, .none);
+            break :blk if (v == .poison_type or sp.get_tag_prop(v).is_type) v else self.report(.not_a_type, node, v, .none);
         },
     };
 }
@@ -74,7 +73,7 @@ pub fn static_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
             _ = self.h09_check_expr(ctx, node, .none);
             break :blk self.dp(.value, self.node_decl[node]).*;
         },
-        else => if (class(k).type_expr) h07_lower_type(self, ctx, node) else self.report(.not_static, node, 0, 0),
+        else => if (Resolver.node_props[@intFromEnum(k)].type_expr) h07_lower_type(self, ctx, node) else self.report(.not_static, node, 0, 0),
     };
 }
 
@@ -155,7 +154,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
                 // the one payload type encodes the other cases in bit patterns it never uses
                 if (payloads != 1) _ = self.report(.self_tag_without_niche, tagof, payloads, 0) else {
                     const fields = sp.get(sp.get(cases[payload_case.?]).variant_case_type.payload).custom_type.field_types;
-                    tag_ty = if (fields.len == 1 and sp.class(fields[0]).is_integer) fields[0] else self.report(.self_tag_without_niche, tagof, 0, 0);
+                    tag_ty = if (fields.len == 1 and sp.get_tag_prop(fields[0]).is_integer) fields[0] else self.report(.self_tag_without_niche, tagof, 0, 0);
                 }
             }
             if (tag_ty != .none and tag_ty != .poison_type) for (params, 0..) |pn, i| {
@@ -206,7 +205,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
     }
     if (w.size != 0) {
         const v = statics.h08_eval_static(self, ctx, w.size);
-        const want = if (sp.class(v).is_type) sp.layout(v).size else if (sp.tag(v) == .int_value) sp.get(v).int.bits else 0;
+        const want = if (sp.get_tag_prop(v).is_type) sp.layout(v).size else if (sp.tag(v) == .int_value) sp.get(v).int.bits else 0;
         if (v != .poison_type and sp.layout(ty).size != want) _ = self.report(.assertsize_failed, w.size, sp.layout(ty).size, want);
     }
     return ty;

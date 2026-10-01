@@ -8,8 +8,11 @@ const StaticPool = @import("../StaticPool.zig");
 const NamePool = @import("../NamePool.zig");
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
+<<<<<<< HEAD
 const class = Resolver.class;
 const NodeKind = ParseTree.Node.Kind;
+=======
+>>>>>>> 931c932 (chore: small adjs.)
 const is_range_kind = Resolver.is_range_kind;
 
 const Pat = struct { mask: u64 = 0, all: bool = false };
@@ -113,7 +116,7 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             else => self.mismatch(lp.seq, st, .none),
         };
         const v = lp.variable;
-        const it = self.h02_declare_local(if (v != 0) self.name_of(v) else .dollar_it, if (v != 0) v else lp.head, if (v != 0) .loop_variable else .autoins_it, elem);
+        const it = self.h02_declare_local(if (v != 0) self.name_of(v) else .it, if (v != 0) v else lp.head, if (v != 0) .loop_variable else .autoins_it, elem);
         self.node_decl[lp.head] = it;
         if (v != 0) {
             self.node_decl[v] = it;
@@ -136,6 +139,7 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
     self.jumps = jumps;
     self.loop_exits.head -= 1;
     self.uninit = self.loop_exits.buf[self.loop_exits.head] | if (lp.cond != 0 or lp.seq != 0) at_exit else 0;
+<<<<<<< HEAD
     if (!ctx.interpreted and !ctx.abstract and class(k).stc) _ = statics.static_of(self, ctx, node);
     // used as a value: an array of the body values; brk ends it without adding one, cont skips one
     if (expected == .none) return if (lp.cond == 0 and lp.seq == 0 and !broke) .never_type else .unit_type;
@@ -155,6 +159,12 @@ fn steps(self: *Resolver, ctx: *FnCtx, seq: NodeId) ?u64 {
     const lo = if (g.lo == 0) 0 else statics.static_int(self, ctx, g.lo) orelse return null;
     const hi = (statics.static_int(self, ctx, g.hi) orelse return null) + @intFromBool(g.incl);
     return if (hi > lo) @intCast(hi - lo) else 0;
+=======
+    if (!ctx.interpreted and !ctx.abstract and Resolver.node_props[@intFromEnum(k)].stc) _ = statics.static_of(self, ctx, node);
+    // used as a value: an array of the body values; brk ends it without adding one
+    if (expected == .none) return .unit_type;
+    return sp.intern(.{ .array_type = .{ .len = self.fresh_var(node), .elem = if (bt == .never_type or bt == .runit_type) (if (elem_hint != .none) elem_hint else .unit_type) else bt } });
+>>>>>>> 931c932 (chore: small adjs.)
 }
 
 // binders belong to their statement: a block scopes every non-declaring statement, a declaration its values
@@ -185,7 +195,7 @@ pub fn h17_check_unwrap(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, ex
 // a branch of if / match: unit blocks and nested ifs / matches are runit, a plain unit value is not
 fn branch(self: *Resolver, ctx: *FnCtx, node: NodeId, expected: StaticPool.Index) StaticPool.Index {
     var t = self.static_pool.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, node, expected));
-    if (t == .unit_type and class(self.nk(node)).runit) t = .runit_type;
+    if (t == .unit_type and Resolver.node_props[@intFromEnum(self.nk(node))].runit) t = .runit_type;
     if (!self.concrete(expected) or t == .never_type or t == .runit_type or t == .poison_type) return t;
     if (t == .unit_type and expected != .unit_type) return self.report(.runit_mixing, node, t, expected);
     return self.h10_expect(node, t, expected);

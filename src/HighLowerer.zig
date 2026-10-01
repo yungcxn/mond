@@ -83,9 +83,33 @@ pub fn init(alloc: std.mem.Allocator, r: *Resolver) HighLowerer {
 }
 
 pub fn deinit(self: *HighLowerer) void {
-    inline for (.{ &self.fn_of, &self.body_of, &self.head_of, &self.next_of, &self.global_of, &self.caps_of, &self.defs, &self.lvn, &self.slots, &self.taken }) |m| m.deinit(self.alloc);
+    self.fn_of.deinit(self.alloc);
+    self.body_of.deinit(self.alloc);
+    self.head_of.deinit(self.alloc);
+    self.next_of.deinit(self.alloc);
+    self.global_of.deinit(self.alloc);
+    self.caps_of.deinit(self.alloc);
+    self.defs.deinit(self.alloc);
+    self.lvn.deinit(self.alloc);
+    self.slots.deinit(self.alloc);
+    self.taken.deinit(self.alloc);
+
     self.ir.deinit();
-    inline for (.{ &self.cap_list, &self.queue, &self.insts, &self.blocks, &self.edges, &self.pending, &self.extra, &self.tmp, &self.alias, &self.remap, &self.var_types, &self.params, &self.defers, &self.loops }) |b| b.deinit();
+
+    self.cap_list.deinit();
+    self.queue.deinit();
+    self.insts.deinit();
+    self.blocks.deinit();
+    self.edges.deinit();
+    self.pending.deinit();
+    self.extra.deinit();
+    self.tmp.deinit();
+    self.alias.deinit();
+    self.remap.deinit();
+    self.var_types.deinit();
+    self.params.deinit();
+    self.defers.deinit();
+    self.loops.deinit();
 }
 
 pub fn lower(self: *HighLowerer) void {
@@ -480,11 +504,33 @@ fn fn_value(self: *HighLowerer, d0: Decl.Index) Ref {
 }
 
 fn reset(self: *HighLowerer) void {
-    inline for (.{ &self.insts, &self.blocks, &self.edges, &self.pending }) |s| inline for (@typeInfo(@TypeOf(s.pool)).@"struct".fields) |f| {
+    inline for (.{
+        &self.insts,
+        &self.blocks,
+        &self.edges,
+        &self.pending,
+    }) |s| inline for (@typeInfo(@TypeOf(s.pool)).@"struct".fields) |f| {
         @field(s.pool, f.name).head = 0;
     };
-    inline for (.{ &self.extra, &self.tmp, &self.alias, &self.remap, &self.var_types, &self.params, &self.defers, &self.loops }) |b| b.head = 0;
-    inline for (.{ &self.defs, &self.lvn, &self.slots, &self.taken }) |m| m.clearRetainingCapacity();
+
+    inline for (.{
+        &self.extra,
+        &self.tmp,
+        &self.alias,
+        &self.remap,
+        &self.var_types,
+        &self.params,
+        &self.defers,
+        &self.loops,
+    }) |b| b.head = 0;
+
+    inline for (.{
+        &self.defs,
+        &self.lvn,
+        &self.slots,
+        &self.taken,
+    }) |m| m.clearRetainingCapacity();
+
     self.dead = false;
 }
 
@@ -745,8 +791,8 @@ fn expr_to(self: *HighLowerer, n: NodeId, t: Index) Ref {
 
 fn constant(self: *HighLowerer, v: Index, t: Index) Ref {
     const sp = self.sp;
-    if (t != .none and sp.tag(v) == .int_value and sp.class(t).is_integer) return self.int(t, sp.get(v).int.bits);
-    if (t != .none and (sp.tag(v) == .int_value or sp.tag(v) == .float_value) and sp.class(t).is_float) {
+    if (t != .none and sp.tag(v) == .int_value and sp.get_tag_prop(t).is_integer) return self.int(t, sp.get(v).int.bits);
+    if (t != .none and (sp.tag(v) == .int_value or sp.tag(v) == .float_value) and sp.get_tag_prop(t).is_float) {
         const f: f64 = if (sp.tag(v) == .float_value) sp.get(v).float.value else @floatFromInt(@as(i64, @bitCast(sp.get(v).int.bits)));
         return Ref.of(sp.intern(.{ .float = .{ .ty = t, .value = f } }));
     }
@@ -984,7 +1030,7 @@ fn logic(self: *HighLowerer, n: NodeId, is_and: bool) Ref {
 }
 
 fn scalar(self: *HighLowerer, t: Index) bool {
-    return t == .bool_type or t != .none and (self.sp.class(t).is_integer or self.sp.class(t).is_float or self.is_ptr(t));
+    return t == .bool_type or t != .none and (self.sp.get_tag_prop(t).is_integer or self.sp.get_tag_prop(t).is_float or self.is_ptr(t));
 }
 
 fn cheap(self: *HighLowerer, n: NodeId, budget: *u8) bool {
@@ -1170,7 +1216,8 @@ fn bind(self: *HighLowerer, p: NodeId, v: Ref, vt: Index) void {
 fn switched(self: *HighLowerer, arms: []const NodeId, s: Ref, st: Index, t: Index, res: u32, m: u32) bool {
     const sp = self.sp;
     const tagged = st != .none and (sp.tag(st) == .variant_union_type or sp.tag(st) == .variant_type and sp.get(st).variant_type.tag_mode != .self);
-    if (!tagged and (st == .none or !sp.class(st).is_integer)) return false;
+    const st_prop = sp.get_tag_prop(st);
+    if (!tagged and (st == .none or !st_prop.is_integer)) return false;
     var count: usize = 0;
     var keyed: usize = 0;
     for (arms) |a| {

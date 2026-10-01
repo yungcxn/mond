@@ -8,7 +8,7 @@ const NamePool = @This();
 pub const Index = enum(u32) {
     empty,
     underscore,
-    dollar_it,
+    it,
     self,
     init,
     deinit,
@@ -32,6 +32,20 @@ pub fn init(alloc: std.mem.Allocator) NamePool {
 
 pub fn deinit(self: *NamePool) void {
     self.map.deinit(self.alloc);
+}
+
+pub fn intern_predefineds(self: *NamePool) void {
+    inline for (@typeInfo(Index).@"enum".fields) |f| {
+        if (@field(Index, f.name) == Index.empty) {
+            _ = self.intern("");
+        } else if (@field(Index, f.name) == Index.underscore) {
+            _ = self.intern("_");
+        } else if (@field(Index, f.name) == Index.self) {
+            _ = self.intern("self");
+        } else {
+            _ = self.intern("$" ++ f.name);
+        }
+    }
 }
 
 pub fn intern(self: *NamePool, text: []const u8) Index {

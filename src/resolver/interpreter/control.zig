@@ -106,7 +106,7 @@ pub fn loop(ip: *Interpreter, n: NodeId) Value {
                 seq = .empty;
             }
         }
-        it = if (framed) ip.info(.decl, l.head) else r.h02_declare_local(if (l.variable != 0) r.name_of(l.variable) else .dollar_it, n, .loop_variable, .none);
+        it = if (framed) ip.info(.decl, l.head) else r.h02_declare_local(if (l.variable != 0) r.name_of(l.variable) else .it, n, .loop_variable, .none);
     }
     const want = !framed or r.static_pool.tag(r.static_pool.apply_vars(&r.abstract_pool, ip.info(.ty, n))) == .array_type;
     const mark = ip.list.head;

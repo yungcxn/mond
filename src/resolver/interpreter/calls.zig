@@ -34,7 +34,7 @@ pub fn member(ip: *Interpreter, n: NodeId) Value {
         .field => |f| return ip.elem(pv, f.index),
         else => {},
     };
-    if (!pv.is_pool() or !sp.class(pv.index()).is_type) return ip.fail(n, .not_static, 0, 0);
+    if (!pv.is_pool() or !sp.get_tag_prop(pv.index()).is_type) return ip.fail(n, .not_static, 0, 0);
     return switch (sp.lookup_member(pv.index(), name)) {
         .case => |c| .pooled(c),
         .method => |m| blk: {

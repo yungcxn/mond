@@ -11,7 +11,7 @@ const Kind = ParseTree.Node.Kind;
 pub fn of(ip: *Interpreter, n: NodeId) ?Index {
     const v = ip.eval(n);
     if (v.is(.poison_type)) return null;
-    if (v.is_pool() and !v.is(.none) and ip.res().static_pool.class(v.index()).is_type) return v.index();
+    if (v.is_pool() and !v.is(.none) and ip.res().static_pool.get_tag_prop(v.index()).is_type) return v.index();
     _ = ip.fail(n, .not_a_type, ip.pool(v), .none);
     return null;
 }
@@ -160,7 +160,7 @@ pub fn oftype(ip: *Interpreter, n: NodeId) Value {
     const c0 = if (framed) ip.info(.value, a1) else r.h07_lower_type(ip.ctx, a1);
     const c = if (c0 != .none and sp.tag(c0) == .generic) sp.intern(.{ .template_type = sp.get(c0).static_fun.decl }) else c0;
     const t = if (c != .none) c else of(ip, a1) orelse return .poison;
-    const vt = if (sp.class(x).is_type) x else sp.type_of(x);
+    const vt = if (sp.get_tag_prop(x).is_type) x else sp.type_of(x);
     if (sp.tag(t) == .template_type) return .boolean(r.realizes(vt, t));
     return .boolean(vt == t or sp.type_of(x) == t or sp.implements(vt, t));
 }

@@ -264,10 +264,7 @@ pub const AbstractKey = packed struct(u64) {
     args_tuple: Index, // due to them being a single `static_pool` index
 };
 
-// cheap yes/no questions about an entry ("is it a pointer?", "is it an integer?").
-// they depend almost only on the tag, so they come from a comptime table indexed by tag
-// instead of being stored per entry: zero memory, one table load.
-pub const Class = packed struct(u16) {
+pub const TagProperties = packed struct(u16) {
     is_type: bool = false,
     is_value: bool = false,
     is_integer: bool = false,
@@ -379,8 +376,8 @@ fn word64(v: anytype) u64 {
 
 // key field <-> item tag, where the names differ
 const tag_pairs = .{
-    .{ "custom_type", "record_type" }, .{ "static_fun", "generic" },       .{ "abstract_type", "type_var" },
-    .{ "int", "int_value" },           .{ "float", "float_value" },        .{ "string", "string_value" },
+    .{ "custom_type", "record_type" },   .{ "static_fun", "generic" },      .{ "abstract_type", "type_var" },
+    .{ "int", "int_value" },             .{ "float", "float_value" },       .{ "string", "string_value" },
     .{ "aggregate", "aggregate_value" }, .{ "function", "function_value" },
 };
 
@@ -605,8 +602,8 @@ pub fn type_of(self: *const StaticPool, value: Index) Index {
 // 5. questions about a type
 // ------------------------------------------------------------------------------------------ //
 
-const class_table = blk: {
-    var t: [@typeInfo(Item.Tag).@"enum".fields.len]Class = undefined;
+const tag_props = blk: {
+    var t: [@typeInfo(Item.Tag).@"enum".fields.len]TagProperties = undefined;
     for (&t, 0..) |*c, i| c.* = switch (@as(Item.Tag, @enumFromInt(i))) {
         .int_type => .{ .is_type = true, .is_integer = true, .has_layout = true },
         .float_type => .{ .is_type = true, .is_float = true, .has_layout = true },
@@ -628,8 +625,8 @@ const class_table = blk: {
     break :blk t;
 };
 
-pub fn class(self: *const StaticPool, index: Index) Class {
-    return class_table[@intFromEnum(self.tag(index))];
+pub inline fn get_tag_prop(self: *const StaticPool, index: Index) TagProperties {
+    return tag_props[@intFromEnum(self.tag(index))];
 }
 
 pub fn implements(self: *const StaticPool, ty: Index, trait: Index) bool {
@@ -867,7 +864,7 @@ pub fn format(self: *const StaticPool, names: *const NamePool, vars: *const Abst
 fn fmt(self: *const StaticPool, names: *const NamePool, vars: *const AbstractPool, index: Index, w: *std.Io.Writer, depth: u8) std.Io.Writer.Error!void {
     if (index == .none) return w.writeAll("none");
     // nominal types can contain themselves: one inside another prints by its declaration
-    if (depth > 0 and self.class(index).is_nominal) return w.print("type#{d}", .{word64(switch (self.get(index)) {
+    if (depth > 0 and self.get_tag_prop(index).is_nominal) return w.print("type#{d}", .{word64(switch (self.get(index)) {
         .custom_type => |c| c.decl,
         .variant_type => |v| v.decl,
         .trait_type => |t| t.decl,

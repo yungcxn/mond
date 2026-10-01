@@ -8,10 +8,8 @@ const Decl = Resolver.Decl;
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
 const Body = Resolver.Body;
-const class = Resolver.class;
 const is_fn = Resolver.is_fn;
-const max_nesting = Resolver.max_nesting;
-const unescape = Resolver.unescape;
+const max_nesting = 256;
 const NamePool = @import("../NamePool.zig");
 
 pub fn h08_eval_static(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
@@ -50,7 +48,7 @@ pub fn try_static(self: *Resolver, ctx: *FnCtx, node: NodeId) ?StaticPool.Index 
 }
 
 pub fn static_of(self: *Resolver, ctx: *FnCtx, n: NodeId) StaticPool.Index {
-    const c = class(self.nk(n));
+    const c = Resolver.node_props[@intFromEnum(self.nk(n))];
     return if (c.stc and c.loop and self.node_value[n] != .none) self.node_value[n] else h08_eval_static(self, ctx, n);
 }
 
@@ -97,7 +95,7 @@ pub fn literal_type(self: *Resolver, node: NodeId, expected: StaticPool.Index) S
         sp.tag(sp.get(target).array_type.len) == .int_value and sp.get(sp.get(target).array_type.len).int.bits >= sp.get(v).string.len) return target;
     if (v == .poison_type or k == .string) return sp.type_of(v);
     if (target != .none and sp.tag(target) == .variant_type) target = sp.single_payload(target); // `Opt8 x = 42`
-    const c = if (target == .none) StaticPool.Class{} else sp.class(target);
+    const c = if (target == .none) StaticPool.TagProperties{} else sp.get_tag_prop(target);
     if (k == .float) return if (c.is_float) target else .f32_type;
     if ((c.is_integer or c.is_float) and sp.fits(v, target)) return target;
     return if (neg) (if (sp.fits(v, .i32_type)) .i32_type else .i64_type) else if (sp.fits(v, .u32_type)) .u32_type else .u64_type;
@@ -106,8 +104,8 @@ pub fn literal_type(self: *Resolver, node: NodeId, expected: StaticPool.Index) S
 pub fn retype(self: *Resolver, v: StaticPool.Index, ty: StaticPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
     if (v == .none or ty == .none or sp.tag(v) != .int_value) return v;
-    if (sp.class(ty).is_integer) return sp.intern(.{ .int = .{ .ty = ty, .bits = sp.get(v).int.bits } });
-    if (!sp.class(ty).is_float) return v;
+    if (sp.get_tag_prop(ty).is_integer) return sp.intern(.{ .int = .{ .ty = ty, .bits = sp.get(v).int.bits } });
+    if (!sp.get_tag_prop(ty).is_float) return v;
     const i = sp.get(v).int;
     const signed = sp.get(i.ty) == .int_type and sp.get(i.ty).int_type.signedness == .signed;
     return sp.intern(.{ .float = .{ .ty = ty, .value = if (signed) @floatFromInt(@as(i64, @bitCast(i.bits))) else @floatFromInt(i.bits) } });
@@ -197,7 +195,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
     const mark = self.doc.diagnostics.len();
     self.check_unit(&ctx, unit);
     ctx.interpreted = false;
-    self.init_leave(outer);
+    self.init_leave(outer.tracked, outer.uninit);
     if (self.errors_since(mark, unit)) {
         memo(self, key, .poison_type);
         return .poison_type;
@@ -207,7 +205,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
         else => {},
     };
     const r = self.interpreter.run(&ctx, unit, capture(self, generic, v, first));
-    const made = if (sp.tag(ctx.ret_type) == .meta_type and sp.class(r).is_type) nominal(self, r) else .none;
+    const made = if (sp.tag(ctx.ret_type) == .meta_type and sp.get_tag_prop(r).is_type) nominal(self, r) else .none;
     if (made != .none and @intFromEnum(made) >= first) self.template_of.put(self.alloc, made, generic) catch @panic("OOM");
     memo(self, key, r);
     return r;
@@ -402,4 +400,26 @@ fn capture(self: *Resolver, decl: Decl.Index, root: NodeId, first: u32) Body {
 
 fn memo(self: *Resolver, key: StaticPool.AbstractKey, v: StaticPool.Index) void {
     self.static_pool.realized_abstracts.put(self.alloc, key, v) catch @panic("OOM");
+}
+
+pub fn unescape(raw: []const u8, buf: []u8) []const u8 {
+    if (raw.len > buf.len) return raw;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < raw.len) : (i += 1) {
+        var c = raw[i];
+        if (c == '\\' and i + 1 < raw.len) {
+            i += 1;
+            c = switch (raw[i]) {
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                '0' => 0,
+                else => raw[i],
+            };
+        }
+        buf[n] = c;
+        n += 1;
+    }
+    return buf[0..n];
 }
