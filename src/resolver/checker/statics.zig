@@ -410,6 +410,12 @@ pub fn unescape(raw: []const u8, buf: []u8) []const u8 {
         var c = raw[i];
         if (c == '\\' and i + 1 < raw.len) {
             i += 1;
+            if (raw[i] == 'x' and i + 2 < raw.len) if (std.fmt.parseInt(u8, raw[i + 1 .. i + 3], 16)) |x| {
+                buf[n] = x;
+                n += 1;
+                i += 2;
+                continue;
+            } else |_| {};
             c = switch (raw[i]) {
                 'n' => '\n',
                 't' => '\t',

@@ -677,6 +677,8 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     const mark = self.doc.diagnostics.len();
     const outer = self.init_enter();
     defer self.init_leave(outer.tracked, outer.uninit);
+    // a local function sees which enclosing locals are not written yet
+    if (kind == .function and !self.dp(.flags, decl).is_global) self.uninit = outer.uninit;
     const off = self.self_off(decl);
     var ctx = FnCtx{ .decl = decl, .ret_type = sp.get(ty).function_type.ret, .self_type = self.owner_of(decl), .abstract = abstract };
     self.open_scope(self.dp(.flags, decl).is_global, if (off == 1) ctx.self_type else .none, v);
@@ -1347,11 +1349,14 @@ pub fn statement(self: *const Resolver, n0: NodeId) Stmt {
     var flags = Decl.Flags{};
     const n = self.unwrap_mods(n0, &flags);
     const p = self.stmt_parts(n);
+    // `f = (..): ..` on a visible variable of function type assigns it, h11 links the name
+    const d = if (p.ids.len == 1) self.node_decl[p.ids[0]] else .none;
+    const assigns = p.type == 0 and d != .none and !is_fn(self.decls.pool.kind.buf[@intFromEnum(d)]);
 
     return .{
         .node = n,
         .flags = flags,
-        .kind = self.decl_kind(p.type, p.value),
+        .kind = if (assigns) .variable else self.decl_kind(p.type, p.value),
         .type = p.type,
         .ids = p.ids,
         .value = p.value,
