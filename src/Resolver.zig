@@ -86,6 +86,13 @@ pub const Decl = struct {
         self,
         autoins_arg,
         autoins_it,
+
+        pub fn is_fn(kind: Kind) bool {
+            return switch (kind) {
+                .function, .static_function, .inlined_function, .trait_member => true,
+                else => false,
+            };
+        }
     };
 
     pub const Flags = packed struct(u8) {
@@ -97,6 +104,10 @@ pub const Decl = struct {
         // methods: the body writes through `self`, the `self` local: something writes through it
         writes: bool = false,
         _pad: u2 = 0,
+
+        pub fn any(flags: Flags) bool {
+            return @as(u8, @bitCast(flags)) != 0;
+        }
     };
 
     //   unresolved -> resolving_signature -> signature_ready -> checking_body -> done   (or failed)
@@ -140,6 +151,33 @@ pub const Param = struct {
     @"else": ParseTree.NodeId = 0,
     is_mut: bool = false,
     stc: bool = false,
+
+    pub fn from_node(res: *const Resolver, n0: ParseTree.NodeId) Param {
+        var p = Param{};
+        var n = n0;
+        while (true) {
+            switch (res.tree.kind(n)) {
+                .partial__fun_def_param_named, .partial__type_def_param_named => p.name = res.tree.arg(n, 1),
+                .partial__fun_def_param_default, .partial__type_def_param_default => p.default = res.tree.arg(n, 1),
+                .partial__fun_def_param_where, .partial__type_def_param_where => p.where = res.tree.arg(n, 1),
+                .partial__fun_def_param_stcwhere => {
+                    p.where = res.tree.arg(n, 1);
+                    p.stc = true;
+                },
+                .partial__fun_def_param_where_else, .partial__type_def_param_where_else => p.@"else" = res.tree.arg(n, 1),
+                .partial__type_def_param_mut => p.is_mut = true,
+                .partial__fun_def_param, .partial__type_def_param => {
+                    p.ty = res.tree.arg(n, 0);
+                    return p;
+                },
+                else => {
+                    p.ty = n;
+                    return p;
+                },
+            }
+            n = res.tree.arg(n, 0);
+        }
+    }
 };
 
 const Access = enum {
@@ -164,8 +202,63 @@ pub const Stmt = struct {
     value: ParseTree.NodeId,
     values: []const ParseTree.NodeId,
 
+    pub fn from_node(res: *const Resolver, n0: ParseTree.NodeId) Stmt {
+        var flags = Decl.Flags{};
+
+        // assignments could have modifiers, which result in non-flat repres. in ast
+        // -> flat out and put into decl flags by walking l.son->l.son->l.son
+        const non_assignmoded_root = blk: {
+            var n = n0;
+            outer: while (true) : (n = res.tree.arg(n, 0)) switch (res.tree.kind(n)) {
+                .mod_pub => flags.is_pub = true,
+                .mod_mut => flags.is_mut = true,
+                .mod_stc => flags.is_stc = true,
+                else => break :outer,
+            };
+            break :blk n;
+        };
+
+        var stmt_type: ParseTree.NodeId = 0;
+        var stmt_ids: []const ParseTree.NodeId = &.{};
+        var stmt_value: ParseTree.NodeId = 0;
+        switch (res.tree.kind(non_assignmoded_root)) {
+            .def_var => {
+                stmt_type = res.tree.arg(non_assignmoded_root, 0);
+                stmt_ids = res.tree.list_at(non_assignmoded_root, 1, .partial__destructure);
+            },
+            .assign_typed => {
+                stmt_type = res.tree.arg(res.tree.arg(non_assignmoded_root, 0), 0);
+                stmt_ids = res.tree.list_at(res.tree.arg(non_assignmoded_root, 0), 1, .partial__destructure);
+                stmt_value = res.tree.arg(non_assignmoded_root, 1);
+            },
+            .assign => {
+                stmt_ids = res.tree.list_at(non_assignmoded_root, 0, .partial__destructure);
+                stmt_value = res.tree.arg(non_assignmoded_root, 1);
+            },
+            else => {},
+        }
+
+        // `f = (..): ..` on a visible variable of function type assigns it, h11 links the name
+        const d = if (stmt_ids.len == 1) res.node_decl[stmt_ids[0]] else .none;
+        const assigns = stmt_type == 0 and d != .none and !res.decls.pool.kind.buf[@intFromEnum(d)].is_fn();
+
+        return .{
+            .node = non_assignmoded_root,
+            .flags = flags,
+            .kind = if (assigns) .variable else res.decl_kind(stmt_type, stmt_value),
+            .type = stmt_type,
+            .ids = stmt_ids,
+            .value = stmt_value,
+            .values = if (stmt_value == 0) &.{} else res.tree.list_at(non_assignmoded_root, 1, .partial__assign_multival),
+        };
+    }
+
     pub fn is_member(s: Stmt) bool {
-        return s.ids.len == 1 and is_fn(s.kind);
+        return s.ids.len == 1 and s.kind.is_fn();
+    }
+
+    pub fn declares(s: Stmt) bool {
+        return s.type != 0 or s.flags.any() or s.kind != .variable;
     }
 };
 
@@ -204,6 +297,8 @@ pub const NodeProperties = packed struct(u8) {
     literal: bool = false,
     _pad: u1 = 0,
 };
+
+// TODO WATCH: sollte in ein eigenes "TreeData" für den Res.
 
 pub const node_props = blk: {
     var t: [256]NodeProperties = @splat(.{});
@@ -421,19 +516,30 @@ fn s1_collect_globals(self: *Resolver) void {
     self.name_pool.intern_predefineds();
 
     for (self.roots) |root| {
-        const s = self.statement(root);
+
+        // every root is assumed to be a "statement", but statements did not
+        //  exist up until now, as statements were expressions aswell in the
+        //  `Parser`.
+        const s: Stmt = Stmt.from_node(self, root);
+
         var flags = s.flags;
         flags.is_global = true;
-        const declares = s.type != 0 or @as(u8, @bitCast(s.flags)) != 0 or s.kind != .variable;
+        const declares = s.declares();
+
         for (s.ids) |id| {
             const name = self.name_of(id);
             if (name == .none) continue;
             const gop = self.globals.getOrPut(self.alloc, name) catch @panic("OOM");
-            if (gop.found_existing and !(is_fn(s.kind) and is_fn(self.dp(.kind, gop.value_ptr.*).*))) {
-                if (declares) _ = self.report(.duplicate_declaration, id, name, gop.value_ptr.*);
+            if (gop.found_existing and !(s.kind.is_fn() and self.dp(.kind, gop.value_ptr.*).*.is_fn())) {
+                if (declares) {
+                    _ = self.report(.duplicate_declaration, id, name, gop.value_ptr.*);
+                }
+
                 if (declares and self.node_decl[root] == .none) self.node_decl[root] = gop.value_ptr.*;
+
                 continue;
             }
+
             const d = self.push_decl(name, s.node, s.kind, .none, flags);
             // overloads with a where clause come before the ones without, so every group of same-typed
             // overloads reads as a runtime dispatch: its where-clauses in order, the where-less fallback last
@@ -592,7 +698,7 @@ pub fn h05_ensure_signature(self: *Resolver, decl: Decl.Index) void {
     state.* = .resolving_signature;
     const sp = &self.static_pool;
     const kind = self.dp(.kind, decl).*;
-    const s = self.statement(self.dp(.node, decl).*);
+    const s = Stmt.from_node(self, self.dp(.node, decl).*);
     if (s.type != 0 and self.tree.kind(s.type) == .type_fun and switch (self.dp(.name, decl).*) {
         .init, .deinit, .main, .has_next, .next => true,
         else => false,
@@ -657,7 +763,7 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     // stcfun bodies are checked per realization, length-generic ones per length (h20); `main` is realized once, by the runtime
     const generic = statics.length_generic(self, ty) and !self.template_of.contains(decl);
     const abstract = generic and statics.only_templates(self, ty);
-    if (kind == .static_function or !is_fn(kind) or self.tree.kind(v) != .def_fun or generic and !abstract) {
+    if (kind == .static_function or !kind.is_fn() or self.tree.kind(v) != .def_fun or generic and !abstract) {
         state.* = .done;
         return;
     }
@@ -677,7 +783,7 @@ pub fn h06_check_body(self: *Resolver, decl: Decl.Index) void {
     // a where clause sees its own parameter and the ones before it; realized `type` parameters are static values
     var slot: usize = 0;
     for (self.params_of(v), 0..) |pn, i| {
-        const p = self.param(pn);
+        const p = Param.from_node(self, pn);
         const pt = sp.get(ty).function_type.params[i + off];
         if (p.default != 0) _ = self.check(&ctx, p.default, pt);
         for (self.params_of(v)[0..i], 0..) |q, j| if (self.param_name(q, j) == self.name_at(p, i)) self.doc.h21_report(.duplicate_declaration, pn, self.name_at(p, i), decl);
@@ -759,7 +865,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             const stmts = self.tree.manychildren(node);
             // local functions are visible in their whole block
             for (stmts) |s| {
-                const st = self.statement(s);
+                const st = Stmt.from_node(self, s);
                 if (st.kind != .function or st.ids.len != 1 or st.type == 0 or self.tree.kind(st.type) != .type_fun) continue;
                 const d = self.h02_declare_local(self.name_of(st.ids[0]), st.node, .function, .none);
                 self.dp(.flags, d).* = st.flags;
@@ -968,7 +1074,7 @@ pub fn h10_expect(self: *Resolver, node: ParseTree.NodeId, actual: StaticPool.In
 
 pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
     const sp = &self.static_pool;
-    const parts = self.statement(node);
+    const parts = Stmt.from_node(self, node);
     const n = parts.node;
     const flags = parts.flags;
     const kind = parts.kind;
@@ -984,7 +1090,7 @@ pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) St
     }
     if (kind == .function and parts.type == 0 and parts.ids.len == 1) {
         const e = self.h01_lookup(self.name_of(parts.ids[0]));
-        if (e != .none and !is_fn(self.dp(.kind, e).*) and self.dp(.ty, e).* != .none and sp.tag(sp.apply_vars(&self.abstract_pool, self.dp(.ty, e).*)) == .function_type) {
+        if (e != .none and !self.dp(.kind, e).*.is_fn() and self.dp(.ty, e).* != .none and sp.tag(sp.apply_vars(&self.abstract_pool, self.dp(.ty, e).*)) == .function_type) {
             self.node_decl[parts.ids[0]] = e;
             return self.h11_check_assign(ctx, node);
         }
@@ -1109,14 +1215,7 @@ fn wrote(self: *Resolver, place: ParseTree.NodeId) void {
     if (d != .none and self.dp(.kind, d).* == .self) self.dp(.flags, d).writes = true;
 }
 
-// HELPERS!
-
-const autoinserted_dollarnames = blk: {
-    @setEvalBranchQuota(100_000);
-    var t: [64][]const u8 = undefined;
-    for (&t, 0..) |*s, i| s.* = std.fmt.comptimePrint("${d}", .{i});
-    break :blk t;
-};
+// HELPERS! must be interned TODO
 
 pub fn name_of(self: *Resolver, n: ParseTree.NodeId) NamePool.Index {
     switch (self.tree.kind(n)) {
@@ -1165,20 +1264,13 @@ pub fn check(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId, expected: Static
     return self.h10_expect(n, t, expected);
 }
 
-pub fn is_fn(kind: Decl.Kind) bool {
-    return switch (kind) {
-        .function, .static_function, .inlined_function, .trait_member => true,
-        else => false,
-    };
-}
-
 pub fn is_range_kind(k: ParseTree.Node.Kind) bool {
     return node_props[@intFromEnum(k)].range;
 }
 
 pub fn push_decl(self: *Resolver, name: NamePool.Index, node: ParseTree.NodeId, kind: Decl.Kind, ty: StaticPool.Index, flags: Decl.Flags) Decl.Index {
     const d: Decl.Index = @enumFromInt(self.decls.len());
-    const lazy = flags.is_global or is_fn(kind) or is_type_decl(kind);
+    const lazy = flags.is_global or kind.is_fn() or is_type_decl(kind);
     self.decls.push(.{ .name = name, .node = node, .kind = kind, .flags = flags, .state = if (lazy) .unresolved else .done, .ty = ty, .value = .none, .next_overload = .none });
     return d;
 }
@@ -1302,91 +1394,19 @@ fn decl_kind(self: *const Resolver, type_node: ParseTree.NodeId, value: ParseTre
     };
 }
 
-pub fn statement(self: *const Resolver, n0: ParseTree.NodeId) Stmt {
-    var flags = Decl.Flags{};
-
-    // assignments could have modifiers, which result in non-flat repres. in ast
-    // -> flat out and put into decl flags by walking l.son->l.son->l.son
-    const non_assignmoded_root = blk: {
-        var n = n0;
-        outer: while (true) : (n = self.tree.arg(n, 0)) switch (self.tree.kind(n)) {
-            .mod_pub => flags.is_pub = true,
-            .mod_mut => flags.is_mut = true,
-            .mod_stc => flags.is_stc = true,
-            else => break :outer,
-        };
-        break :blk n;
-    };
-
-    var stmt_type: ParseTree.NodeId = 0;
-    var stmt_ids: []const ParseTree.NodeId = &.{};
-    var stmt_value: ParseTree.NodeId = 0;
-    switch (self.tree.kind(non_assignmoded_root)) {
-        .def_var => {
-            stmt_type = self.tree.arg(non_assignmoded_root, 0);
-            stmt_ids = self.tree.list_at(non_assignmoded_root, 1, .partial__destructure);
-        },
-        .assign_typed => {
-            stmt_type = self.tree.arg(self.tree.arg(non_assignmoded_root, 0), 0);
-            stmt_ids = self.tree.list_at(self.tree.arg(non_assignmoded_root, 0), 1, .partial__destructure);
-            stmt_value = self.tree.arg(non_assignmoded_root, 1);
-        },
-        .assign => {
-            stmt_ids = self.tree.list_at(non_assignmoded_root, 0, .partial__destructure);
-            stmt_value = self.tree.arg(non_assignmoded_root, 1);
-        },
-        else => {},
-    }
-
-    // TODO NEXT where i left off
-    // `f = (..): ..` on a visible variable of function type assigns it, h11 links the name
-    const d = if (stmt_ids.len == 1) self.node_decl[stmt_ids[0]] else .none;
-    const assigns = stmt_type == 0 and d != .none and !is_fn(self.decls.pool.kind.buf[@intFromEnum(d)]);
-
-    return .{
-        .node = non_assignmoded_root,
-        .flags = flags,
-        .kind = if (assigns) .variable else self.decl_kind(stmt_type, stmt_value),
-        .type = stmt_type,
-        .ids = stmt_ids,
-        .value = stmt_value,
-        .values = if (stmt_value == 0) &.{} else self.tree.list_at(non_assignmoded_root, 1, .partial__assign_multival),
-    };
-}
-
-pub fn param(self: *const Resolver, n0: ParseTree.NodeId) Param {
-    var p = Param{};
-    var n = n0;
-    while (true) {
-        switch (self.tree.kind(n)) {
-            .partial__fun_def_param_named, .partial__type_def_param_named => p.name = self.tree.arg(n, 1),
-            .partial__fun_def_param_default, .partial__type_def_param_default => p.default = self.tree.arg(n, 1),
-            .partial__fun_def_param_where, .partial__type_def_param_where => p.where = self.tree.arg(n, 1),
-            .partial__fun_def_param_stcwhere => {
-                p.where = self.tree.arg(n, 1);
-                p.stc = true;
-            },
-            .partial__fun_def_param_where_else, .partial__type_def_param_where_else => p.@"else" = self.tree.arg(n, 1),
-            .partial__type_def_param_mut => p.is_mut = true,
-            .partial__fun_def_param, .partial__type_def_param => {
-                p.ty = self.tree.arg(n, 0);
-                return p;
-            },
-            else => {
-                p.ty = n;
-                return p;
-            },
-        }
-        n = self.tree.arg(n, 0);
-    }
-}
-
 // unnamed parameters and fields are `$0`, `$1`, ...
 pub fn param_name(self: *Resolver, pn: ParseTree.NodeId, i: usize) NamePool.Index {
-    return self.name_at(self.param(pn), i);
+    return self.name_at(Param.from_node(self, pn), i);
 }
 
 pub fn name_at(self: *Resolver, p: Param, i: usize) NamePool.Index {
+    const autoinserted_dollarnames = comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var t: [64][]const u8 = undefined;
+        for (&t, 0..) |*s, j| s.* = std.fmt.comptimePrint("${d}", .{j});
+        break :blk t;
+    };
+
     return if (p.name != 0) self.name_of(p.name) else self.name_pool.intern(autoinserted_dollarnames[@min(i, 63)]);
 }
 
@@ -1484,7 +1504,7 @@ pub fn integer(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId) bool {
 pub fn signature_mentions(self: *Resolver, f: ParseTree.NodeId, v: ParseTree.NodeId) bool {
     const header = self.tree.arg(f, 0);
     if (self.tree.kind(header) != .partial__fun_def_header_ret or self.mentions(self.tree.arg(header, 1), v)) return true;
-    for (self.params_of(f)) |pn| if (self.mentions(self.param(pn).ty, v)) return true;
+    for (self.params_of(f)) |pn| if (self.mentions(Resolver.Param.from_node(self, pn).ty, v)) return true;
     return false;
 }
 
@@ -1589,9 +1609,9 @@ fn field_mut(self: *Resolver, pt: StaticPool.Index, name: NamePool.Index) bool {
     var t = sp.apply_vars(&self.abstract_pool, pt);
     t = sp.pointee(t);
     if (sp.tag(t) == .variant_case_type) t = sp.get(t).variant_case_type.payload;
-    if (t != .none and sp.tag(t) == .template_type) if (self.template_field(sp.get(t).template_type, name)) |f| return self.param(f).is_mut;
+    if (t != .none and sp.tag(t) == .template_type) if (self.template_field(sp.get(t).template_type, name)) |f| return Param.from_node(self, f).is_mut;
     if (t == .none or sp.tag(t) != .record_type) return false;
-    for (sp.get(t).custom_type.field_names, 0..) |n, i| if (n == name) return self.param(self.fields_of(t)[i]).is_mut;
+    for (sp.get(t).custom_type.field_names, 0..) |n, i| if (n == name) return Param.from_node(self, self.fields_of(t)[i]).is_mut;
     return false;
 }
 

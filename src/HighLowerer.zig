@@ -122,7 +122,7 @@ pub fn lower(self: *HighLowerer) void {
         put(self.alloc, &self.global_of, @enumFromInt(i), self.ir.globals.len());
         self.ir.globals.push(.{ .decl = @enumFromInt(i), .ty = self.apply(d.ty[i]), .init = if (d.flags[i].is_stc) d.value[i] else .none });
     };
-    for (bodies.decl) |bd| if (Resolver.is_fn(self.r.dp(.kind, bd).*) and !self.head_of.contains(bd)) {
+    for (bodies.decl) |bd| if (self.r.dp(.kind, bd).*.is_fn() and !self.head_of.contains(bd)) {
         _ = self.func(bd);
     };
     self.ir.init_fn = self.ir.functions.len();
@@ -539,7 +539,7 @@ fn scan_taken(self: *HighLowerer) void {
         while (target != 0 and self.r.tree.kind(target) == .capture) target = self.r.tree.arg(target, 0);
         if (target != 0 and self.r.tree.kind(target) == .identifier and !self.is_ptr(self.ty(target))) put(self.alloc, &self.taken, self.decl(target), {});
         const d = self.decl(n);
-        if (d != .none and Resolver.is_fn(self.r.dp(.kind, d).*) and self.body_of.contains(d)) {
+        if (d != .none and self.r.dp(.kind, d).*.is_fn() and self.body_of.contains(d)) {
             const node = self.r.dp(.node, d).*;
             if (node >= b.lo and node < b.lo + b.len) for (self.captures(d)) |c| if (self.by_ref(c)) put(self.alloc, &self.taken, c, {});
         }
@@ -579,7 +579,7 @@ fn candidate(self: *HighLowerer, m: Decl.Index) bool {
     const fail = self.block();
     var tested = false;
     for (pnodes) |pn| {
-        const p = self.r.param(pn);
+        const p = Resolver.Param.from_node(self.r, pn);
         if (p.where == 0 or p.@"else" != 0 or p.stc) continue;
         tested = true;
         const ok = self.block();
@@ -587,7 +587,7 @@ fn candidate(self: *HighLowerer, m: Decl.Index) bool {
         self.goto(ok);
     }
     for (pnodes) |pn| {
-        const p = self.r.param(pn);
+        const p = Resolver.Param.from_node(self.r, pn);
         if (p.where == 0 or p.@"else" == 0 or p.stc) continue;
         const ok = self.block();
         const els = self.block();
@@ -936,7 +936,7 @@ fn ident(self: *HighLowerer, n: NodeId) Ref {
     if (d == .none) return .none;
     const kind = self.r.dp(.kind, d).*;
     const value = self.r.dp(.value, d).*;
-    if (Resolver.is_fn(kind)) return self.fn_value(d);
+    if (kind.is_fn()) return self.fn_value(d);
     if (value != .none and (self.r.dp(.flags, d).is_stc or kind == .static_parameter or kind == .parameter or kind == .type_alias or kind == .record or kind == .variant or kind == .trait)) return self.constant(value, self.ty(n));
     return self.load_var(d);
 }
@@ -985,7 +985,7 @@ fn store_to(self: *HighLowerer, target: NodeId, x: Ref) void {
 }
 
 fn assign(self: *HighLowerer, n0: NodeId) void {
-    const parts = self.r.statement(n0);
+    const parts = Resolver.Stmt.from_node(self.r, n0);
     const n = parts.node;
     if (parts.kind != .variable) return;
     const values = parts.values;
@@ -1030,7 +1030,7 @@ fn cheap(self: *HighLowerer, n: NodeId, budget: *u8) bool {
     if (self.static_of(n) != null) return true;
     const k = self.r.tree.kind(n);
     switch (k) {
-        .identifier, .identifier_self => return self.is_ssa(n) and !Resolver.is_fn(self.r.dp(.kind, self.decl(n)).*),
+        .identifier, .identifier_self => return self.is_ssa(n) and !self.r.dp(.kind, self.decl(n)).*.is_fn(),
         .capture => return self.cheap(self.r.tree.arg(n, 0), budget),
         .int, .char, .float, .string, .boolean_true, .boolean_false => return true,
         .neg_num => if (self.r.is_literal(n)) return true,
@@ -1569,7 +1569,7 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
     const args = self.r.tree.manychildren(self.r.tree.arg(n, 1));
     if (self.realized(n)) |f| return self.fn_value(f);
     const d = self.decl(n);
-    if (d != .none and Resolver.is_fn(self.r.dp(.kind, d).*)) return self.direct(d, callee, args, t);
+    if (d != .none and self.r.dp(.kind, d).*.is_fn()) return self.direct(d, callee, args, t);
     const ct = self.ty(callee);
     if (self.sp.tag(ct) == .meta_type or self.sp.tag(ct) == .variant_case_type) return self.construct(t, args);
     const f = self.expr(callee);
@@ -1631,7 +1631,7 @@ fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId
     if (self.body_of.get(rd)) |bi| self.body = self.r.bodies.get(bi).?;
     for (pnodes, 0..) |pn, j| if (self.tmp.buf[at + j] != none) self.declare_var(self.decl(pn), @enumFromInt(self.tmp.buf[at + j]));
     for (pnodes, 0..) |pn, j| if (self.tmp.buf[at + j] == none) {
-        const dflt = self.r.param(pn).default;
+        const dflt = Resolver.Param.from_node(self.r, pn).default;
         const x = if (dflt != 0) self.expr_to(dflt, self.sp.get(ft).function_type.params[j + off]) else Ref.none;
         self.declare_var(self.decl(pn), x);
         self.tmp.buf[at + j] = @intFromEnum(x);
@@ -1699,7 +1699,7 @@ fn complete(self: *HighLowerer, rec: Index, mark: u32) void {
     var locals: u64 = 0;
     var guarded: u64 = 0;
     if (bi != null) for (fields, 0..) |f, i| {
-        const p = self.r.param(f);
+        const p = Resolver.Param.from_node(self.r, f);
         if (p.@"else" != 0) guarded |= @as(u64, 1) << @intCast(i);
         for ([_]NodeId{ if (self.tmp.buf[mark + i] == none) p.default else 0, if (p.@"else" != 0) p.where else 0, p.@"else" }) |x| if (x != 0) {
             const sub = self.r.tree.subtree(x);
@@ -1713,12 +1713,12 @@ fn complete(self: *HighLowerer, rec: Index, mark: u32) void {
     for (0..fields.len) |i| if (locals >> @intCast(i) & 1 != 0 and self.tmp.buf[mark + i] != none) self.declare_var(@enumFromInt(self.body.first + i), @enumFromInt(self.tmp.buf[mark + i]));
     for (fields, 0..) |f, i| if (self.tmp.buf[mark + i] == none) {
         const t = self.sp.get(rec).custom_type.field_types[i];
-        const x = if (self.r.param(f).default != 0) self.expr_to(self.r.param(f).default, t) else self.emit(.zeroed, t, 0, 0);
+        const x = if (Resolver.Param.from_node(self.r, f).default != 0) self.expr_to(Resolver.Param.from_node(self.r, f).default, t) else self.emit(.zeroed, t, 0, 0);
         self.tmp.buf[mark + i] = @intFromEnum(x);
         if (locals >> @intCast(i) & 1 != 0) self.declare_var(@enumFromInt(self.body.first + i), x);
     };
     for (fields, 0..) |f, i| if (guarded >> @intCast(i) & 1 != 0) {
-        const p = self.r.param(f);
+        const p = Resolver.Param.from_node(self.r, f);
         if (p.where == 0) continue;
         const ok = self.block();
         const els = self.block();

@@ -6,7 +6,6 @@ const StaticPool = @import("../StaticPool.zig");
 const Decl = Resolver.Decl;
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
-const is_fn = Resolver.is_fn;
 
 pub fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
     const sp = &self.static_pool;
@@ -25,7 +24,7 @@ pub fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
     const d = if (self.tree.kind(callee) != .fun_call) self.node_decl[callee] else if (self.node_decl[self.tree.arg(callee, 0)] != .none and self.dp(.kind, self.node_decl[self.tree.arg(callee, 0)]).* == .static_function) self.node_decl[callee] else .none;
     // `x.m(..)` binds x as the self argument, `Type.m(x.&, ..)` passes it like any other argument
     const recv = if (self.tree.kind(callee) == .member and sp.tag(self.node_type[self.tree.arg(callee, 0)]) != .meta_type) self.tree.arg(callee, 0) else 0;
-    if (ct != .poison_type and d != .none and is_fn(self.dp(.kind, d).*)) return call_decl(self, ctx, node, d, args, recv);
+    if (ct != .poison_type and d != .none and self.dp(.kind, d).*.is_fn()) return call_decl(self, ctx, node, d, args, recv);
     const target = if (sp.tag(ct) != .meta_type) sp.apply_vars(&self.abstract_pool, ct) else statics.deferred(self, ctx, callee) orelse {
         for (args) |a| _ = self.h09_check_expr(ctx, self.arg_value(a), .none);
         return .poison_type;
@@ -195,7 +194,7 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
 fn check_stcwhere(self: *Resolver, ctx: *FnCtx, node: NodeId, callee: Decl.Index, pnodes: []const NodeId, args: []const NodeId, map: []const u32) void {
     if (ctx.interpreted) return;
     for (pnodes) |pn| {
-        if (self.param(pn).stc) break;
+        if (Resolver.Param.from_node(self, pn).stc) break;
     } else return;
     const ft = self.dp(.ty, callee).*;
     const off = self.self_off(callee);
@@ -213,7 +212,7 @@ fn check_stcwhere(self: *Resolver, ctx: *FnCtx, node: NodeId, callee: Decl.Index
         self.dp(.value, self.h02_declare_local(self.param_name(pn, j), pn, .static_parameter, pt)).* = if (v == .none) v else statics.retype(self, v, pt);
     }
     for (pnodes) |pn| {
-        const p = self.param(pn);
+        const p = Resolver.Param.from_node(self, pn);
         if (!p.stc) continue;
         const r = statics.try_static(self, ctx, p.where) orelse {
             _ = self.report(.not_static, node, 0, 0);
@@ -225,7 +224,7 @@ fn check_stcwhere(self: *Resolver, ctx: *FnCtx, node: NodeId, callee: Decl.Index
 
 pub fn dispatches(self: *Resolver, d: Decl.Index) bool {
     for (self.params_of(self.value_node(d))) |pn| {
-        const p = self.param(pn);
+        const p = Resolver.Param.from_node(self, pn);
         if (p.where != 0 and p.@"else" == 0 and !p.stc) return true;
     }
     return false;
@@ -251,13 +250,13 @@ fn score(self: *Resolver, c: Decl.Index, args: []const NodeId, tys: []const Stat
         else if (sp.has_vars(p))
             (if (statics.arg_len(self, t, p) != .none) 2 else return -1)
         else if (sp.coerce(&self.abstract_pool, t, p) != .incompatible) 4 else return -1;
-        if (self.param(pnodes[map[i]]).where != 0) total += 1;
+        if (Resolver.Param.from_node(self, pnodes[map[i]]).where != 0) total += 1;
     }
     return total;
 }
 
 pub fn has_where(self: *Resolver, d: Decl.Index) bool {
-    for (self.params_of(self.value_node(d))) |pn| if (self.param(pn).where != 0) return true;
+    for (self.params_of(self.value_node(d))) |pn| if (Resolver.Param.from_node(self, pn).where != 0) return true;
     return false;
 }
 
@@ -291,7 +290,7 @@ pub fn bind_args(self: *Resolver, params: []const NodeId, args: []const NodeId, 
         bound |= @as(u64, 1) << @intCast(p);
         map[i] = @intCast(p);
     }
-    if (!partial) for (params, 0..) |pn, j| if (bound >> @intCast(j) & 1 == 0 and self.param(pn).default == 0) return false;
+    if (!partial) for (params, 0..) |pn, j| if (bound >> @intCast(j) & 1 == 0 and Resolver.Param.from_node(self, pn).default == 0) return false;
     return true;
 }
 

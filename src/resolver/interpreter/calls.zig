@@ -52,7 +52,7 @@ pub fn call(self: *Interpreter, n: NodeId) Value {
     const args = r.tree.manychildren(r.tree.arg(n, 1));
     const d = self.info(.decl, n);
     const cd = self.info(.decl, callee);
-    if (d != .none and Resolver.is_fn(r.dp(.kind, d).*) and (cd == .none or r.dp(.kind, cd).* != .static_function)) {
+    if (d != .none and r.dp(.kind, d).*.is_fn() and (cd == .none or r.dp(.kind, cd).* != .static_function)) {
         if (r.self_off(r.real(d)) == 0 or r.tree.kind(callee) != .member or sp.tag(self.info(.ty, r.tree.arg(callee, 0))) == .meta_type) return invoke(self, n, d, args, .empty, .empty);
         const c = places.cell(self, r.tree.arg(callee, 0)) orelse return .poison;
         return invoke(self, n, d, args, if (self.mem.buf[c].is_ref()) self.mem.buf[c] else .ref(r.self_ptr(self.vtype(self.mem.buf[c])), c), .empty);
@@ -186,10 +186,10 @@ fn attempt(self: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, b
         _ = places.store(self, pnodes[map[i]], self.info(.decl, pnodes[map[i]]), self.list.buf[base + i]);
     }
     for (pnodes, 0..) |pn, j| if (bound >> @intCast(j) & 1 == 0) {
-        _ = places.store(self, pn, self.info(.decl, pn), self.eval(r.param(pn).default));
+        _ = places.store(self, pn, self.info(.decl, pn), self.eval(Resolver.Param.from_node(self.res(), pn).default));
     };
     for (pnodes) |pn| {
-        const p = r.param(pn);
+        const p = Resolver.Param.from_node(self.res(), pn);
         if (p.where == 0) continue;
         const w = self.eval(p.where);
         if (w.ty != .bool_type) return Value.poison;
@@ -254,7 +254,7 @@ fn complete(self: *Interpreter, rec: Index, at: u32) bool {
     const r = self.res();
     const fields = r.fields_of(rec);
     var framed = false;
-    for (fields, 0..) |f, i| framed = framed or r.param(f).@"else" != 0 or r.param(f).default != 0 and self.mem.buf[at + i].is(.none);
+    for (fields, 0..) |f, i| framed = framed or Resolver.Param.from_node(self.res(), f).@"else" != 0 or Resolver.Param.from_node(self.res(), f).default != 0 and self.mem.buf[at + i].is(.none);
     if (!framed) {
         for (0..fields.len) |i| if (self.mem.buf[at + i].is(.none)) self.fill(at + i, self.zero(field(self, rec, i)), field(self, rec, i));
         return true;
@@ -269,13 +269,13 @@ fn complete(self: *Interpreter, rec: Index, at: u32) bool {
     const base = self.top().base;
     for (0..fields.len) |i| self.mem.buf[base + i] = self.mem.buf[at + i];
     for (fields, 0..) |f, i| if (self.mem.buf[base + i].is(.none)) {
-        const d = r.param(f).default;
+        const d = Resolver.Param.from_node(self.res(), f).default;
         const x = if (d != 0) self.eval(d) else self.zero(field(self, rec, i));
         if (x.is(.poison_type)) return false;
         self.fill(base + i, x, field(self, rec, i));
     };
     for (fields, 0..) |f, i| {
-        const p = r.param(f);
+        const p = Resolver.Param.from_node(self.res(), f);
         if (p.where == 0 or p.@"else" == 0) continue;
         const w = self.eval(p.where);
         if (w.ty != .bool_type) return false;

@@ -168,7 +168,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
             var names: [64]NamePool.Index = undefined;
             var types: [64]StaticPool.Index = undefined;
             for (fields, 0..) |f, i| {
-                const p = self.param(f);
+                const p = Resolver.Param.from_node(self, f);
                 types[i] = dynify(self, realized_type(self, ctx, p.ty));
                 names[i] = self.name_at(p, i);
                 if (std.mem.indexOfScalar(NamePool.Index, names[0..i], names[i]) != null) self.doc.h21_report(.duplicate_declaration, f, names[i], decl);
@@ -184,11 +184,11 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
         for (fields, 0..) |f, i| {
             const t = sp.get(ty).custom_type.field_types[i];
             const fd = self.h02_declare_local(sp.get(ty).custom_type.field_names[i], f, .field, t);
-            self.dp(.flags, fd).is_mut = self.param(f).is_mut;
-            calls.link(self, self.param(f).name, fd, t);
+            self.dp(.flags, fd).is_mut = Resolver.Param.from_node(self, f).is_mut;
+            calls.link(self, Resolver.Param.from_node(self, f).name, fd, t);
         }
         for (fields, 0..) |f, i| {
-            const p = self.param(f);
+            const p = Resolver.Param.from_node(self, f);
             if (p.default != 0) _ = self.check(ctx, p.default, sp.get(ty).custom_type.field_types[i]);
             self.check_guards(ctx, p, sp.get(ty).custom_type.field_types[i]);
         }
@@ -223,13 +223,13 @@ fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.I
     var names: [64]NamePool.Index = undefined;
     var n: usize = 0;
     for (self.tree.manychildren(body)) |s| {
-        const m = self.statement(s);
+        const m = Resolver.Stmt.from_node(self, s);
         if (!m.is_member()) continue;
         names[n] = self.name_of(m.ids[0]);
         self.node_decl[m.ids[0]] = self.push_decl(names[n], m.node, .trait_member, .none, m.flags);
         n += 1;
     }
-    for (self.tree.manychildren(body)) |s| if (!self.statement(s).is_member()) {
+    for (self.tree.manychildren(body)) |s| if (!Resolver.Stmt.from_node(self, s).is_member()) {
         _ = self.h11_check_assign(ctx, s);
     };
     var types: [64]StaticPool.Index = undefined;
@@ -298,8 +298,8 @@ pub fn fun_type(self: *Resolver, ctx: *FnCtx, v: NodeId, category: StaticPool.Fu
     var buf: [64]StaticPool.Index = undefined;
     buf[0] = self_param;
     for (params, 0..) |p, i| {
-        buf[i + off] = h07_lower_type(self, ctx, self.param(p).ty);
-        if (statics.holds_template(self, buf[i + off]) and statics.templated(self, buf[i + off]) == .none) buf[i + off] = self.report(.unrealized_template, self.param(p).ty, buf[i + off], 0);
+        buf[i + off] = h07_lower_type(self, ctx, Resolver.Param.from_node(self, p).ty);
+        if (statics.holds_template(self, buf[i + off]) and statics.templated(self, buf[i + off]) == .none) buf[i + off] = self.report(.unrealized_template, Resolver.Param.from_node(self, p).ty, buf[i + off], 0);
     }
     const r = if (self.tree.kind(header) == .partial__fun_def_header_ret) realized_type(self, ctx, self.tree.arg(header, 1)) else ret;
     return self.static_pool.intern(.{ .function_type = .{ .category = category, .params = buf[0 .. params.len + off], .ret = r } });

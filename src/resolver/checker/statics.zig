@@ -8,7 +8,6 @@ const Decl = Resolver.Decl;
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
 const Body = Resolver.Body;
-const is_fn = Resolver.is_fn;
 const max_nesting = 256;
 const NamePool = @import("../NamePool.zig");
 
@@ -169,7 +168,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
     const params = self.params_of(v);
     bind_static(self, generic, args);
     for (params) |pn| {
-        const w = self.param(pn).where;
+        const w = Resolver.Param.from_node(self, pn).where;
         if (w != 0 and h08_eval_static(self, &ctx, w) == .bool_false) _ = self.report(.stcwhere_violated, w, generic, args);
     }
     const unit = self.tree.arg(v, 1);
@@ -224,7 +223,7 @@ fn bind_static(self: *Resolver, generic: Decl.Index, args: StaticPool.Index) voi
     @memcpy(argv[0..argc], sp.get(args).aggregate.elems);
     for (self.params_of(self.value_node(generic)), 0..) |pn, i| {
         const pt = if (sp.has_vars(self.sig(generic).params[i])) sp.type_of(argv[i]) else self.sig(generic).params[i];
-        const p = self.param(pn);
+        const p = Resolver.Param.from_node(self, pn);
         const d = self.h02_declare_local(self.name_at(p, i), pn, .static_parameter, pt);
         calls.link(self, p.name, d, pt);
         self.dp(.value, d).* = retype(self, argv[i], pt);
@@ -375,14 +374,14 @@ pub fn template_member(self: *Resolver, node: NodeId, t: StaticPool.Index, name:
     self.open_scope(true, .none, 0);
     defer self.h04_pop_scope();
     if (kind == .record) if (self.template_field(g, name)) |f| {
-        const p = self.param(f);
+        const p = Resolver.Param.from_node(self, f);
         return if (self.mentions(p.ty, v)) self.report(.generic_member, node, name, t) else types.h07_lower_type(self, &ctx, p.ty);
     };
     const w = self.definition(unit);
     const tr = if (self.type_kind(w.core) == .trait) w.core else if (w.body != 0) w.body else return self.report(.unknown_member, node, name, t);
     for (self.tree.manychildren(self.tree.arg(tr, if (self.tree.kind(tr) == .def_trait_implof) 1 else 0))) |s| {
-        const parts = self.statement(s);
-        if (parts.ids.len != 1 or self.name_of(parts.ids[0]) != name or !is_fn(parts.kind)) continue;
+        const parts = Resolver.Stmt.from_node(self, s);
+        if (parts.ids.len != 1 or self.name_of(parts.ids[0]) != name or !parts.kind.is_fn()) continue;
         return if (self.signature_mentions(parts.value, v)) self.report(.generic_member, node, name, t) else types.fun_type(self, &ctx, parts.value, .default, .poison_type, .none);
     }
     return self.report(.unknown_member, node, name, t);

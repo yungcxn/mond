@@ -165,7 +165,7 @@ pub fn declare(self: *Interpreter, n0: NodeId) Value {
         _ = r.h11_check_assign(self.ctx, n0);
         return .unit;
     }
-    const s = r.statement(n0);
+    const s = Resolver.Stmt.from_node(r, n0);
     if (s.kind != .variable) {
         if (!Resolver.is_type_decl(s.kind)) return .unit;
         const t = self.eval(s.value);

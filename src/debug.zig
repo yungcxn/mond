@@ -781,7 +781,7 @@ pub const Inspector = struct {
             parent[c] = @intCast(p);
         };
         const d = r.decls.sliced();
-        for (d.node, d.kind, 0..) |dn, k, i| if ((Res.is_fn(k) or is_type(k)) and dn < n) {
+        for (d.node, d.kind, 0..) |dn, k, i| if ((k.is_fn() or is_type(k)) and dn < n) {
             owner[dn] = @enumFromInt(i);
         };
         const s = Inspector{ .w = &fw.interface, .r = r, .l = l, .tree = .{ .w = &fw.interface, .t = r.tree, .src = r.src_bytes, .r = r, .marked = marked }, .starts = line_starts.sliced(), .parent = parent, .owner = owner };
@@ -870,7 +870,7 @@ pub const Inspector = struct {
                 if (l.ir.globals.pool.init.buf[g] != .none) return;
             }
             if (try s.types(cur) or try s.funcs(cur) > 0) return;
-            if (Res.is_fn(s.r.decls.pool.kind.buf[@intFromEnum(cur)])) return s.w.writeAll(dim ++ "  no code: unused or static only\n" ++ reset);
+            if (s.r.decls.pool.kind.buf[@intFromEnum(cur)].is_fn()) return s.w.writeAll(dim ++ "  no code: unused or static only\n" ++ reset);
         }
         _ = try s.funcs(.none);
     }
