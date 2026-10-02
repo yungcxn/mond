@@ -318,12 +318,6 @@ pub inline fn manychildren(self: *const @This(), n: NodeId) []const NodeId {
     return self.extra_childrefs.buf[a[0]..][0..a[1]];
 }
 
-// child i as a list: the children of a `wrapper` node, or the child alone
-pub inline fn list_at(self: *const @This(), n: NodeId, comptime i: u1, comptime wrapper: Node.Kind) []const NodeId {
-    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.pool.args.buf[n]);
-    return if (self.kind(slots[i]) == wrapper) self.manychildren(slots[i]) else slots[i..][0..1];
-}
-
 pub inline fn span(self: *const @This(), n: NodeId) Lexer.TextSpan {
     return self.span_store[self.arg(n, 0)];
 }

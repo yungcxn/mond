@@ -152,6 +152,7 @@ pub const Param = struct {
     is_mut: bool = false,
     stc: bool = false,
 
+    // TODO: res should be removed from here, as only tree is needed
     pub fn from_node(res: *const Resolver, n0: ParseTree.NodeId) Param {
         var p = Param{};
         var n = n0;
@@ -203,6 +204,22 @@ pub const Stmt = struct {
     values: []const ParseTree.NodeId,
 
     pub fn from_node(res: *const Resolver, n0: ParseTree.NodeId) Stmt {
+
+        // TODO NEXT: must be removed from here, ugly
+        const list_at = struct {
+            // child i as a list: the children of a `wrapper` node, or the child alone
+            pub inline fn list_at(
+                tree: *const ParseTree,
+                n: ParseTree.NodeId,
+                comptime i: u1,
+                comptime wrapper: ParseTree.Node.Kind,
+            ) []const ParseTree.NodeId {
+                const lr: *const [2]ParseTree.NodeId = @ptrCast(&tree.ast_nodes.pool.args.buf[n]);
+                const child_i_id = lr[i];
+                return if (tree.kind(child_i_id) == wrapper) tree.manychildren(child_i_id) else lr[i..][0..1];
+            }
+        }.list_at;
+
         var flags = Decl.Flags{};
 
         // assignments could have modifiers, which result in non-flat repres. in ast
@@ -224,15 +241,15 @@ pub const Stmt = struct {
         switch (res.tree.kind(non_assignmoded_root)) {
             .def_var => {
                 stmt_type = res.tree.arg(non_assignmoded_root, 0);
-                stmt_ids = res.tree.list_at(non_assignmoded_root, 1, .partial__destructure);
+                stmt_ids = list_at(res.tree, non_assignmoded_root, 1, .partial__destructure);
             },
             .assign_typed => {
                 stmt_type = res.tree.arg(res.tree.arg(non_assignmoded_root, 0), 0);
-                stmt_ids = res.tree.list_at(res.tree.arg(non_assignmoded_root, 0), 1, .partial__destructure);
+                stmt_ids = list_at(res.tree, res.tree.arg(non_assignmoded_root, 0), 1, .partial__destructure);
                 stmt_value = res.tree.arg(non_assignmoded_root, 1);
             },
             .assign => {
-                stmt_ids = res.tree.list_at(non_assignmoded_root, 0, .partial__destructure);
+                stmt_ids = list_at(res.tree, non_assignmoded_root, 0, .partial__destructure);
                 stmt_value = res.tree.arg(non_assignmoded_root, 1);
             },
             else => {},
@@ -249,7 +266,7 @@ pub const Stmt = struct {
             .type = stmt_type,
             .ids = stmt_ids,
             .value = stmt_value,
-            .values = if (stmt_value == 0) &.{} else res.tree.list_at(non_assignmoded_root, 1, .partial__assign_multival),
+            .values = if (stmt_value == 0) &.{} else list_at(res.tree, non_assignmoded_root, 1, .partial__assign_multival),
         };
     }
 
