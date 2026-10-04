@@ -2,6 +2,7 @@ const std = @import("std");
 const Resolver = @import("../Resolver.zig");
 const AbstractPool = @import("AbstractPool.zig");
 const NamePool = @import("NamePool.zig");
+const DeclPool = @import("DeclPool.zig");
 const target = @import("../main.zig").target;
 const SoD = @import("../ds/dynbuf.zig").SoD;
 const DynBuf = @import("../ds/dynbuf.zig").DynBuf;
@@ -41,7 +42,7 @@ pub const ArrayType = struct { len: Index, elem: Index };
 pub const PtrType = struct { child: Index, mutable: bool };
 
 pub const CustomType = struct {
-    decl: Resolver.Decl.Index,
+    decl: DeclPool.Index,
     is_packed: bool,
     field_names: []const NamePool.Index,
     field_types: []const Index,
@@ -50,7 +51,7 @@ pub const CustomType = struct {
 };
 
 pub const VariantType = struct {
-    decl: Resolver.Decl.Index,
+    decl: DeclPool.Index,
     tag_mode: VariantTagMode,
     tag_type: Index,
     is_unionsized: bool,
@@ -67,14 +68,14 @@ pub const SubVariantType = struct {
 };
 
 pub const TraitType = struct {
-    decl: Resolver.Decl.Index,
+    decl: DeclPool.Index,
     member_names: []const NamePool.Index,
     member_types: []const Index,
     supers: []const Index,
 };
 
 pub const StaticFun = struct {
-    decl: Resolver.Decl.Index,
+    decl: DeclPool.Index,
     result_kind: TypeType,
 };
 
@@ -105,7 +106,7 @@ pub const Layout = struct {
 pub const Member = union(enum) {
     none,
     field: struct { index: u32, ty: Index },
-    method: Resolver.Decl.Index,
+    method: DeclPool.Index,
     trait_method: struct { trait: Index, index: u32 },
     case: Index,
     builtin_len,
@@ -245,7 +246,7 @@ pub const Key = union(enum) {
     variant_union_type: []const Index,
     trait_type: TraitType,
     static_fun: StaticFun,
-    template_type: Resolver.Decl.Index,
+    template_type: DeclPool.Index,
     abstract_type: AbstractPool.Index,
     int: IntValue,
     float: FloatValue,
@@ -253,14 +254,14 @@ pub const Key = union(enum) {
     string: []const u8,
     aggregate: Aggregate,
     variant_value: VariantValue,
-    function: Resolver.Decl.Index,
+    function: DeclPool.Index,
 };
 
 // needed to map templates / generics to realizations
 // - e.g. of a `stcfun`, or of a function with unlengthed array param., or abstract types
 // - since the arguments are one pool index, the whole key is 8 bytes and compares as one.
 pub const AbstractKey = packed struct(u64) {
-    generic_tuple: Resolver.Decl.Index,
+    generic_tuple: DeclPool.Index,
     args_tuple: Index, // due to them being a single `static_pool` index
 };
 
@@ -537,7 +538,7 @@ pub fn intern(self: *StaticPool, key: Key) Index {
     return index;
 }
 
-pub fn reserve_nominal(self: *StaticPool, decl: Resolver.Decl.Index) Index {
+pub fn reserve_nominal(self: *StaticPool, decl: DeclPool.Index) Index {
     _ = decl; // the decl is written by complete_nominal, until then the entry reads as poison
     return self.push_item(.{ .tag = .simple_type, .data = @intFromEnum(SimpleType.poison) }, false);
 }
@@ -575,7 +576,7 @@ pub fn array_elem(self: *const StaticPool, t: Index) Index {
     return if (t != .none and self.tag(t) == .array_type) self.get(t).array_type.elem else .none;
 }
 
-pub fn method_decl(self: *const StaticPool, m: @FieldType(Member, "trait_method")) Resolver.Decl.Index {
+pub fn method_decl(self: *const StaticPool, m: @FieldType(Member, "trait_method")) DeclPool.Index {
     return self.get(m.trait).trait_type.decl.member(m.index);
 }
 

@@ -4,7 +4,7 @@ const Resolver = @import("../../Resolver.zig");
 const calls = @import("calls.zig");
 const statics = @import("statics.zig");
 const StaticPool = @import("../StaticPool.zig");
-const Decl = Resolver.Decl;
+const DeclPool = @import("../DeclPool.zig");
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
 const is_range_kind = Resolver.is_range_kind;
@@ -38,7 +38,7 @@ pub fn h07_lower_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
         .def_fun_declaration => fun_type(self, ctx, node, .default, .unit_type, .none),
         else => blk: {
             const v = statics.deferred(self, ctx, node) orelse .poison_type;
-            if (sp.tag(v) == .generic and sp.tag(sp.get(self.dp(.ty, sp.get(v).static_fun.decl).*).function_type.ret) == .meta_type) break :blk sp.intern(.{ .template_type = sp.get(v).static_fun.decl });
+            if (sp.tag(v) == .generic and sp.tag(sp.get(self.decl_pool.tys()[@intFromEnum(sp.get(v).static_fun.decl)]).function_type.ret) == .meta_type) break :blk sp.intern(.{ .template_type = sp.get(v).static_fun.decl });
             break :blk if (v == .poison_type or sp.get_tag_prop(v).is_type) v else self.report(.not_a_type, node, v, .none);
         },
     };
@@ -71,13 +71,13 @@ pub fn static_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
         },
         .def_fun => blk: {
             _ = self.h09_check_expr(ctx, node, .none);
-            break :blk self.dp(.value, self.node_decl[node]).*;
+            break :blk self.decl_pool.values()[@intFromEnum(self.node_decl[node])];
         },
         else => if (Resolver.node_props[@intFromEnum(k)].type_expr) h07_lower_type(self, ctx, node) else self.report(.not_static, node, 0, 0),
     };
 }
 
-pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: ParseTree.NodeId) StaticPool.Index {
+pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, node: ParseTree.NodeId) StaticPool.Index {
     const sp = &self.static_pool;
     const w = self.definition(node);
     const c = w.core;
@@ -85,12 +85,12 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
     const tagof = w.tagof;
     const ck = self.tree.kind(c);
     const is_trait = ck == .def_trait or ck == .def_trait_implof;
-    var first = self.decls.len();
+    var first = self.decl_pool.entries.len();
     // reserved first (or already by h20), so fields can point back at the type (`*Tree`)
-    if (self.dp(.value, decl).* == .none) self.dp(.value, decl).* = sp.reserve_nominal(decl);
-    const ty = self.dp(.value, decl).*;
-    self.dp(.ty, decl).* = meta(self.type_kind(c), .type_type);
-    if (self.dp(.state, decl).* == .resolving_signature) self.dp(.state, decl).* = .signature_ready;
+    if (self.decl_pool.values()[@intFromEnum(decl)] == .none) self.decl_pool.values()[@intFromEnum(decl)] = sp.reserve_nominal(decl);
+    const ty = self.decl_pool.values()[@intFromEnum(decl)];
+    self.decl_pool.tys()[@intFromEnum(decl)] = meta(self.type_kind(c), .type_type);
+    if (self.decl_pool.states()[@intFromEnum(decl)] == .resolving_signature) self.decl_pool.states()[@intFromEnum(decl)] = .signature_ready;
     self.h03_push_scope();
     defer self.h04_pop_scope();
 
@@ -144,8 +144,8 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
                 }
                 const tv = if (tag_node == 0) sp.intern(.{ .int = .{ .ty = .u64_type, .bits = next_tag } }) else statics.h08_eval_static(self, ctx, tag_node);
                 if (sp.tag(tv) == .int_value) next_tag = sp.get(tv).int.bits +% 1;
-                for (cases[0..i]) |prev| if (sp.get(prev).variant_case_type.name == self.name_of(self.tree.arg(q, 0))) self.doc.h21_report(.duplicate_declaration, pn, self.name_of(self.tree.arg(q, 0)), decl);
-                cases[i] = self.set(self.tree.arg(q, 0), sp.intern(.{ .variant_case_type = .{ .variant = ty, .case = @intCast(i), .name = self.name_of(self.tree.arg(q, 0)), .tag = tv, .payload = payload } }));
+                for (cases[0..i]) |prev| if (sp.get(prev).variant_case_type.name == self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(q, 0))) self.doc.h21_report(.duplicate_declaration, pn, self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(q, 0)), decl);
+                cases[i] = self.set(self.tree.arg(q, 0), sp.intern(.{ .variant_case_type = .{ .variant = ty, .case = @intCast(i), .name = self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(q, 0)), .tag = tv, .payload = payload } }));
             }
             // variants are always tagged, without tagof by the smallest tag type for their case count
             const mode: StaticPool.VariantTagMode = if (tagof != 0 and self.tree.kind(tagof) == .identifier_self) .self else .int;
@@ -180,11 +180,11 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
     if (sp.tag(ty) == .record_type) {
         // defaults and where-clauses see the fields by name, the snapshot's locals start at the first field
         const fields = self.fields_of_node(c);
-        first = self.decls.len();
+        first = self.decl_pool.entries.len();
         for (fields, 0..) |f, i| {
             const t = sp.get(ty).custom_type.field_types[i];
             const fd = self.h02_declare_local(sp.get(ty).custom_type.field_names[i], f, .field, t);
-            self.dp(.flags, fd).is_mut = Resolver.Param.from_node(self, f).is_mut;
+            self.decl_pool.flags()[@intFromEnum(fd)].is_mut = Resolver.Param.from_node(self, f).is_mut;
             calls.link(self, Resolver.Param.from_node(self, f).name, fd, t);
         }
         for (fields, 0..) |f, i| {
@@ -213,20 +213,20 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: Decl.Index, node: 
 
 // a trait body: one row for the body (its value is the self type), then one row per function member,
 // contiguous, so member i is row + 1 + i. static members (`stc u32 MASK = ..`) are plain locals of the body.
-fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.Index, self_ty: StaticPool.Index, supers: []const StaticPool.Index, of: Decl.Index) StaticPool.Index {
+fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.Index, self_ty: StaticPool.Index, supers: []const StaticPool.Index, of: DeclPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
-    const b = self.push_decl(if (self_ty == .none) self.dp(.name, of).* else .empty, body, .trait, .trait_type, .{});
+    const b = self.push_decl(if (self_ty == .none) self.decl_pool.names()[@intFromEnum(of)] else .empty, body, .trait, .trait_type, .{});
     if (self.realized_args.get(of)) |a| self.realized_args.put(self.alloc, b, a) catch @panic("OOM");
     if (self.template_of.get(of)) |g| self.template_of.put(self.alloc, b, g) catch @panic("OOM");
     const tr = if (reserved != .none) reserved else sp.reserve_nominal(b);
-    self.dp(.value, b).* = if (self_ty != .none) self_ty else tr;
+    self.decl_pool.values()[@intFromEnum(b)] = if (self_ty != .none) self_ty else tr;
     var names: [64]NamePool.Index = undefined;
     var n: usize = 0;
     for (self.tree.manychildren(body)) |s| {
         const m = Resolver.Stmt.from_node(self, s);
         if (!m.is_member()) continue;
-        names[n] = self.name_of(m.ids[0]);
-        self.node_decl[m.ids[0]] = self.push_decl(names[n], m.node, .trait_member, .none, m.flags);
+        names[n] = self.name_pool.name_of(self.tree, self.src_bytes, m.assignees[0]);
+        self.node_decl[m.assignees[0]] = self.push_decl(names[n], m.node, .trait_member, .none, m.flags);
         n += 1;
     }
     for (self.tree.manychildren(body)) |s| if (!Resolver.Stmt.from_node(self, s).is_member()) {
@@ -238,9 +238,9 @@ fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.I
     return tr;
 }
 
-pub fn decl_type(self: *Resolver, d: Decl.Index) StaticPool.Index {
+pub fn decl_type(self: *Resolver, d: DeclPool.Index) StaticPool.Index {
     self.h05_ensure_signature(d);
-    const t = self.dp(.ty, d).*;
+    const t = self.decl_pool.tys()[@intFromEnum(d)];
     return if (t == .none) .poison_type else t;
 }
 

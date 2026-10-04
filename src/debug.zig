@@ -4,6 +4,7 @@ const ParseTree = @import("ParseTree.zig");
 const Res = @import("Resolver.zig");
 const Doctor = @import("resolver/Doctor.zig");
 const DynBuf = @import("ds/dynbuf.zig").DynBuf;
+const DeclPool = @import("resolver/DeclPool.zig");
 const Node = ParseTree.Node;
 const NodeId = ParseTree.NodeId;
 
@@ -41,7 +42,7 @@ pub const Resolver = struct {
         const starts = line_starts.sliced();
 
         try w.writeAll(dim ++ "[DEBUG RESOLVER DUMP]\n" ++ reset ++ func_col ++ "declarations\n" ++ reset);
-        const d = r.decls.sliced();
+        const d = r.decl_pool.entries.sliced();
         var globals: usize = 0;
         for (0..d.name.len) |i| {
             globals += @intFromBool(d.flags[i].is_global);
@@ -78,7 +79,7 @@ pub const Resolver = struct {
     }
 
     fn decl_row(w: *std.Io.Writer, r: *Res, starts: []const u32, i: usize) !void {
-        const d = r.decls.sliced();
+        const d = r.decl_pool.entries.sliced();
         const sp = &r.static_pool;
         const kind = d.kind[i];
         const flags = d.flags[i];
@@ -129,7 +130,7 @@ const Tree = struct {
             try s.w.writeAll("\n");
         }
         try s.w.print(dim ++ "{d} functions, {d} nodes total" ++ reset, .{ roots.len, t.ast_nodes.len() });
-        if (r) |res| try s.w.print(dim ++ ", {d} declarations, {d} diagnostics" ++ reset, .{ res.decls.len(), res.doc.diagnostics.len() });
+        if (r) |res| try s.w.print(dim ++ ", {d} declarations, {d} diagnostics" ++ reset, .{ res.decl_pool.entries.len(), res.doc.diagnostics.len() });
         try s.w.writeAll("\n");
         try s.w.flush();
     }
@@ -184,7 +185,7 @@ const Tree = struct {
             try s.w.writeAll(reset);
         }
         const d = r.node_decl[idx];
-        if (d != .none) try s.w.print(dim ++ "  → " ++ reset ++ bold ++ "#{d} {s}" ++ reset ++ dim ++ " {s}" ++ reset, .{ @intFromEnum(d), decl_name(r, d), @tagName(r.decls.pool.kind.buf[@intFromEnum(d)]) });
+        if (d != .none) try s.w.print(dim ++ "  → " ++ reset ++ bold ++ "#{d} {s}" ++ reset ++ dim ++ " {s}" ++ reset, .{ @intFromEnum(d), decl_name(r, d), @tagName(r.decl_pool.kinds()[@intFromEnum(d)]) });
         if (!s.marked[idx]) return;
         const diags = r.doc.diagnostics.sliced();
         for (diags.node, diags.code, diags.severity, diags.a, diags.b) |n, code, sev, a, b| if (n == idx) {
@@ -194,8 +195,8 @@ const Tree = struct {
     }
 };
 
-fn decl_name(r: *Res, d: Res.Decl.Index) []const u8 {
-    const n = r.decls.pool.name.buf[@intFromEnum(d)];
+fn decl_name(r: *Res, d: DeclPool.Index) []const u8 {
+    const n = r.decl_pool.names()[@intFromEnum(d)];
     return if (n == .empty or n == .none) "<anon>" else r.name_pool.get(n);
 }
 
@@ -472,8 +473,8 @@ pub const HighLowerer = struct {
         }
     }
 
-    fn nominal(w: *std.Io.Writer, l: *Low, d: Res.Decl.Index) !bool {
-        const n = l.r.decls.pool.name.buf[@intFromEnum(d)];
+    fn nominal(w: *std.Io.Writer, l: *Low, d: DeclPool.Index) !bool {
+        const n = l.r.decl_pool.names()[@intFromEnum(d)];
         if (n == .empty or n == .none) return false;
         try w.writeAll(l.r.name_pool.get(n));
         const args = l.r.realized_args.get(d) orelse return true;
@@ -758,7 +759,7 @@ pub const Inspector = struct {
     tree: Tree,
     starts: []const u32,
     parent: []NodeId,
-    owner: []Res.Decl.Index,
+    owner: []DeclPool.Index,
 
     pub fn run(io: std.Io, r: *Res, l: ?*Low) !void {
         const a = std.heap.smp_allocator;
@@ -773,14 +774,14 @@ pub const Inspector = struct {
         defer a.free(marked);
         const parent = try a.alloc(NodeId, n);
         defer a.free(parent);
-        const owner = try a.alloc(Res.Decl.Index, n);
+        const owner = try a.alloc(DeclPool.Index, n);
         defer a.free(owner);
         @memset(parent, none);
         @memset(owner, .none);
         for (0..n) |p| for (children(r.tree, @intCast(p))) |c| if (c < n) {
             parent[c] = @intCast(p);
         };
-        const d = r.decls.sliced();
+        const d = r.decl_pool.entries.sliced();
         for (d.node, d.kind, 0..) |dn, k, i| if ((k.is_fn() or is_type(k)) and dn < n) {
             owner[dn] = @enumFromInt(i);
         };
@@ -813,11 +814,11 @@ pub const Inspector = struct {
     fn decls(s: Inspector, q: []const u8) !bool {
         const id = if (q[0] == '#') std.fmt.parseInt(usize, q[1..], 10) catch return false else null;
         var hit = false;
-        for (0..s.r.decls.len()) |i| if (if (id) |x| x == i else std.mem.eql(u8, decl_name(s.r, @enumFromInt(i)), q)) {
+        for (0..s.r.decl_pool.entries.len()) |i| if (if (id) |x| x == i else std.mem.eql(u8, decl_name(s.r, @enumFromInt(i)), q)) {
             hit = true;
             try s.w.writeAll(func_col ++ "resolved\n" ++ reset);
             try Resolver.decl_row(s.w, s.r, s.starts, i);
-            try s.subtree(s.r.decls.pool.node.buf[i]);
+            try s.subtree(s.r.decl_pool.nodes()[i]);
             if (id != null or s.l == null or !s.l.?.next_of.contains(@enumFromInt(i))) try s.lowered(@enumFromInt(i));
         };
         return hit or std.mem.eql(u8, q, "$init") and try s.funcs(.none) > 0;
@@ -825,7 +826,7 @@ pub const Inspector = struct {
 
     fn line(s: Inspector, q: []const u8) !bool {
         const want = (std.fmt.parseInt(usize, q, 10) catch return false) -| 1;
-        var last: ?Res.Decl.Index = null;
+        var last: ?DeclPool.Index = null;
         for (1..s.parent.len) |i| {
             const n: NodeId = @intCast(i);
             const p = s.parent[n];
@@ -854,13 +855,13 @@ pub const Inspector = struct {
         try s.tree.node(n, "", true, true, "", 0);
     }
 
-    fn enclosing(s: Inspector, n0: NodeId) Res.Decl.Index {
+    fn enclosing(s: Inspector, n0: NodeId) DeclPool.Index {
         var n = n0;
         while (n != none and s.owner[n] == .none) n = s.parent[n];
         return if (n == none) .none else s.owner[n];
     }
 
-    fn lowered(s: Inspector, d: Res.Decl.Index) !void {
+    fn lowered(s: Inspector, d: DeclPool.Index) !void {
         const l = s.l orelse return s.w.writeAll(err_col ++ "lowered\n  not lowered, resolution failed\n" ++ reset);
         try s.w.writeAll(func_col ++ "lowered\n" ++ reset);
         var cur = d;
@@ -870,7 +871,7 @@ pub const Inspector = struct {
                 if (l.ir.globals.pool.init.buf[g] != .none) return;
             }
             if (try s.types(cur) or try s.funcs(cur) > 0) return;
-            if (s.r.decls.pool.kind.buf[@intFromEnum(cur)].is_fn()) return s.w.writeAll(dim ++ "  no code: unused or static only\n" ++ reset);
+            if (s.r.decl_pool.kinds()[@intFromEnum(cur)].is_fn()) return s.w.writeAll(dim ++ "  no code: unused or static only\n" ++ reset);
         }
         _ = try s.funcs(.none);
     }
@@ -892,16 +893,16 @@ pub const Inspector = struct {
         return m == n;
     }
 
-    fn up(s: Inspector, d: Res.Decl.Index) Res.Decl.Index {
-        const n = s.r.decls.pool.node.buf[@intFromEnum(d)];
+    fn up(s: Inspector, d: DeclPool.Index) DeclPool.Index {
+        const n = s.r.decl_pool.nodes()[@intFromEnum(d)];
         return if (n < s.parent.len and s.parent[n] != none) s.enclosing(s.parent[n]) else .none;
     }
 
-    fn is_type(k: Res.Decl.Kind) bool {
+    fn is_type(k: DeclPool.Entry.Kind) bool {
         return k == .record or k == .variant or k == .type_alias;
     }
 
-    fn funcs(s: Inspector, d: Res.Decl.Index) !usize {
+    fn funcs(s: Inspector, d: DeclPool.Index) !usize {
         const l = s.l.?;
         const h = l.head_of.get(d) orelse d;
         var count: usize = 0;
@@ -912,10 +913,10 @@ pub const Inspector = struct {
         return count;
     }
 
-    fn types(s: Inspector, d: Res.Decl.Index) !bool {
-        if (!is_type(s.r.decls.pool.kind.buf[@intFromEnum(d)])) return false;
-        for (s.r.decls.sliced_field(.value), 0..) |v, i| {
-            const di: Res.Decl.Index = @enumFromInt(i);
+    fn types(s: Inspector, d: DeclPool.Index) !bool {
+        if (!is_type(s.r.decl_pool.kinds()[@intFromEnum(d)])) return false;
+        for (s.r.decl_pool.entries.sliced_field(.value), 0..) |v, i| {
+            const di: DeclPool.Index = @enumFromInt(i);
             if (v != .none and (di == d or s.r.template_of.get(di) == d)) try HighLowerer.typedef(s.w, s.l.?, v);
         }
         return true;

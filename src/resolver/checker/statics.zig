@@ -4,7 +4,7 @@ const Resolver = @import("../../Resolver.zig");
 const calls = @import("calls.zig");
 const types = @import("types.zig");
 const StaticPool = @import("../StaticPool.zig");
-const Decl = Resolver.Decl;
+const DeclPool = @import("../DeclPool.zig");
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
 const Body = Resolver.Body;
@@ -25,7 +25,7 @@ pub fn deferred(self: *Resolver, ctx: *FnCtx, node: NodeId) ?StaticPool.Index {
     const s = self.tree.subtree(node);
     for (s[0]..s[1]) |i| switch (self.tree.kind(@intCast(i))) {
         .identifier, .identifier_self => {
-            const d = self.h01_lookup(self.name_of(@intCast(i)));
+            const d = self.h01_lookup(self.name_pool.name_of(self.tree, self.src_bytes, @intCast(i)));
             if (d != .none) self.node_decl[i] = d;
         },
         else => {},
@@ -115,11 +115,11 @@ pub fn retype(self: *Resolver, v: StaticPool.Index, ty: StaticPool.Index) Static
     return sp.intern(.{ .float = .{ .ty = ty, .value = if (signed) @floatFromInt(@as(i64, @bitCast(i.bits))) else @floatFromInt(i.bits) } });
 }
 
-pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.Index) StaticPool.Index {
+pub fn h20_instantiate(self: *Resolver, generic: DeclPool.Index, args: StaticPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
     const key = StaticPool.AbstractKey{ .generic_tuple = generic, .args_tuple = args };
     if (sp.realized_abstracts.get(key)) |r| return r;
-    const node = self.dp(.node, generic).*;
+    const node = self.decl_pool.nodes()[@intFromEnum(generic)];
     // a realization that realizes itself forever eats the static budget and stops there
     if (self.local_scope_marks.head > max_nesting) return self.report(.static_eval_failed, node, generic, 0);
     if (!self.interpreter.charge(node, 64)) return .poison_type;
@@ -127,11 +127,11 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
     const argc = sp.get(args).aggregate.elems.len;
     @memcpy(argv[0..argc], sp.get(args).aggregate.elems);
 
-    if (self.dp(.kind, generic).* != .static_function) {
+    if (self.decl_pool.kinds()[@intFromEnum(generic)] != .static_function) {
         // length-generic function: a new declaration per tuple of lengths, the lengths bound in order of appearance
         self.h06_check_body(generic);
-        if (self.dp(.state, generic).* == .failed) return .poison_type;
-        const d = self.push_decl(self.dp(.name, generic).*, node, self.dp(.kind, generic).*, .none, self.dp(.flags, generic).*);
+        if (self.decl_pool.states()[@intFromEnum(generic)] == .failed) return .poison_type;
+        const d = self.push_decl(self.decl_pool.names()[@intFromEnum(generic)], node, self.decl_pool.kinds()[@intFromEnum(generic)], .none, self.decl_pool.flags()[@intFromEnum(generic)]);
         self.template_of.put(self.alloc, d, generic) catch @panic("OOM");
         const fv = sp.intern(.{ .function = d });
         memo(self, key, fv);
@@ -144,7 +144,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
         defer if (outer != null) self.h04_pop_scope();
         self.h05_ensure_signature(d);
         self.realized_args.put(self.alloc, d, args) catch @panic("OOM");
-        const ft = sp.get(self.dp(.ty, d).*).function_type;
+        const ft = sp.get(self.decl_pool.tys()[@intFromEnum(d)]).function_type;
         var ps: [64]StaticPool.Index = undefined;
         @memcpy(ps[0..ft.params.len], ft.params);
         var i: usize = 0;
@@ -156,7 +156,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
             if (sp.get(p) == .ptr_type) p = sp.get(p).ptr_type.child;
             if (sp.get(p) == .array_type) _ = sp.unify(&self.abstract_pool, sp.get(p).array_type.len, argv[i - 1]);
         }
-        self.dp(.ty, d).* = sp.intern(.{ .function_type = .{ .category = ft.category, .params = ps[0..ft.params.len], .ret = ft.ret } });
+        self.decl_pool.tys()[@intFromEnum(d)] = sp.intern(.{ .function_type = .{ .category = ft.category, .params = ps[0..ft.params.len], .ret = ft.ret } });
         self.h06_check_body(d);
         return fv;
     }
@@ -174,15 +174,15 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
     const unit = self.tree.arg(v, 1);
     const kind = self.type_kind(unit);
     if (kind != .variable) { // a type: memoized before its body, so it can mention itself (`Stream(Child)` inside Stream)
-        const d = self.push_decl(self.dp(.name, generic).*, unit, kind, .none, .{});
+        const d = self.push_decl(self.decl_pool.names()[@intFromEnum(generic)], unit, kind, .none, .{});
         self.realized_args.put(self.alloc, d, args) catch @panic("OOM");
         self.template_of.put(self.alloc, d, generic) catch @panic("OOM");
-        self.dp(.value, d).* = sp.reserve_nominal(d);
-        memo(self, key, self.dp(.value, d).*);
+        self.decl_pool.values()[@intFromEnum(d)] = sp.reserve_nominal(d);
+        memo(self, key, self.decl_pool.values()[@intFromEnum(d)]);
         return types.h19_check_type_def(self, &ctx, d, unit);
     }
     if (self.tree.kind(unit) == .def_fun) {
-        const d = self.push_decl(self.dp(.name, generic).*, unit, .function, .none, .{});
+        const d = self.push_decl(self.decl_pool.names()[@intFromEnum(generic)], unit, .function, .none, .{});
         const fv = sp.intern(.{ .function = d });
         memo(self, key, fv);
         self.static_scope.put(self.alloc, d, key) catch @panic("OOM");
@@ -193,7 +193,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
     ctx.in_static = false;
     ctx.interpreted = true;
     ctx.ret_type = self.sig(generic).ret;
-    const first = self.decls.len();
+    const first = self.decl_pool.entries.len();
     const vars = self.abstract_pool.count();
     const outer = self.init_enter();
     const mark = self.doc.diagnostics.len();
@@ -216,7 +216,7 @@ pub fn h20_instantiate(self: *Resolver, generic: Decl.Index, args: StaticPool.In
 }
 
 // the static parameters of a stcfun as locals holding the arguments of one realization
-fn bind_static(self: *Resolver, generic: Decl.Index, args: StaticPool.Index) void {
+fn bind_static(self: *Resolver, generic: DeclPool.Index, args: StaticPool.Index) void {
     const sp = &self.static_pool;
     var argv: [64]StaticPool.Index = undefined;
     const argc = sp.get(args).aggregate.elems.len;
@@ -226,13 +226,13 @@ fn bind_static(self: *Resolver, generic: Decl.Index, args: StaticPool.Index) voi
         const p = Resolver.Param.from_node(self, pn);
         const d = self.h02_declare_local(self.name_at(p, i), pn, .static_parameter, pt);
         calls.link(self, p.name, d, pt);
-        self.dp(.value, d).* = retype(self, argv[i], pt);
+        self.decl_pool.values()[@intFromEnum(d)] = retype(self, argv[i], pt);
     }
 }
 
-pub fn is_template(self: *Resolver, d: Decl.Index) bool {
-    if (d == .none or self.dp(.kind, d).* != .static_function or self.dp(.ty, d).* == .none) return false;
-    const t = self.dp(.ty, d).*;
+pub fn is_template(self: *Resolver, d: DeclPool.Index) bool {
+    if (d == .none or self.decl_pool.kinds()[@intFromEnum(d)] != .static_function or self.decl_pool.tys()[@intFromEnum(d)] == .none) return false;
+    const t = self.decl_pool.tys()[@intFromEnum(d)];
     return self.static_pool.tag(t) == .function_type and self.static_pool.tag(self.static_pool.get(t).function_type.ret) == .meta_type;
 }
 
@@ -291,7 +291,7 @@ pub fn unwrapped(self: *Resolver, t0: StaticPool.Index) StaticPool.Index {
     return if (self.static_pool.tag(t) == .variant_case_type) self.static_pool.get(t).variant_case_type.variant else t;
 }
 
-fn nominal(self: *Resolver, t0: StaticPool.Index) Decl.Index {
+fn nominal(self: *Resolver, t0: StaticPool.Index) DeclPool.Index {
     return switch (self.static_pool.get(unwrapped(self, t0))) {
         .custom_type => |c| c.decl,
         .variant_type => |v| v.decl,
@@ -300,7 +300,7 @@ fn nominal(self: *Resolver, t0: StaticPool.Index) Decl.Index {
     };
 }
 
-pub fn source_of(self: *Resolver, t: StaticPool.Index) Decl.Index {
+pub fn source_of(self: *Resolver, t: StaticPool.Index) DeclPool.Index {
     const d = nominal(self, t);
     return if (d == .none) .none else self.template_of.get(d) orelse .none;
 }
@@ -314,7 +314,7 @@ pub fn sibling(self: *Resolver, ctx: *FnCtx, t: StaticPool.Index, st: StaticPool
 
 pub fn opened(self: *Resolver, ctx: *FnCtx) bool {
     const g = (if (ctx.decl == .none) null else self.template_of.get(ctx.decl)) orelse return false;
-    const ty = self.dp(.ty, g).*;
+    const ty = self.decl_pool.tys()[@intFromEnum(g)];
     if (ty == .none or self.static_pool.tag(ty) != .function_type) return false;
     for (self.static_pool.get(ty).function_type.params) |p| if (templated(self, p) != .none) return true;
     return false;
@@ -381,21 +381,21 @@ pub fn template_member(self: *Resolver, node: NodeId, t: StaticPool.Index, name:
     const tr = if (self.type_kind(w.core) == .trait) w.core else if (w.body != 0) w.body else return self.report(.unknown_member, node, name, t);
     for (self.tree.manychildren(self.tree.arg(tr, if (self.tree.kind(tr) == .def_trait_implof) 1 else 0))) |s| {
         const parts = Resolver.Stmt.from_node(self, s);
-        if (parts.ids.len != 1 or self.name_of(parts.ids[0]) != name or !parts.kind.is_fn()) continue;
-        return if (self.signature_mentions(parts.value, v)) self.report(.generic_member, node, name, t) else types.fun_type(self, &ctx, parts.value, .default, .poison_type, .none);
+        if (parts.assignees.len != 1 or self.name_pool.name_of(self.tree, self.src_bytes, parts.assignees[0]) != name or !parts.kind.is_fn()) continue;
+        return if (self.signature_mentions(parts.values[0], v)) self.report(.generic_member, node, name, t) else types.fun_type(self, &ctx, parts.values[0], .default, .poison_type, .none);
     }
     return self.report(.unknown_member, node, name, t);
 }
 
 // the node tables of one checked body or type definition, as realizations share their nodes
-pub fn snapshot(self: *Resolver, decl: Decl.Index, root: NodeId, first: u32) void {
+pub fn snapshot(self: *Resolver, decl: DeclPool.Index, root: NodeId, first: u32) void {
     self.body_of.put(self.alloc, decl, self.bodies.len()) catch @panic("OOM");
     self.bodies.push(capture(self, decl, root, first));
 }
 
-fn capture(self: *Resolver, decl: Decl.Index, root: NodeId, first: u32) Body {
+fn capture(self: *Resolver, decl: DeclPool.Index, root: NodeId, first: u32) Body {
     const lo, const hi = self.tree.subtree(root);
-    const b = Body{ .decl = decl, .lo = lo, .len = hi - lo, .start = self.body_nodes.len(), .first = first, .locals = self.decls.len() - first };
+    const b = Body{ .decl = decl, .lo = lo, .len = hi - lo, .start = self.body_nodes.len(), .first = first, .locals = self.decl_pool.entries.len() - first };
     self.body_nodes.pool.ty.append(self.node_type[lo..hi]);
     self.body_nodes.pool.decl.append(self.node_decl[lo..hi]);
     self.body_nodes.pool.value.append(self.node_value[lo..hi]);

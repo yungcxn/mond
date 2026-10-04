@@ -1,6 +1,7 @@
 const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const StaticPool = @import("../StaticPool.zig");
+const DeclPool = @import("../DeclPool.zig");
 const Interpreter = @import("../Interpreter.zig");
 const calls = @import("calls.zig");
 const places = @import("places.zig");
@@ -74,7 +75,7 @@ pub fn loop(ip: *Interpreter, n: NodeId) Value {
     var lo: Value = .empty;
     var hi: Value = .empty;
     var incl = false;
-    var it: Decl.Index = .none;
+    var it: DeclPool.Index = .none;
     var iter: Index = .none;
     var recv: Value = .empty;
     if (l.seq != 0) {
@@ -106,7 +107,7 @@ pub fn loop(ip: *Interpreter, n: NodeId) Value {
                 seq = .empty;
             }
         }
-        it = if (framed) ip.info(.decl, l.head) else r.h02_declare_local(if (l.variable != 0) r.name_of(l.variable) else .it, n, .loop_variable, .none);
+        it = if (framed) ip.info(.decl, l.head) else r.h02_declare_local(if (l.variable != 0) r.name_pool.name_of(r.tree, r.src_bytes, l.variable) else .it, n, .loop_variable, .none);
     }
     const want = !framed or r.static_pool.tag(r.static_pool.apply_vars(&r.abstract_pool, ip.info(.ty, n))) == .array_type;
     const mark = ip.list.head;
@@ -250,7 +251,7 @@ pub fn matches(ip: *Interpreter, p: NodeId, v: Value) bool {
 fn name(ip: *Interpreter, id: NodeId, v: Value) void {
     const r = ip.res();
     if (ip.framed()) return places.bind(ip, ip.info(.decl, id), v);
-    const nm = r.name_of(id);
+    const nm = r.name_pool.name_of(r.tree, r.src_bytes, id);
     if (nm == .underscore) return;
     const d = r.h02_declare_local(nm, id, .pattern_binder, ip.vtype(v));
     r.node_decl[id] = d;

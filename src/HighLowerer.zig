@@ -5,13 +5,13 @@ const ParseTree = @import("ParseTree.zig");
 const Resolver = @import("Resolver.zig");
 const StaticPool = @import("resolver/StaticPool.zig");
 const NamePool = @import("resolver/NamePool.zig");
+const DeclPool = @import("resolver/DeclPool.zig");
 const HighIr = @import("high_lowerer/HighIr.zig");
 const Ref = HighIr.Ref;
 const Op = HighIr.Op;
 const Index = StaticPool.Index;
 const NodeId = ParseTree.NodeId;
 const Kind = ParseTree.Node.Kind;
-const Decl = Resolver.Decl;
 
 const HighLowerer = @This();
 const none: u32 = std.math.maxInt(u32);
@@ -29,14 +29,14 @@ r: *Resolver,
 sp: *StaticPool,
 ir: HighIr,
 base: u32,
-fn_of: std.AutoHashMapUnmanaged(Decl.Index, u32) = .empty,
-body_of: std.AutoHashMapUnmanaged(Decl.Index, u32) = .empty,
-head_of: std.AutoHashMapUnmanaged(Decl.Index, Decl.Index) = .empty,
-next_of: std.AutoHashMapUnmanaged(Decl.Index, Decl.Index) = .empty,
-global_of: std.AutoHashMapUnmanaged(Decl.Index, u32) = .empty,
-caps_of: std.AutoHashMapUnmanaged(Decl.Index, [2]u32) = .empty,
-cap_list: DynBuf(Decl.Index),
-queue: DynBuf(Decl.Index),
+fn_of: std.AutoHashMapUnmanaged(DeclPool.Index, u32) = .empty,
+body_of: std.AutoHashMapUnmanaged(DeclPool.Index, u32) = .empty,
+head_of: std.AutoHashMapUnmanaged(DeclPool.Index, DeclPool.Index) = .empty,
+next_of: std.AutoHashMapUnmanaged(DeclPool.Index, DeclPool.Index) = .empty,
+global_of: std.AutoHashMapUnmanaged(DeclPool.Index, u32) = .empty,
+caps_of: std.AutoHashMapUnmanaged(DeclPool.Index, [2]u32) = .empty,
+cap_list: DynBuf(DeclPool.Index),
+queue: DynBuf(DeclPool.Index),
 insts: SoD(Scratch),
 blocks: SoD(BlockState),
 edges: SoD(Edge),
@@ -51,8 +51,8 @@ defers: DynBuf(Defer),
 loops: DynBuf(Loop),
 defs: std.AutoHashMapUnmanaged(u64, Ref) = .empty,
 lvn: std.AutoHashMapUnmanaged(Key, Ref) = .empty,
-slots: std.AutoHashMapUnmanaged(Decl.Index, Ref) = .empty,
-taken: std.AutoHashMapUnmanaged(Decl.Index, void) = .empty,
+slots: std.AutoHashMapUnmanaged(DeclPool.Index, Ref) = .empty,
+taken: std.AutoHashMapUnmanaged(DeclPool.Index, void) = .empty,
 cur: u32 = 0,
 dead: bool = false,
 ret_ty: Index = .unit_type,
@@ -64,7 +64,7 @@ pub fn init(alloc: std.mem.Allocator, r: *Resolver) HighLowerer {
         .r = r,
         .sp = &r.static_pool,
         .ir = .init(alloc),
-        .base = r.decls.len(),
+        .base = r.decl_pool.entries.len(),
         .cap_list = .init(alloc, 64),
         .queue = .init(alloc, 256),
         .insts = .init(alloc, 1024),
@@ -115,14 +115,14 @@ pub fn deinit(self: *HighLowerer) void {
 pub fn lower(self: *HighLowerer) void {
     const bodies = self.r.bodies.sliced();
     for (bodies.decl, 0..) |d, i| put(self.alloc, &self.body_of, d, @intCast(i));
-    var heads = self.r.globals.valueIterator();
+    var heads = self.r.global_decls.valueIterator();
     while (heads.next()) |h| self.group(h.*);
-    const d = self.r.decls.sliced();
+    const d = self.r.decl_pool.entries.sliced();
     for (0..d.name.len) |i| if (d.flags[i].is_global and d.kind[i] == .variable) {
         put(self.alloc, &self.global_of, @enumFromInt(i), self.ir.globals.len());
         self.ir.globals.push(.{ .decl = @enumFromInt(i), .ty = self.apply(d.ty[i]), .init = if (d.flags[i].is_stc) d.value[i] else .none });
     };
-    for (bodies.decl) |bd| if (self.r.dp(.kind, bd).*.is_fn() and !self.head_of.contains(bd)) {
+    for (bodies.decl) |bd| if (self.r.decl_pool.kinds()[@intFromEnum(bd)].is_fn() and !self.head_of.contains(bd)) {
         _ = self.func(bd);
     };
     self.ir.init_fn = self.ir.functions.len();
@@ -136,13 +136,13 @@ fn put(alloc: std.mem.Allocator, m: anytype, k: @FieldType(@TypeOf(m.*).KV, "key
     m.put(alloc, k, v) catch @panic("OOM");
 }
 
-fn group(self: *HighLowerer, first: Decl.Index) void {
+fn group(self: *HighLowerer, first: DeclPool.Index) void {
     var c = first;
-    while (c != .none) : (c = self.r.dp(.next_overload, c).*) {
+    while (c != .none) : (c = self.r.decl_pool.next_overloads()[@intFromEnum(c)]) {
         const rc = self.r.real(c);
         if (!self.body_of.contains(rc)) continue;
         var h = first;
-        while (h != c) : (h = self.r.dp(.next_overload, h).*) {
+        while (h != c) : (h = self.r.decl_pool.next_overloads()[@intFromEnum(h)]) {
             const rh = self.r.real(h);
             if (!self.body_of.contains(rh) or !self.r.same_params(rh, rc)) continue;
             put(self.alloc, &self.head_of, rc, rh);
@@ -154,12 +154,12 @@ fn group(self: *HighLowerer, first: Decl.Index) void {
     }
 }
 
-fn func(self: *HighLowerer, d0: Decl.Index) u32 {
+fn func(self: *HighLowerer, d0: DeclPool.Index) u32 {
     const d = self.head_of.get(d0) orelse d0;
     const gop = self.fn_of.getOrPut(self.alloc, d) catch @panic("OOM");
     if (gop.found_existing) return gop.value_ptr.*;
     gop.value_ptr.* = self.ir.functions.len();
-    self.ir.functions.push(.{ .decl = d, .ty = self.apply(self.r.dp(.ty, d).*), .first_block = 0, .blocks = 0, .first_inst = 0, .insts = 0, .captures = @intCast(self.captures(d).len) });
+    self.ir.functions.push(.{ .decl = d, .ty = self.apply(self.r.decl_pool.tys()[@intFromEnum(d)]), .first_block = 0, .blocks = 0, .first_inst = 0, .insts = 0, .captures = @intCast(self.captures(d).len) });
     if (self.body_of.contains(d)) self.queue.push(d);
     return gop.value_ptr.*;
 }
@@ -172,7 +172,7 @@ fn ty(self: *HighLowerer, n: NodeId) Index {
     return self.apply(self.r.node_info(self.body, .ty, n));
 }
 
-fn decl(self: *HighLowerer, n: NodeId) Decl.Index {
+fn decl(self: *HighLowerer, n: NodeId) DeclPool.Index {
     return self.r.node_info(self.body, .decl, n);
 }
 
@@ -198,7 +198,7 @@ fn has_value(t: Index) bool {
 }
 
 fn var_ty(self: *HighLowerer, v: u32) Index {
-    return if (v < self.base) self.apply(self.r.dp(.ty, @enumFromInt(v)).*) else self.var_types.buf[v - self.base];
+    return if (v < self.base) self.apply(self.r.decl_pool.tys()[v]) else self.var_types.buf[v - self.base];
 }
 
 fn temp(self: *HighLowerer, t: Index) u32 {
@@ -411,8 +411,8 @@ fn seal(self: *HighLowerer, b: u32) void {
     self.blocks.pool.sealed.buf[b] = true;
 }
 
-fn needs_mem(self: *HighLowerer, d: Decl.Index) bool {
-    return self.taken.contains(d) or self.aggregate(self.apply(self.r.dp(.ty, d).*));
+fn needs_mem(self: *HighLowerer, d: DeclPool.Index) bool {
+    return self.taken.contains(d) or self.aggregate(self.apply(self.r.decl_pool.tys()[@intFromEnum(d)]));
 }
 
 fn aggregate(self: *HighLowerer, t: Index) bool {
@@ -432,7 +432,7 @@ fn default_value(self: *HighLowerer, t: Index) Ref {
     return if (self.sp.tag(t) == .record_type) self.construct(t, &.{}) else self.emit(.zeroed, t, 0, 0);
 }
 
-fn declare_var(self: *HighLowerer, d: Decl.Index, x: Ref) void {
+fn declare_var(self: *HighLowerer, d: DeclPool.Index, x: Ref) void {
     if (d == .none or self.dead) return;
     if (self.global_of.contains(d)) return self.store_var(d, x);
     if (self.needs_mem(d)) {
@@ -442,7 +442,7 @@ fn declare_var(self: *HighLowerer, d: Decl.Index, x: Ref) void {
     } else self.write(@intFromEnum(d), self.cur, if (x == .none) self.raw(.undef, self.var_ty(@intFromEnum(d)), 0, 0, self.cur) else x);
 }
 
-fn load_var(self: *HighLowerer, d: Decl.Index) Ref {
+fn load_var(self: *HighLowerer, d: DeclPool.Index) Ref {
     if (self.dead) return .none;
     const t = self.var_ty(@intFromEnum(d));
     if (self.global_of.get(d)) |g| return self.e2(.load, t, Ref.global(g), .none);
@@ -450,7 +450,7 @@ fn load_var(self: *HighLowerer, d: Decl.Index) Ref {
     return self.read(@intFromEnum(d), self.cur);
 }
 
-fn store_var(self: *HighLowerer, d: Decl.Index, x: Ref) void {
+fn store_var(self: *HighLowerer, d: DeclPool.Index, x: Ref) void {
     if (self.dead or x == .none) return;
     if (self.global_of.get(d)) |g| {
         _ = self.e2(.store, .unit_type, Ref.global(g), x);
@@ -467,7 +467,7 @@ fn is_ssa(self: *HighLowerer, n: NodeId) bool {
     };
 }
 
-fn captures(self: *HighLowerer, d: Decl.Index) []const Decl.Index {
+fn captures(self: *HighLowerer, d: DeclPool.Index) []const DeclPool.Index {
     if (self.caps_of.get(d)) |c| return self.cap_list.buf[c[0]..][0..c[1]];
     const start = self.cap_list.head;
     self.r.captures(d, &self.cap_list);
@@ -475,11 +475,11 @@ fn captures(self: *HighLowerer, d: Decl.Index) []const Decl.Index {
     return self.cap_list.buf[start..self.cap_list.head];
 }
 
-fn by_ref(self: *HighLowerer, c: Decl.Index) bool {
-    return self.r.dp(.flags, c).is_mut or self.aggregate(self.apply(self.r.dp(.ty, c).*));
+fn by_ref(self: *HighLowerer, c: DeclPool.Index) bool {
+    return self.r.decl_pool.flags()[@intFromEnum(c)].is_mut or self.aggregate(self.apply(self.r.decl_pool.tys()[@intFromEnum(c)]));
 }
 
-fn fn_value(self: *HighLowerer, d0: Decl.Index) Ref {
+fn fn_value(self: *HighLowerer, d0: DeclPool.Index) Ref {
     const d = self.r.real(d0);
     const f = self.func(d);
     const head = self.ir.functions.pool.decl.buf[f];
@@ -492,7 +492,7 @@ fn fn_value(self: *HighLowerer, d0: Decl.Index) Ref {
     }
     const at = self.list(self.tmp.buf[mark..self.tmp.head]);
     self.tmp.head = mark;
-    return self.emit(.closure, self.apply(self.r.dp(.ty, head).*), f, at);
+    return self.emit(.closure, self.apply(self.r.decl_pool.tys()[@intFromEnum(head)]), f, at);
 }
 
 fn reset(self: *HighLowerer) void {
@@ -539,17 +539,17 @@ fn scan_taken(self: *HighLowerer) void {
         while (target != 0 and self.r.tree.kind(target) == .capture) target = self.r.tree.arg(target, 0);
         if (target != 0 and self.r.tree.kind(target) == .identifier and !self.is_ptr(self.ty(target))) put(self.alloc, &self.taken, self.decl(target), {});
         const d = self.decl(n);
-        if (d != .none and self.r.dp(.kind, d).*.is_fn() and self.body_of.contains(d)) {
-            const node = self.r.dp(.node, d).*;
+        if (d != .none and self.r.decl_pool.kinds()[@intFromEnum(d)].is_fn() and self.body_of.contains(d)) {
+            const node = self.r.decl_pool.nodes()[@intFromEnum(d)];
             if (node >= b.lo and node < b.lo + b.len) for (self.captures(d)) |c| if (self.by_ref(c)) put(self.alloc, &self.taken, c, {});
         }
     }
 }
 
-fn lower_fn(self: *HighLowerer, d: Decl.Index) void {
+fn lower_fn(self: *HighLowerer, d: DeclPool.Index) void {
     self.reset();
     const f = self.fn_of.get(d).?;
-    const ft = self.apply(self.r.dp(.ty, d).*);
+    const ft = self.apply(self.r.decl_pool.tys()[@intFromEnum(d)]);
     self.ret_ty = self.sp.get(ft).function_type.ret;
     self.goto(self.block());
     const caps = self.captures(d);
@@ -559,20 +559,20 @@ fn lower_fn(self: *HighLowerer, d: Decl.Index) void {
         if (self.by_ref(c)) put(self.alloc, &self.slots, c, p) else self.write(@intFromEnum(c), self.cur, p);
     }
     for (0..self.sp.get(ft).function_type.params.len) |j| self.params.push(self.emit(.param, self.sp.get(ft).function_type.params[j], @intCast(caps.len + j), 0));
-    var m: ?Decl.Index = d;
+    var m: ?DeclPool.Index = d;
     while (m) |c| : (m = self.next_of.get(c)) if (!self.candidate(c)) break;
     if (!self.dead) _ = self.emit(.@"unreachable", .unit_type, 0, 0);
     self.freeze(f);
 }
 
-fn candidate(self: *HighLowerer, m: Decl.Index) bool {
+fn candidate(self: *HighLowerer, m: DeclPool.Index) bool {
     self.body = self.r.bodies.get(self.body_of.get(m).?).?;
     self.scan_taken();
     const v = self.r.value_node(m);
     const off = self.r.self_off(m);
     if (off == 1) for (self.body.lo..self.body.lo + self.body.len) |i| {
         const x = self.decl(@intCast(i));
-        if (x != .none and self.r.dp(.kind, x).* == .self and self.r.dp(.node, x).* == v) break self.declare_var(x, self.params.buf[0]);
+        if (x != .none and self.r.decl_pool.kinds()[@intFromEnum(x)] == .self and self.r.decl_pool.nodes()[@intFromEnum(x)] == v) break self.declare_var(x, self.params.buf[0]);
     };
     const pnodes = self.r.params_of(v);
     for (pnodes, 0..) |pn, i| self.declare_var(self.decl(pn), self.params.buf[i + off]);
@@ -600,7 +600,7 @@ fn candidate(self: *HighLowerer, m: Decl.Index) bool {
     const body = self.r.tree.arg(v, 1);
     if (self.r.tree.kind(body) == .block) {
         _ = self.expr(body);
-        if (!self.dead and !has_value(self.ret_ty)) self.ret(.none) else if (!self.dead and self.r.dp(.name, m).* == .main) self.ret(self.int(self.ret_ty, 0)) else if (!self.dead) _ = self.emit(.@"unreachable", .unit_type, 0, 0);
+        if (!self.dead and !has_value(self.ret_ty)) self.ret(.none) else if (!self.dead and self.r.decl_pool.names()[@intFromEnum(m)] == .main) self.ret(self.int(self.ret_ty, 0)) else if (!self.dead) _ = self.emit(.@"unreachable", .unit_type, 0, 0);
     } else self.ret(self.expr_to(body, self.ret_ty));
     self.goto(fail);
     return tested;
@@ -934,10 +934,10 @@ fn deref_ty(self: *HighLowerer, t: Index) Index {
 fn ident(self: *HighLowerer, n: NodeId) Ref {
     const d = self.decl(n);
     if (d == .none) return .none;
-    const kind = self.r.dp(.kind, d).*;
-    const value = self.r.dp(.value, d).*;
+    const kind = self.r.decl_pool.kinds()[@intFromEnum(d)];
+    const value = self.r.decl_pool.values()[@intFromEnum(d)];
     if (kind.is_fn()) return self.fn_value(d);
-    if (value != .none and (self.r.dp(.flags, d).is_stc or kind == .static_parameter or kind == .parameter or kind == .type_alias or kind == .record or kind == .variant or kind == .trait)) return self.constant(value, self.ty(n));
+    if (value != .none and (self.r.decl_pool.flags()[@intFromEnum(d)].is_stc or kind == .static_parameter or kind == .parameter or kind == .type_alias or kind == .record or kind == .variant or kind == .trait)) return self.constant(value, self.ty(n));
     return self.load_var(d);
 }
 
@@ -989,14 +989,14 @@ fn assign(self: *HighLowerer, n0: NodeId) void {
     const n = parts.node;
     if (parts.kind != .variable) return;
     const values = parts.values;
-    if (parts.ids.len == 1 and self.r.name_of(parts.ids[0]) == .none) return self.store_to(parts.ids[0], self.expr_to(values[0], self.ty(parts.ids[0])));
+    if (parts.assignees.len == 1 and self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, parts.assignees[0]) == .none) return self.store_to(parts.assignees[0], self.expr_to(values[0], self.ty(parts.assignees[0])));
     const shared = if (values.len == 1) self.expr(values[0]) else Ref.none;
-    for (parts.ids, 0..) |id, i| {
+    for (parts.assignees, 0..) |id, i| {
         const d = self.decl(id);
-        if (d == .none or (self.r.dp(.flags, d).is_stc and self.r.dp(.value, d).* != .none)) continue;
+        if (d == .none or (self.r.decl_pool.flags()[@intFromEnum(d)].is_stc and self.r.decl_pool.values()[@intFromEnum(d)] != .none)) continue;
         const t = self.var_ty(@intFromEnum(d));
         const x = if (values.len == 0) (if (self.aggregate(t) and !self.global_of.contains(d)) self.default_value(t) else Ref.none) else if (values.len > 1) self.expr_to(values[i], t) else self.coerce(shared, self.ty(values[0]), t);
-        if (self.r.dp(.node, d).* != n) {
+        if (self.r.decl_pool.nodes()[@intFromEnum(d)] != n) {
             self.store_var(d, x);
         } else if (self.global_of.get(d)) |g| {
             if (x.is_const()) self.ir.globals.pool.init.buf[g] = x.value() else self.store_var(d, x);
@@ -1030,7 +1030,7 @@ fn cheap(self: *HighLowerer, n: NodeId, budget: *u8) bool {
     if (self.static_of(n) != null) return true;
     const k = self.r.tree.kind(n);
     switch (k) {
-        .identifier, .identifier_self => return self.is_ssa(n) and !self.r.dp(.kind, self.decl(n)).*.is_fn(),
+        .identifier, .identifier_self => return self.is_ssa(n) and !self.r.decl_pool.kinds()[@intFromEnum(self.decl(n))].is_fn(),
         .capture => return self.cheap(self.r.tree.arg(n, 0), budget),
         .int, .char, .float, .string, .boolean_true, .boolean_false => return true,
         .neg_num => if (self.r.is_literal(n)) return true,
@@ -1186,7 +1186,7 @@ fn keys(self: *HighLowerer, p: NodeId, st: Index, b: u32, mark: u32) void {
 
 fn bind(self: *HighLowerer, p: NodeId, v: Ref, vt: Index) void {
     switch (self.r.tree.kind(p)) {
-        .identifier => if (self.r.name_of(p) != .underscore) self.declare_var(self.decl(p), v),
+        .identifier => if (self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, p) != .underscore) self.declare_var(self.decl(p), v),
         .labelarrow => {
             const ct = self.ty(self.r.tree.arg(p, 0));
             self.bind_label(self.r.tree.arg(p, 1), if (self.sp.tag(ct) == .variant_case_type) self.payload(self.narrow(v, vt, self.sp.get(ct).variant_case_type.variant), ct) else v);
@@ -1269,7 +1269,7 @@ fn pattern(self: *HighLowerer, p: NodeId, v: Ref, vt: Index, ok: u32, fail: u32)
     const pt = self.ty(p);
     switch (self.r.tree.kind(p)) {
         .identifier => {
-            if (self.r.name_of(p) != .underscore) self.declare_var(self.decl(p), v);
+            if (self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, p) != .underscore) self.declare_var(self.decl(p), v);
             self.br(ok);
         },
         .partial__match_case_pattern_or => {
@@ -1427,7 +1427,7 @@ fn loop(self: *HighLowerer, n: NodeId) Ref {
     var body: NodeId = undefined;
     var repeat: NodeId = 0;
     var step: ?struct { v: u32, ty: Index } = null;
-    var each: struct { decl: Decl.Index = .none, base: Ref = .none, ty: Index = .none } = .{};
+    var each: struct { decl: DeclPool.Index = .none, base: Ref = .none, ty: Index = .none } = .{};
     switch (k) {
         .@"while", .stcwhile, .while_with_repeat_stmt, .stcwhile_with_repeat_stmt => {
             const w = if (k == .@"while" or k == .stcwhile) n else a0;
@@ -1558,8 +1558,8 @@ fn method_call(self: *HighLowerer, t: Index, name: NamePool.Index, recv: Ref) Re
     };
 }
 
-fn fn_ret(self: *HighLowerer, d: Decl.Index) Index {
-    const ft = self.apply(self.r.dp(.ty, self.r.real(d)).*);
+fn fn_ret(self: *HighLowerer, d: DeclPool.Index) Index {
+    const ft = self.apply(self.r.decl_pool.tys()[@intFromEnum(self.r.real(d))]);
     return if (ft != .none and self.sp.tag(ft) == .function_type) self.sp.get(ft).function_type.ret else .unit_type;
 }
 
@@ -1569,7 +1569,7 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
     const args = self.r.tree.manychildren(self.r.tree.arg(n, 1));
     if (self.realized(n)) |f| return self.fn_value(f);
     const d = self.decl(n);
-    if (d != .none and self.r.dp(.kind, d).*.is_fn()) return self.direct(d, callee, args, t);
+    if (d != .none and self.r.decl_pool.kinds()[@intFromEnum(d)].is_fn()) return self.direct(d, callee, args, t);
     const ct = self.ty(callee);
     if (self.sp.tag(ct) == .meta_type or self.sp.tag(ct) == .variant_case_type) return self.construct(t, args);
     const f = self.expr(callee);
@@ -1586,17 +1586,17 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
 }
 
 // a stcfun call producing a function stands for its realization
-fn realized(self: *HighLowerer, n: NodeId) ?Decl.Index {
+fn realized(self: *HighLowerer, n: NodeId) ?DeclPool.Index {
     if (self.r.tree.kind(n) != .fun_call) return null;
     const g = self.decl(self.r.tree.arg(n, 0));
-    return if (g != .none and self.r.dp(.kind, g).* == .static_function and self.decl(n) != .none) self.decl(n) else null;
+    return if (g != .none and self.r.decl_pool.kinds()[@intFromEnum(g)] == .static_function and self.decl(n) != .none) self.decl(n) else null;
 }
 
-fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId, t: Index) Ref {
+fn direct(self: *HighLowerer, d: DeclPool.Index, callee: NodeId, all: []const NodeId, t: Index) Ref {
     const rd = self.r.real(d);
     const f = self.func(rd);
     const fv = Ref.of(self.sp.intern(.{ .function = self.ir.functions.pool.decl.buf[f] }));
-    const ft = self.apply(self.r.dp(.ty, rd).*);
+    const ft = self.apply(self.r.decl_pool.tys()[@intFromEnum(rd)]);
     const off = self.r.self_off(rd);
     const pnodes = self.r.params_of(self.r.value_node(rd));
     const mark = self.tmp.head;
@@ -1612,14 +1612,14 @@ fn direct(self: *HighLowerer, d: Decl.Index, callee: NodeId, all: []const NodeId
         const x = if (!bound) self.expr_to(recv, self.sp.get(ft).function_type.params[0]) else if (self.is_ptr(self.ty(recv))) self.expr(recv) else self.place(recv);
         self.tmp.push(@intFromEnum(x));
         if (!bound) args = args[1..];
-        dynamic = self.r.dp(.kind, rd).* == .trait_member and self.sp.tag(self.r.deref(self.ty(recv))) == .trait_type;
+        dynamic = self.r.decl_pool.kinds()[@intFromEnum(rd)] == .trait_member and self.sp.tag(self.r.deref(self.ty(recv))) == .trait_type;
     }
     const at = self.tmp.head;
     for (pnodes) |_| self.tmp.push(none);
     for (args, 0..) |a, i| {
         var j = i;
         if (self.r.tree.kind(a) == .partial__fun_call_assigned_param) {
-            const name = self.r.name_of(self.r.tree.arg(a, 0));
+            const name = self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, self.r.tree.arg(a, 0));
             for (pnodes, 0..) |pn, q| if (self.r.param_name(pn, q) == name) {
                 j = q;
             };
@@ -1736,7 +1736,7 @@ fn complete(self: *HighLowerer, rec: Index, mark: u32) void {
 fn member(self: *HighLowerer, n: NodeId) Ref {
     const parent = self.r.tree.arg(n, 0);
     const pt = self.ty(parent);
-    const name = self.r.name_of(self.r.tree.arg(n, 1));
+    const name = self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, self.r.tree.arg(n, 1));
     const base_t = if (self.sp.tag(pt) == .meta_type) (self.static_of(parent) orelse return .none) else self.r.deref(pt);
     return switch (self.sp.lookup_member(base_t, name)) {
         .field => |f| if (self.is_ptr(pt) or self.is_place(parent)) self.e2(.load, f.ty, self.place(n), .none) else self.emit(.extract, f.ty, @intFromEnum(self.expr(parent)), f.index),
@@ -1776,7 +1776,7 @@ fn place(self: *HighLowerer, n: NodeId) Ref {
             const parent = self.r.tree.arg(n, 0);
             const pt = self.ty(parent);
             const base = if (self.is_ptr(pt)) self.expr(parent) else self.place(parent);
-            switch (self.sp.lookup_member(self.r.deref(pt), self.r.name_of(self.r.tree.arg(n, 1)))) {
+            switch (self.sp.lookup_member(self.r.deref(pt), self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, self.r.tree.arg(n, 1)))) {
                 .field => |f| return self.emit(.field_ptr, self.ptr(f.ty), @intFromEnum(base), f.index),
                 else => {},
             }

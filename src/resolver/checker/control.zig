@@ -111,7 +111,7 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             else => self.mismatch(lp.seq, st, .none),
         };
         const v = lp.variable;
-        const it = self.h02_declare_local(if (v != 0) self.name_of(v) else .it, if (v != 0) v else lp.head, if (v != 0) .loop_variable else .autoins_it, elem);
+        const it = self.h02_declare_local(if (v != 0) self.name_pool.name_of(self.tree, self.src_bytes, v) else .it, if (v != 0) v else lp.head, if (v != 0) .loop_variable else .autoins_it, elem);
         self.node_decl[lp.head] = it;
         if (v != 0) {
             self.node_decl[v] = it;
@@ -202,14 +202,14 @@ fn merge(self: *Resolver, node: NodeId, acc: StaticPool.Index, t: StaticPool.Ind
 fn bind_label(self: *Resolver, label: NodeId, t: StaticPool.Index) void {
     const sp = &self.static_pool;
     if (self.tree.kind(label) != .partial__destructure) {
-        self.node_decl[label] = self.h02_declare_local(self.name_of(label), label, .arrow_binder, t);
+        self.node_decl[label] = self.h02_declare_local(self.name_pool.name_of(self.tree, self.src_bytes, label), label, .arrow_binder, t);
         _ = self.set(label, t);
         return;
     }
     const rt = sp.apply_vars(&self.abstract_pool, t);
     for (self.tree.manychildren(label), 0..) |id, i| {
         const ft = if (sp.tag(rt) == .record_type and i < sp.get(rt).custom_type.field_types.len) sp.get(rt).custom_type.field_types[i] else self.mismatch(id, t, .none);
-        self.node_decl[id] = self.h02_declare_local(self.name_of(id), id, .arrow_binder, ft);
+        self.node_decl[id] = self.h02_declare_local(self.name_pool.name_of(self.tree, self.src_bytes, id), id, .arrow_binder, ft);
         _ = self.set(id, ft);
     }
 }
@@ -234,7 +234,7 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
     const sp = &self.static_pool;
     switch (self.tree.kind(p)) {
         .identifier => {
-            const name = self.name_of(p);
+            const name = self.name_pool.name_of(self.tree, self.src_bytes, p);
             if (name != .underscore) self.node_decl[p] = self.h02_declare_local(name, p, .pattern_binder, st);
             _ = self.set(p, st);
             return .{ .all = true };
@@ -255,13 +255,13 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
                 }
                 for (names.buf[from..first]) |n| if (std.mem.indexOfScalar(NamePool.Index, names.buf[mark..names.head], n) == null) self.doc.h21_report(.undefined_name, alt, n, 0);
                 for (mark..names.head) |j| {
-                    const id = self.dp(.node, self.local_decls.buf[j]).*;
+                    const id = self.decl_pool.nodes()[@intFromEnum(self.local_decls.buf[j])];
                     const k = std.mem.indexOfScalar(NamePool.Index, names.buf[from..first], names.buf[j]) orelse {
                         self.doc.h21_report(.undefined_name, id, names.buf[j], 0);
                         continue;
                     };
                     self.node_decl[id] = self.local_decls.buf[from + k];
-                    const t = self.dp(.ty, self.node_decl[id]).*;
+                    const t = self.decl_pool.tys()[@intFromEnum(self.node_decl[id])];
                     if (self.node_type[id] != t and self.node_type[id] != .poison_type and t != .poison_type) _ = self.report(.type_mismatch, id, self.node_type[id], t);
                 }
                 names.head = mark;
@@ -272,7 +272,7 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
         .partial__match_case_pattern_typecast => {
             const t = types.realized_type(self, ctx, self.tree.arg(p, 0));
             const v = self.tree.arg(p, 1);
-            self.node_decl[v] = self.h02_declare_local(self.name_of(v), v, .pattern_binder, t);
+            self.node_decl[v] = self.h02_declare_local(self.name_pool.name_of(self.tree, self.src_bytes, v), v, .pattern_binder, t);
             _ = self.set(v, t);
             const widen = t == st or t == .poison_type or st == .poison_type or sp.coerce(&self.abstract_pool, st, t) != .incompatible;
             const narrow = switch (sp.tag(st)) {

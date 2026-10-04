@@ -90,11 +90,11 @@ fn define(ip: *Interpreter, n: NodeId) Index {
     for (s[0]..s[1]) |i| {
         const id: NodeId = @intCast(i);
         const d = ip.info(.decl, id);
-        if (!places.named(r.tree.kind(id)) or d == .none or r.dp(.flags, d).is_global) continue;
+        if (!places.named(r.tree.kind(id)) or d == .none or r.decl_pool.flags()[@intFromEnum(d)].is_global) continue;
         const v = places.peek(ip, d);
         if (v.is(.none)) continue;
         const x = ip.pool(v);
-        r.dp(.value, r.h02_declare_local(r.dp(.name, d).*, id, .static_parameter, r.dp(.ty, d).*)).* = x;
+        r.decl_pool.values()[@intFromEnum(r.h02_declare_local(r.decl_pool.names()[@intFromEnum(d)], id, .static_parameter, r.decl_pool.tys()[@intFromEnum(d)]))] = x;
     }
     return r.static_type(&ctx, n);
 }

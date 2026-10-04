@@ -3,6 +3,7 @@ const SoD = @import("../ds/dynbuf.zig").SoD;
 const DynBuf = @import("../ds/dynbuf.zig").DynBuf;
 const StaticPool = @import("../resolver/StaticPool.zig");
 const Resolver = @import("../Resolver.zig");
+const DeclPool = @import("../resolver/DeclPool.zig");
 
 const HighIr = @This();
 
@@ -131,8 +132,8 @@ pub const Op = enum(u8) {
 
 pub const Inst = struct { op: Op, ty: StaticPool.Index, a: u32, b: u32 };
 pub const Block = struct { start: u32, len: u32, preds: u32 };
-pub const Function = struct { decl: Resolver.Decl.Index, ty: StaticPool.Index, first_block: u32, blocks: u32, first_inst: u32, insts: u32, captures: u32 };
-pub const Global = struct { decl: Resolver.Decl.Index, ty: StaticPool.Index, init: StaticPool.Index };
+pub const Function = struct { decl: DeclPool.Index, ty: StaticPool.Index, first_block: u32, blocks: u32, first_inst: u32, insts: u32, captures: u32 };
+pub const Global = struct { decl: DeclPool.Index, ty: StaticPool.Index, init: StaticPool.Index };
 
 functions: SoD(Function),
 blocks: SoD(Block),

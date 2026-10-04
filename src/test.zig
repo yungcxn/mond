@@ -3,6 +3,7 @@ const Lexer = @import("Lexer.zig");
 const Parser = @import("Parser.zig");
 const Resolver = @import("Resolver.zig");
 const HighLowerer = @import("HighLowerer.zig");
+const DeclPool = @import("resolver/DeclPool.zig");
 const Ref = @import("high_lowerer/HighIr.zig").Ref;
 const debug = @import("debug.zig");
 
@@ -46,7 +47,7 @@ fn run(a: std.mem.Allocator, src: []u8) !Result {
                 const l = try a.create(HighLowerer);
                 l.* = HighLowerer.init(a, r);
                 l.lower();
-                if (try verify(a, l)) |v| try out.append(a, .{ .line = if (v.d == .none) 1 else if (debug.node_span(&parser.tree, src, r.decls.pool.node.buf[@intFromEnum(v.d)])) |s| line_at(src, s[0]) else 1, .code = "invalid_ir", .msg = v.msg });
+                if (try verify(a, l)) |v| try out.append(a, .{ .line = if (v.d == .none) 1 else if (debug.node_span(&parser.tree, src, r.decl_pool.nodes()[@intFromEnum(v.d)])) |s| line_at(src, s[0]) else 1, .code = "invalid_ir", .msg = v.msg });
             }
             const d = r.doc.diagnostics.sliced();
             for (d.code, d.node, d.a, d.b) |code, node, x, y| {
@@ -60,9 +61,9 @@ fn run(a: std.mem.Allocator, src: []u8) !Result {
     return .{ .found = out.items, .r = res };
 }
 
-const Bad = struct { d: Resolver.Decl.Index, msg: []const u8 };
+const Bad = struct { d: DeclPool.Index, msg: []const u8 };
 
-fn bad(a: std.mem.Allocator, d: Resolver.Decl.Index, comptime fmt: []const u8, args: anytype) !?Bad {
+fn bad(a: std.mem.Allocator, d: DeclPool.Index, comptime fmt: []const u8, args: anytype) !?Bad {
     return .{ .d = d, .msg = try std.fmt.allocPrint(a, fmt, args) };
 }
 
@@ -182,7 +183,7 @@ fn checks(a: std.mem.Allocator, src: []const u8) ![]Check {
 }
 
 fn actual(a: std.mem.Allocator, r: *Resolver, c: Check) ![]const u8 {
-    const d = r.decls.sliced();
+    const d = r.decl_pool.entries.sliced();
     for (0..d.name.len) |i| {
         if (d.name[i] == .empty or d.name[i] == .none or !std.mem.eql(u8, r.name_pool.get(d.name[i]), c.name)) continue;
         const span = debug.node_span(r.tree, r.src_bytes, d.node[i]) orelse continue;
@@ -272,7 +273,7 @@ fn check(w: *std.Io.Writer, io: std.Io, path: []const u8, negative: bool, filter
             try lines.writer.print("  " ++ dim ++ "{s}" ++ reset ++ "\n", .{source_line(src, c.line)});
         }
         counts[@intFromBool(!ok)] += 1;
-        try w.print("  {s}{s}" ++ reset ++ " {s}/{s}  " ++ dim ++ "{d} expected, {d} found, {d} checks, {d} declarations" ++ reset ++ "\n{s}", .{ if (ok) green else red, if (ok) "✓" else "✗", path, name, want.len, got.found.len, cs.len, if (got.r) |r| r.decls.len() else 0, lines.written() });
+        try w.print("  {s}{s}" ++ reset ++ " {s}/{s}  " ++ dim ++ "{d} expected, {d} found, {d} checks, {d} declarations" ++ reset ++ "\n{s}", .{ if (ok) green else red, if (ok) "✓" else "✗", path, name, want.len, got.found.len, cs.len, if (got.r) |r| r.decl_pool.entries.len() else 0, lines.written() });
     }
     return counts;
 }

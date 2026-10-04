@@ -3,6 +3,7 @@ const DynBuf = @import("../ds/dynbuf.zig").DynBuf;
 const ParseTree = @import("../ParseTree.zig");
 const Resolver = @import("../Resolver.zig");
 const StaticPool = @import("StaticPool.zig");
+const DeclPool = @import("DeclPool.zig");
 const Value = @import("interpreter/Value.zig");
 const places = @import("interpreter/places.zig");
 const control = @import("interpreter/control.zig");
@@ -11,7 +12,6 @@ const types = @import("interpreter/types.zig");
 const Index = StaticPool.Index;
 const NodeId = ParseTree.NodeId;
 const Kind = ParseTree.Node.Kind;
-const Decl = Resolver.Decl;
 
 const Interpreter = @This();
 
@@ -22,7 +22,7 @@ pub const no_cell = std.math.maxInt(u32);
 // env: the closure a frame was called through, its captures resolve to the closure's cells
 const Frame = struct { body: Resolver.Body, base: u32, env: Value = .empty };
 const Session = struct { ctx: *Resolver.FnCtx, mem: u32, adopted: u32 };
-const Adopted = struct { decl: Decl.Index, cell: u32 };
+const Adopted = struct { decl: DeclPool.Index, cell: u32 };
 const Defer = struct { node: NodeId, cell: u32 };
 
 budget: u32 = step_budget,
@@ -38,8 +38,8 @@ defers: DynBuf(Defer),
 // a block stored into a cell older than its frame stays until that cell is gone
 floor: u32 = 0,
 floor_cell: u32 = no_cell,
-caps: std.AutoHashMapUnmanaged(Decl.Index, [2]u32) = .empty,
-cap_list: DynBuf(Decl.Index),
+caps: std.AutoHashMapUnmanaged(DeclPool.Index, [2]u32) = .empty,
+cap_list: DynBuf(DeclPool.Index),
 
 pub fn init(a: std.mem.Allocator) Interpreter {
     return .{ .frames = .init(a, 64), .mem = .init(a, 1024), .list = .init(a, 256), .ids = .init(a, 256), .adopted = .init(a, 16), .defers = .init(a, 16), .cap_list = .init(a, 64) };
@@ -308,7 +308,7 @@ fn zero_case(self: *Interpreter, v: StaticPool.VariantType) Value {
     return if (payload != .none) calls.construct(self, payload, &.{}) else .empty;
 }
 
-pub fn captures(self: *Interpreter, d: Decl.Index) []const Decl.Index {
+pub fn captures(self: *Interpreter, d: DeclPool.Index) []const DeclPool.Index {
     if (self.caps.get(d)) |c| return self.cap_list.buf[c[0]..][0..c[1]];
     const start = self.cap_list.head;
     self.res().captures(d, &self.cap_list);
@@ -317,25 +317,25 @@ pub fn captures(self: *Interpreter, d: Decl.Index) []const Decl.Index {
 }
 
 // a function as a value: with captures a block of the function and its environment, like the lowerer's closure
-pub fn closure(self: *Interpreter, d: Decl.Index) Value {
+pub fn closure(self: *Interpreter, d: DeclPool.Index) Value {
     const r = self.res();
-    const f: Value = .of(&r.static_pool, r.dp(.value, d).*);
+    const f: Value = .of(&r.static_pool, r.decl_pool.values()[@intFromEnum(d)]);
     const caps = self.captures(d);
     if (caps.len == 0) return f;
     const at = self.alloc(@intCast(caps.len + 1));
     self.mem.buf[at] = f;
     for (caps, 1..) |c, i| {
         const s = places.slot(self, c);
-        const x: Value = if (s != null and r.by_ref(c)) .ref(r.self_ptr(r.dp(.ty, c).*), s.?) else self.own(places.peek(self, c));
+        const x: Value = if (s != null and r.by_ref(c)) .ref(r.self_ptr(r.decl_pool.tys()[@intFromEnum(c)]), s.?) else self.own(places.peek(self, c));
         self.mem.buf[at + i] = x;
     }
-    return .block(r.dp(.ty, d).*, at, @intCast(caps.len + 1));
+    return .block(r.decl_pool.tys()[@intFromEnum(d)], at, @intCast(caps.len + 1));
 }
 
 // the cell of a capture of the closure a frame runs in
-pub fn captured(self: *Interpreter, f: Frame, d: Decl.Index) ?u32 {
+pub fn captured(self: *Interpreter, f: Frame, d: DeclPool.Index) ?u32 {
     if (!f.env.is_heap() or f.body.decl == .none) return null;
-    const k = std.mem.indexOfScalar(Decl.Index, self.captures(f.body.decl), d) orelse return null;
+    const k = std.mem.indexOfScalar(DeclPool.Index, self.captures(f.body.decl), d) orelse return null;
     const c = f.env.at() + 1 + @as(u32, @intCast(k));
     return if (self.mem.buf[c].is_ref() and self.res().by_ref(d)) self.mem.buf[c].at() else c;
 }

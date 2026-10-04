@@ -3,6 +3,7 @@ const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const statics = @import("statics.zig");
 const StaticPool = @import("../StaticPool.zig");
+const DeclPool = @import("../DeclPool.zig");
 const Decl = Resolver.Decl;
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
@@ -13,18 +14,18 @@ pub fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
     if (self.tree.kind(node) == .with) { // a copy of a record, the named arguments must be its fields
         const t = self.deref(self.h09_check_expr(ctx, self.tree.arg(node, 0), .none));
         for (args) |a| {
-            const m = if (self.tree.kind(a) == .partial__fun_call_assigned_param and t != .poison_type) sp.lookup_member(t, self.name_of(self.tree.arg(a, 0))) else StaticPool.Member.none;
-            _ = if (m == .field) self.check(ctx, self.tree.arg(a, 1), named(self, a, m.field.ty)) else if (t == .poison_type) t else self.report(.unknown_named_argument, a, self.name_of(self.tree.arg(a, 0)), t);
+            const m = if (self.tree.kind(a) == .partial__fun_call_assigned_param and t != .poison_type) sp.lookup_member(t, self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(a, 0))) else StaticPool.Member.none;
+            _ = if (m == .field) self.check(ctx, self.tree.arg(a, 1), named(self, a, m.field.ty)) else if (t == .poison_type) t else self.report(.unknown_named_argument, a, self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(a, 0)), t);
         }
         return t;
     }
     const callee = self.tree.arg(node, 0);
     const ct = self.h09_check_expr(ctx, callee, .none);
     // a stcfun call producing a function is called like that function
-    const d = if (self.tree.kind(callee) != .fun_call) self.node_decl[callee] else if (self.node_decl[self.tree.arg(callee, 0)] != .none and self.dp(.kind, self.node_decl[self.tree.arg(callee, 0)]).* == .static_function) self.node_decl[callee] else .none;
+    const d = if (self.tree.kind(callee) != .fun_call) self.node_decl[callee] else if (self.node_decl[self.tree.arg(callee, 0)] != .none and self.decl_pool.kinds()[@intFromEnum(self.node_decl[self.tree.arg(callee, 0)])] == .static_function) self.node_decl[callee] else .none;
     // `x.m(..)` binds x as the self argument, `Type.m(x.&, ..)` passes it like any other argument
     const recv = if (self.tree.kind(callee) == .member and sp.tag(self.node_type[self.tree.arg(callee, 0)]) != .meta_type) self.tree.arg(callee, 0) else 0;
-    if (ct != .poison_type and d != .none and self.dp(.kind, d).*.is_fn()) return call_decl(self, ctx, node, d, args, recv);
+    if (ct != .poison_type and d != .none and self.decl_pool.kinds()[@intFromEnum(d)].is_fn()) return call_decl(self, ctx, node, d, args, recv);
     const target = if (sp.tag(ct) != .meta_type) sp.apply_vars(&self.abstract_pool, ct) else statics.deferred(self, ctx, callee) orelse {
         for (args) |a| _ = self.h09_check_expr(ctx, self.arg_value(a), .none);
         return .poison_type;
@@ -53,9 +54,9 @@ pub fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
 }
 
 // calls of declared functions: overload resolution, stcfun realization, length-generic realization
-fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_args: []const NodeId, recv: NodeId) StaticPool.Index {
+fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: DeclPool.Index, all_args: []const NodeId, recv: NodeId) StaticPool.Index {
     const sp = &self.static_pool;
-    if (self.dp(.kind, first).* == .static_function) {
+    if (self.decl_pool.kinds()[@intFromEnum(first)] == .static_function) {
         const want = self.sig(first).params.len;
         if (all_args.len != want) return self.report(.wrong_arity, node, all_args.len, want);
         const ret = self.sig(first).ret;
@@ -92,13 +93,13 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
         if (sp.tag(ret) != .meta_type) self.node_value[node] = r;
         if (sp.tag(r) != .function_value) return if (sp.tag(ret) == .meta_type or ret == .poison_type) sp.type_of(r) else ret;
         self.node_decl[node] = sp.get(r).function;
-        return self.dp(.ty, sp.get(r).function).*;
+        return self.decl_pool.tys()[@intFromEnum(sp.get(r).function)];
     }
     // the self argument of a method: the receiver, or the first argument when called through the type
     const off = self.self_off(first);
     var args = all_args;
     if (off == 1) {
-        const ft = self.dp(.ty, self.real(first)).*;
+        const ft = self.decl_pool.tys()[@intFromEnum(self.real(first))];
         const p0 = if (ft != .none and sp.tag(ft) == .function_type) sp.get(ft).function_type.params[0] else StaticPool.Index.poison_type;
         if (recv != 0) {
             const rt = sp.apply_vars(&self.abstract_pool, self.node_type[recv]);
@@ -115,18 +116,18 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
     var tys: [64]StaticPool.Index = undefined;
     var map: [64]u32 = undefined;
     const f0 = self.real(first);
-    const f0_ok = self.dp(.ty, f0).* != .none and bind_args(self, self.params_of(self.value_node(f0)), args, &map, false);
+    const f0_ok = self.decl_pool.tys()[@intFromEnum(f0)] != .none and bind_args(self, self.params_of(self.value_node(f0)), args, &map, false);
     for (args, 0..) |a, i| {
         const hint = if (f0_ok) self.sig(f0).params[map[i] + off] else .none;
         tys[i] = self.h09_check_expr(ctx, self.arg_value(a), hint);
     }
     // most specific candidate: exact > coercion > unlengthed, a where clause beats none
-    var best: Decl.Index = .none;
+    var best: DeclPool.Index = .none;
     var best_score: i32 = -1;
     var ambiguous = false;
     var count: u32 = 0;
     var c = first;
-    while (c != .none) : (c = self.dp(.next_overload, c).*) {
+    while (c != .none) : (c = self.decl_pool.next_overloads()[@intFromEnum(c)]) {
         count += 1;
         const s = score(self, c, args, tys[0..args.len], off);
         if (s > best_score) {
@@ -141,7 +142,7 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
     }
     if (ambiguous) _ = self.report(.ambiguous_overload, node, best, 0);
     var callee = self.real(best);
-    if (off == 1 and self.dp(.flags, callee).writes) {
+    if (off == 1 and self.decl_pool.flags()[@intFromEnum(callee)].writes) {
         const r = if (recv != 0) recv else self.arg_value(all_args[0]);
         const rt = sp.apply_vars(&self.abstract_pool, self.node_type[r]);
         const place = switch (self.tree.kind(r)) {
@@ -157,7 +158,7 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
     const pnodes = self.params_of(self.value_node(callee));
     _ = bind_args(self, pnodes, args, &map, false);
     check_stcwhere(self, ctx, node, callee, pnodes, args, map[0..args.len]);
-    if (statics.length_generic(self, self.dp(.ty, callee).*)) {
+    if (statics.length_generic(self, self.decl_pool.tys()[@intFromEnum(callee)])) {
         // the argument lengths, in parameter order, pick the realization
         var lens: [64]StaticPool.Index = undefined;
         var n: usize = 0;
@@ -191,12 +192,12 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: Decl.Index, all_
 }
 
 // stcwhere holds at every call: the callee's parameters are bound to the static arguments in a scope of their own
-fn check_stcwhere(self: *Resolver, ctx: *FnCtx, node: NodeId, callee: Decl.Index, pnodes: []const NodeId, args: []const NodeId, map: []const u32) void {
+fn check_stcwhere(self: *Resolver, ctx: *FnCtx, node: NodeId, callee: DeclPool.Index, pnodes: []const NodeId, args: []const NodeId, map: []const u32) void {
     if (ctx.interpreted) return;
     for (pnodes) |pn| {
         if (Resolver.Param.from_node(self, pn).stc) break;
     } else return;
-    const ft = self.dp(.ty, callee).*;
+    const ft = self.decl_pool.tys()[@intFromEnum(callee)];
     const off = self.self_off(callee);
     self.open_scope(true, .none, 0);
     defer self.h04_pop_scope();
@@ -209,7 +210,7 @@ fn check_stcwhere(self: *Resolver, ctx: *FnCtx, node: NodeId, callee: Decl.Index
         };
         const pt0 = self.static_pool.get(ft).function_type.params[j + off];
         const pt = if (statics.templated(self, pt0) != .none and at != .none) at else pt0;
-        self.dp(.value, self.h02_declare_local(self.param_name(pn, j), pn, .static_parameter, pt)).* = if (v == .none) v else statics.retype(self, v, pt);
+        self.decl_pool.values()[@intFromEnum(self.h02_declare_local(self.param_name(pn, j), pn, .static_parameter, pt))] = if (v == .none) v else statics.retype(self, v, pt);
     }
     for (pnodes) |pn| {
         const p = Resolver.Param.from_node(self, pn);
@@ -222,7 +223,7 @@ fn check_stcwhere(self: *Resolver, ctx: *FnCtx, node: NodeId, callee: Decl.Index
     }
 }
 
-pub fn dispatches(self: *Resolver, d: Decl.Index) bool {
+pub fn dispatches(self: *Resolver, d: DeclPool.Index) bool {
     for (self.params_of(self.value_node(d))) |pn| {
         const p = Resolver.Param.from_node(self, pn);
         if (p.where != 0 and p.@"else" == 0 and !p.stc) return true;
@@ -230,11 +231,11 @@ pub fn dispatches(self: *Resolver, d: Decl.Index) bool {
     return false;
 }
 
-fn score(self: *Resolver, c: Decl.Index, args: []const NodeId, tys: []const StaticPool.Index, off: usize) i32 {
+fn score(self: *Resolver, c: DeclPool.Index, args: []const NodeId, tys: []const StaticPool.Index, off: usize) i32 {
     const sp = &self.static_pool;
     self.h05_ensure_signature(c);
     const r = self.real(c);
-    const ft = self.dp(.ty, r).*;
+    const ft = self.decl_pool.tys()[@intFromEnum(r)];
     if (ft == .none or sp.tag(ft) != .function_type) return -1;
     var map: [64]u32 = undefined;
     const pnodes = self.params_of(self.value_node(r));
@@ -255,18 +256,18 @@ fn score(self: *Resolver, c: Decl.Index, args: []const NodeId, tys: []const Stat
     return total;
 }
 
-pub fn has_where(self: *Resolver, d: Decl.Index) bool {
+pub fn has_where(self: *Resolver, d: DeclPool.Index) bool {
     for (self.params_of(self.value_node(d))) |pn| if (Resolver.Param.from_node(self, pn).where != 0) return true;
     return false;
 }
 
 // one dispatch group: the same parameter types under the same names
-pub fn same_params(self: *Resolver, a0: Decl.Index, b0: Decl.Index) bool {
+pub fn same_params(self: *Resolver, a0: DeclPool.Index, b0: DeclPool.Index) bool {
     const sp = &self.static_pool;
     const a = self.real(a0);
     const b = self.real(b0);
-    const ta = self.dp(.ty, a).*;
-    const tb = self.dp(.ty, b).*;
+    const ta = self.decl_pool.tys()[@intFromEnum(a)];
+    const tb = self.decl_pool.tys()[@intFromEnum(b)];
     if (ta != tb and (ta == .none or tb == .none or sp.tag(ta) != .function_type or sp.tag(tb) != .function_type or !std.mem.eql(StaticPool.Index, sp.get(ta).function_type.params, sp.get(tb).function_type.params))) return false;
     const pa = self.params_of(self.value_node(a));
     const pb = self.params_of(self.value_node(b));
@@ -281,7 +282,7 @@ pub fn bind_args(self: *Resolver, params: []const NodeId, args: []const NodeId, 
     for (args, 0..) |a, i| {
         var p: usize = i;
         if (self.tree.kind(a) == .partial__fun_call_assigned_param) {
-            const name = self.name_of(self.tree.arg(a, 0));
+            const name = self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(a, 0));
             p = for (params, 0..) |pn, j| {
                 if (self.param_name(pn, j) == name) break j;
             } else return false;
@@ -301,7 +302,7 @@ pub fn named(self: *Resolver, a: NodeId, t: StaticPool.Index) StaticPool.Index {
 
 fn bad_args(self: *Resolver, node: NodeId, params: []const NodeId, args: []const NodeId) StaticPool.Index {
     for (args) |a| if (self.tree.kind(a) == .partial__fun_call_assigned_param) {
-        const name = self.name_of(self.tree.arg(a, 0));
+        const name = self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(a, 0));
         for (params, 0..) |pn, j| {
             if (self.param_name(pn, j) == name) break;
         } else return self.report(.unknown_named_argument, a, name, .none);
@@ -309,7 +310,7 @@ fn bad_args(self: *Resolver, node: NodeId, params: []const NodeId, args: []const
     return self.report(.wrong_arity, node, args.len, params.len);
 }
 
-pub fn link(self: *Resolver, id: NodeId, d: Decl.Index, t: StaticPool.Index) void {
+pub fn link(self: *Resolver, id: NodeId, d: DeclPool.Index, t: StaticPool.Index) void {
     if (id == 0) return;
     self.node_decl[id] = d;
     self.node_type[id] = t;

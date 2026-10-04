@@ -1,18 +1,18 @@
 const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
+const DeclPool = @import("../DeclPool.zig");
 const Interpreter = @import("../Interpreter.zig");
 const calls = @import("calls.zig");
 const types = @import("types.zig");
 const Value = @import("Value.zig");
 const NodeId = ParseTree.NodeId;
 const Kind = ParseTree.Node.Kind;
-const Decl = Resolver.Decl;
 
 pub fn named(k: Kind) bool {
     return k == .identifier or k == .identifier_self;
 }
 
-pub fn slot(self: *Interpreter, d: Decl.Index) ?u32 {
+pub fn slot(self: *Interpreter, d: DeclPool.Index) ?u32 {
     const x = @intFromEnum(d);
     var i = self.frames.head;
     while (i > 0) {
@@ -37,7 +37,7 @@ fn impure(self: *Interpreter, n: NodeId) bool {
         i -= 1;
         const f = self.frames.buf[i];
         if (f.body.len == 0) return false;
-        if (f.body.decl != .none and r.dp(.kind, f.body.decl).* == .static_function) {
+        if (f.body.decl != .none and r.decl_pool.kinds()[@intFromEnum(f.body.decl)] == .static_function) {
             _ = self.report(.impure_stcfun, n, 0, 0);
             return true;
         }
@@ -50,51 +50,51 @@ pub fn flush(self: *Interpreter, mark: u32) void {
     while (self.adopted.head > mark) {
         self.adopted.head -= 1;
         const a = self.adopted.buf[self.adopted.head];
-        r.dp(.value, a.decl).* = r.retype(self.export_(r.dp(.node, a.decl).*, self.mem.buf[a.cell]), r.dp(.ty, a.decl).*);
+        r.decl_pool.values()[@intFromEnum(a.decl)] = r.retype(self.export_(r.decl_pool.nodes()[@intFromEnum(a.decl)], self.mem.buf[a.cell]), r.decl_pool.tys()[@intFromEnum(a.decl)]);
     }
 }
 
-fn decl_of(self: *Interpreter, n: NodeId) Decl.Index {
+fn decl_of(self: *Interpreter, n: NodeId) DeclPool.Index {
     return if (self.framed()) self.info(.decl, n) else self.res().use(n);
 }
 
-fn stored(self: *Interpreter, n: NodeId, d: Decl.Index) Value {
+fn stored(self: *Interpreter, n: NodeId, d: DeclPool.Index) Value {
     const r = self.res();
-    const v = r.dp(.value, d).*;
+    const v = r.decl_pool.values()[@intFromEnum(d)];
     if (v != .none) return .of(&r.static_pool, v);
-    return if (r.dp(.state, d).* == .failed) .poison else self.fail(n, .not_static, r.name_of(n), 0);
+    return if (r.decl_pool.states()[@intFromEnum(d)] == .failed) .poison else self.fail(n, .not_static, r.name_pool.name_of(r.tree, r.src_bytes, n), 0);
 }
 
-pub fn peek(self: *Interpreter, d: Decl.Index) Value {
+pub fn peek(self: *Interpreter, d: DeclPool.Index) Value {
     if (slot(self, d)) |s| if (!self.mem.buf[s].is(.none)) return self.mem.buf[s];
-    return .of(&self.res().static_pool, self.res().dp(.value, d).*);
+    return .of(&self.res().static_pool, self.res().decl_pool.values()[@intFromEnum(d)]);
 }
 
 pub fn load(self: *Interpreter, n: NodeId) Value {
     const d = decl_of(self, n);
-    if (d == .none) return if (self.framed()) self.fail(n, .undefined_name, self.res().name_of(n), 0) else .poison;
-    if (self.framed() and self.res().dp(.kind, d).* == .function and !self.res().dp(.flags, d).is_global) return self.closure(d);
+    if (d == .none) return if (self.framed()) self.fail(n, .undefined_name, self.res().name_pool.name_of(self.res().tree, self.res().src_bytes, n), 0) else .poison;
+    if (self.framed() and self.res().decl_pool.kinds()[@intFromEnum(d)] == .function and !self.res().decl_pool.flags()[@intFromEnum(d)].is_global) return self.closure(d);
     const v = peek(self, d);
     return if (v.is(.none)) stored(self, n, d) else v;
 }
 
-pub fn bind(self: *Interpreter, d: Decl.Index, v: Value) void {
+pub fn bind(self: *Interpreter, d: DeclPool.Index, v: Value) void {
     const r = self.res();
     if (d == .none) return;
     if (slot(self, d)) |s| return self.set(s, v);
-    if (r.dp(.ty, d).* == .none) r.dp(.ty, d).* = self.vtype(v);
-    r.dp(.value, d).* = self.pool(v);
+    if (r.decl_pool.tys()[@intFromEnum(d)] == .none) r.decl_pool.tys()[@intFromEnum(d)] = self.vtype(v);
+    r.decl_pool.values()[@intFromEnum(d)] = self.pool(v);
 }
 
-pub fn store(self: *Interpreter, n: NodeId, d: Decl.Index, v: Value) bool {
+pub fn store(self: *Interpreter, n: NodeId, d: DeclPool.Index, v: Value) bool {
     const r = self.res();
     if (d == .none) return true;
     if (slot(self, d)) |s| {
-        self.fill(s, v, r.dp(.ty, d).*);
+        self.fill(s, v, r.decl_pool.tys()[@intFromEnum(d)]);
         return true;
     }
     if (impure(self, n)) return false;
-    r.dp(.value, d).* = r.retype(self.export_(r.dp(.node, d).*, v), r.dp(.ty, d).*);
+    r.decl_pool.values()[@intFromEnum(d)] = r.retype(self.export_(r.decl_pool.nodes()[@intFromEnum(d)], v), r.decl_pool.tys()[@intFromEnum(d)]);
     return true;
 }
 
@@ -143,7 +143,7 @@ pub fn cell(self: *Interpreter, n: NodeId) ?u32 {
         const iv = self.eval(r.tree.arg(n, 1));
         if (!Value.is_int(iv.ty)) return null;
         break :blk iv.bits;
-    } else if (agg.is_heap()) switch (r.static_pool.lookup_member(agg.ty, r.name_of(r.tree.arg(n, 1)))) {
+    } else if (agg.is_heap()) switch (r.static_pool.lookup_member(agg.ty, r.name_pool.name_of(r.tree, r.src_bytes, r.tree.arg(n, 1)))) {
         .field => |f| f.index,
         else => return null,
     } else 0;
@@ -168,23 +168,23 @@ pub fn declare(self: *Interpreter, n0: NodeId) Value {
     const s = Resolver.Stmt.from_node(r, n0);
     if (s.kind != .variable) {
         if (!Resolver.is_type_decl(s.kind)) return .unit;
-        const t = self.eval(s.value);
-        for (s.ids) |id| _ = store(self, id, self.info(.decl, id), t);
+        const t = self.eval(s.values[0]);
+        for (s.assignees) |id| _ = store(self, id, self.info(.decl, id), t);
         return if (t.is(.poison_type)) t else .unit;
     }
     const values = s.values;
     const shared: Value = if (values.len == 1) self.eval(values[0]) else .empty;
     if (self.unwind != .none or shared.is(.poison_type)) return shared;
-    if (s.ids.len == 1 and !named(r.tree.kind(s.ids[0]))) {
-        write(self, s.ids[0], shared);
+    if (s.assignees.len == 1 and !named(r.tree.kind(s.assignees[0]))) {
+        write(self, s.assignees[0], shared);
         return .unit;
     }
-    const d0 = if (s.ids.len > 0) self.info(.decl, s.ids[0]) else .none;
-    const dyn = if (s.type != 0 and d0 != .none and self.info(.value, s.type) == .none and types.unknown(&r.static_pool, r.dp(.ty, d0).*)) types.of(self, s.type) orelse return .poison else .none;
-    for (s.ids, 0..) |id, i| {
+    const d0 = if (s.assignees.len > 0) self.info(.decl, s.assignees[0]) else .none;
+    const dyn = if (s.type != 0 and d0 != .none and self.info(.value, s.type) == .none and types.unknown(&r.static_pool, r.decl_pool.tys()[@intFromEnum(d0)])) types.of(self, s.type) orelse return .poison else .none;
+    for (s.assignees, 0..) |id, i| {
         const d = self.info(.decl, id);
         if (d == .none) continue;
-        const x = if (values.len > 1) self.eval(values[i]) else if (values.len == 1) shared else self.zero(if (dyn != .none) dyn else r.dp(.ty, d).*);
+        const x = if (values.len > 1) self.eval(values[i]) else if (values.len == 1) shared else self.zero(if (dyn != .none) dyn else r.decl_pool.tys()[@intFromEnum(d)]);
         if (x.is(.poison_type)) return x;
         if (dyn != .none and values.len > 0 and !types.admits(self, x, dyn)) return self.fail(values[@min(i, values.len - 1)], .type_mismatch, self.vtype(x), dyn);
         if (!store(self, id, d, self.coerce(x, dyn))) return .poison;

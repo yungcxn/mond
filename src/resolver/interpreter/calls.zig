@@ -2,19 +2,19 @@ const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const StaticPool = @import("../StaticPool.zig");
 const NamePool = @import("../NamePool.zig");
+const DeclPool = @import("../DeclPool.zig");
 const Interpreter = @import("../Interpreter.zig");
 const Value = @import("Value.zig");
 const control = @import("control.zig");
 const places = @import("places.zig");
 const Index = StaticPool.Index;
 const NodeId = ParseTree.NodeId;
-const Decl = Resolver.Decl;
 
 pub fn member(self: *Interpreter, n: NodeId) Value {
     const r = self.res();
     const sp = &r.static_pool;
     const parent = r.tree.arg(n, 0);
-    const name = r.name_of(r.tree.arg(n, 1));
+    const name = r.name_pool.name_of(r.tree, r.src_bytes, r.tree.arg(n, 1));
     if (name == .len and !self.framed()) {
         const t = sp.pointee(sp.apply_vars(&r.abstract_pool, r.h09_check_expr(self.ctx, parent, .none)));
         if (sp.get(t) == .array_type and sp.tag(sp.get(t).array_type.len) == .int_value) return .of(sp, sp.get(t).array_type.len);
@@ -39,7 +39,7 @@ pub fn member(self: *Interpreter, n: NodeId) Value {
         .case => |c| .pooled(c),
         .method => |m| blk: {
             r.h05_ensure_signature(m);
-            break :blk .of(sp, r.dp(.value, m).*);
+            break :blk .of(sp, r.decl_pool.values()[@intFromEnum(m)]);
         },
         else => self.fail(n, .unknown_member, name, pv.index()),
     };
@@ -52,7 +52,7 @@ pub fn call(self: *Interpreter, n: NodeId) Value {
     const args = r.tree.manychildren(r.tree.arg(n, 1));
     const d = self.info(.decl, n);
     const cd = self.info(.decl, callee);
-    if (d != .none and r.dp(.kind, d).*.is_fn() and (cd == .none or r.dp(.kind, cd).* != .static_function)) {
+    if (d != .none and r.decl_pool.kinds()[@intFromEnum(d)].is_fn() and (cd == .none or r.decl_pool.kinds()[@intFromEnum(cd)] != .static_function)) {
         if (r.self_off(r.real(d)) == 0 or r.tree.kind(callee) != .member or sp.tag(self.info(.ty, r.tree.arg(callee, 0))) == .meta_type) return invoke(self, n, d, args, .empty, .empty);
         const c = places.cell(self, r.tree.arg(callee, 0)) orelse return .poison;
         return invoke(self, n, d, args, if (self.mem.buf[c].is_ref()) self.mem.buf[c] else .ref(r.self_ptr(self.vtype(self.mem.buf[c])), c), .empty);
@@ -67,7 +67,7 @@ pub fn call(self: *Interpreter, n: NodeId) Value {
         .function_value => invoke(self, n, sp.get(c).function, args, .empty, .empty),
         .generic => blk: {
             const g = sp.get(c).static_fun.decl;
-            const params = sp.get(r.dp(.ty, g).*).function_type.params;
+            const params = sp.get(r.decl_pool.tys()[@intFromEnum(g)]).function_type.params;
             if (args.len != params.len) break :blk self.fail(n, .wrong_arity, args.len, params.len);
             const mark = self.ids.head;
             defer self.ids.head = mark;
@@ -102,7 +102,7 @@ pub fn deinit(self: *Interpreter, n: NodeId, c: u32) void {
     }
 }
 
-fn invoke(self: *Interpreter, n: NodeId, d0: Decl.Index, all: []const NodeId, self0: Value, env: Value) Value {
+fn invoke(self: *Interpreter, n: NodeId, d0: DeclPool.Index, all: []const NodeId, self0: Value, env: Value) Value {
     const r = self.res();
     const sp = &r.static_pool;
     if (self.frames.head > Interpreter.max_depth) return self.fail(n, .static_eval_failed, 0, 0);
@@ -123,21 +123,21 @@ fn invoke(self: *Interpreter, n: NodeId, d0: Decl.Index, all: []const NodeId, se
         args = args[1..];
         base += 1;
     }
-    if (r.dp(.kind, d).* == .trait_member and selfvalue0.is_ref()) d = switch (sp.lookup_member(self.vtype(self.mem.buf[selfvalue0.at()]), r.dp(.name, d).*)) {
+    if (r.decl_pool.kinds()[@intFromEnum(d)] == .trait_member and selfvalue0.is_ref()) d = switch (sp.lookup_member(self.vtype(self.mem.buf[selfvalue0.at()]), r.decl_pool.names()[@intFromEnum(d)])) {
         .method => |m| m,
         else => d,
     };
     r.h05_ensure_signature(d);
-    if (r.length_generic(r.dp(.ty, d).*)) d = realize(self, n, d, args, base) orelse return .poison;
+    if (r.length_generic(r.decl_pool.tys()[@intFromEnum(d)])) d = realize(self, n, d, args, base) orelse return .poison;
     var c = d;
-    while (c != .none) : (c = r.dp(.next_overload, c).*) {
+    while (c != .none) : (c = r.decl_pool.next_overloads()[@intFromEnum(c)]) {
         if (c != d and !r.same_params(c, d)) continue;
         if (attempt(self, n, r.real(c), args, base, selfvalue0, env)) |v| return v;
     }
     return self.fail(n, .no_matching_overload, args.len, 0);
 }
 
-fn realize(self: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, base: u32) ?Decl.Index {
+fn realize(self: *Interpreter, n: NodeId, d: DeclPool.Index, args: []const NodeId, base: u32) ?DeclPool.Index {
     const r = self.res();
     const sp = &r.static_pool;
     const pnodes = r.params_of(r.value_node(d));
@@ -146,7 +146,7 @@ fn realize(self: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, b
     const mark = self.ids.head;
     defer self.ids.head = mark;
     for (0..pnodes.len) |j| {
-        const p = sp.get(r.dp(.ty, d).*).function_type.params[j + r.self_off(d)];
+        const p = sp.get(r.decl_pool.tys()[@intFromEnum(d)]).function_type.params[j + r.self_off(d)];
         if (!r.generic_slot(p)) continue;
         for (0..args.len) |i| if (map[i] == j) {
             const v = self.list.buf[base + i];
@@ -162,19 +162,19 @@ fn realize(self: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, b
     return sp.get(f).function;
 }
 
-fn attempt(self: *Interpreter, n: NodeId, d: Decl.Index, args: []const NodeId, base: u32, valueself: Value, env: Value) ?Value {
+fn attempt(self: *Interpreter, n: NodeId, d: DeclPool.Index, args: []const NodeId, base: u32, valueself: Value, env: Value) ?Value {
     const r = self.res();
     r.h05_ensure_signature(d);
     r.h06_check_body(d);
     const bi = r.body_of.get(d) orelse return self.fail(n, .not_static, 0, 0);
     const v = r.value_node(d);
-    if (r.dp(.state, d).* == .failed) return Value.poison;
+    if (r.decl_pool.states()[@intFromEnum(d)] == .failed) return Value.poison;
     const pnodes = r.params_of(v);
     var map: [64]u32 = undefined;
     if (!r.bind_args(pnodes, args, &map, false)) return self.fail(n, .wrong_arity, args.len, pnodes.len);
     const body = r.bodies.get(bi).?;
     const caller = self.frames.buf[self.frames.head - 1].body.decl;
-    const unchecked = caller != .none and r.dp(.kind, caller).* == .static_function;
+    const unchecked = caller != .none and r.decl_pool.kinds()[@intFromEnum(caller)] == .static_function;
     self.enter(body);
     self.frames.buf[self.frames.head - 1].env = env;
     var keep = false;
@@ -215,7 +215,7 @@ pub fn construct(self: *Interpreter, target: Index, args: []const NodeId) Value 
     const len: u32 = @intCast(fields.len);
     const at = self.alloc(len);
     for (args, 0..) |a, i| {
-        const fi = r.field_of(rec, a, i) orelse return self.fail(a, .unknown_named_argument, r.name_of(r.tree.arg(a, 0)), rec);
+        const fi = r.field_of(rec, a, i) orelse return self.fail(a, .unknown_named_argument, r.name_pool.name_of(r.tree, r.src_bytes, r.tree.arg(a, 0)), rec);
         const x = self.eval(r.arg_value(a));
         if (x.is(.poison_type)) return x;
         self.fill(at + fi, x, sp.get(rec).custom_type.field_types[fi]);
@@ -241,7 +241,7 @@ pub fn with(self: *Interpreter, n: NodeId) Value {
         self.mem.buf[at + i] = x;
     }
     for (r.tree.manychildren(r.tree.arg(n, 1)), 0..) |a, i| {
-        const fi = r.field_of(t, a, i) orelse return self.fail(a, .unknown_named_argument, r.name_of(r.tree.arg(a, 0)), t);
+        const fi = r.field_of(t, a, i) orelse return self.fail(a, .unknown_named_argument, r.name_pool.name_of(r.tree, r.src_bytes, r.tree.arg(a, 0)), t);
         const x = self.eval(r.arg_value(a));
         if (x.is(.poison_type)) return x;
         self.fill(at + fi, x, sp.get(t).custom_type.field_types[fi]);
@@ -261,7 +261,7 @@ fn complete(self: *Interpreter, rec: Index, at: u32) bool {
     }
     const decl = r.static_pool.get(rec).custom_type.decl;
     const bi = r.body_of.get(decl) orelse {
-        _ = self.fail(r.dp(.node, decl).*, .not_static, 0, 0);
+        _ = self.fail(r.decl_pool.nodes()[@intFromEnum(decl)], .not_static, 0, 0);
         return false;
     };
     self.enter(r.bodies.get(bi).?);
