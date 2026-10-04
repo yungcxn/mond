@@ -200,26 +200,10 @@ pub const Stmt = struct {
     kind: Decl.Kind,
     type: ParseTree.NodeId,
     ids: []const ParseTree.NodeId,
-    value: ParseTree.NodeId,
+    value: ParseTree.NodeId, // TODO: must be removed and put into union with below?
     values: []const ParseTree.NodeId,
 
     pub fn from_node(res: *const Resolver, n0: ParseTree.NodeId) Stmt {
-
-        // TODO NEXT: must be removed from here, ugly
-        const list_at = struct {
-            // child i as a list: the children of a `wrapper` node, or the child alone
-            pub inline fn list_at(
-                tree: *const ParseTree,
-                n: ParseTree.NodeId,
-                comptime i: u1,
-                comptime wrapper: ParseTree.Node.Kind,
-            ) []const ParseTree.NodeId {
-                const lr: *const [2]ParseTree.NodeId = @ptrCast(&tree.ast_nodes.pool.args.buf[n]);
-                const child_i_id = lr[i];
-                return if (tree.kind(child_i_id) == wrapper) tree.manychildren(child_i_id) else lr[i..][0..1];
-            }
-        }.list_at;
-
         var flags = Decl.Flags{};
 
         // assignments could have modifiers, which result in non-flat repres. in ast
@@ -236,28 +220,43 @@ pub const Stmt = struct {
         };
 
         var stmt_type: ParseTree.NodeId = 0;
-        var stmt_ids: []const ParseTree.NodeId = &.{};
         var stmt_value: ParseTree.NodeId = 0;
+        var stmt_ids: []const ParseTree.NodeId = &.{};
         switch (res.tree.kind(non_assignmoded_root)) {
-            .def_var => {
-                stmt_type = res.tree.arg(non_assignmoded_root, 0);
-                stmt_ids = list_at(res.tree, non_assignmoded_root, 1, .partial__destructure);
+            .def_var => { // variable definition, unassigned
+                const def_var_ch = res.tree.laidout_children(.def_var, non_assignmoded_root);
+
+                stmt_type = def_var_ch.type;
+                stmt_ids = if (res.tree.kind(def_var_ch.identifier) == .partial__destructure) res.tree.manychildren(def_var_ch.identifier) else res.tree.arg_ptr(non_assignmoded_root, 1)[0..1];
             },
-            .assign_typed => {
-                stmt_type = res.tree.arg(res.tree.arg(non_assignmoded_root, 0), 0);
-                stmt_ids = list_at(res.tree, res.tree.arg(non_assignmoded_root, 0), 1, .partial__destructure);
+            .assign_typed => { // typed assignment with value that is being assigned
+                const assign_typed_ch = res.tree.laidout_children(.assign_typed, non_assignmoded_root);
+                const def_var_ch = res.tree.laidout_children(.def_var, assign_typed_ch.def_var);
+
+                stmt_value = assign_typed_ch.assigned;
+                stmt_type = res.tree.arg(assign_typed_ch.def_var, 0);
+                stmt_ids = if (res.tree.kind(def_var_ch.identifier) == .partial__destructure) res.tree.manychildren(def_var_ch.identifier) else res.tree.arg_ptr(assign_typed_ch.def_var, 1)[0..1];
+            },
+            .assign => { // assignment without type, only value
+                const assign_ch = res.tree.laidout_children(.assign, non_assignmoded_root);
+
                 stmt_value = res.tree.arg(non_assignmoded_root, 1);
+                stmt_ids = if (res.tree.kind(assign_ch.assignee) == .partial__destructure) res.tree.manychildren(assign_ch.assignee) else res.tree.arg_ptr(non_assignmoded_root, 0)[0..1];
             },
-            .assign => {
-                stmt_ids = list_at(res.tree, non_assignmoded_root, 0, .partial__destructure);
-                stmt_value = res.tree.arg(non_assignmoded_root, 1);
+            else => {
+                // anything else is not supposed to have: type, ids, value
             },
-            else => {},
         }
 
         // `f = (..): ..` on a visible variable of function type assigns it, h11 links the name
         const d = if (stmt_ids.len == 1) res.node_decl[stmt_ids[0]] else .none;
         const assigns = stmt_type == 0 and d != .none and !res.decls.pool.kind.buf[@intFromEnum(d)].is_fn();
+
+        var values: []const ParseTree.NodeId = &.{};
+        if (stmt_value != 0) {
+            const r_ch = res.tree.arg(non_assignmoded_root, 1);
+            values = if (res.tree.kind(r_ch) == .partial__assign_multival) res.tree.manychildren(r_ch) else res.tree.arg_ptr(non_assignmoded_root, 1)[0..1];
+        }
 
         return .{
             .node = non_assignmoded_root,
@@ -266,7 +265,7 @@ pub const Stmt = struct {
             .type = stmt_type,
             .ids = stmt_ids,
             .value = stmt_value,
-            .values = if (stmt_value == 0) &.{} else list_at(res.tree, non_assignmoded_root, 1, .partial__assign_multival),
+            .values = values,
         };
     }
 
@@ -543,6 +542,7 @@ fn s1_collect_globals(self: *Resolver) void {
         flags.is_global = true;
         const declares = s.declares();
 
+        // TODO NEXT
         for (s.ids) |id| {
             const name = self.name_of(id);
             if (name == .none) continue;

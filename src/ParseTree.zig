@@ -192,7 +192,10 @@ pub const Node = struct {
     };
 
     pub fn LayoutStruct(comptime nk: Kind) type {
-        return DefTable[@intFromEnum(nk)][2];
+        const t = DefTable[@intFromEnum(nk)][2];
+        if (@TypeOf(t) == @EnumLiteral() and t == .leaf) @compileError("leaf nodes have no layout struct");
+        if (@TypeOf(t) == @EnumLiteral() and t == .references_token) @compileError("data nodes have no layout struct");
+        return t;
     }
 
     pub const nk_childc = blk: {
@@ -301,7 +304,7 @@ pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, span_idx: u32)
     return new_node_idx;
 }
 
-// utility for navigating the tree structure //
+// utility for navigating the tree structure, we assume n to be valid //
 
 pub inline fn kind(self: *const @This(), n: NodeId) Node.Kind {
     return self.ast_nodes.pool.nk.buf[n];
@@ -312,10 +315,38 @@ pub inline fn arg(self: *const @This(), n: NodeId, i: u1) NodeId {
     return slots[i];
 }
 
+pub inline fn arg_ptr(self: *const @This(), n: NodeId, i: u1) *const NodeId {
+    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.pool.args.buf[n]);
+    return &slots[i];
+}
+
 // we assert for this, that `n` is an id for a node that has "many" children
 pub inline fn manychildren(self: *const @This(), n: NodeId) []const NodeId {
     const a = self.ast_nodes.pool.args.buf[n];
     return self.extra_childrefs.buf[a[0]..][0..a[1]];
+}
+
+pub inline fn laidout_children(self: *const @This(), comptime nk: Node.Kind, n: NodeId) Node.LayoutStruct(nk) {
+    const nk_childc = comptime Node.nk_childc[@intFromEnum(nk)];
+
+    switch (comptime nk_childc) {
+        .data => unreachable,
+        .none => unreachable,
+        .one => return {
+            const Type = Node.LayoutStruct(nk);
+            var build: Type = undefined;
+            @field(build, @typeInfo(Type).@"struct".fields[0].name) = self.arg(n, 0);
+            return build;
+        },
+        .two => return {
+            const Type = Node.LayoutStruct(nk);
+            var build: Type = undefined;
+            @field(build, @typeInfo(Type).@"struct".fields[0].name) = self.arg(n, 0);
+            @field(build, @typeInfo(Type).@"struct".fields[1].name) = self.arg(n, 1);
+            return build;
+        },
+        .many => return self.manychildren(n),
+    }
 }
 
 pub inline fn span(self: *const @This(), n: NodeId) Lexer.TextSpan {
