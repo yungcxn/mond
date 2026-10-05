@@ -1,0 +1,29 @@
+type Rec = *(i32 a, Ghost g); #! undefined_name
+type Def = *(i32 a = nodef); #! undefined_name
+type Guard = *(i32 a where a > limit); #! undefined_name
+variant V = +(A(Phantom), B); #! undefined_name
+fun param_type = (Missing m) {} #! undefined_name
+fun ret_type = () -> Missing2 {} #! undefined_name
+fun default_arg = (i32 a = unknown_default) {} #! undefined_name
+fun where_arg = (i32 a where a < bound) -> i32: ret a; #! undefined_name
+fun arr_len = () { [count]u8 buf; } #! undefined_name
+fun loop_head = () { for x in nothing {} } #! undefined_name
+fun while_head = () { while nocond {} } #! undefined_name
+fun match_head = () { match nomatch { _ => 1, } } #! undefined_name
+fun lambda_body = () { f = (i32 x): x + ghost; } #! undefined_name
+fun member_base = () -> i32: ret nobase.field; #! undefined_name
+fun call_arg = () { ov(gone); } #! undefined_name
+fun ov = (i32 x) {}
+fun cast_target = (i32 x) -> i32: ret x as Nowhere; #! undefined_name
+fun index_base = () -> u8: ret noarr[0]; #! undefined_name
+fun index_expr = () -> u8 { [2]u8 a = [1, 2]; ret a[noidx]; } #! undefined_name
+type T = *(i32 v) !{
+    fun m = () -> i32: ret self.v + nomember; #! undefined_name
+}
+stcfun sf = (u32 n) -> u32: ret n + stcghost; #! undefined_name
+stc u32 S = sf(1);
+fun typeof_arg = () { t = typeof hidden; } #! undefined_name
+fun sizeof_arg = () -> u64: ret sizeof Hidden; #! undefined_name
+fun deinit_arg = () { deinit vanished; } #! undefined_name
+fun ret_value = () -> i32: ret nothing_here; #! undefined_name
+$main = () {}

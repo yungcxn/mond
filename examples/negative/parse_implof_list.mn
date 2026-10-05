@@ -1,0 +1,2 @@
+trait A = !{ fun a = (); }
+type T = *(i32 x) implof A; #! IllegalImplofList

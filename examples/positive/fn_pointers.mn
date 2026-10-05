@@ -1,0 +1,72 @@
+type Pt = *(mut i32 x, mut i32 y);
+
+fun set_through = (* *i32 pp, i32 v) { pp.*.* = v; }
+fun retarget = (* &i32 pp, &i32 to) { pp.* = to; }
+fun field_ptr = (*Pt p) -> *i32: ret p.y.&;
+
+stcfun arith = () -> i32 {
+    mut [5]i32 a = [10, 20, 30, 40, 50];
+    mut *i32 p = a[0].&;
+    i32 first = p++.*;
+    i32 second = p.*;
+    p += 2;
+    i32 fourth = p.*;
+    p -= 3;
+    i32 again = (p + 4).*;
+    i32 indexed = p[2];
+    p[1] = 99;
+    ret first + second + fourth + again + indexed + a[1];
+}
+
+stcfun chains = () -> i32 {
+    mut i32 v = 1;
+    mut *i32 p = v.&;
+    set_through(p.&, 7);
+    i32 w = 3;
+    mut &i32 r = v.&;
+    retarget(r.&, w.&);
+    ret v * 10 + r.*;
+}
+
+stcfun fields = () -> i32 {
+    mut Pt pt = Pt(x = 1, y = 2);
+    *i32 py = field_ptr(pt.&);
+    py.* = 5;
+    *Pt whole = pt.&;
+    whole.x += 10;
+    ret pt.x * 100 + pt.y;
+}
+
+stcfun compare = () -> u32 {
+    [3]u8 a = [1, 2, 3];
+    &u8 lo = a[0].&;
+    &u8 hi = a[2].&;
+    mut u32 r = 0;
+    if lo < hi: r += 1;
+    if lo + 2 == hi: r += 10;
+    if hi - 2 == lo: r += 100;
+    if lo != hi: r += 1000;
+    ret r;
+}
+
+stc i32 AR = arith(); #= AR 249
+stc i32 CH = chains(); #= CH 73
+stc i32 FI = fields(); #= FI 1105
+stc u32 CM = compare(); #= CM 1111
+
+$main = () {
+    i32 imm = 1;
+    mut i32 m = 2;
+    ri = imm.&; #: ri &i32
+    rm = m.&; #: rm *i32
+    *i32 wm = m.&; #: wm *i32
+    pp = wm.&; #: pp &*i32
+    deep = pp.*.*; #: deep i32
+    mut [3]i32 arr = [1, 2, 3];
+    pa = arr.&; #: pa *[3]i32
+    *[3]i32 wa = arr.&;
+    e = wa[1]; #: e i32
+    *i32 el = arr[0].&;
+    next = el + 1; #: next *i32
+    wa.*[2] = 7;
+}

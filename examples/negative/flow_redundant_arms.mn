@@ -1,0 +1,25 @@
+variant V = +(A, B(u8), C(u8 x, u8 y));
+fun f = (V v, bool b, u8 n) {
+    match b { true => 0, false => 1, true => 2 } #! redundant_match_arm
+    match b { true => 0, _ => 1, false => 2 } #! redundant_match_arm
+    match b { x => 0, _ => 1 } #! redundant_match_arm
+    match n { _ => 0, _ => 1 } #! redundant_match_arm
+    match n { y => 0, 3 => 1, 4 => 2 } #! redundant_match_arm redundant_match_arm
+    match v { V v2 => 0, V.A => 1 } #! redundant_match_arm
+    match v { V.C(_, _) => 0, V.A => 1, V.C(_, _) => 2, _ => 3 } #! redundant_match_arm
+    match v { V.A | V.B(_) => 0, V.B(_) => 1, _ => 2 } #! redundant_match_arm
+    # a catch-all after full case coverage is redundant, a refined pattern before its general one is not
+    match v { V.A => 0, V.B(_) => 1, V.C(_, _) => 2, _ => 3 } #! redundant_match_arm
+    match v { V.A => 0, V.B(_) => 1, V.C(_, _) => 2, rest => 3 } #! redundant_match_arm
+    match b { true => 0, false => 1, _ => 2 } #! redundant_match_arm
+    match v { V.A => 0, V.B(3) => 1, V.B(_) => 2, V.C(_, _) => 3 }
+    match v { V.A => 0, V.B(_) => 1, _ => 2 }
+    match v { V.A | V.A => 0, _ => 1 }
+    match v { V.A => 0, V.A | V.B(_) => 1, _ => 2 }
+}
+# a poisoned scrutinee accepts any pattern and needs no exhaustiveness
+fun g = (Nope q) { #! undefined_name
+    match q { 1 => 0, "s" => 1, V.A => 2 }
+    u8 r = match q { 1 => 0 }
+}
+$main = () {}

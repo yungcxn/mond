@@ -24,6 +24,7 @@ pub fn h07_lower_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
         .capture => h07_lower_type(self, ctx, self.tree.arg(node, 0)),
         .typeof => blk: {
             const t = self.h09_check_expr(ctx, self.tree.arg(node, 0), .none);
+            if (self.tree.kind(self.tree.arg(node, 0)) == .identifier and statics.is_template(self, self.node_decl[self.tree.arg(node, 0)])) break :blk self.report(.unrealized_template, self.tree.arg(node, 0), 0, 0);
             break :blk if (self.tree.kind(self.tree.arg(node, 0)) == .identifier_self) sp.pointee(t) else t;
         },
         .type_ptr, .type_ptrmut => sp.intern(.{ .ptr_type = .{ .child = h07_lower_type(self, ctx, self.tree.arg(node, 0)), .mutable = k == .type_ptrmut } }),
@@ -49,20 +50,17 @@ pub fn static_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
     const k = self.tree.kind(node);
     return switch (k) {
         .unify_variants => blk: {
-            var members: [64]StaticPool.Index = undefined;
-            var n: usize = 0;
+            var members: std.ArrayList(StaticPool.Index) = .empty;
+            defer members.deinit(self.alloc);
             for ([_]NodeId{ self.tree.arg(node, 0), self.tree.arg(node, 1) }) |side| {
                 const t = h07_lower_type(self, ctx, side);
                 if (sp.tag(t) == .variant_union_type) {
-                    const m = sp.get(t).variant_union_type;
-                    @memcpy(members[n..][0..m.len], m);
-                    n += m.len;
+                    members.appendSlice(self.alloc, sp.get(t).variant_union_type) catch @panic("OOM");
                 } else if (sp.tag(t) == .variant_type) {
-                    members[n] = t;
-                    n += 1;
+                    members.append(self.alloc, t) catch @panic("OOM");
                 } else _ = self.mismatch(side, t, .variant_type);
             }
-            break :blk sp.intern(.{ .variant_union_type = members[0..n] });
+            break :blk sp.intern(.{ .variant_union_type = members.items });
         },
         .def_type, .def_type_packed, .def_type_assertsize, .def_type_implof, .def_variant, .def_variant_unionsized, .def_variant_tagof, .def_variant_assertsize, .def_variant_implof, .def_trait, .def_trait_implof => blk: {
             const d = self.decl_pool.push_decl(.empty, node, self.type_kind(node), .none, .{});
@@ -94,11 +92,11 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
     self.h03_push_scope();
     defer self.h04_pop_scope();
 
-    var traits: [32]StaticPool.Index = undefined;
     var nt: usize = 0;
     // the anonymous `!{..}` body, completed after the type: member signatures may realize types that construct this one
     var own: StaticPool.Index = .none;
     const members = if (!is_trait and body != 0) self.tree.arg(body, if (self.tree.kind(body) == .def_trait_implof) 1 else 0) else 0;
+    const traits = self.scratch(StaticPool.Index, if (members != 0 and self.tree.kind(body) == .def_trait_implof) self.tree.manychildren(self.tree.arg(body, 0)).len + 1 else 1);
     if (members != 0) {
         const impls = if (self.tree.kind(body) == .def_trait_implof) self.tree.manychildren(self.tree.arg(body, 0)) else &[_]NodeId{};
         if (self.tree.manychildren(members).len > 0) {
@@ -108,23 +106,29 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
         }
         for (impls) |t| {
             traits[nt] = h07_lower_type(self, ctx, t);
+            if (traits[nt] != .poison_type and sp.tag(traits[nt]) != .trait_type) traits[nt] = self.mismatch(t, traits[nt], .trait_type);
             nt += @intFromBool(traits[nt] != .poison_type);
         }
     }
 
     switch (ck) {
         .def_trait, .def_trait_implof => {
-            var supers: [32]StaticPool.Index = undefined;
             const impls = if (ck == .def_trait_implof) self.tree.manychildren(self.tree.arg(c, 0)) else &[_]NodeId{};
-            for (impls, 0..) |t, i| supers[i] = h07_lower_type(self, ctx, t);
-            own = trait_body(self, ctx, self.tree.arg(c, if (ck == .def_trait_implof) 1 else 0), ty, .none, supers[0..impls.len], decl);
+            const supers = self.scratch(StaticPool.Index, impls.len);
+            var ns: usize = 0;
+            for (impls) |t| {
+                supers[ns] = h07_lower_type(self, ctx, t);
+                if (supers[ns] != .poison_type and sp.tag(supers[ns]) != .trait_type) supers[ns] = self.mismatch(t, supers[ns], .trait_type);
+                ns += @intFromBool(supers[ns] != .poison_type);
+            }
+            own = trait_body(self, ctx, self.tree.arg(c, if (ck == .def_trait_implof) 1 else 0), ty, .none, supers[0..ns], decl);
         },
         .def_variant, .def_variant_unionsized => {
             const params = self.tree.manychildren(self.tree.arg(c, 0));
-            var cases: [256]StaticPool.Index = undefined;
+            const cases = self.scratch(StaticPool.Index, params.len);
             var payload_case: ?usize = null;
             var payloads: usize = 0;
-            var next_tag: u64 = 0;
+            var next_tag: StaticPool.IntValue = .{ .ty = .u64_type, .bits = 0 };
             for (params, 0..) |pn, i| {
                 var q = pn;
                 var tag_node: NodeId = 0;
@@ -142,8 +146,8 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
                     payload_case = i;
                     payloads += 1;
                 }
-                const tv = if (tag_node == 0) sp.intern(.{ .int = .{ .ty = .u64_type, .bits = next_tag } }) else statics.h08_eval_static(self, ctx, tag_node);
-                if (sp.tag(tv) == .int_value) next_tag = sp.get(tv).int.bits +% 1;
+                const tv = if (tag_node == 0) sp.intern(.{ .int = next_tag }) else statics.h08_eval_static(self, ctx, tag_node);
+                if (sp.tag(tv) == .int_value) next_tag = .{ .ty = sp.get(tv).int.ty, .bits = sp.get(tv).int.bits +% 1 } else if (tv != .poison_type) _ = self.mismatch(tag_node, sp.type_of(tv), .u64_type);
                 for (cases[0..i]) |prev| if (sp.get(prev).variant_case_type.name == self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(q, 0))) self.doc.h21_report(.duplicate_declaration, pn, self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(q, 0)), decl);
                 cases[i] = self.set(self.tree.arg(q, 0), sp.intern(.{ .variant_case_type = .{ .variant = ty, .case = @intCast(i), .name = self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(q, 0)), .tag = tv, .payload = payload } }));
             }
@@ -152,7 +156,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
             var tag_ty: StaticPool.Index = if (tagof == 0) StaticPool.smallest_tag_type(params.len) else if (mode == .self) .none else h07_lower_type(self, ctx, tagof);
             if (mode == .self) {
                 // the one payload type encodes the other cases in bit patterns it never uses
-                if (payloads != 1) _ = self.report(.self_tag_without_niche, tagof, payloads, 0) else {
+                if (payloads != 1) tag_ty = self.report(.self_tag_without_niche, tagof, payloads, 0) else {
                     const fields = sp.get(sp.get(cases[payload_case.?]).variant_case_type.payload).custom_type.field_types;
                     tag_ty = if (fields.len == 1 and sp.get_tag_prop(fields[0]).is_integer) fields[0] else self.report(.self_tag_without_niche, tagof, 0, 0);
                 }
@@ -165,8 +169,8 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
         },
         else => { // records: `*(..)`, `**(..)` and payload tuples
             const fields = self.fields_of_node(c);
-            var names: [64]NamePool.Index = undefined;
-            var types: [64]StaticPool.Index = undefined;
+            const names = self.scratch(NamePool.Index, fields.len);
+            const types = self.scratch(StaticPool.Index, fields.len);
             for (fields, 0..) |f, i| {
                 const p = Resolver.Param.from_node(self, f);
                 types[i] = dynify(self, realized_type(self, ctx, p.ty));
@@ -177,6 +181,20 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
         },
     }
     if (own != .none and !is_trait) _ = trait_body(self, ctx, members, own, ty, &.{}, decl);
+    // member bodies once the type is complete, before the fields are names; a method calling one that writes self writes self too
+    if (own != .none) {
+        const b = sp.get(own).trait_type.decl;
+        const n = sp.get(own).trait_type.member_names.len;
+        for (0..n) |i| self.h06_check_body(b.member(i));
+        var grew = true;
+        while (grew) {
+            grew = false;
+            for (0..n) |i| if (!self.decl_pool.flags()[@intFromEnum(b.member(i))].writes and calls_writer(self, b.member(i))) {
+                self.decl_pool.flags()[@intFromEnum(b.member(i))].writes = true;
+                grew = true;
+            };
+        }
+    }
     if (sp.tag(ty) == .record_type) {
         // defaults and where-clauses see the fields by name, the snapshot's locals start at the first field
         const fields = self.fields_of_node(c);
@@ -187,16 +205,17 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
             self.decl_pool.flags()[@intFromEnum(fd)].is_mut = Resolver.Param.from_node(self, f).is_mut;
             calls.link(self, Resolver.Param.from_node(self, f).name, fd, t);
         }
+        // a default sees the fields before its own, a where-clause all of them
+        const at = self.local_names.head - fields.len;
+        const names = self.scratch(NamePool.Index, fields.len);
+        @memcpy(names, self.local_names.buf[at..][0..fields.len]);
+        @memset(self.local_names.buf[at..][0..fields.len], .empty);
         for (fields, 0..) |f, i| {
             const p = Resolver.Param.from_node(self, f);
             if (p.default != 0) _ = self.check(ctx, p.default, sp.get(ty).custom_type.field_types[i]);
-            self.check_guards(ctx, p, sp.get(ty).custom_type.field_types[i]);
+            self.local_names.buf[at + i] = names[i];
         }
-    }
-    // member bodies once the type is complete, then trait conformance
-    if (own != .none) {
-        const b = sp.get(own).trait_type.decl;
-        for (0..sp.get(own).trait_type.member_names.len) |i| self.h06_check_body(b.member(i));
+        for (fields, 0..) |f, i| self.check_guards(ctx, Resolver.Param.from_node(self, f), sp.get(ty).custom_type.field_types[i]);
     }
     if (!is_trait) {
         for (traits[0..nt]) |t| if (t != own and sp.tag(t) == .trait_type) conform(self, ty, own, t, node);
@@ -211,6 +230,16 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
     return ty;
 }
 
+fn calls_writer(self: *Resolver, m: DeclPool.Index) bool {
+    const s = self.tree.subtree(self.value_node(m));
+    for (s[0]..s[1]) |x| {
+        const d = self.node_decl[x];
+        if (self.tree.kind(@intCast(x)) != .fun_call or d == .none or self.tree.kind(self.tree.arg(@intCast(x), 0)) != .member) continue;
+        if (self.tree.kind(self.tree.arg(self.tree.arg(@intCast(x), 0), 0)) == .identifier_self and self.decl_pool.flags()[@intFromEnum(self.real(d))].writes) return true;
+    }
+    return false;
+}
+
 // a trait body: one row for the body (its value is the self type), then one row per function member,
 // contiguous, so member i is row + 1 + i. static members (`stc u32 MASK = ..`) are plain locals of the body.
 fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.Index, self_ty: StaticPool.Index, supers: []const StaticPool.Index, of: DeclPool.Index) StaticPool.Index {
@@ -220,19 +249,20 @@ fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.I
     if (self.template_of.get(of)) |g| self.template_of.put(self.alloc, b, g) catch @panic("OOM");
     const tr = if (reserved != .none) reserved else sp.reserve_nominal(b);
     self.decl_pool.values()[@intFromEnum(b)] = if (self_ty != .none) self_ty else tr;
-    var names: [64]NamePool.Index = undefined;
+    const names = self.scratch(NamePool.Index, self.tree.manychildren(body).len);
     var n: usize = 0;
     for (self.tree.manychildren(body)) |s| {
         const m = Resolver.Stmt.from_node(self, s);
         if (!m.is_member()) continue;
         names[n] = self.name_pool.name_of(self.tree, self.src_bytes, m.assignees[0]);
+        if (std.mem.indexOfScalar(NamePool.Index, names[0..n], names[n]) != null) self.doc.h21_report(.duplicate_declaration, m.assignees[0], names[n], of);
         self.node_decl[m.assignees[0]] = self.decl_pool.push_decl(names[n], m.node, .trait_member, .none, m.flags);
         n += 1;
     }
     for (self.tree.manychildren(body)) |s| if (!Resolver.Stmt.from_node(self, s).is_member()) {
         _ = self.h11_check_assign(ctx, s);
     };
-    var types: [64]StaticPool.Index = undefined;
+    const types = self.scratch(StaticPool.Index, n);
     for (0..n) |i| types[i] = decl_type(self, b.member(i));
     sp.complete_nominal(tr, .{ .trait_type = .{ .decl = b, .member_names = names[0..n], .member_types = types[0..n], .supers = supers } });
     return tr;
@@ -295,28 +325,27 @@ pub fn fun_type(self: *Resolver, ctx: *FnCtx, v: NodeId, category: StaticPool.Fu
     const header = self.tree.arg(v, 0);
     const params = self.params_of(v);
     const off = @intFromBool(self_param != .none);
-    var buf: [64]StaticPool.Index = undefined;
-    buf[0] = self_param;
+    const buf = self.scratch(StaticPool.Index, params.len + off);
+    if (off == 1) buf[0] = self_param;
     for (params, 0..) |p, i| {
         buf[i + off] = h07_lower_type(self, ctx, Resolver.Param.from_node(self, p).ty);
         if (statics.holds_template(self, buf[i + off]) and statics.templated(self, buf[i + off]) == .none) buf[i + off] = self.report(.unrealized_template, Resolver.Param.from_node(self, p).ty, buf[i + off], 0);
     }
     const r = if (self.tree.kind(header) == .partial__fun_def_header_ret) realized_type(self, ctx, self.tree.arg(header, 1)) else ret;
-    return self.static_pool.intern(.{ .function_type = .{ .category = category, .params = buf[0 .. params.len + off], .ret = r } });
+    return self.static_pool.intern(.{ .function_type = .{ .category = category, .params = buf, .ret = r } });
 }
 
 // unlengthed arrays that are not inferred per value become runtime-length arrays
 pub fn dynify(self: *Resolver, t: StaticPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
     if (t == .none or !sp.has_vars(t)) return t;
-    var buf: [64]StaticPool.Index = undefined;
     return switch (sp.get(t)) {
         .array_type => |a| sp.intern(.{ .array_type = .{ .len = if (sp.tag(sp.apply_vars(&self.abstract_pool, a.len)) == .type_var) StaticPool.dyn_len else a.len, .elem = dynify(self, a.elem) } }),
         .ptr_type => |p| sp.intern(.{ .ptr_type = .{ .child = dynify(self, p.child), .mutable = p.mutable } }),
         .function_type => |f| blk: {
-            const n = f.params.len;
-            for (0..n) |i| buf[i] = dynify(self, sp.get(t).function_type.params[i]);
-            break :blk sp.intern(.{ .function_type = .{ .category = f.category, .params = buf[0..n], .ret = dynify(self, sp.get(t).function_type.ret) } });
+            const buf = self.scratch(StaticPool.Index, f.params.len);
+            for (buf, 0..) |*p, i| p.* = dynify(self, sp.get(t).function_type.params[i]);
+            break :blk sp.intern(.{ .function_type = .{ .category = f.category, .params = buf, .ret = dynify(self, sp.get(t).function_type.ret) } });
         },
         else => t,
     };

@@ -1,0 +1,45 @@
+fun sign = (i32 x) -> i32 {
+    if (x < 0) { ret -1; }
+    if (x == 0): ret 0;
+    ret 1;
+}
+fun grade = (u32 s) -> u8: ret if s >= 90: 'A' else: if s >= 80: 'B' else: if s >= 70: 'C' else: 'F';
+fun blocky = (bool c) -> u32 {
+    u32 v = if c { u32 t = 4; t * t; } else { 3; };
+    ret v;
+}
+fun dangling = (bool a, bool b) -> u32 {
+    mut u32 r = 0;
+    if a: if b: r = 1 else: r = 2;
+    ret r;
+}
+fun nested_value = (bool a, bool b) -> u32: ret if a: (if b: 1 else: 2) else: 3;
+fun cond_group = (i32 x) -> bool: ret if (x > 0) and (x < 10): true else: false;
+# `<-` is postfix and labels the operand right before it
+fun arrow_head = (i32 x) -> i32 {
+    if (x * 2 <- d) > 10: ret d;
+    if ((x + 1) <- e) > 5: ret e * 10;
+    ret 0;
+}
+fun unit_if = (bool c) { if c {} else {} }
+fun stmt_value_discarded = (bool c) { if c: 1 else: 2; }
+fun else_block_colon = (bool c) -> u32 {
+    if c { ret 1; } else: { ret 2; }
+}
+
+stc i32 S = sign(-5) * 100 + sign(0) * 10 + sign(7); #= S -99
+stc []u8 G = stcfor s in [95, 85, 75, 10]: grade(s); #= G [65, 66, 67, 70]
+stc u32 B = blocky(true) * 10 + blocky(false); #= B 163
+stc []u32 D = stcfor p in [0, 1, 2, 3]: dangling(p >= 2, p % 2 == 1); #= D [0, 0, 2, 1]
+stc []u32 NV = stcfor p in [0, 1, 2, 3]: nested_value(p >= 2, p % 2 == 1); #= NV [3, 3, 2, 1]
+stc bool CG = cond_group(5) and !cond_group(10); #= CG true
+stc i32 AH = arrow_head(6) * 100 + arrow_head(5); #= AH 260
+
+fun typing = (bool c) {
+    t1 = if c: true else: false; #: t1 bool
+    t2 = if c: 'a' else: 'b'; #: t2 u32
+    t3 = if c: "ab" else: "cd"; #: t3 [2]u8
+    t4 = if c: [1, 2] else: [3, 4]; #: t4 [2]u32
+    t5 = if c { 1; } else { 2; }; #: t5 u32
+}
+$main = () {}

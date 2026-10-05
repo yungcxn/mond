@@ -1,0 +1,28 @@
+# every record and variant has `$init` (default construction) and `$deinit` (nothing) unless it declares them
+type Plain = *(u32 n, u8 m = 7);
+type Own = *(u32 n) !{ $init = (u32 k): ret Own(n = k * 2); }
+variant Kind = +(A, B);
+
+stcfun built = () -> u32 { Plain p = Plain.$init(); ret p.n + p.m; }
+stcfun own = () -> u32: ret Own.$init(4).n;
+stcfun dropped = () -> u32 { Plain p = Plain(1, 2); p.$deinit(); ret p.n; }
+stcfun kind = () -> u8: ret Kind.$init().$tag;
+
+stc u32 B = built(); #= B 7
+stc u32 O = own(); #= O 8
+stc u32 D = dropped(); #= D 1
+stc u8 K = kind(); #= K 0
+stc u64 L = "abc".$len; #= L 3
+stc u64 L2 = [[1], [2], [3]][0].$len; #= L2 1
+
+fun runtime = () -> u32 {
+    Plain p = Plain.$init();
+    p.$deinit();
+    ret p.m;
+}
+
+$main = () {
+    k = Kind.$init(); #: k +(A, B)
+    p = Plain.$init(); #: p *(u32 n, u8 m)
+    r = runtime(); #: r u32
+}

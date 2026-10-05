@@ -1,0 +1,25 @@
+stc u64 SU8 = sizeof u8; #= SU8 1
+stc u64 SU16 = sizeof u16; #= SU16 2
+stc u64 SU32 = sizeof u32; #= SU32 4
+stc u64 SU64 = sizeof u64; #= SU64 8
+stc u64 SI8 = sizeof i8; #= SI8 1
+stc u64 SI16 = sizeof i16; #= SI16 2
+stc u64 SI32 = sizeof i32; #= SI32 4
+stc u64 SI64 = sizeof i64; #= SI64 8
+stc u64 SF16 = sizeof f16; #= SF16 2
+stc u64 SF32 = sizeof f32; #= SF32 4
+stc u64 SF64 = sizeof f64; #= SF64 8
+stc u64 SBOOL = sizeof bool; #= SBOOL 1
+stc u64 SPTR = sizeof *u8; #= SPTR 8
+stc u64 SRPTR = sizeof &u64; #= SRPTR 8
+stc u64 SPP = sizeof **u8; #= SPP 8
+stc u64 SPARR = sizeof *[16]u8; #= SPARR 8
+stc u64 SFN = sizeof () -> (); #= SFN 8
+stc u64 SFN2 = sizeof (i64, u8) -> u8; #= SFN2 8
+stc u64 SEMPTY = sizeof [0]u64; #= SEMPTY 0
+stc u64 SONE = sizeof [1]u8; #= SONE 1
+stc u64 SBOOLS = sizeof [3]bool; #= SBOOLS 3
+stc u64 SNEST = sizeof [2][2][2]u32; #= SNEST 32
+stc u64 SPTRS = sizeof [3]&u8; #= SPTRS 24
+
+$main = () {}

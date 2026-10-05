@@ -1,0 +1,24 @@
+# a stcif without else has no value when its condition is false
+stc u32 A = stcif false: 1; #! type_mismatch
+stc u32 B = stcif true: 1; #= B 1
+
+# the taken branch is checked like any code
+stc u32 C = stcif true: undefined_name else: 1; #! undefined_name
+stc u32 D = stcif false: 1 else: "text"; #! type_mismatch
+stc u8 E = stcif true: 300 else: 1; #! type_mismatch
+
+# conditions must be static booleans
+stc u32 F = stcif 1: 1 else: 2; #! type_mismatch
+stc u32 G = stcif "yes": 1 else: 2; #! type_mismatch
+
+# a stcmatch without a matching arm
+stc u32 H = stcmatch 5 { 1 => 1, 2 => 2 } #! non_exhaustive_match
+stc u32 I = stcmatch 5 { 1 => 1, _ => 0 } #= I 0
+stc u32 J = stcmatch 7 { 0..<5 => 1, 8.. => 2 } #! non_exhaustive_match
+stc type K = stcmatch u32 { u8 => u16, u16 => u32 } #! non_exhaustive_match
+
+# the matching arm is checked
+stc u32 L = stcmatch 2 { 1 => 1, 2 => undefined_name } #! undefined_name
+stc bool M = stcmatch 1 { 1 => 5, _ => true } #! type_mismatch
+
+$main = () {}

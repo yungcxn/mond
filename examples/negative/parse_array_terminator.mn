@@ -1,0 +1,1 @@
+i32 x = [1; 2]; #! IllegalArraySeparatorTerminator

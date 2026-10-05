@@ -1,0 +1,36 @@
+variant A = +(X = 5, Y);
+variant B = +(Z, W);
+variant C = +(K(u32), L);
+variant AB = A || B;
+variant ABC = AB || C;
+variant CA = C || A;
+
+stc u64 SAB = sizeof AB; #= SAB 1
+stc u64 SABC = sizeof ABC; #= SABC 8
+stc u64 SCA = sizeof CA; #= SCA 8
+
+stcfun tag_ab = (AB v) -> u8: ret v.$tag;
+stcfun tag_abc = (ABC v) -> u8: ret v.$tag;
+stcfun tag_ca = (CA v) -> u8: ret v.$tag;
+
+stc u8 T1 = tag_ab(A.X); #= T1 5
+stc u8 T2 = tag_ab(A.Y); #= T2 6
+stc u8 T3 = tag_ab(B.Z); #= T3 7
+stc u8 T4 = tag_ab(B.W); #= T4 8
+stc u8 T5 = tag_abc(C.L); #= T5 10
+stc u8 T6 = tag_abc(C.K(1)); #= T6 9
+stc u8 T7 = tag_ca(A.X); #= T7 7
+stc u8 T8 = tag_ca(C.L); #= T8 1
+
+variant P1 = +(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26, a27, a28, a29, a30, a31, a32, a33, a34, a35, a36, a37, a38, a39, a40, a41, a42, a43, a44, a45, a46, a47, a48, a49, a50, a51, a52, a53, a54, a55, a56, a57, a58, a59, a60, a61, a62, a63);
+variant P2 = +(b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, b16, b17, b18, b19, b20, b21, b22, b23, b24, b25, b26, b27, b28, b29, b30, b31, b32, b33, b34, b35, b36, b37, b38, b39, b40, b41, b42, b43, b44, b45, b46, b47, b48, b49, b50, b51, b52, b53, b54, b55, b56, b57, b58, b59, b60, b61, b62, b63);
+variant P3 = +(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49, c50, c51, c52, c53, c54, c55, c56, c57, c58, c59, c60, c61, c62, c63);
+variant P4 = +(d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31, d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47, d48, d49, d50, d51, d52, d53, d54, d55, d56, d57, d58, d59, d60, d61, d62, d63);
+variant P5 = +(e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12, e13, e14, e15, e16, e17, e18, e19, e20, e21, e22, e23, e24, e25, e26, e27, e28, e29, e30, e31, e32, e33, e34, e35, e36, e37, e38, e39, e40, e41, e42, e43, e44, e45, e46, e47, e48, e49, e50, e51, e52, e53, e54, e55, e56, e57, e58, e59, e60, e61, e62, e63);
+variant Huge = P1 || P2 || P3 || P4 || P5;
+stc u64 SH = sizeof Huge; #= SH 2
+stcfun tag_huge = (Huge h) -> u16: ret h.$tag;
+stc u16 TH = tag_huge(P5.e63); #= TH 319
+stc u16 TH2 = tag_huge(P1.a0); #= TH2 0
+
+$main = () {}

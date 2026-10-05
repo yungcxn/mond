@@ -1,0 +1,29 @@
+variant Res = +(Ok(i32), Err(u8));
+variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+
+# `??` and `?<-` unwrap the first case with a payload, any other case is empty
+stcfun checked = (i32 v) -> Res: ret if v < 0: Res.Err(1) else: Res.Ok(v * 2);
+stcfun arrow = (Res r) -> i32: ret if r ?<- x: x else: 100;
+stcfun strict = (Res r) -> i32: ret r??;
+stcfun opt = (u8 v) -> Opt8: ret if v == 0: Opt8.None else: v;
+
+stc i32 OK = checked(21) ?? 0; #= OK 42
+stc i32 ER = checked(-1) ?? -7; #= ER -7
+stc i32 A1 = arrow(Res.Ok(5)); #= A1 5
+stc i32 A2 = arrow(Res.Err(5)); #= A2 100
+stc i32 S1 = strict(Res.Ok(3)); #= S1 3
+stc u8 O1 = opt(9) ?? 1; #= O1 9
+stc u8 O2 = opt(0) ?? 1; #= O2 1
+stc bool O3 = opt(0) == Opt8.None; #= O3 true
+
+# a value typed as a case unwraps that case
+stcfun direct = () -> u8: ret Res.Err(9) ?? 0;
+stc u8 DI = direct(); #= DI 9
+
+# a match binds the payload of whichever case is held
+stcfun either = (Res r) -> i32: ret match r { Res.Ok(v) => v, Res.Err(e) => -(e as i32) };
+stc i32 E1 = either(Res.Ok(4)) * 10 + either(Res.Err(2)); #= E1 38
+
+$main = () {}
+fun wrap = (u8 v) -> Opt8: ret v;
+stc u8 W1 = wrap(4) ?? 0; #= W1 4

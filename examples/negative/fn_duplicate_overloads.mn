@@ -1,0 +1,19 @@
+fun same = (u32 a) -> u32: ret 1;
+fun same = (u32 a) -> u32: ret 2; #! duplicate_declaration
+fun ret_only = (u32 a) -> u32: ret 1;
+fun ret_only = (u32 a) -> u8: ret 2; #! duplicate_declaration
+fun names_differ = (u32 a) -> u32: ret 1;
+fun names_differ = (u32 b) -> u32: ret 2;
+fun types_differ = (u32 a) -> u32: ret 1;
+fun types_differ = (u64 a) -> u32: ret 2;
+fun guarded = (u32 a where a > 0) -> u32: ret 1;
+fun guarded = (u32 a where a > 1) -> u32: ret 2;
+fun guarded = (u32 a) -> u32: ret 3;
+fun twice_plain = (u32 a where a > 0) -> u32: ret 1;
+fun twice_plain = (u32 a) -> u32: ret 2;
+fun twice_plain = (u32 a) -> u32: ret 3; #! duplicate_declaration
+# a where-else never fails dispatch, so it already is the fallback of its group
+fun guarded_else = (u32 a where a > 0 else ret 0) -> u32: ret 1;
+fun guarded_else = (u32 a) -> u32: ret 2; #! duplicate_declaration
+
+$main = () {}

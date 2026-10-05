@@ -1,0 +1,164 @@
+# a three address register machine with multi field instructions, plus a packed u32 encoding of it
+
+variant Ins = +(
+    Li(u8 d, i32 imm),
+    Mv(u8 d, u8 s),
+    Add(u8 d, u8 a, u8 b),
+    Sub(u8 d, u8 a, u8 b),
+    Mul(u8 d, u8 a, u8 b),
+    Rem(u8 d, u8 a, u8 b),
+    Ld(u8 d, u8 addr),
+    St(u8 s, u8 addr),
+    Blt(u8 a, u8 b, u32 to),
+    Beq(u8 a, u8 b, u32 to),
+    J(u32 to),
+    Halt,
+) tagof u8;
+
+type Cpu = *(mut [8]i32 r, mut [16]i32 mem, mut u32 pc = 0, mut u32 steps = 0, mut bool trapped = false) !{
+    fun exec = (Ins i) -> bool {
+        self.steps += 1;
+        self.pc += 1;
+        match i {
+            Ins.Li(d, imm) => self.r[d] = imm,
+            Ins.Mv(d, s) => self.r[d] = self.r[s],
+            Ins.Add(d, a, b) => self.r[d] = self.r[a] + self.r[b],
+            Ins.Sub(d, a, b) => self.r[d] = self.r[a] - self.r[b],
+            Ins.Mul(d, a, b) => self.r[d] = self.r[a] * self.r[b],
+            Ins.Rem(d, a, b) => {
+                if self.r[b] == 0 {
+                    self.trapped = true;
+                    ret false;
+                }
+                self.r[d] = self.r[a] % self.r[b];
+            },
+            Ins.Ld(d, addr) => self.r[d] = self.mem[self.r[addr]],
+            Ins.St(s, addr) => self.mem[self.r[addr]] = self.r[s],
+            Ins.Blt(a, b, to) => if self.r[a] < self.r[b]: self.pc = to,
+            Ins.Beq(a, b, to) => if self.r[a] == self.r[b]: self.pc = to,
+            Ins.J(to) => self.pc = to,
+            Ins.Halt => ret false,
+        }
+        ret true;
+    }
+}
+
+fun boot = () -> Cpu: ret Cpu(r = [0, 0, 0, 0, 0, 0, 0, 0], mem = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+fun run = (*Cpu c, &[]Ins prog) -> i32 {
+    while c.pc as u64 < prog.$len and c.steps < 2000 {
+        if !c.exec(prog.*[c.pc]): brk;
+    }
+    ret c.r[0];
+}
+
+# gcd by remainders: r1, r2 inputs, result in r0
+stcfun gcd_prog = (i32 a, i32 b) -> i32 {
+    [7]Ins p = [
+        Ins.Li(1, a), Ins.Li(2, b), Ins.Li(3, 0),
+        Ins.Beq(2, 3, 6),
+        Ins.Rem(4, 1, 2), Ins.Mv(1, 2),
+        Ins.Halt,
+    ];
+    mut Cpu c = boot();
+    run(c.&, p.&);
+    ret c.r[1] * 1000 + c.r[2] * 10 + c.r[4];
+}
+
+# full gcd loop: rem, shift, branch back
+stcfun gcd_loop = (i32 a, i32 b) -> i32 {
+    [9]Ins p = [
+        Ins.Li(1, a), Ins.Li(2, b), Ins.Li(3, 0),
+        Ins.Beq(2, 3, 8),
+        Ins.Rem(4, 1, 2),
+        Ins.Mv(1, 2),
+        Ins.Mv(2, 4),
+        Ins.J(3),
+        Ins.Mv(0, 1),
+    ];
+    mut Cpu c = boot();
+    ret run(c.&, p.&);
+}
+
+# fib(n) iteratively in registers
+stcfun fib_prog = (i32 n) -> i32 {
+    [11]Ins p = [
+        Ins.Li(1, 0), Ins.Li(2, 1), Ins.Li(3, 0), Ins.Li(4, n), Ins.Li(5, 1),
+        Ins.Beq(3, 4, 11),
+        Ins.Add(6, 1, 2), Ins.Mv(1, 2), Ins.Mv(2, 6), Ins.Add(3, 3, 5), Ins.J(5),
+    ];
+    mut Cpu c = boot();
+    run(c.&, p.&);
+    ret c.r[1] * 1000 + c.steps as i32;
+}
+
+# memory: store squares, then sum them back with a loop
+stcfun mem_prog = () -> i32 {
+    [17]Ins p = [
+        Ins.Li(1, 0), Ins.Li(2, 10), Ins.Li(3, 1),
+        Ins.Mul(4, 1, 1), Ins.St(4, 1), Ins.Add(1, 1, 3), Ins.Blt(1, 2, 3),
+        Ins.Li(1, 0), Ins.Li(0, 0),
+        Ins.Ld(4, 1), Ins.Add(0, 0, 4), Ins.Add(1, 1, 3), Ins.Blt(1, 2, 9),
+        Ins.Halt, Ins.Halt, Ins.Halt, Ins.Halt,
+    ];
+    mut Cpu c = boot();
+    i32 total = run(c.&, p.&);
+    ret total * 1000 + c.mem[9] + c.steps as i32 * 1000000;
+}
+
+stcfun trap_prog = () -> u32 {
+    [4]Ins p = [Ins.Li(1, 5), Ins.Li(2, 0), Ins.Rem(3, 1, 2), Ins.Li(0, 9)];
+    mut Cpu c = boot();
+    run(c.&, p.&);
+    ret c.pc * 100 + c.steps * 10 + (if c.trapped: 1 else: 0);
+}
+
+# an endless loop is cut off by the step budget
+stcfun spin_prog = () -> u32 {
+    [1]Ins p = [Ins.J(0)];
+    mut Cpu c = boot();
+    run(c.&, p.&);
+    ret c.steps;
+}
+
+# packing: opcode in the top byte, then three byte fields or a 24 bit immediate
+fun opcode = (Ins i) -> u32: ret match i {
+    Ins.Li(d, imm) => 1 << 24 | d as u32 << 16 | (imm as u32 & 0xFFFF),
+    Ins.Add(d, a, b) => 3 << 24 | d as u32 << 16 | a as u32 << 8 | b as u32,
+    Ins.J(to) => 11 << 24 | to,
+    Ins.Halt => 0xFF << 24,
+    _ => 0,
+}
+
+fun decode_li = (u32 w) -> Ins {
+    i32 imm = (w & 0xFFFF) as i32;
+    ret Ins.Li((w >> 16 & 0xFF) as u8, if imm >= 0x8000: imm - 0x10000 else: imm);
+}
+
+stcfun pack = () -> u64 {
+    u32 a = opcode(Ins.Li(3, -2));
+    u32 b = opcode(Ins.Add(7, 1, 2));
+    u32 c = opcode(Ins.J(1000));
+    i32 back = match decode_li(a) {
+        Ins.Li(d, imm) => d as i32 * 100 + imm,
+        _ => 0,
+    };
+    ret (a as u64 << 32 | b as u64) ^ c as u64 + (back as u64);
+}
+
+stc i32 GP = gcd_prog(48, 18); #= GP 18192
+stc i32 GL = gcd_loop(1071, 462); #= GL 21
+stc i32 GL0 = gcd_loop(7, 0); #= GL0 7
+stc i32 FB = fib_prog(20); #= FB 6765126
+stc i32 MP = mem_prog(); #= MP 86285081
+stc u32 TR = trap_prog(); #= TR 331
+stc u32 SP = spin_prog(); #= SP 2000
+stc u64 PK = pack(); #= PK 73183485489513488
+
+$main = () -> i32 {
+    mut Cpu c = boot();
+    [3]Ins p = [Ins.Li(0, 4), Ins.Mul(0, 0, 0), Ins.Halt];
+    v = run(c.&, p.&); #: v i32
+    w = opcode(p[1]); #: w u32
+    ret v + w as i32;
+}

@@ -1,0 +1,22 @@
+# induced return types are settled across calls that go in circles
+fun ra = (u32 n): ret if n == 0: 0 else: rb(n - 1) + 1; #: ra (u32) -> u32
+fun rb = (u32 n): ret if n == 0: 0 else: rc(n - 1) + 2; #: rb (u32) -> u32
+fun rc = (u32 n) -> u32: ret if n == 0: 0 else: ra(n - 1) + 3; #: rc (u32) -> u32
+fun self_only = (i64 n): ret if n <= 0: n else: self_only(n - 2); #: self_only (i64) -> i64
+fun block_body = (u8 n) { if n == 0 { ret 1; } ret block_body(n - 1) * 2; } #: block_body (u8) -> u32
+fun via_later = (u32 n): ret later_def(n) + 1; #: via_later (u32) -> u64
+fun later_def = (u32 n) -> u64: ret n;
+fun local_pair = (u32 n) -> u32 {
+    fun ping = (u32 k): ret if k == 0: 10 else: pong(k - 1); #: ping (u32) -> u32
+    fun pong = (u32 k): ret if k == 0: 20 else: ping(k - 1); #: pong (u32) -> u32
+    ret ping(n);
+}
+
+stc u32 RA = ra(6); #= RA 12
+stc i64 SO = self_only(7); #= SO -1
+stc u32 BB = block_body(5); #= BB 32
+stc u64 VL = via_later(4); #= VL 5
+stc u32 LP0 = local_pair(4); #= LP0 10
+stc u32 LP1 = local_pair(5); #= LP1 20
+
+$main = (): ret ra(1) + local_pair(2); #: $main () -> u32

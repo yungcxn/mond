@@ -1,0 +1,52 @@
+# implicit integer coercion: same signedness widens, unsigned widens into a strictly wider signed type
+fun f = (u8 a8, u16 a16, u32 a32, u64 a64, i8 b8, i16 b16, i32 b32, i64 b64) {
+    u8 x01 = a16; #! type_mismatch
+    u8 x02 = a32; #! type_mismatch
+    u8 x03 = a64; #! type_mismatch
+    u8 x04 = b8; #! type_mismatch
+    u8 x05 = b16; #! type_mismatch
+    u16 x06 = a32; #! type_mismatch
+    u16 x07 = b8; #! type_mismatch
+    u16 x08 = b16; #! type_mismatch
+    u32 x09 = a64; #! type_mismatch
+    u32 x10 = b32; #! type_mismatch
+    u64 x11 = b8; #! type_mismatch
+    u64 x12 = b64; #! type_mismatch
+    i8 x13 = a8; #! type_mismatch
+    i8 x14 = b16; #! type_mismatch
+    i16 x15 = a16; #! type_mismatch
+    i16 x16 = b32; #! type_mismatch
+    i32 x17 = a32; #! type_mismatch
+    i32 x18 = b64; #! type_mismatch
+    i64 x19 = a64; #! type_mismatch
+    u8 o01 = a8;
+    u16 o02 = a8;
+    u32 o03 = a16;
+    u64 o04 = a32;
+    i16 o05 = a8;
+    i32 o06 = a16;
+    i64 o07 = a32;
+    i16 o08 = b8;
+    i32 o09 = b16;
+    i64 o10 = b32;
+    i64 o11 = b8;
+}
+
+fun fl = (f16 h, f32 s, f64 d, i32 n, u8 u, bool b) {
+    f32 y1 = h;
+    f64 y2 = h;
+    f64 y3 = s;
+    f16 z1 = s; #! type_mismatch
+    f16 z2 = d; #! type_mismatch
+    f32 z3 = d; #! type_mismatch
+    f32 z4 = n; #! type_mismatch
+    f64 z5 = u; #! type_mismatch
+    i32 z6 = s; #! type_mismatch
+    u8 z7 = h; #! type_mismatch
+    i32 z8 = b; #! type_mismatch
+    bool z9 = n; #! type_mismatch
+    bool z10 = s; #! type_mismatch
+    u8 z11 = b; #! type_mismatch
+}
+
+$main = () {}

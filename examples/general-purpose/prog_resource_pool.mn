@@ -1,0 +1,171 @@
+# a slot pool with a free list, handles give their slot back in deinit; leaks show up as live slots
+
+type Pool = *(mut [8]u32 next, mut [8]bool used, mut u32 free = 0, mut u32 live = 0, mut u32 peak = 0, mut u32 failed = 0) !{
+    fun acquire = () -> u32 {
+        if self.free == 8 {
+            self.failed += 1;
+            ret 8;
+        }
+        u32 s = self.free;
+        self.free = self.next[s];
+        self.used[s] = true;
+        self.live += 1;
+        if self.live > self.peak: self.peak = self.live;
+        ret s;
+    }
+    fun release = (u32 s) {
+        if s >= 8 or !self.used[s]: ret;
+        self.used[s] = false;
+        self.next[s] = self.free;
+        self.free = s;
+        self.live -= 1;
+    }
+}
+
+fun new_pool = () -> Pool: ret Pool(next = [1, 2, 3, 4, 5, 6, 7, 8], used = [false, false, false, false, false, false, false, false]);
+
+type Handle = *(u32 slot, *Pool pool) !{
+    $init = (*Pool p) -> Handle: ret Handle(slot = p.acquire(), pool = p);
+    $deinit = () { self.pool.release(self.slot); }
+    fun ok = () -> bool: ret self.slot < 8;
+}
+
+fun stats = (&Pool p) -> u32: ret p.live * 1000 + p.peak * 100 + p.failed * 10 + p.free;
+
+# nested scopes, each releasing on exit
+fun scopes = () -> u32 {
+    mut Pool p = new_pool();
+    {
+        mut Handle a = Handle.$init(p.&);
+        defer deinit a;
+        {
+            mut Handle b = Handle.$init(p.&);
+            defer deinit b;
+            mut Handle c = Handle.$init(p.&);
+            defer deinit c;
+        }
+        mut Handle d = Handle.$init(p.&);
+        defer deinit d;
+    }
+    ret stats(p.&);
+}
+
+# exhaustion: the ninth acquire fails, a failed handle releases nothing
+fun exhaust = () -> u32 {
+    mut Pool p = new_pool();
+    for round in 0..<2 {
+        mut [9]u32 held;
+        for i in 0..<9: held[i] = p.acquire();
+        for i in 0..<9: p.release(held[i]);
+    }
+    ret stats(p.&);
+}
+
+# early exits from loops run the defers of every scope they leave
+fun searching = (u32 target) -> u32 {
+    mut Pool p = new_pool();
+    mut u32 found = 99;
+    for i in 0..<4 {
+        mut Handle outer = Handle.$init(p.&);
+        defer deinit outer;
+        for j in 0..<4 {
+            mut Handle inner = Handle.$init(p.&);
+            defer deinit inner;
+            if j == 1: cont;
+            if i * 4 + j == target {
+                found = i * 10 + j;
+                brk;
+            }
+        }
+        if found != 99: brk;
+    }
+    ret found * 10000 + stats(p.&);
+}
+
+fun leave_early = (*Pool p, u32 k) -> u32 {
+    mut Handle a = Handle.$init(p);
+    defer deinit a;
+    mut Handle b = Handle.$init(p);
+    defer deinit b;
+    if k == 0: ret p.live;
+    mut Handle c = Handle.$init(p);
+    defer deinit c;
+    if k == 1: ret p.live * 10;
+    ret p.live * 100;
+}
+
+fun returns = () -> u32 {
+    mut Pool p = new_pool();
+    u32 r = leave_early(p.&, 0) + leave_early(p.&, 1) + leave_early(p.&, 2);
+    ret r * 10000 + stats(p.&);
+}
+
+# a transaction: keeps its handles only when it commits, otherwise a defer rolls them back
+fun transaction = (*Pool p, u32 n, bool commit) -> u32 {
+    mut [4]u32 got;
+    mut u32 taken = 0;
+    mut bool done = false;
+    defer if !done: for i in 0..<taken: p.release(got[i]);
+    for i in 0..<n {
+        u32 s = p.acquire();
+        if s == 8: ret 0;
+        got[i] = s;
+        taken += 1;
+    }
+    done = commit;
+    ret taken;
+}
+
+fun transactions = () -> u32 {
+    mut Pool p = new_pool();
+    u32 a = transaction(p.&, 3, false);
+    u32 b = transaction(p.&, 4, true);
+    u32 c = transaction(p.&, 4, true);
+    u32 d = transaction(p.&, 2, true);
+    ret ((a * 10 + b) * 10 + c) * 10 + d + stats(p.&) * 10000;
+}
+
+# a defer inside a match arm block belongs to that arm, the undeferred handle stays live
+fun by_kind = (u32 k) -> u32 {
+    mut Pool p = new_pool();
+    mut u32 mark = 0;
+    match k {
+        0 => {
+            mut Handle h = Handle.$init(p.&);
+            defer deinit h;
+            mark = p.live;
+        },
+        1 => {
+            mut Handle h = Handle.$init(p.&);
+            mut Handle g = Handle.$init(p.&);
+            defer deinit h;
+            mark = p.live * 10;
+        },
+        _ => mark = 7,
+    }
+    ret mark * 1000 + stats(p.&) / 1000;
+}
+
+stcfun s_scopes = () -> u32: ret scopes();
+stcfun s_exhaust = () -> u32: ret exhaust();
+stcfun s_search = () -> u32: ret searching(6) * 100 + searching(14) / 10000;
+stcfun s_skipped = () -> u32: ret searching(9);
+stcfun s_returns = () -> u32: ret returns();
+stcfun s_trans = () -> u32: ret transactions();
+stcfun s_kinds = () -> u32: ret by_kind(0) * 100000 + by_kind(1) * 10 + by_kind(5) / 1000;
+
+stc u32 SC = s_scopes(); #= SC 300
+stc u32 EX = s_exhaust(); #= EX 820
+stc u32 SE = s_search(); #= SE 12020032
+stc u32 SK = s_skipped(); #= SK 990200
+stc u32 RE = s_returns(); #= RE 3320300
+stc u32 TR = s_trans(); #= TR 88183440
+stc u32 KI = s_kinds(); #= KI 100200017
+
+$main = () -> u32 {
+    mut Pool p = new_pool();
+    h = Handle.$init(p.&);
+    s = h.slot; #: s u32
+    u32 ok = if h.ok(): 1 else: 0;
+    ret scopes() + exhaust() + searching(5) + returns() + transactions() + by_kind(1) + ok;
+}

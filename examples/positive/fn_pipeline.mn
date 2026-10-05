@@ -1,0 +1,64 @@
+# a small stream pipeline built from first class functions, where dispatch and pointer walks
+
+fun map = (*[]i64 xs, (i64) -> i64 f) { for i in 0..<xs.$len: xs[i] = f(xs[i]); }
+
+fun fold = (&[]i64 xs, i64 init, (i64, i64) -> i64 f) -> i64 {
+    mut i64 acc = init;
+    for x in xs: acc = f(acc, x);
+    ret acc;
+}
+
+fun count_if = (&[]i64 xs, (i64) -> bool p) -> u32 {
+    mut u32 n = 0;
+    for x in xs: if p(x): n += 1;
+    ret n;
+}
+
+fun classify = (i64 x where x % 15 == 0) -> u32: ret 15;
+fun classify = (i64 x where x % 5 == 0) -> u32: ret 5;
+fun classify = (i64 x where x % 3 == 0) -> u32: ret 3;
+fun classify = (i64 x) -> u32: ret 0;
+
+fun scaler = (i64 k): (i64 x): x * k;
+fun offset = (i64 k): (i64 x): x + k;
+fun then = ((i64) -> i64 f, (i64) -> i64 g): (i64 x): g(f(x));
+
+fun max_ptr = (&[]i64 xs) -> u64 {
+    mut u64 best = 0;
+    for i in 1..<xs.$len: if xs.*[i] > xs.*[best]: best = i;
+    ret best;
+}
+
+stcfun run = () -> i64 {
+    mut [8]i64 data = [3, -1, 4, -1, 5, -9, 2, 6];
+    map(data.&, then(scaler(3), offset(1)));
+    i64 sum = fold(data.&, 0, (i64 a, i64 b): a + b);
+    i64 prod_sign = fold(data.&, 1, (i64 a, i64 b): if b < 0: -a else: a);
+    u32 neg = count_if(data.&, (i64 x): x < 0);
+    u64 at = max_ptr(data.&);
+    ret sum * 1000000 + prod_sign * 100000 + neg as i64 * 1000 + at as i64;
+}
+
+stcfun buzz = () -> u32 {
+    mut u32 score = 0;
+    for i in 1..=30: score += classify(i as i64);
+    ret score;
+}
+
+stcfun tables = () -> i64 {
+    [4]((i64) -> i64) ops = [scaler(2), offset(-3), then(scaler(2), offset(-3)), (i64 x): x * x];
+    mut i64 acc = 0;
+    for op in ops: acc = acc * 100 + op(7);
+    ret acc;
+}
+
+stc i64 RUN = run(); #= RUN 34903007
+stc u32 BZ = buzz(); #= BZ 74
+stc i64 TB = tables(); #= TB 14041149
+
+$main = () {
+    mut [3]i64 xs = [1, 2, 3];
+    map(xs.&, scaler(2));
+    t = fold(xs.&, 0, (i64 a, i64 b): a + b); #: t i64
+    c = classify(t); #: c u32
+}

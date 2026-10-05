@@ -54,7 +54,6 @@ pub const Op = enum(u8) {
     bit_and,
     bit_or,
     bit_xor,
-    pow,
     eq,
     ne,
     lt,
@@ -110,7 +109,7 @@ pub const Op = enum(u8) {
 
     pub fn is_pure(op: Op) bool {
         return switch (op) {
-            .zeroed, .add, .sub, .mul, .div, .rem, .shl, .shr, .bit_and, .bit_or, .bit_xor, .pow, .eq, .ne, .lt, .gt, .le, .ge, .neg, .not, .type_test, .convert, .cast, .field_ptr, .index_ptr, .len, .select, .extract, .variant_make, .variant_tag, .variant_payload => true,
+            .zeroed, .add, .sub, .mul, .div, .rem, .shl, .shr, .bit_and, .bit_or, .bit_xor, .eq, .ne, .lt, .gt, .le, .ge, .neg, .not, .type_test, .convert, .cast, .field_ptr, .index_ptr, .len, .select, .extract, .variant_make, .variant_tag, .variant_payload => true,
             else => false,
         };
     }

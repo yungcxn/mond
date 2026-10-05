@@ -1,0 +1,11 @@
+# unlengthed arrays are runtime-length: a fat pointer, the same size as written in a record field
+type Slice = *(&[]u8 s);
+type Owned = *([]u32 xs, u8 n);
+
+stc u64 SF = sizeof Slice; #= SF 16
+stc u64 SO = sizeof Owned; #= SO 24
+stc u64 SP = sizeof &[]u8; #= SP 16
+stc u64 SM = sizeof *[]u64; #= SM 16
+stc u64 SA = sizeof []u8; #= SA 16
+
+$main = () {}

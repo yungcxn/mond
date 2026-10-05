@@ -1,0 +1,1 @@
+fun f = (bool c) -> i32: ret if c: 1 else: 2 else: 3; #! ExpectedSemicolon

@@ -6,9 +6,9 @@ stcfun oob = (u32 i) -> u32 { [3]u32 a = [1, 2, 3]; ret a[i]; } #! static_eval_f
 
 stc u32 O = oob(5);
 
-stcfun spin = () -> u32 { mut u32 x = 0; loop x += 1; ret x; } #! static_eval_failed
+stcfun spin = () -> u32 { mut u32 x = 0; loop x += 1; ret x; }
 
-stc u32 S = spin();
+stc u32 S = spin(); #! static_eval_failed
 
 variant V = +(A, B(u8));
 
@@ -16,9 +16,9 @@ stcfun unwrapped = (V v) -> u8: ret v??; #! static_eval_failed
 
 stc u8 U = unwrapped(V.A);
 
-fun down = (u32 n) -> u32: ret if n == 0: 0 else: 1 + down(n - 1); #! static_eval_failed
+fun down = (u32 n) -> u32: ret if n == 0: 0 else: 1 + down(n - 1);
 
-stc u32 DN = down(100000);
+stc u32 DN = down(100000); #! static_eval_failed
 stc u32 OK = down(10); #= OK 10
 
 stcfun shifted = (u32 n) -> u32: ret 1 << n; #! static_eval_failed

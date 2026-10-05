@@ -1,0 +1,29 @@
+u32 plain = 5;
+mut u32 counter = 0;
+stc u32 FIXED = 5;
+fun runtime = (u32 x) -> u32: ret x + 1;
+
+# a global without stc has no compile time value
+stc u32 A = plain; #! not_static
+stc u32 B = counter + 1; #! not_static
+stc u32 C = FIXED + 1; #= C 6
+[plain]u8 buf; #! not_static
+[FIXED]u8 fbuf; #: fbuf [5]u8
+
+fun f = (u32 n, [4]u32 xs, bool flag) {
+    u32 local = 3;
+    stc u32 l1 = local; #! not_static
+    stc u32 l2 = runtime(n); #! not_static
+    stc u32 l3 = runtime(2); #= l3 3
+    stc []u32 l4 = stcfor x in xs: x; #! not_static
+    stc u32 l5 = stcmatch n { 0 => 1, _ => 2 } #! not_static
+    stc u32 l6 = stcif flag: 1 else: 2; #! not_static
+    stc u64 l7 = xs.$len; #= l7 4
+    stc u64 l8 = sizeof xs; #= l8 16
+    stc u64 l9 = sizeof n; #= l9 4
+    [xs.$len]u8 ok;
+    [n + 1]u8 bad; #! not_static
+    [local]u8 bad2; #! not_static
+}
+
+$main = () {}

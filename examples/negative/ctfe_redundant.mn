@@ -1,0 +1,29 @@
+# inside a stcfun every construct is static already
+stcfun sf1 = (u32 n) -> []u32: ret stcfor i in 0..<n: i; #! redundant_stc
+stcfun sf2 = (u32 n) -> u32: ret stcmatch n { 0 => 1, _ => 2 } #! redundant_stc
+stcfun sf3 = (u32 n) -> []u32 { mut u32 k = 0; ret stcloop k = k + 1: if k > n: brk else: k; } #! redundant_stc
+stcfun sf4 = (u32 n) -> []u32: ret for i in 0..<n: i;
+stc []u32 S1 = sf1(2);
+stc u32 S2 = sf2(0);
+stc []u32 S3 = sf3(2);
+stc []u32 S4 = sf4(3); #= S4 [0, 1, 2]
+
+# so is the body of a static loop
+stc [][]u32 N1 = stcfor i in 0..<2: stcfor j in 0..<2: i + j; #! redundant_stc
+stc []u32 N2 = stcfor i in 0..<3: stcif i > 0: i else: 9; #! redundant_stc
+stc []u32 N3 = stcfor i in 0..<3: if i > 0: i else: 9; #= N3 [9, 1, 2]
+stc [][]u32 N4 = stcfor i in 0..<2: for j in 0..<2: i * j; #= N4 [[0, 0], [0, 1]]
+
+# the function a stcfun produces is runtime code, a stcif over the static parameter is meaningful there
+stcfun Make = (u32 k): (u32 x) -> u32: ret stcif k > 1: x * k else: x;
+fun m3 = Make(3);
+stc u32 M3 = m3(2) + Make(1)(2); #= M3 8
+
+# a stc declaration is fine anywhere
+stcfun locals = () -> u32 {
+    stc u32 K = 4;
+    ret K * 2;
+}
+stc u32 LO = locals(); #= LO 8
+
+$main = () {}

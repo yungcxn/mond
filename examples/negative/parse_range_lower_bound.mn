@@ -1,0 +1,4 @@
+# `..` binds to its lower bound only: `1 + 1..=4` adds a number to a range
+fun f = () {
+    x = 1 + 1..=4; #! type_mismatch
+}

@@ -1,0 +1,13 @@
+type P = *(i32 x, i32 y);
+variant Res = +(Ok(u32 v, u32 w), Err(u8), None) tagof u8;
+
+fun f = (Res r) {
+    i32 a = (P(1, 2) <- p, q, extra).x; #! type_mismatch
+    i32 b = (P(1, 2) <- m, n).x;
+    i32 c = m; #! undefined_name
+    bool d = r ?<- v, w, z; #! type_mismatch
+    u32 e = match r { Res.Ok <- v, w => v + w, Res.Err <- k => k, Res.None => 0 }
+    u32 g = match r { Res.Ok <- v, w => v + w, _ => w } #! undefined_name
+}
+
+$main = () {}

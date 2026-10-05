@@ -1,0 +1,74 @@
+mut u32 TICKS = 0;
+type Holder = *(mut () -> u32 f);
+
+# mutable locals are captured by reference, the closure sees later writes
+fun sees_later_write = () -> u32 {
+    mut u32 n = 1;
+    f = (): n;
+    n = 5;
+    ret f();
+}
+# immutable scalars are copied, every loop step captures its own value
+fun per_step_copy = () -> u32 {
+    mut [3](() -> u32) fs = [(): 0, (): 0, (): 0];
+    for i in 0..<3: fs[i] = (): i * 10;
+    ret fs[0]() + fs[1]() + fs[2]();
+}
+fun writes_through = () -> u32 {
+    mut u32 n = 0;
+    inc = (): n += 2;
+    do inc();
+    do inc();
+    ret n;
+}
+fun two_levels = (u32 a) -> u32 {
+    mut u32 acc = a;
+    outer = () -> u32 {
+        inner = (): acc += 1;
+        do inner();
+        ret acc;
+    }
+    do outer();
+    ret outer() * 100 + acc;
+}
+fun reads_aggregate = () -> u32 {
+    [3]u32 xs = [4, 5, 6];
+    sum = () -> u32 {
+        mut u32 s = 0;
+        for x in xs: s += x;
+        ret s;
+    }
+    ret sum();
+}
+fun globals_not_captured = () -> u32 {
+    tick = (): TICKS += 1;
+    do tick();
+    do tick();
+    ret TICKS;
+}
+# a lambda stored into a place assigns it, it declares nothing
+fun into_field = () -> u32 {
+    mut Holder h = Holder(f = (): 1);
+    u32 k = 7;
+    h.f = (): k;
+    ret h.f() + k;
+}
+fun param_captured = (u32 base): (u32 x): base * x; #: param_captured (u32) -> (u32) -> u32
+fun local_fn_sees_param = (u32 k) -> u32 {
+    fun scaled = (u32 v) -> u32: ret v * k;
+    ret scaled(3);
+}
+
+stc u32 SL = sees_later_write(); #= SL 5
+stc u32 PS = per_step_copy(); #= PS 30
+stc u32 WT = writes_through(); #= WT 4
+stc u32 TL = two_levels(10); #= TL 1212
+stc u32 RA = reads_aggregate(); #= RA 15
+stc u32 IF = into_field(); #= IF 14
+stc u32 PC = param_captured(6)(7); #= PC 42
+stc u32 LP = local_fn_sees_param(4); #= LP 12
+
+$main = () -> i32 {
+    u32 x = sees_later_write() + per_step_copy() + writes_through() + two_levels(1) + reads_aggregate() + globals_not_captured() + param_captured(2)(3) + local_fn_sees_param(2) + into_field();
+    ret x as i32;
+}

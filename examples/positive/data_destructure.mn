@@ -1,0 +1,27 @@
+type P = *(i32 x, i32 y);
+type T3 = *(u8 a, u16 b, u32 c);
+variant Res = +(Ok(u32 v, u32 w), Err(u8), None) tagof u8;
+
+stcfun swap_sum = () -> i32: ret (P(3, 4) <- a, b).x * 0 + a * 10 + b;
+stcfun mixed = () -> u32: ret (T3(1, 2, 3) <- a, b, c).c + (a as u32) * 100 + (b as u32) * 10;
+stcfun first = () -> i32: ret (P(5, 6) <- only).y + only.x;
+stcfun pair = (Res r) -> u32: ret if r ?<- v, w: v * 10 + w else: 0;
+stcfun arm = (Res r) -> u32: ret match r {
+    Res.Ok <- v, w => v + w,
+    Res.Err <- e => e as u32 * 100,
+    Res.None => 1,
+}
+
+stc i32 SW = swap_sum(); #= SW 34
+stc u32 MX = mixed(); #= MX 123
+stc i32 FS = first(); #= FS 11
+stc u32 PR = pair(Res.Ok(4, 2)); #= PR 42
+stc u32 PN = pair(Res.None); #= PN 0
+stc u32 A1 = arm(Res.Ok(4, 2)); #= A1 6
+stc u32 A2 = arm(Res.Err(3)); #= A2 300
+stc u32 A3 = arm(Res.None); #= A3 1
+
+$main = () {
+    s = (T3(1, 2, 3) <- a, b, c).a; #: s u8
+    w = (P(1, 2) <- x, y).x + x + y; #: w i32
+}

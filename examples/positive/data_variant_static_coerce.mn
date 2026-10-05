@@ -1,0 +1,28 @@
+# a static value keeps the conversion into a single-payload variant, like a runtime one
+variant Opt = +(Some(u8), None = 0xFF) tagof self;
+variant Tagged = +(Some(u32), None) tagof u8;
+variant Reg = ++(AsInt(i32), AsUint(u32), AsFloat(f32)) tagof u8;
+
+stcfun pass = (Opt o) -> u8: ret o ?? 1;
+stcfun id = (Opt o) -> Opt: ret o;
+stcfun retag = () -> u8 {
+    Reg r = Reg.AsInt(5);
+    Reg.AsUint u = r as Reg.AsUint;
+    ret u.$tag;
+}
+stcfun retag_payload = () -> u32 {
+    Reg r = Reg.AsInt(-1);
+    Reg.AsUint u = r as Reg.AsUint;
+    ret u ?? 0;
+}
+
+stc Opt X = 42;
+stc Tagged Y = 42;
+stc u8 XV = X ?? 0; #= XV 42
+stc u32 YV = Y ?? 0; #= YV 42
+stc u8 P = pass(9); #= P 9
+stc u8 Z = id(5) ?? 0; #= Z 5
+stc u8 RT = retag(); #= RT 1
+stc u32 RP = retag_payload(); #= RP 4294967295
+
+$main = () {}

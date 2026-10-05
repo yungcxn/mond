@@ -1,0 +1,163 @@
+# range query structures: prefix sums, a fenwick tree, a segment tree and a sparse table
+
+# stcfuns copy the table into a local first, the address of a stc global would let them write outside state
+stc [10]i32 DATA = [5, -2, 7, 3, -8, 6, 1, 9, -4, 2];
+
+fun prefix = (&[10]i32 xs) -> [11]i32 {
+    mut [11]i32 p;
+    for i in 0..<10: p[i + 1] = p[i] + xs.*[i];
+    ret p;
+}
+
+fun range_sum = (&[11]i32 p, u32 lo, u32 hi) -> i32: ret p.*[hi] - p.*[lo];
+
+fun lowbit = (u32 i) -> u32: ret i & (0 -% i);
+
+type Fenwick = *(mut [11]i32 t) !{
+    fun add = (u32 at, i32 d) {
+        mut u32 i = at + 1;
+        while i <= 10 {
+            self.t[i] += d;
+            i += lowbit(i);
+        }
+    }
+    fun sum = (u32 n) -> i32 {
+        mut i32 s = 0;
+        mut u32 i = n;
+        while i > 0 {
+            s += self.t[i];
+            i -= lowbit(i);
+        }
+        ret s;
+    }
+    fun between = (u32 lo, u32 hi) -> i32: ret self.sum(hi) - self.sum(lo);
+}
+
+fun build_fenwick = (&[10]i32 xs) -> Fenwick {
+    mut Fenwick f = Fenwick(t = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    for i in 0..<10: f.add(i, xs.*[i]);
+    ret f;
+}
+
+# iterative segment tree for range minimum, leaves at 16..31, padding is a large sentinel
+type Seg = *(mut [32]i32 t) !{
+    fun set = (u32 at, i32 v) {
+        mut u32 i = at + 16;
+        self.t[i] = v;
+        while i > 1 {
+            i = i / 2;
+            i32 l = self.t[2 * i];
+            i32 r = self.t[2 * i + 1];
+            self.t[i] = if l < r: l else: r;
+        }
+    }
+    fun min = (u32 lo0, u32 hi0) -> i32 {
+        mut i32 best = 2147483647;
+        mut u32 lo = lo0 + 16;
+        mut u32 hi = hi0 + 16;
+        while lo < hi {
+            if lo % 2 == 1 {
+                if self.t[lo] < best: best = self.t[lo];
+                lo += 1;
+            }
+            if hi % 2 == 1 {
+                hi -= 1;
+                if self.t[hi] < best: best = self.t[hi];
+            }
+            lo = lo / 2;
+            hi = hi / 2;
+        }
+        ret best;
+    }
+}
+
+fun build_seg = (&[10]i32 xs) -> Seg {
+    mut Seg s = Seg(t = [2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647,
+                         2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647,
+                         2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647,
+                         2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2147483647]);
+    for i in 0..<10: s.set(i, xs.*[i]);
+    ret s;
+}
+
+# sparse table of maxima: level k covers windows of 2^k
+fun sparse_max = (&[10]i32 xs, u32 lo, u32 hi) -> i32 {
+    mut [4][10]i32 st;
+    for i in 0..<10: st[0][i] = xs.*[i];
+    for k in 1..<4 {
+        u32 w = 1 << k;
+        for i in 0..<10 {
+            if i + w > 10: brk;
+            i32 a = st[k - 1][i];
+            i32 b = st[k - 1][i + w / 2];
+            st[k][i] = if a > b: a else: b;
+        }
+    }
+    mut u32 k = 0;
+    while (1 << (k + 1)) <= hi - lo: k += 1;
+    i32 a = st[k][lo];
+    i32 b = st[k][hi - (1 << k)];
+    ret if a > b: a else: b;
+}
+
+stcfun sums = () -> i32 {
+    [10]i32 data = DATA;
+    [11]i32 p = prefix(data.&);
+    ret range_sum(p.&, 0, 10) * 10000 + range_sum(p.&, 2, 5) * 100 + range_sum(p.&, 4, 4);
+}
+
+stcfun fenwick_ops = () -> i32 {
+    [10]i32 data = DATA;
+    mut Fenwick f = build_fenwick(data.&);
+    i32 before = f.between(3, 8);
+    f.add(4, 10);
+    f.add(0, -5);
+    ret before * 1000000 + f.between(3, 8) * 1000 + f.sum(10);
+}
+
+stcfun seg_ops = () -> i32 {
+    [10]i32 data = DATA;
+    mut Seg s = build_seg(data.&);
+    i32 a = s.min(0, 10);
+    i32 b = s.min(5, 8);
+    i32 c = s.min(9, 10);
+    s.set(4, 100);
+    i32 d = s.min(0, 10);
+    ret ((a + 10) * 100 + (b + 10)) * 10000 + (c + 10) * 100 + (d + 10);
+}
+
+stcfun sparse_ops = () -> i32 {
+    [10]i32 data = DATA;
+    mut i32 r = 0;
+    r = r * 100 + sparse_max(data.&, 0, 10);
+    r = r * 100 + sparse_max(data.&, 3, 6);
+    r = r * 100 + sparse_max(data.&, 8, 9) + 10;
+    ret r;
+}
+
+# brute force cross check of every range against the fenwick tree
+stcfun cross_check = () -> u32 {
+    [10]i32 data = DATA;
+    Fenwick f = build_fenwick(data.&);
+    [11]i32 p = prefix(data.&);
+    mut u32 agree = 0;
+    for lo in 0..=10 {
+        for hi in lo..=10 {
+            if f.between(lo, hi) == range_sum(p.&, lo, hi): agree += 1;
+        }
+    }
+    ret agree;
+}
+
+stc i32 SUMS = sums(); #= SUMS 190200
+stc i32 FEN = fenwick_ops(); #= FEN 11021024
+stc i32 SEG = seg_ops(); #= SEG 2111206
+stc i32 SPA = sparse_ops(); #= SPA 90606
+stc u32 CROSS = cross_check(); #= CROSS 66
+stc u32 LOWS = lowbit(12) * 100 + lowbit(1) * 10 + lowbit(0); #= LOWS 410
+
+$main = () -> i32 {
+    f = build_fenwick(DATA.&); #: f *([11]i32 t)
+    s = build_seg(DATA.&);
+    ret f.sum(5) + s.min(2, 7) + sparse_max(DATA.&, 1, 4);
+}

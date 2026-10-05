@@ -1,0 +1,23 @@
+# every value of a multi assignment is computed before the first write
+stcfun swapped = (i32 x, i32 y) -> i32 {
+    mut i32 a = x;
+    mut i32 b = y;
+    a, b = b, a;
+    ret a * 10 + b;
+}
+stcfun rotated = () -> i32 {
+    mut i32 a = 1;
+    mut i32 b = 2;
+    mut i32 c = 3;
+    a, b, c = b, c, a;
+    ret a * 100 + b * 10 + c;
+}
+fun run_swap = (i32 x, i32 y) -> i32 {
+    mut i32 a = x;
+    mut i32 b = y;
+    a, b = b, a;
+    ret a - b;
+}
+stc i32 S = swapped(1, 2); #= S 21
+stc i32 R = rotated(); #= R 231
+$main = () { i32 r = run_swap(1, 2); }

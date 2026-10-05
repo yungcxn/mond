@@ -1,0 +1,15 @@
+type Holder = *(() -> u32 f);
+fun f = () -> u32 {
+    [1](() -> u32) a = [(): 0];
+    a[0] = (): 1; #! assign_to_immutable
+    Holder h = Holder(f = (): 2);
+    h.f = (): 3; #! assign_to_immutable
+    u32 after = 4;
+    g = (): after;
+    ret g() + h.f() + a[0]();
+}
+fun wrong_type = () {
+    mut [1](() -> u32) a = [(): 0];
+    a[0] = (bool b): 1; #! type_mismatch
+}
+$main = () {}

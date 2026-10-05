@@ -1,3 +1,4 @@
+const std = @import("std");
 const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const StaticPool = @import("../StaticPool.zig");
@@ -30,8 +31,9 @@ pub fn member(self: *Interpreter, n: NodeId) Value {
         return .int(sp.tag_type_of(st), sp.get(v.tag).int.bits + if (sp.tag(st) == .variant_union_type) sp.union_offset(st, v.variant) else 0);
     }
     const pt = self.vtype(pv);
-    if (pv.is_heap() or sp.tag(pt) == .record_type) switch (sp.lookup_member(pt, name)) {
-        .field => |f| return self.elem(pv, f.index),
+    const fields = if (pv.is_pool() and sp.tag(pt) == .variant_case_type and sp.tag(pv.index()) == .variant_value) Value.of(sp, sp.get(pv.index()).variant_value.payload) else pv;
+    if (pv.is_heap() or sp.tag(pt) == .record_type or sp.tag(pt) == .variant_case_type) switch (sp.lookup_member(pt, name)) {
+        .field => |f| return self.elem(fields, f.index),
         else => {},
     };
     if (!pv.is_pool() or !sp.get_tag_prop(pv.index()).is_type) return self.fail(n, .not_static, 0, 0);
@@ -57,6 +59,11 @@ pub fn call(self: *Interpreter, n: NodeId) Value {
         const c = places.cell(self, r.tree.arg(callee, 0)) orelse return .poison;
         return invoke(self, n, d, args, if (self.mem.buf[c].is_ref()) self.mem.buf[c] else .ref(r.self_ptr(self.vtype(self.mem.buf[c])), c), .empty);
     }
+    if (d == .none and r.tree.kind(callee) == .member) switch (r.builtin_of(callee, self.hint(r.tree.arg(callee, 0)), self.hint(n))) {
+        .builtin_init => return self.zero(self.hint(n)),
+        .builtin_deinit => return .unit,
+        else => {},
+    };
     const cv = self.eval(callee);
     if (cv.is_heap() and sp.tag(cv.ty) == .function_type) return invoke(self, n, sp.get(self.mem.buf[cv.at()].index()).function, args, .empty, cv);
     if (!cv.is_pool() or cv.is(.poison_type)) return if (cv.is(.poison_type)) cv else self.fail(n, .not_static, 0, 0);
@@ -74,8 +81,9 @@ pub fn call(self: *Interpreter, n: NodeId) Value {
             for (args, params) |a, p| {
                 const x = self.eval(r.arg_value(a));
                 if (x.is(.poison_type)) break :blk x;
+                if (self.escapes(x)) break :blk self.fail(r.arg_value(a), .not_static, 0, 0);
                 const i = self.pool(x);
-                const ok = if (sp.tag(p) == .meta_type) p == .type_type and sp.get_tag_prop(i).is_type or sp.type_of(i) == p else !sp.get_tag_prop(p).is_integer or sp.tag(i) == .int_value and sp.fits(i, p);
+                const ok = if (sp.tag(p) == .meta_type) p == .type_type and sp.get_tag_prop(i).is_type or sp.type_of(i) == p else if (sp.get_tag_prop(p).is_integer or sp.get_tag_prop(p).is_float) sp.fits(i, p) else p != .bool_type and sp.tag(p) != .record_type or sp.type_of(i) == p;
                 if (!ok) break :blk self.fail(r.arg_value(a), .type_mismatch, sp.type_of(i), p);
                 self.ids.push(r.retype(i, p));
             }
@@ -105,7 +113,7 @@ pub fn deinit(self: *Interpreter, n: NodeId, c: u32) void {
 fn invoke(self: *Interpreter, n: NodeId, d0: DeclPool.Index, all: []const NodeId, self0: Value, env: Value) Value {
     const r = self.res();
     const sp = &r.static_pool;
-    if (self.frames.head > Interpreter.max_depth) return self.fail(n, .static_eval_failed, 0, 0);
+    if (self.frames.head > Interpreter.max_depth) return self.fail(self.origin(n), .static_eval_failed, 0, 0);
     const mark = self.list.head;
     defer self.list.head = mark;
     for (all) |a| {
@@ -141,8 +149,8 @@ fn realize(self: *Interpreter, n: NodeId, d: DeclPool.Index, args: []const NodeI
     const r = self.res();
     const sp = &r.static_pool;
     const pnodes = r.params_of(r.value_node(d));
-    var map: [64]u32 = undefined;
-    if (!r.bind_args(pnodes, args, &map, false)) return null;
+    const map = r.scratch(u32, args.len);
+    if (!r.bind_args(pnodes, args, map, false)) return null;
     const mark = self.ids.head;
     defer self.ids.head = mark;
     for (0..pnodes.len) |j| {
@@ -170,8 +178,8 @@ fn attempt(self: *Interpreter, n: NodeId, d: DeclPool.Index, args: []const NodeI
     const v = r.value_node(d);
     if (r.decl_pool.states()[@intFromEnum(d)] == .failed) return Value.poison;
     const pnodes = r.params_of(v);
-    var map: [64]u32 = undefined;
-    if (!r.bind_args(pnodes, args, &map, false)) return self.fail(n, .wrong_arity, args.len, pnodes.len);
+    const map = r.scratch(u32, args.len);
+    if (!r.bind_args(pnodes, args, map, false)) return self.fail(n, .wrong_arity, args.len, pnodes.len);
     const body = r.bodies.get(bi).?;
     const caller = self.frames.buf[self.frames.head - 1].body.decl;
     const unchecked = caller != .none and r.decl_pool.kinds()[@intFromEnum(caller)] == .static_function;
@@ -180,12 +188,10 @@ fn attempt(self: *Interpreter, n: NodeId, d: DeclPool.Index, args: []const NodeI
     var keep = false;
     defer self.leave(keep);
     if (r.self_off(d) == 1) places.bind(self, @enumFromInt(body.first), valueself);
-    var bound: u64 = 0;
     for (0..args.len) |i| {
-        bound |= @as(u64, 1) << @intCast(map[i]);
         _ = places.store(self, pnodes[map[i]], self.info(.decl, pnodes[map[i]]), self.list.buf[base + i]);
     }
-    for (pnodes, 0..) |pn, j| if (bound >> @intCast(j) & 1 == 0) {
+    for (pnodes, 0..) |pn, j| if (std.mem.indexOfScalar(u32, map, @intCast(j)) == null) {
         _ = places.store(self, pn, self.info(.decl, pn), self.eval(Resolver.Param.from_node(self.res(), pn).default));
     };
     for (pnodes) |pn| {
@@ -200,7 +206,7 @@ fn attempt(self: *Interpreter, n: NodeId, d: DeclPool.Index, args: []const NodeI
         if (self.unwind == .ret) return self.result(e);
         if (r.tree.kind(p.@"else") != .assign) _ = places.store(self, pn, self.info(.decl, pn), e);
     }
-    const out = self.result(self.eval(r.tree.arg(v, 1)));
+    const out = self.coerce(self.result(self.eval(r.tree.arg(v, 1))), r.sig(d).ret);
     keep = out.is_boxed();
     return out;
 }

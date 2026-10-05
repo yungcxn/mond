@@ -1,0 +1,30 @@
+# an arm is redundant as soon as the arms before it cover every value it matches
+variant V = +(A, B(u8), C(u8 x, u8 y));
+variant W = +(X(V), Y);
+variant Lo = +(L1, L2);
+variant Hi = +(H1, H2);
+type R = *(u8 a, bool b);
+
+fun f = (V v, W w, u8 n, i8 s, R r, Lo || Hi u, bool t) {
+    match v { V.B(_) => 0, V.B(4) => 1, _ => 2 } #! redundant_match_arm
+    match v { V.C(1, _) => 0, V.C(_, 2) => 1, V.C(1, 2) => 2, _ => 3 } #! redundant_match_arm
+    match n { 0..=5 => 0, 1 | 2 => 1, _ => 2 } #! redundant_match_arm
+    match n { 0..=2 => 0, 3..=9 => 1, 3 => 2, _ => 3 } #! redundant_match_arm
+    match n { ..<128 => 0, 128.. => 1, 200 => 2 } #! redundant_match_arm
+    match s { ..=-1 => 0, 0..=127 => 1, -128 => 2 } #! redundant_match_arm
+    match w { W.X(_) => 0, W.X(V.B(1)) => 1, W.Y => 2 } #! redundant_match_arm
+    match w { W.X(V.A) => 0, W.X(V.B(_)) => 1, W.X(V.C(_, _)) => 2, W.X(x) => 3, W.Y => 4 } #! redundant_match_arm
+    match r { R(_, true) => 0, R(_, false) => 1, R(3, _) => 2 } #! redundant_match_arm
+    match u { Lo.L1 => 0, Lo.L2 => 1, Lo low => 2, _ => 3 } #! redundant_match_arm
+    match u { Hi high => 0, Hi.H2 => 1, _ => 2 } #! redundant_match_arm
+    match t { true | false => 0, false => 1 } #! redundant_match_arm
+    # refined arms before general ones, overlapping but not covered arms stay quiet
+    match v { V.B(4) => 0, V.B(_) => 1, _ => 2 }
+    match v { V.C(1, _) => 0, V.C(_, 2) => 1, V.C(2, 1) => 2, _ => 3 }
+    match n { 0..=5 => 0, 3..=9 => 1, _ => 2 }
+    match s { ..=-2 => 0, 1..=127 => 1, -1 | 0 => 2 }
+    match w { W.X(V.B(1)) => 0, W.X(_) => 1, W.Y => 2 }
+    match r { R(3, true) => 0, R(_, false) => 1, R(4, _) => 2, _ => 3 }
+}
+
+$main = () {}

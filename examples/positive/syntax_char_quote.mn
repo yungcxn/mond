@@ -1,0 +1,8 @@
+# an escaped quote is a char of its own, `'\'` alone stays an error (lex_char_escape_quote)
+stc u8 QUOTE = '\''; #= QUOTE 39
+stc []u8 QS = "\'"; #: QS [1]u8
+stc u8 Q1 = QS[0]; #= Q1 39
+
+$main = () {
+    u8 q = '\'';
+}

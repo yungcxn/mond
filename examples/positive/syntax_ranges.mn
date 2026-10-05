@@ -1,0 +1,25 @@
+# a prefix operator does not take a range into its operand, the upper bound takes arithmetic
+stc []i32 NEG = stcfor i in -1..=1: i; #= NEG [-1, 0, 1]
+stc []u32 UPTO_INCL = stcfor ..=2: $it; #= UPTO_INCL [0, 1, 2]
+stc []u32 UPTO_EXCL = stcfor ..<2: $it; #= UPTO_EXCL [0, 1]
+stc []u32 ARITH = stcfor i in 1..<2 + 2: i * 10; #= ARITH [10, 20, 30]
+stc []u32 BOTH = stcfor i in (1 + 1)..=2 * 2: i; #= BOTH [2, 3, 4]
+stc []u32 EMPTY = stcfor i in 3..<3: i; #= EMPTY []
+stc []u32 ONE = stcfor i in 3..=3: i; #= ONE [3]
+stc []u32 OPEN = stcloop { brk; }; #= OPEN []
+
+stcfun open_end = () -> u32 {
+    mut u32 s = 0;
+    for i in 5.. {
+        if i > 7: brk;
+        s += i;
+    }
+    ret s;
+}
+
+stc u32 OE = open_end(); #= OE 18
+
+$main = () {
+    r = 0..<4; #: r []u32
+    for i in 1..=3 {}
+}

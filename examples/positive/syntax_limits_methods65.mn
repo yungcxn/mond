@@ -1,0 +1,77 @@
+# a type body with 65 member functions
+type T = *(u32 x) !{
+    fun m0 = () -> u32: ret 0;
+    fun m1 = () -> u32: ret 1;
+    fun m2 = () -> u32: ret 2;
+    fun m3 = () -> u32: ret 3;
+    fun m4 = () -> u32: ret 4;
+    fun m5 = () -> u32: ret 5;
+    fun m6 = () -> u32: ret 6;
+    fun m7 = () -> u32: ret 7;
+    fun m8 = () -> u32: ret 8;
+    fun m9 = () -> u32: ret 9;
+    fun m10 = () -> u32: ret 10;
+    fun m11 = () -> u32: ret 11;
+    fun m12 = () -> u32: ret 12;
+    fun m13 = () -> u32: ret 13;
+    fun m14 = () -> u32: ret 14;
+    fun m15 = () -> u32: ret 15;
+    fun m16 = () -> u32: ret 16;
+    fun m17 = () -> u32: ret 17;
+    fun m18 = () -> u32: ret 18;
+    fun m19 = () -> u32: ret 19;
+    fun m20 = () -> u32: ret 20;
+    fun m21 = () -> u32: ret 21;
+    fun m22 = () -> u32: ret 22;
+    fun m23 = () -> u32: ret 23;
+    fun m24 = () -> u32: ret 24;
+    fun m25 = () -> u32: ret 25;
+    fun m26 = () -> u32: ret 26;
+    fun m27 = () -> u32: ret 27;
+    fun m28 = () -> u32: ret 28;
+    fun m29 = () -> u32: ret 29;
+    fun m30 = () -> u32: ret 30;
+    fun m31 = () -> u32: ret 31;
+    fun m32 = () -> u32: ret 32;
+    fun m33 = () -> u32: ret 33;
+    fun m34 = () -> u32: ret 34;
+    fun m35 = () -> u32: ret 35;
+    fun m36 = () -> u32: ret 36;
+    fun m37 = () -> u32: ret 37;
+    fun m38 = () -> u32: ret 38;
+    fun m39 = () -> u32: ret 39;
+    fun m40 = () -> u32: ret 40;
+    fun m41 = () -> u32: ret 41;
+    fun m42 = () -> u32: ret 42;
+    fun m43 = () -> u32: ret 43;
+    fun m44 = () -> u32: ret 44;
+    fun m45 = () -> u32: ret 45;
+    fun m46 = () -> u32: ret 46;
+    fun m47 = () -> u32: ret 47;
+    fun m48 = () -> u32: ret 48;
+    fun m49 = () -> u32: ret 49;
+    fun m50 = () -> u32: ret 50;
+    fun m51 = () -> u32: ret 51;
+    fun m52 = () -> u32: ret 52;
+    fun m53 = () -> u32: ret 53;
+    fun m54 = () -> u32: ret 54;
+    fun m55 = () -> u32: ret 55;
+    fun m56 = () -> u32: ret 56;
+    fun m57 = () -> u32: ret 57;
+    fun m58 = () -> u32: ret 58;
+    fun m59 = () -> u32: ret 59;
+    fun m60 = () -> u32: ret 60;
+    fun m61 = () -> u32: ret 61;
+    fun m62 = () -> u32: ret 62;
+    fun m63 = () -> u32: ret 63;
+    fun m64 = () -> u32: ret 64;
+}
+stcfun call = () -> u32 {
+    T t = T(x = 0);
+    ret t.m0() + t.m63() * 100 + t.m64() * 10000;
+}
+stc u32 R = call(); #= R 646300
+$main = () {
+    T t = T(x = 0);
+    r = t.m64(); #: r u32
+}

@@ -1,0 +1,53 @@
+fun total = (&[]u32 a) -> u32 {
+    mut u32 s = 0;
+    for x in a: s += x;
+    ret s;
+}
+fun fill = (*[]u8 a, u8 v) { for i in 0..<a.$len: a[i] = v; }
+fun copy_in = ([]u16 a) -> u64: ret a.$len;
+fun two = (&[]u8 a, &[]u8 b) -> u64: ret a.$len * 100 + b.$len;
+
+fun f = () {
+    [3]u32 w = [1, 2, 3];
+    [3]u8 b = [1, 2, 3];
+    mut [3]u8 mb = [1, 2, 3];
+    [3]i32 signed = [1, 2, 3];
+    u32 a1 = total(w.&);
+    u32 a2 = total(b.&); #! type_mismatch
+    u32 a3 = total(signed.&); #! type_mismatch
+    u32 a4 = total(w); #! type_mismatch
+    u32 a5 = total(5); #! type_mismatch
+    fill(mb.&, 0);
+    fill(b.&, 0); #! type_mismatch
+    fill(mb.&, 300); #! type_mismatch
+    u64 c1 = copy_in([1, 2, 3]);
+    u64 c2 = copy_in(b); #! type_mismatch
+    u64 c3 = copy_in(b.&); #! type_mismatch
+    u64 t1 = two(b.&, "hello".&);
+    u64 t2 = two(b.&, w.&); #! type_mismatch
+    u64 t3 = two(b.&); #! wrong_arity
+    u32 e = total([].&);
+}
+
+fun pick = ([]u16 a) -> u64: ret a.$len;
+fun pick = (bool b) -> u64: ret 0;
+
+# a failed argument must not fix the length of a length-generic parameter for later calls
+fun after_errors = () {
+    u64 p1 = pick("abc"); #! no_matching_overload
+    u64 p2 = pick([1, 2, 3, 4]);
+    u64 p3 = pick([1, 2]);
+    u64 p4 = pick(true);
+}
+
+stcfun lens = () -> u64 {
+    [2]u8 ab = [1, 2];
+    [5]u32 five = [5, 6, 7, 8, 9];
+    ret two(ab.&, "xyz".&) * 1000 + total(five.&);
+}
+
+stc u64 LE = lens(); #= LE 203035
+stc u64 CI = copy_in([1, 2, 3, 4]); #= CI 4
+stc u64 CJ = copy_in([9]); #= CJ 1
+
+$main = () {}

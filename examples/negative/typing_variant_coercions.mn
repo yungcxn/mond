@@ -1,0 +1,46 @@
+# implicit conversions into variants, unions and traits
+variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+variant Maybe = +(Just(i32), Nothing);
+variant Many = +(One(u8), Two(u8, u8));
+variant Dir = +(N, S);
+variant Turn = +(L, R);
+variant Pair = +(Both(u8 a, u8 b), Neither);
+trait Named = !{ fun name = () -> u8; }
+type Cat = *(u8 id) implof Named !{ fun name = () -> u8: ret self.id; }
+type Rock = *(u8 id);
+
+fun take_named = (&Named n) -> u8: ret n.name();
+fun take_any = (Dir || Turn x) {}
+
+fun f = (u8 b, u16 w, i32 n, Cat c, Rock r) {
+    Opt8 o1 = b;
+    Opt8 o2 = 7;
+    Opt8 o3 = Opt8.None;
+    Opt8 o4 = Opt8.Some(b);
+    Opt8 o5 = w; #! type_mismatch
+    Opt8 o6 = 256; #! type_mismatch
+    Maybe m1 = n;
+    Maybe m2 = b;
+    Maybe m3 = Maybe.Nothing;
+    Maybe m4 = true; #! type_mismatch
+    Many y1 = b; #! type_mismatch
+    Pair p1 = b; #! type_mismatch
+    Pair p2 = Pair.Both(1, 2);
+    Dir d1 = Dir.N;
+    Dir d2 = Turn.L; #! type_mismatch
+    Dir || Turn u1 = Dir.S;
+    Dir || Turn u2 = Turn.R;
+    Dir || Turn u3 = d1;
+    Dir u4 = u1; #! type_mismatch
+    Dir || Turn u5 = Opt8.None; #! type_mismatch
+    take_any(d1);
+    take_any(Turn.L);
+    take_any(o3); #! type_mismatch
+    Named t1 = c;
+    Named t2 = r; #! type_mismatch
+    u8 t3 = take_named(c.&);
+    u8 t4 = take_named(r.&); #! type_mismatch
+    Cat t5 = t1; #! type_mismatch
+}
+
+$main = () {}

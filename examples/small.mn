@@ -226,7 +226,6 @@ fun handle_event = (Event e): match e {
 fun handle_anyfixed = (AnyFixed32 a): match a {
     AnyFixed32.AsInt(i) => print("Int: %d", i),
     AnyFixed32.AsFloat(f) => print("Float: %f", f),
-    AnyFixed32.AsBits(bits) => print("Bits..."),
     AnyFixed32 non_specific => print("Non-specific: %d", non_specific),  # homogenic -> storable
 }
 
@@ -385,7 +384,7 @@ $main = () {
     myvar = if 2 + 3 == 5: do print("2 + 3 == 5") else: 42;                   # do for unit -> runit
 
     # stcif: condition is static, evaluated at compile-time only true compiles
-    i32 myvar = stcif 1 == 1: 42 else: "illegal never-compiled value";
+    i32 stcif_var = stcif 1 == 1: 42 else: "illegal never-compiled value";
 
 
     # match unassigned

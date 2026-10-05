@@ -1,0 +1,15 @@
+# a local type sees the types and stcfuns of its function, never its locals
+fun g = () -> u32 {
+    u32 k = 3;
+    stc u32 S = 4;
+    type T = *(u32 v = k) !{ #! undefined_name
+        fun get = () -> u32: ret self.v + k + S; #! undefined_name undefined_name
+    }
+    trait Tr = !{ fun need = () -> u32; }
+    type U = *(u32 w) implof Tr !{
+        fun need = () -> u32: ret self.w;
+        fun mk = () -> T: ret T(v = 1);
+    }
+    ret T(v = 1).get() + U(w = 2).need();
+}
+$main = () {}

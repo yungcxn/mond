@@ -1,0 +1,50 @@
+# f32 rounds every result to single precision, f64 keeps double
+stc f32 S1 = 0.1 + 0.2; #= S1 0.30000001192092896
+stc bool S2 = 0.1 + 0.2 == 0.3; #= S2 true
+stc f64 D1 = 0.1;
+stc f64 D2 = 0.2;
+stc f64 D3 = D1 + D2; #= D3 0.30000000000000004
+stc bool D4 = D1 + D2 == 0.3; #= D4 false
+stc f32 BIG = 16777216.0 + 1.0; #= BIG 16777216
+stc f64 BIG64 = 9007199254740992.0 + 1.0; #= BIG64 9007199254740992
+stc f32 THIRD = 1.0 / 3.0; #= THIRD 0.3333333432674408
+stc f64 THIRD64 = D1 / 0.3; #= THIRD64 0.33333333333333337
+
+# division by zero gives an infinity, not an error
+stc f64 INF = 1.0 / 0.0; #= INF inf
+stc f64 NINF = -1.0 / 0.0; #= NINF -inf
+stc bool ORD = NINF < -1000000.0 and INF > 1000000.0; #= ORD true
+stc f64 NAN = 0.0 / 0.0;
+stc bool NEQ = NAN == NAN; #= NEQ false
+stc bool NLT = NAN < 1.0 or NAN > 1.0 or NAN == 1.0; #= NLT false
+
+# float to int truncates toward zero and saturates, nan becomes zero
+stc i32 T1 = 2.9 as i32; #= T1 2
+stc i32 T2 = -2.9 as i32; #= T2 -2
+stc u8 T3 = 255.9 as u8; #= T3 255
+stc u8 T4 = 256.0 as u8; #= T4 255
+stc u8 T5 = -0.5 as u8; #= T5 0
+stc i8 T6 = -1000.0 as i8; #= T6 -128
+stc i32 T7 = INF as i32; #= T7 2147483647
+stc i32 T8 = NINF as i32; #= T8 -2147483648
+stc i64 T9 = NAN as i64; #= T9 0
+stc u64 T10 = INF as u64; #= T10 18446744073709551615
+
+# int to float rounds to the nearest representable value
+stc f32 F1 = 16777217 as f32; #= F1 16777216
+stc f32 F2 = 16777219 as f32; #= F2 16777220
+stc f64 F3 = -9223372036854775808 as f64; #= F3 -9223372036854776000
+stc f64 F4 = 18446744073709551615 as f64; #= F4 18446744073709552000
+stc f16 H1 = 2049 as f16; #= H1 2048
+stc f16 H2 = 0.1 as f16; #= H2 0.0999755859375
+stc f64 W1 = (1.0 / 3.0) as f64; #= W1 0.3333333432674408
+stc f32 N1 = THIRD64 as f32; #= N1 0.3333333432674408
+
+# mixed with integers the float side decides
+stc f32 M1 = 1 + 0.5; #= M1 1.5
+stc f64 M2 = D1 * 10; #= M2 1
+stc bool M3 = 3 > 2.5; #= M3 true
+stc M4 = 1 + 0.5; #: M4 f32
+stc M5 = 0.5 + 1; #: M5 f32
+
+$main = () {}

@@ -1,0 +1,25 @@
+type P = *(i32 x, i32 y);
+type D = *(u8 a, u8 b = 1);
+type M = *(mut i32 v, i32 c) !{ fun get = () -> i32: ret self.v; }
+
+fun f = () {
+    P d = P(1, x = 2); #! wrong_arity
+    P e = P(x = 1, w = 2); #! unknown_named_argument
+    P g = P(y = 2); #! wrong_arity
+    P h = P(1, "s"); #! type_mismatch
+    D i = D(); #! wrong_arity
+    D j = D(b = 2); #! wrong_arity
+    D k = D(1);
+    D l = D(256); #! type_mismatch
+    i32 m = P.x; #! unknown_member
+    i32 n = P(1, 2).z; #! unknown_member
+    P o = P(1, 2) with (z = 3); #! unknown_named_argument
+    P q = P(1, 2) with (x = 1.5); #! type_mismatch
+    i32 s = M.get(); #! wrong_arity
+    i32 t = M(1, 2).get();
+    i32 u = P(1, 2); #! type_mismatch
+    P v = 5; #! type_mismatch
+    D w = P(1, 2); #! type_mismatch
+}
+
+$main = () {}

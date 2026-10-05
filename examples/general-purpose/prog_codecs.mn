@@ -1,0 +1,171 @@
+# text codecs: rfc 4648 base32, hex and percent encoding, each round tripped
+
+stc [32]u8 B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+stc [16]u8 HEX = "0123456789ABCDEF";
+
+type Buf = *(mut [64]u8 data, mut u32 len = 0) !{
+    fun put = (u8 c) {
+        self.data[self.len] = c;
+        self.len += 1;
+    }
+    fun same = (&[]u8 want) -> bool {
+        if self.len as u64 != want.$len: ret false;
+        for i in 0..<self.len: if self.data[i] != want.*[i]: ret false;
+        ret true;
+    }
+}
+
+fun empty = () -> Buf {
+    mut Buf b = Buf(data = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    ret b;
+}
+
+# five bit groups through a bit accumulator, padded to blocks of eight
+fun base32 = (&[]u8 src) -> Buf {
+    mut Buf out = empty();
+    mut u32 acc = 0;
+    mut u32 bits = 0;
+    for c in src.* {
+        acc = (acc << 8 | c as u32) & 0xFFFF;
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            out.put(B32[(acc >> bits) & 31]);
+        }
+    }
+    if bits > 0: out.put(B32[(acc << (5 - bits)) & 31]);
+    while out.len % 8 != 0: out.put('=');
+    ret out;
+}
+
+fun b32_value = (u8 c) -> i32 {
+    if c >= 'A' and c <= 'Z': ret (c - 'A') as i32;
+    if c >= '2' and c <= '7': ret (c - '2') as i32 + 26;
+    ret -1;
+}
+
+# decodes the first n bytes, so a buffer filled only in part can be decoded in place
+fun unbase32_n = (&[]u8 src, u64 n) -> Buf {
+    mut Buf out = empty();
+    mut u32 acc = 0;
+    mut u32 bits = 0;
+    for i in 0..<n {
+        u8 c = src.*[i];
+        if c == '=': brk;
+        i32 v = b32_value(c);
+        if v < 0: ret out;
+        acc = (acc << 5 | v as u32) & 0xFFFF;
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            out.put(((acc >> bits) & 0xFF) as u8);
+        }
+    }
+    ret out;
+}
+
+fun unbase32 = (&[]u8 src) -> Buf: ret unbase32_n(src, src.$len);
+
+fun hex = (&[]u8 src) -> Buf {
+    mut Buf out = empty();
+    for c in src.* {
+        out.put(HEX[c >> 4]);
+        out.put(HEX[c & 15]);
+    }
+    ret out;
+}
+
+fun nibble = (u8 c) -> u8: ret if c >= 'a': c - 'a' + 10 else: if c >= 'A': c - 'A' + 10 else: c - '0';
+
+fun unhex = (&[]u8 src) -> Buf {
+    mut Buf out = empty();
+    mut u64 i = 0;
+    while i + 1 < src.$len, i += 2: out.put(nibble(src.*[i]) << 4 | nibble(src.*[i + 1]));
+    ret out;
+}
+
+fun unreserved = (u8 c) -> bool: ret c >= 'a' and c <= 'z' or c >= 'A' and c <= 'Z' or c >= '0' and c <= '9' or c == '-' or c == '_' or c == '.' or c == '~';
+
+fun percent = (&[]u8 src) -> Buf {
+    mut Buf out = empty();
+    for c in src.* {
+        if unreserved(c) {
+            out.put(c);
+            cont;
+        }
+        out.put('%');
+        out.put(HEX[c >> 4]);
+        out.put(HEX[c & 15]);
+    }
+    ret out;
+}
+
+fun unpercent = (&[]u8 src) -> Buf {
+    mut Buf out = empty();
+    mut u64 i = 0;
+    while i < src.$len {
+        u8 c = src.*[i];
+        if c == '%' and i + 2 < src.$len {
+            out.put(nibble(src.*[i + 1]) << 4 | nibble(src.*[i + 2]));
+            i += 3;
+        } else {
+            out.put(if c == '+': ' ' else: c);
+            i += 1;
+        }
+    }
+    ret out;
+}
+
+# the rfc 4648 test vectors
+stcfun b32_vectors = () -> u32 {
+    mut u32 ok = 0;
+    if base32("".&).same("".&): ok += 1;
+    if base32("f".&).same("MY======".&): ok += 1;
+    if base32("fo".&).same("MZXQ====".&): ok += 1;
+    if base32("foo".&).same("MZXW6===".&): ok += 1;
+    if base32("foob".&).same("MZXW6YQ=".&): ok += 1;
+    if base32("fooba".&).same("MZXW6YTB".&): ok += 1;
+    if base32("foobar".&).same("MZXW6YTBOI======".&): ok += 1;
+    ret ok;
+}
+
+stcfun b32_round = () -> u32 {
+    mut u32 ok = 0;
+    if unbase32("MZXW6YTBOI======".&).same("foobar".&): ok += 1;
+    if unbase32("MY======".&).same("f".&): ok += 1;
+    Buf e = base32("\x00\xFF\x10 mond!".&);
+    if unbase32_n(e.data.&, e.len as u64).same("\x00\xFF\x10 mond!".&): ok += 1;
+    if unbase32("MZ1W".&).len == 1: ok += 1;
+    ret ok;
+}
+
+stcfun hex_round = () -> u32 {
+    mut u32 ok = 0;
+    if hex("\xDE\xAD\xBE\xEF".&).same("DEADBEEF".&): ok += 1;
+    if unhex("deadBEEF".&).same("\xDE\xAD\xBE\xEF".&): ok += 1;
+    if hex("".&).len == 0: ok += 1;
+    if unhex("abc".&).len == 1: ok += 1;
+    ret ok;
+}
+
+stcfun pct_round = () -> u32 {
+    mut u32 ok = 0;
+    if percent("a b&c=d/e~f".&).same("a%20b%26c%3Dd%2Fe~f".&): ok += 1;
+    if unpercent("a%20b%26c%3Dd%2Fe~f".&).same("a b&c=d/e~f".&): ok += 1;
+    if unpercent("x+y%41".&).same("x yA".&): ok += 1;
+    if percent("\xC3\xA9".&).same("%C3%A9".&): ok += 1;
+    ret ok;
+}
+
+stc u32 B32V = b32_vectors(); #= B32V 7
+stc u32 B32R = b32_round(); #= B32R 4
+stc u32 HEXR = hex_round(); #= HEXR 4
+stc u32 PCTR = pct_round(); #= PCTR 4
+stc u32 B32LEN = base32("12345678901234567890".&).len; #= B32LEN 32
+
+$main = () -> u32 {
+    e = base32("hello".&); #: e *([64]u8 data, u32 len)
+    d = unbase32_n(e.data.&, e.len as u64);
+    ret d.len + hex("ab".&).len + percent("a b".&).len + (if d.same("hello".&): 1 else: 0);
+}

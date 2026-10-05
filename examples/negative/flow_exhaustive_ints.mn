@@ -1,0 +1,22 @@
+fun u8_full = (u8 x) -> u8: ret match x { 0..=127 => 0, 128..=255 => 1 }
+fun u8_gap = (u8 x) -> u8: ret match x { 0..=126 => 0, 128..=255 => 1 } #! non_exhaustive_match
+fun u8_lt = (u8 x) -> u8: ret match x { ..<100 => 0, 100.. => 1 }
+fun u8_last = (u8 x) -> u8: ret match x { ..=254 => 0 } #! non_exhaustive_match
+fun u8_last_ok = (u8 x) -> u8: ret match x { ..=254 => 0, 255 => 1 }
+fun i8_full = (i8 x) -> u8: ret match x { -128..<0 => 0, 0 => 1, 1..=127 => 2 }
+fun i8_min = (i8 x) -> u8: ret match x { -127..=127 => 0 } #! non_exhaustive_match
+fun i8_min_ok = (i8 x) -> u8: ret match x { -127..=127 => 0, -128 => 1 }
+fun overlap = (u8 x) -> u8: ret match x { 0..=200 => 0, 100..=255 => 1 }
+fun singles = (bool b) -> u8: ret match b { false => 0, true => 1 }
+fun u16_full = (u16 x) -> u8: ret match x { 0 => 0, 1..=65534 => 1, 65535 => 2 }
+fun u64_full = (u64 x) -> u8: ret match x { 0 => 0, 1.. => 1 }
+fun i64_full = (i64 x) -> u8: ret match x { ..<0 => 0, 0.. => 1 }
+fun i32_hole = (i32 x) -> u8: ret match x { ..<0 => 0, 1.. => 1 } #! non_exhaustive_match
+fun excl_hole = (u8 x) -> u8: ret match x { 0..<10 => 0, 11..=255 => 1 } #! non_exhaustive_match
+fun excl_edge = (u8 x) -> u8: ret match x { 0..<10 => 0, 10..=255 => 1 }
+fun chars = (u8 c) -> u8: ret match c { 'a'..='z' => 0 } #! non_exhaustive_match
+fun f32_needs_wild = (f32 x) -> u8: ret match x { 0.0 => 0 } #! non_exhaustive_match
+fun f32_wild = (f32 x) -> u8: ret match x { 0.0 => 0, _ => 1 }
+fun str_wild = ([2]u8 s) -> u8: ret match s { "ab" => 0, _ => 1 }
+fun binder_all = (u8 x) -> u8: ret match x { 3 => 0, y => y }
+$main = () {}

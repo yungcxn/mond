@@ -1,0 +1,19 @@
+# the fields of a case payload are members of a value of that case
+variant Shape = +(Rect(u32 w, u32 h), Circle(u32 r), Dot);
+
+stcfun width = () -> u32 {
+    Shape.Rect r = Shape.Rect(3, 4);
+    ret r.w * 10 + r.h;
+}
+stcfun radius = () -> u32: ret Shape.Circle(r = 9).r;
+
+stc u32 W = width(); #= W 34
+stc u32 R = radius(); #= R 9
+
+fun runtime = (Shape.Rect r) -> u32: ret r.w + r.h;
+
+$main = () {
+    c = Shape.Circle(2); #: c +(Rect, Circle, Dot).Circle
+    r = c.r; #: r u32
+    x = runtime(Shape.Rect(1, 2)); #: x u32
+}

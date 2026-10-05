@@ -1,0 +1,2 @@
+# `\x` takes exactly two hex digits
+u8 c = '\x4'; #! LexingError_InvalidEscape

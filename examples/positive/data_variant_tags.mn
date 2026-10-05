@@ -1,0 +1,36 @@
+variant Seq = +(A, B = 10, C, D = 3, E) tagof u8;
+variant Expr = +(A = 2 + 3, B = 1 << 4, C) tagof u16;
+variant Hex = +(A = 0x10, B = 0b11, C = 0o17) tagof u8;
+variant Cased = +(Lo(u8) = 7, Hi(u16), Off) tagof u8;
+
+stc u8 SA = Seq.A.$tag; #= SA 0
+stc u8 SB = Seq.B.$tag; #= SB 10
+stc u8 SC = Seq.C.$tag; #= SC 11
+stc u8 SD = Seq.D.$tag; #= SD 3
+stc u8 SE = Seq.E.$tag; #= SE 4
+stc u16 EA = Expr.A.$tag; #= EA 5
+stc u16 EB = Expr.B.$tag; #= EB 16
+stc u16 EC = Expr.C.$tag; #= EC 17
+stc []u8 HX = [Hex.A.$tag, Hex.B.$tag, Hex.C.$tag]; #= HX [16, 3, 15]
+stc u8 CL = Cased.Lo.$tag; #= CL 7
+stc u8 CH = Cased.Hi.$tag; #= CH 8
+stc u8 CO = Cased.Off.$tag; #= CO 9
+
+stcfun runtime_tag = (Cased c) -> u8: ret c.$tag;
+stc u8 RT = runtime_tag(Cased.Hi(300)); #= RT 8
+stcfun as_int = (Seq s) -> u8: ret s as u8;
+stc u8 AI = as_int(Seq.C); #= AI 11
+
+variant V64 = +(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14, C15, C16, C17, C18, C19, C20, C21, C22, C23, C24, C25, C26, C27, C28, C29, C30, C31, C32, C33, C34, C35, C36, C37, C38, C39, C40, C41, C42, C43, C44, C45, C46, C47, C48, C49, C50, C51, C52, C53, C54, C55, C56, C57, C58, C59, C60, C61, C62, C63);
+stc u64 S64 = sizeof V64; #= S64 1
+stc u8 L64 = V64.C63.$tag; #= L64 63
+variant Top = +(A = 254, B) tagof u8;
+stc u8 TB = Top.B.$tag; #= TB 255
+variant Wide = +(A = 255, B) tagof u16;
+stc u16 WB = Wide.B.$tag; #= WB 256
+stc u64 SW = sizeof Wide; #= SW 2
+
+$main = () {
+    t = Seq.E.$tag; #: t u8
+    w = Expr.B.$tag; #: w u16
+}

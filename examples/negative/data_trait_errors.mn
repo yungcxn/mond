@@ -1,0 +1,32 @@
+trait Addable = !{ fun add = ((typeof self) other) -> u32; }
+trait Base = !{ fun id = () -> u32; }
+trait Sub = implof Base !{ fun extra = () -> u32; }
+type Rec = *(u8 v);
+
+type SelfOk = *(u32 v) implof Addable !{ fun add = (SelfOk o) -> u32: ret o.v; }
+type SelfBad = *(u32 v) implof Addable !{ fun add = (SelfOk o) -> u32: ret o.v; } #! trait_signature_mismatch
+type SelfPtr = *(u32 v) implof Addable !{ fun add = (&SelfPtr o) -> u32: ret 1; } #! trait_signature_mismatch
+type MissDeep = *(u8 v) implof Sub !{ fun extra = () -> u32: ret 1; } #! trait_member_missing
+type BothMiss = *(u8 v) implof Sub !{ } #! trait_member_missing trait_member_missing
+type Twice = *(u8 v) implof Base, Base !{ fun id = () -> u32: ret 1; }
+variant VMiss = +(A, B) implof Base !{ fun other = () {} } #! trait_member_missing
+variant VOk = +(A, B) implof Base !{ fun id = () -> u32: ret 2; }
+
+fun use_trait = (Base b) -> u32: ret b.id();
+fun use_ptr = (*Base b) -> u32: ret b.id();
+
+fun f = () {
+    u32 a = use_trait(Rec(1)); #! type_mismatch
+    u32 b = use_trait(VOk.A);
+    Twice t = Twice(1);
+    u32 c = use_ptr(t.&); #! type_mismatch
+    mut Twice mt = Twice(1);
+    u32 d = use_ptr(mt.&);
+    Base e = Rec(1); #! type_mismatch
+    Base g = t;
+    u32 h = g.extra(); #! unknown_member
+    u32 i = Base.id(); #! wrong_arity
+    Sub j = t; #! type_mismatch
+}
+
+$main = () {}

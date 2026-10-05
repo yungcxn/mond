@@ -1,0 +1,32 @@
+type Rec = *(i32 a);
+variant V = +(A, B(u8));
+trait T = !{ fun m = (); }
+fun add = (i32 a, i32 b) -> i32: ret a + b;
+fun mk = (): (i32 x): x;
+
+fun f = (i32 n, Rec r, bool b, [2]u8 arr, &i32 p, (i32) -> i32 g) {
+    n(); #! not_callable
+    r(1); #! not_callable
+    b(); #! not_callable
+    arr(0); #! not_callable
+    p(); #! not_callable
+    1(); #! not_callable
+    "s"(); #! not_callable
+    add(1, 2)(3); #! not_callable
+    g(); #! wrong_arity
+    g(1, 2); #! wrong_arity
+    g("s"); #! type_mismatch
+    g(true); #! type_mismatch
+    mk()(1, 2); #! wrong_arity
+    mk()(); #! wrong_arity
+    i32 ok = mk()(5);
+    bool wrong = mk()(5); #! type_mismatch
+    u32 w = g(1); #! type_mismatch
+    V.A(); 
+    V.B(1, 2); #! wrong_arity
+    V.B(); #! wrong_arity
+    undefined_fn(1); #! undefined_name
+    add(undefined_arg, 1); #! undefined_name
+}
+
+$main = () {}

@@ -1,0 +1,106 @@
+variant V = +(A, B, C);
+type R = *(mut i32 x) !{ $deinit = () {} }
+
+fun ifs = (bool c, bool d) {
+    mut u32 a;
+    if c { if d: a = 1 else: a = 2; } else: a = 3;
+    u32 a1 = a;
+    mut u32 b;
+    if c { if d: b = 1; } else: b = 3;
+    u32 b1 = b; #! use_before_initialization
+    mut u32 e;
+    if c: e = 1 else: ret;
+    u32 e1 = e;
+    mut u32 f;
+    if c { f = 1; } else { if d: ret else: f = 2; }
+    u32 f1 = f;
+}
+
+fun reported_once = (bool c) {
+    mut u32 a;
+    u32 x = a; #! use_before_initialization
+    u32 y = a;
+}
+
+fun matches = (V v) {
+    mut u32 a;
+    match v { V.A => a = 1, V.B => a = 2, V.C => ret }
+    u32 a1 = a;
+    mut u32 b;
+    match v { V.A => b = 1, _ => {} }
+    u32 b1 = b; #! use_before_initialization
+    mut u32 c;
+    match v { V.A => c = 1, V.B => c = 2, V.C => loop {} }
+    u32 c1 = c;
+}
+
+fun loops = (bool c, u32 n) {
+    mut u32 a;
+    while c { a = 1; }
+    u32 a1 = a; #! use_before_initialization
+    mut u32 b;
+    while true { b = 1; brk; }
+    u32 b1 = b; #! use_before_initialization
+    mut u32 d;
+    loop { if c: brk; d = 1; }
+    u32 d1 = d; #! use_before_initialization
+    mut u32 e;
+    loop { e = 1; if c: brk; }
+    u32 e1 = e;
+    mut u32 g;
+    for i in 0..<n { g = i; }
+    u32 g1 = g; #! use_before_initialization
+    mut u32 h;
+    loop { if c { h = 1; brk; } if n > 3 { h = 2; brk; } }
+    u32 h1 = h;
+    mut u32 k;
+    loop { if c { k = 1; brk; } if n > 3: brk; }
+    u32 k1 = k; #! use_before_initialization
+}
+
+fun logic = (bool c) {
+    mut u32 a;
+    if c and { a = 1; true; } { u32 inside = a; }
+    mut u32 b;
+    if c or { b = 1; true; } { u32 inside = b; } #! use_before_initialization
+    mut u32 d;
+    if c or { d = 1; false; } {} else { u32 inside = d; }
+    mut u32 e;
+    if c and { e = 1; true; } {} else { u32 inside = e; } #! use_before_initialization
+    mut u32 g;
+    bool ok = ({ g = 1; true; }) and c;
+    u32 g1 = g;
+}
+
+fun writes = () {
+    mut u32 a;
+    p = a.&;
+    u32 a1 = a;
+    mut u32 b;
+    b = b + 1; #! use_before_initialization
+    mut u32 d;
+    d++; #! use_before_initialization
+    mut [3]u32 arr;
+    u32 x = arr[0];
+    mut R r;
+    i32 y = r.x;
+    mut f32 fl;
+    f32 z = -fl; #! use_before_initialization
+}
+
+fun deinits = (R r0) {
+    mut R r = r0;
+    deinit r;
+    R s = r; #! use_before_initialization
+    r = r0;
+    R t = r;
+}
+
+fun nested = () {
+    mut u32 a;
+    fun read_a = () -> u32: ret a; #! use_before_initialization
+    a = 2;
+    fun later = () -> u32: ret a;
+}
+
+$main = () {}

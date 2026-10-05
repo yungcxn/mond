@@ -1,0 +1,18 @@
+# integer literal spellings
+stc u32 C = 08; #= C 8
+stc u32 F = 1__0; #= F 10
+stc u32 G = 0b1010_1010; #= G 170
+stc u32 H = 0xab; #= H 171
+stc u32 I = 0XAB; #= I 171
+stc u32 J = 0B11; #= J 3
+stc u32 K = 0O17; #= K 15
+stc u64 BIG = 0xFFFF_FFFF_FFFF_FFFF; #= BIG 18446744073709551615
+stc u64 BIN = 0b1000000000000000000000000000000000000000000000000000000000000000; #= BIN 9223372036854775808
+stc i64 MIN = -0x8000_0000_0000_0000; #= MIN -9223372036854775808
+stc i16 NH = -0x8000; #= NH -32768
+stc f32 L = 1.; #= L 1
+stc f64 FD = 0.5; #= FD 0.5
+stc f64 FE = 1_000.000_5; #= FE 1000.0005
+stc u8 Z = 000; #= Z 0
+
+$main = () {}

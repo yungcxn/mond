@@ -1,0 +1,1 @@
+$main = (&[]&u8 argv, i32 argc) {} #! type_mismatch

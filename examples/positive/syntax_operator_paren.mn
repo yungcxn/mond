@@ -1,0 +1,9 @@
+# `*(` and `+(` after an operand are an operator followed by a group, not a type or variant start
+stc i32 MUL = 2 *(3 + 4); #= MUL 14
+stc i32 ADD = 2 +(3); #= ADD 5
+stc i32 BOTH = 1 +(2) *(3); #= BOTH 7
+
+$main = () {
+    i32 a = 3;
+    i32 b = a *(a + 1); #: b i32
+}

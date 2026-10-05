@@ -1,0 +1,10 @@
+# a type that must contain itself
+fun a1 = (): ret [a1(), a1()]; #! infinite_type
+fun a2 = (): ret a2; #! infinite_type
+fun a3 = (): ret a3().&; #! infinite_type
+fun a5 = (u32 n): ret if n == 0: [a6(n)] else: [a6(n)];
+fun a6 = (u32 n): ret a5(n); #! infinite_type
+fun fine = (u32 n) -> [1]u32: ret [n];
+fun ok = (u32 n): ret if n == 0: 0 else: ok(n - 1) + 1; #: ok (u32) -> u32
+
+$main = () {}

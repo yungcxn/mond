@@ -1,0 +1,4 @@
+fun f = (i32 x): match x {
+    1 => 2 #! IllegalMatchCase
+    3 => 4,
+}

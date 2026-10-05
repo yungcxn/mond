@@ -1,0 +1,42 @@
+type C = *(mut u32 n, u32 fixed) !{
+    fun inc = () { self.n += 1; }
+    fun peek = () -> u32: ret self.n;
+    fun inc2 = () { self.inc(); }
+    fun reset = () { self.* = C(n = 0, fixed = self.fixed); }
+}
+type Box = *(C inner, mut C minner);
+variant W = +(Has(mut u32 v), Empty);
+
+fun take_ro = (&C c) -> u32: ret c.peek();
+fun take_rw = (*C c) { c.inc(); }
+
+fun f = (&C ro, *C rw, C val, &Box rb, *Box wb) {
+    C fixed = C(n = 1, fixed = 2);
+    mut C m = C(n = 1, fixed = 2);
+    fixed.inc(); #! assign_to_immutable
+    fixed.inc2(); #! assign_to_immutable
+    fixed.reset(); #! assign_to_immutable
+    u32 a = fixed.peek();
+    m.inc();
+    m.inc2();
+    m.reset();
+    ro.inc(); #! write_through_immutable_pointer
+    u32 b = ro.peek();
+    rw.inc();
+    val.inc(); #! assign_to_immutable
+    rb.minner.inc(); #! write_through_immutable_pointer
+    wb.minner.inc();
+    wb.inner.inc(); #! assign_to_immutable
+    u32 c = wb.inner.peek();
+    C(n = 1, fixed = 1).inc();
+    C.inc(rw);
+    C.inc(ro); #! type_mismatch
+    C.inc(m.&);
+    u32 d = C.peek(ro);
+    take_rw(m.&);
+    take_rw(fixed.&); #! type_mismatch
+    u32 e = take_ro(fixed.&);
+    m.fixed = 3; #! assign_to_immutable
+}
+
+$main = () {}

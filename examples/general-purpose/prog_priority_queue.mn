@@ -1,0 +1,130 @@
+# a generic binary min heap over anything with a key, realized for several element types and capacities
+
+trait Keyed = !{
+    fun key = () -> i64;
+}
+
+type Heap = (type T, u32 N): *(mut [N]T items, mut u32 len = 0) !{
+    fun less = (u32 a, u32 b) -> bool: ret self.items[a].key() < self.items[b].key();
+    fun swap = (u32 a, u32 b) {
+        T t = self.items[a];
+        self.items[a] = self.items[b];
+        self.items[b] = t;
+    }
+    fun push = (T x) -> bool {
+        if self.len == N: ret false;
+        mut u32 i = self.len;
+        self.items[i] = x;
+        self.len += 1;
+        while i > 0 {
+            u32 parent = (i - 1) / 2;
+            if !self.less(i, parent): brk;
+            self.swap(i, parent);
+            i = parent;
+        }
+        ret true;
+    }
+    fun pop = () -> T {
+        T top = self.items[0];
+        self.len -= 1;
+        self.items[0] = self.items[self.len];
+        mut u32 i = 0;
+        loop {
+            u32 l = 2 * i + 1;
+            u32 r = l + 1;
+            mut u32 m = i;
+            if l < self.len and self.less(l, m): m = l;
+            if r < self.len and self.less(r, m): m = r;
+            if m == i: brk;
+            self.swap(i, m);
+            i = m;
+        }
+        ret top;
+    }
+}
+
+# ties broken by id so the order is total and the result deterministic
+type Job = *(u32 id, i64 prio) implof Keyed !{
+    fun key = () -> i64: ret self.prio * 100 + self.id as i64;
+}
+
+# a max heap through a negated key
+type Score = *(i64 v) implof Keyed !{
+    fun key = () -> i64: ret -self.v;
+}
+
+type Cursor = *(u32 list, u32 at, i64 v) implof Keyed !{
+    fun key = () -> i64: ret self.v;
+}
+
+stcfun jobs = () -> u64 {
+    mut Heap(Job, 8) h = Heap(Job, 8)(items = [Job(id = 0, prio = 0), Job(id = 0, prio = 0), Job(id = 0, prio = 0), Job(id = 0, prio = 0),
+                                               Job(id = 0, prio = 0), Job(id = 0, prio = 0), Job(id = 0, prio = 0), Job(id = 0, prio = 0)]);
+    [6]i64 prios = [5, 1, 3, 1, 9, 3];
+    for i in 0..<6: h.push(Job(id = i, prio = prios[i]));
+    mut u64 order = 0;
+    while h.len > 0: order = order * 10 + h.pop().id;
+    ret order;
+}
+
+stcfun scores = () -> i64 {
+    mut Heap(Score, 4) h = Heap(Score, 4)(items = [Score(v = 0), Score(v = 0), Score(v = 0), Score(v = 0)]);
+    [6]i64 vs = [4, -7, 12, 0, 3, 8];
+    mut u32 rejected = 0;
+    for v in vs: if !h.push(Score(v = v)): rejected += 1;
+    mut i64 out = 0;
+    while h.len > 0: out = out * 100 + h.pop().v + 10;
+    ret out * 10 + rejected as i64;
+}
+
+# merge three sorted lists through a heap of cursors
+stcfun merge = () -> u64 {
+    [3][4]i64 lists = [[1, 4, 7, 10], [2, 5, 8, 11], [0, 3, 6, 9]];
+    mut Heap(Cursor, 3) h = Heap(Cursor, 3)(items = [Cursor(list = 0, at = 0, v = 0), Cursor(list = 0, at = 0, v = 0), Cursor(list = 0, at = 0, v = 0)]);
+    for l in 0..<3: h.push(Cursor(list = l, at = 0, v = lists[l][0]));
+    mut u64 checksum = 0;
+    mut i64 prev = -1;
+    mut bool sorted = true;
+    while h.len > 0 {
+        Cursor c = h.pop();
+        if c.v < prev: sorted = false;
+        prev = c.v;
+        checksum = checksum * 3 + c.list as u64;
+        if c.at + 1 < 4: h.push(Cursor(list = c.list, at = c.at + 1, v = lists[c.list][c.at + 1]));
+    }
+    ret if sorted: checksum else: 0;
+}
+
+# heap sort through the same template, one more capacity
+stcfun heap_sort = () -> i64 {
+    [10]i64 xs = [31, -4, 15, 9, -26, 5, 35, 8, -9, 7];
+    mut Heap(Score, 10) h = Heap(Score, 10)(items = [Score(v = 0), Score(v = 0), Score(v = 0), Score(v = 0), Score(v = 0),
+                                                     Score(v = 0), Score(v = 0), Score(v = 0), Score(v = 0), Score(v = 0)]);
+    for x in xs: h.push(Score(v = x));
+    mut i64 desc_ok = 1;
+    mut i64 prev = 1000;
+    mut i64 first_three = 0;
+    mut u32 n = 0;
+    while h.len > 0 {
+        i64 v = h.pop().v;
+        if v > prev: desc_ok = 0;
+        prev = v;
+        if n < 3: first_three = first_three * 100 + v;
+        n += 1;
+    }
+    ret desc_ok * 1000000 + first_three;
+}
+
+stc u64 JOBS = jobs(); #= JOBS 132504
+stc i64 SC = scores(); #= SC 221410032
+stc u64 MER = merge(); #= MER 388360
+stc i64 HS = heap_sort(); #= HS 1353115
+
+$main = () -> i64 {
+    mut Heap(Job, 2) h = Heap(Job, 2)(items = [Job(id = 0, prio = 0), Job(id = 0, prio = 0)]);
+    h.push(Job(id = 1, prio = 4));
+    h.push(Job(id = 2, prio = 3));
+    full = h.push(Job(id = 3, prio = 1)); #: full bool
+    j = h.pop(); #: j *(u32 id, i64 prio)
+    ret j.prio;
+}

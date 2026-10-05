@@ -1,0 +1,83 @@
+# defers run in reverse order when their block ends, the trace is a number of digits
+stcfun lifo = () -> u32 {
+    mut u32 t = 0;
+    {
+        defer t = t * 10 + 1;
+        defer t = t * 10 + 2;
+        defer t = t * 10 + 3;
+    }
+    ret t;
+}
+
+# each iteration of a loop body is a block of its own
+stcfun per_iteration = () -> u32 {
+    mut u32 t = 0;
+    for i in 1..=3 {
+        defer t = t * 10 + i;
+        t = t * 10;
+    }
+    ret t;
+}
+
+# the inner block finishes first
+stcfun nested = () -> u32 {
+    mut u32 t = 0;
+    {
+        defer t = t * 10 + 1;
+        {
+            defer t = t * 10 + 2;
+            t = t * 10 + 9;
+        }
+        t = t * 10 + 8;
+    }
+    ret t;
+}
+
+# brk and cont leave the body through its defers
+stcfun jumps = () -> u32 {
+    mut u32 t = 0;
+    for i in 1..=5 {
+        defer t = t * 10 + i;
+        if i == 2: cont;
+        if i == 4: brk;
+    }
+    ret t;
+}
+
+# a ret leaves every enclosing block, their defers still run afterwards on the outer state
+type Cell = *(mut u32 v);
+fun leave = (*Cell c) -> u32 {
+    defer c.v = c.v * 10 + 1;
+    {
+        defer c.v = c.v * 10 + 2;
+        ret c.v;
+    }
+}
+stcfun returned = () -> u32 {
+    mut Cell c = Cell(v = 5);
+    u32 r = leave(c.&);
+    ret r * 1000 + c.v;
+}
+
+# defer deinit runs the destructor of the value at that point
+type Tracked = *(*u32 log, u32 id) !{
+    $deinit = () { self.log.* = self.log.* * 10 + self.id; }
+}
+stcfun destructors = () -> u32 {
+    mut u32 log = 0;
+    {
+        a = Tracked(log = log.&, id = 1) defer deinit;
+        b = Tracked(log = log.&, id = 2) defer deinit;
+        defer log = log * 10 + 3;
+    }
+    ret log;
+}
+
+stc u32 LI = lifo(); #= LI 321
+stc u32 PI = per_iteration(); #= PI 10203
+stc u32 NE = nested(); #= NE 9281
+stc u32 JU = jumps(); #= JU 1234
+stc u32 RE = returned(); #= RE 5521
+stc u32 DE = destructors(); #= DE 321
+
+$main = () {}

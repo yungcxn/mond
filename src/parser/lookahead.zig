@@ -1,7 +1,6 @@
 const Parser = @import("../Parser.zig");
 const Lexer = @import("../Lexer.zig");
 const ParseTree = @import("../ParseTree.zig");
-const FixedStack = @import("../ds/fixedstack.zig").FixedStack;
 const NodeId = ParseTree.NodeId;
 const eval = @import("eval.zig");
 
@@ -39,6 +38,7 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_stcmatch)] = &eval.stcmatch;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = &eval.templ_prefix(.type_ptr, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = &eval.templ_prefix(.type_ptrmut, prec_unary + 1);
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_&&")] = &eval.type_ptr_ptr;
     t[@intFromEnum(Lexer.Token.Kind.kw_u8)] = &eval.type_u8;
     t[@intFromEnum(Lexer.Token.Kind.kw_u16)] = &eval.type_u16;
     t[@intFromEnum(Lexer.Token.Kind.kw_u32)] = &eval.type_u32;
@@ -113,7 +113,7 @@ pub inline fn multival_follows(p: *Parser) bool {
     while (p.tokens.get_field(.tk, cur)) |tk| : (cur += 1) switch (tk) {
         .@"pct_(", .@"pct_[", .@"pct_{", .@"xpct_!{", .@"xpct_*(", .@"xpct_**(", .@"xpct_+(", .@"xpct_++(" => depth += 1,
         .@"pct_)", .@"pct_]", .@"pct_}" => {
-            if (depth == 0) return cur != p.tok_cursor + 1;
+            if (depth == 0) return tk == .@"pct_}" and cur != p.tok_cursor + 1;
             depth -= 1;
         },
         .@"xpct_=>" => if (depth == 0) return false,
@@ -169,6 +169,8 @@ pub const binary_compute = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_+%")] = .{ .f = &eval.templ_binary(.binary_add_wrap, 10), .prec = 10 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_-%")] = .{ .f = &eval.templ_binary(.binary_sub_wrap, 10), .prec = 10 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*%")] = .{ .f = &eval.templ_binary(.binary_mul_wrap, 11), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_*(")] = .{ .f = &eval.templ_binary_group(.binary_mul, 11), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_+(")] = .{ .f = &eval.templ_binary_group(.binary_add, 10), .prec = 10 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .f = &eval.templ_binary(.binary_div, 11), .prec = 11 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .f = &eval.templ_binary(.binary_mod, 11), .prec = 11 };
 

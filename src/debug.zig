@@ -570,7 +570,6 @@ pub const HighLowerer = struct {
             .bit_and => "&",
             .bit_or => "|",
             .bit_xor => "^",
-            .pow => "**",
             .eq => "==",
             .ne => "!=",
             .lt => "<",

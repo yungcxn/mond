@@ -30,13 +30,14 @@ pub fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
         for (args) |a| _ = self.h09_check_expr(ctx, self.arg_value(a), .none);
         return .poison_type;
     };
-    switch (sp.tag(target)) {
+    const value = sp.tag(ct) != .meta_type and (self.tree.kind(callee) != .member or recv != 0);
+    switch (if (value and (sp.tag(target) == .record_type or sp.tag(target) == .variant_case_type)) .simple_type else sp.tag(target)) {
         // type constructors: records (`Person(name = ..)`) and variant cases (`Event.Key(13)`)
         .record_type, .variant_case_type => {
             const rec = if (sp.tag(target) == .variant_case_type) sp.get(target).variant_case_type.payload else target;
-            var map: [64]u32 = undefined;
+            const map = self.scratch(u32, args.len);
             if (rec == .none and args.len > 0) return self.report(.wrong_arity, node, args.len, 0);
-            if (rec != .none and !bind_args(self, self.fields_of(rec), args, &map, false)) return bad_args(self, node, self.fields_of(rec), args);
+            if (rec != .none and !bind_args(self, self.fields_of(rec), args, map, false)) return bad_args(self, node, self.fields_of(rec), args);
             for (args, 0..) |a, i| _ = self.check(ctx, self.arg_value(a), named(self, a, sp.get(rec).custom_type.field_types[map[i]]));
             return target;
         },
@@ -84,12 +85,13 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: DeclPool.Index, 
         }
         if (bad) return .poison_type;
         if (ctx.interpreted and ret != .fun_type) return ret;
-        var vals: [64]StaticPool.Index = undefined;
+        const vals = self.scratch(StaticPool.Index, all_args.len);
         for (all_args, 0..) |a, i| {
             vals[i] = statics.retype(self, statics.h08_eval_static(self, ctx, self.arg_value(a)), self.sig(first).params[i]);
             if (statics.holds_template(self, vals[i])) return .poison_type;
         }
-        const r = statics.h20_instantiate(self, first, sp.intern(.{ .aggregate = .{ .ty = .none, .elems = vals[0..all_args.len] } }));
+        if (self.interpreter.depth == 0) self.interpreter.root = node;
+        const r = statics.h20_instantiate(self, first, sp.intern(.{ .aggregate = .{ .ty = .none, .elems = vals } }));
         if (sp.tag(ret) != .meta_type) self.node_value[node] = r;
         if (sp.tag(r) != .function_value) return if (sp.tag(ret) == .meta_type or ret == .poison_type) sp.type_of(r) else ret;
         self.node_decl[node] = sp.get(r).function;
@@ -113,10 +115,10 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: DeclPool.Index, 
         } else return self.report(.wrong_arity, node, 0, 1);
     }
     // argument types once, with the first candidate's parameters as expectation
-    var tys: [64]StaticPool.Index = undefined;
-    var map: [64]u32 = undefined;
+    const tys = self.scratch(StaticPool.Index, args.len);
+    const map = self.scratch(u32, args.len);
     const f0 = self.real(first);
-    const f0_ok = self.decl_pool.tys()[@intFromEnum(f0)] != .none and bind_args(self, self.params_of(self.value_node(f0)), args, &map, false);
+    const f0_ok = self.decl_pool.tys()[@intFromEnum(f0)] != .none and bind_args(self, self.params_of(self.value_node(f0)), args, map, false);
     for (args, 0..) |a, i| {
         const hint = if (f0_ok) self.sig(f0).params[map[i] + off] else .none;
         tys[i] = self.h09_check_expr(ctx, self.arg_value(a), hint);
@@ -129,7 +131,7 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: DeclPool.Index, 
     var c = first;
     while (c != .none) : (c = self.decl_pool.next_overloads()[@intFromEnum(c)]) {
         count += 1;
-        const s = score(self, c, args, tys[0..args.len], off);
+        const s = score(self, c, args, tys, off);
         if (s > best_score) {
             best, best_score, ambiguous = .{ c, s, false };
         } else if (s == best_score and s >= 0 and !has_where(self, self.real(c)) and !has_where(self, self.real(best))) ambiguous = true;
@@ -137,7 +139,10 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: DeclPool.Index, 
     if (best == .none) {
         if (count > 1) return self.report(.no_matching_overload, node, args.len, 0);
         if (!f0_ok) return bad_args(self, node, self.params_of(self.value_node(f0)), args);
-        for (args, 0..) |a, i| _ = self.h10_expect(self.arg_value(a), tys[i], self.sig(f0).params[map[i] + off]);
+        for (args, 0..) |a, i| {
+            const p = self.sig(f0).params[map[i] + off];
+            _ = if (!sp.has_vars(p)) self.h10_expect(self.arg_value(a), tys[i], p) else if (statics.arg_len(self, tys[i], p) == .none) self.mismatch(self.arg_value(a), tys[i], p) else tys[i];
+        }
         return .poison_type;
     }
     if (ambiguous) _ = self.report(.ambiguous_overload, node, best, 0);
@@ -152,15 +157,15 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: DeclPool.Index, 
         if (recv == 0) {
             if (sp.tag(rt) == .ptr_type) _ = self.report(.type_mismatch, r, rt, self.sig(callee).params[0]);
         } else if (sp.is_ptr(rt)) {
-            if (sp.tag(rt) == .ptr_type) self.write_access(r, .through_ptr);
+            self.write_access(r, if (sp.tag(rt) == .ptr_type) .through_ptr else .ok);
         } else if (place) self.write_access(r, self.writable(r));
     }
     const pnodes = self.params_of(self.value_node(callee));
-    _ = bind_args(self, pnodes, args, &map, false);
-    check_stcwhere(self, ctx, node, callee, pnodes, args, map[0..args.len]);
+    _ = bind_args(self, pnodes, args, map, false);
+    check_stcwhere(self, ctx, node, callee, pnodes, args, map);
     if (statics.length_generic(self, self.decl_pool.tys()[@intFromEnum(callee)])) {
         // the argument lengths, in parameter order, pick the realization
-        var lens: [64]StaticPool.Index = undefined;
+        const lens = self.scratch(StaticPool.Index, args.len);
         var n: usize = 0;
         for (0..pnodes.len) |j| {
             const p = self.sig(callee).params[j + off];
@@ -199,18 +204,20 @@ fn check_stcwhere(self: *Resolver, ctx: *FnCtx, node: NodeId, callee: DeclPool.I
     } else return;
     const ft = self.decl_pool.tys()[@intFromEnum(callee)];
     const off = self.self_off(callee);
+    const vs = self.scratch(StaticPool.Index, pnodes.len);
+    @memset(vs, .none);
+    const ts = self.scratch(StaticPool.Index, pnodes.len);
+    @memset(ts, .none);
+    for (args, 0..) |a, i| {
+        vs[map[i]] = statics.try_static(self, ctx, self.arg_value(a)) orelse .none;
+        ts[map[i]] = self.node_type[self.arg_value(a)];
+    }
     self.open_scope(true, .none, 0);
     defer self.h04_pop_scope();
     for (pnodes, 0..) |pn, j| {
-        var v: StaticPool.Index = .none;
-        var at: StaticPool.Index = .none;
-        for (args, 0..) |a, i| if (map[i] == j) {
-            v = statics.try_static(self, ctx, self.arg_value(a)) orelse .none;
-            at = self.node_type[self.arg_value(a)];
-        };
         const pt0 = self.static_pool.get(ft).function_type.params[j + off];
-        const pt = if (statics.templated(self, pt0) != .none and at != .none) at else pt0;
-        self.decl_pool.values()[@intFromEnum(self.h02_declare_local(self.param_name(pn, j), pn, .static_parameter, pt))] = if (v == .none) v else statics.retype(self, v, pt);
+        const pt = if (statics.templated(self, pt0) != .none and ts[j] != .none) ts[j] else pt0;
+        self.decl_pool.values()[@intFromEnum(self.h02_declare_local(self.param_name(pn, j), pn, .static_parameter, pt))] = if (vs[j] == .none) .none else statics.retype(self, vs[j], pt);
     }
     for (pnodes) |pn| {
         const p = Resolver.Param.from_node(self, pn);
@@ -237,19 +244,19 @@ fn score(self: *Resolver, c: DeclPool.Index, args: []const NodeId, tys: []const 
     const r = self.real(c);
     const ft = self.decl_pool.tys()[@intFromEnum(r)];
     if (ft == .none or sp.tag(ft) != .function_type) return -1;
-    var map: [64]u32 = undefined;
+    const map = self.scratch(u32, args.len);
     const pnodes = self.params_of(self.value_node(r));
-    if (!bind_args(self, pnodes, args, &map, false)) return -1;
+    if (!bind_args(self, pnodes, args, map, false)) return -1;
     var total: i32 = 0;
     for (args, tys, 0..) |a, t, i| {
         const p = sp.get(ft).function_type.params[map[i] + off];
         const v = self.arg_value(a);
         total += if (statics.templated(self, p) != .none)
             (if (statics.passes(self, t, p)) 5 else return -1)
+        else if (sp.has_vars(p) and t != .poison_type)
+            (if (statics.arg_len(self, t, p) != .none) 2 else return -1)
         else if (t == p or t == .poison_type or (self.is_literal(v) and sp.coerce(&self.abstract_pool, statics.literal_type(self, v, p), p) == .identity))
             @as(i32, 6) - @intFromBool(sp.get_tag_prop(p).is_float and !sp.get_tag_prop(t).is_float)
-        else if (sp.has_vars(p))
-            (if (statics.arg_len(self, t, p) != .none) 2 else return -1)
         else if (sp.coerce(&self.abstract_pool, t, p) != .incompatible) 4 else return -1;
         if (Resolver.Param.from_node(self, pnodes[map[i]]).where != 0) total += 1;
     }
@@ -277,8 +284,7 @@ pub fn same_params(self: *Resolver, a0: DeclPool.Index, b0: DeclPool.Index) bool
 }
 
 pub fn bind_args(self: *Resolver, params: []const NodeId, args: []const NodeId, map: []u32, partial: bool) bool {
-    if (args.len > params.len or params.len > 64) return false;
-    var bound: u64 = 0;
+    if (args.len > params.len) return false;
     for (args, 0..) |a, i| {
         var p: usize = i;
         if (self.tree.kind(a) == .partial__fun_call_assigned_param) {
@@ -287,11 +293,10 @@ pub fn bind_args(self: *Resolver, params: []const NodeId, args: []const NodeId, 
                 if (self.param_name(pn, j) == name) break j;
             } else return false;
         }
-        if (bound >> @intCast(p) & 1 != 0) return false;
-        bound |= @as(u64, 1) << @intCast(p);
+        if (std.mem.indexOfScalar(u32, map[0..i], @intCast(p)) != null) return false;
         map[i] = @intCast(p);
     }
-    if (!partial) for (params, 0..) |pn, j| if (bound >> @intCast(j) & 1 == 0 and Resolver.Param.from_node(self, pn).default == 0) return false;
+    if (!partial) for (params, 0..) |pn, j| if (std.mem.indexOfScalar(u32, map[0..args.len], @intCast(j)) == null and Resolver.Param.from_node(self, pn).default == 0) return false;
     return true;
 }
 

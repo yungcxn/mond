@@ -1,0 +1,41 @@
+variant Tagged = +(A = notag, B); #! undefined_name
+variant Typed = +(A, B) tagof NoTag; #! undefined_name
+type Sized = *(u8 a) assertsize nosize; #! undefined_name
+type Impl = *(u8 a) implof NoTrait !{} #! undefined_name
+trait Sub = implof NoSuper !{ fun f = (); } #! undefined_name
+type Gen = (type T): *(T a);
+type GenBad = Gen(NoArg); #! undefined_name
+u32 global_init = undefined_global; #! undefined_name
+stc u32 stc_init = undefined_stc; #! undefined_name
+variant O = +(Some(u8), None);
+
+fun patterns = (O o) -> u8 {
+    u8 r = match o {
+        NoVariant.Some(x) => x, #! undefined_name
+        O.None => 0,
+        _ => 1,
+    };
+    ret r;
+}
+fun static_if = () -> u32: ret stcif nostc: 1 else: 2; #! undefined_name
+fun oftype_target = (u32 v) -> bool: ret v oftype NoType; #! undefined_name
+fun type_member = () -> u32: ret NoType2.member; #! undefined_name
+fun with_base = () { x = nobase with (a = 1); } #! undefined_name
+fun unwrap_base = () { if nounwrap ?<- v {} } #! undefined_name
+fun fallback_base = () -> u8: ret nofallback ?? 0; #! undefined_name
+fun fallback_value = (O o) -> u8: ret o ?? nofb; #! undefined_name
+fun label_base = () { (nolabel <- l); } #! undefined_name
+fun defer_body = () { defer nodefer(); } #! undefined_name
+fun addr = () { p = noaddr.&; } #! undefined_name
+fun deref = () { v = noderef.*; } #! undefined_name
+fun inc = () { noinc++; } #! undefined_name
+fun compound = () { nocompound += 1; } #! undefined_name
+fun assign_place = () { noplace.f = 1; } #! undefined_name
+fun repeat_stmt = () { mut u32 i = 0; while i < 3, norepeat++: {} } #! undefined_name
+fun loop_repeat = () { loop noloop++ { brk; } } #! undefined_name
+# every static head is reported once, not again by its static evaluation
+fun static_match = () -> u32: ret stcmatch nosc { _ => 1, }; #! undefined_name
+fun static_while = () { stcwhile nosw: 1; } #! undefined_name
+fun static_loop = () { stcloop nosl++: brk; } #! undefined_name
+fun static_for2 = () { stcfor i in nostcseq: i; } #! undefined_name
+$main = () {}

@@ -1,0 +1,25 @@
+# an array of different cases of one variant is an array of the variant
+variant P = +(Two(i32 a, i32 b), One(i32 v), Zero);
+variant A = +(X, Y);
+variant B = +(Z(u8), W);
+
+fun swap_diff = (P p) -> i32: ret match p {
+    P.Two(x, 0) | P.Two(0, x) => x,
+    P.Two(x, y) | P.One(x) <- y => x - y,
+    P.Zero => 99,
+}
+fun side = (A || B u) -> u32: ret match u { A a => (match a { A.X => 1, A.Y => 2 }), B.Z(k) => k, B b => 50 }
+
+stc []i32 SD = stcfor p in [P.Two(5, 0), P.Two(0, 6), P.Two(9, 4), P.One(3), P.Zero]: swap_diff(p); #= SD [5, 6, 5, 0, 99]
+stc []u32 SI = stcfor u in [A.X, A.Y]: side(u); #= SI [1, 2]
+stc u32 SB = side(B.Z(7)) * 100 + side(B.W); #= SB 750
+
+fun types = (u8 a, u16 b) {
+    cs = [P.Zero, P.One(1), P.Two(1, 2)]; #: cs [3]+(Two, One, Zero)
+    one = [P.Zero]; #: one [1]+(Two, One, Zero).Zero
+    same = [P.One(1), P.One(2)]; #: same [2]+(Two, One, Zero).One
+    wide = [a, b]; #: wide [2]u16
+    wide2 = [b, a]; #: wide2 [2]u16
+    []P given = [P.Zero, P.One(1)]; #: given [2]+(Two, One, Zero)
+}
+$main = () {}

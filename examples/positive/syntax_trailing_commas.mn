@@ -1,0 +1,24 @@
+# a trailing comma is allowed in every list
+trait A = !{ fun a = () -> u32; }
+trait B = !{ fun b = () -> u32; }
+
+type P = *(u32 x, u32 y,) implof A, B, !{
+    fun a = () -> u32: ret self.x;
+    fun b = () -> u32: ret self.y;
+}
+
+variant V = +(One, Two(u32 n,), Three,);
+
+fun add = (u32 a, u32 b,) -> u32: ret a + b;
+
+stc [3]u32 ARR = [1, 2, 3,]; #= ARR [1, 2, 3]
+stc [1]u32 ONE = [4,]; #= ONE [4]
+stc u32 CALL = add(1, 2,); #= CALL 3
+stc u32 NAMED = add(a = 1, b = 5,); #= NAMED 6
+stc P PT = P(x = 1, y = 2,); #= PT [1, 2]
+stc P WITH = PT with (y = 9,); #= WITH [1, 9]
+stc u32 M = match V.Two(n = 3,) { V.Two(n,) => n, _ => 0, }; #= M 3
+
+$main = () {
+    u32 s = add(1, 2,);
+}

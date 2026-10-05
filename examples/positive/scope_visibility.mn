@@ -1,0 +1,48 @@
+variant O = +(Some(u32), None);
+
+# globals are visible before their declaration, in functions and in other globals
+fun early = () -> u32: ret LATE * 2 + later_fn();
+stc u32 E = early(); #= E 25
+stc u32 CHAIN = LATE + 1; #= CHAIN 11
+stc u32 LATE = 10;
+fun later_fn = () -> u32: ret 5;
+
+fun binder_in_and = (O o) -> u32: ret if o ?<- v and v > 3: v else: 0;
+fun binder_in_while = (O o) -> u32 {
+    mut u32 n = 0;
+    while o ?<- v { n += v; brk; }
+    ret n;
+}
+fun label_in_expr = () -> u32: ret (6 <- six) * six;
+fun hoisted_mutual = (u32 n) -> u32 {
+    u32 r = even(n);
+    fun even = (u32 k) -> u32: ret if k == 0: 1 else: odd(k - 1);
+    fun odd = (u32 k) -> u32: ret if k == 0: 0 else: even(k - 1);
+    ret r;
+}
+fun local_type_sees_types = () -> u32 {
+    type In = *(u32 v);
+    stcfun twice = (u32 x) -> u32: ret x * 2;
+    type L = *(u8 a) !{ fun m = () -> u32: ret In(v = twice(2)).v + self.a; }
+    L l = L(a = 1);
+    ret l.m();
+}
+fun inner_block_hoist = () -> u32 {
+    u32 r = { u32 x = twice(4); fun twice = (u32 v) -> u32: ret v * 2; x; };
+    ret r;
+}
+
+stc u32 BA1 = binder_in_and(O.Some(9)); #= BA1 9
+stc u32 BA2 = binder_in_and(O.Some(2)); #= BA2 0
+stc u32 BA3 = binder_in_and(O.None); #= BA3 0
+stc u32 BW = binder_in_while(O.Some(4)); #= BW 4
+stc u32 LE = label_in_expr(); #= LE 36
+stc u32 HM1 = hoisted_mutual(10); #= HM1 1
+stc u32 HM2 = hoisted_mutual(7); #= HM2 0
+stc u32 LT = local_type_sees_types(); #= LT 5
+stc u32 IH = inner_block_hoist(); #= IH 8
+
+# an integer result may fall off the end, it is 0 then
+$main = () -> u8 { #: $main () -> u8
+    u32 a = early() + hoisted_mutual(3) + local_type_sees_types() + inner_block_hoist();
+}

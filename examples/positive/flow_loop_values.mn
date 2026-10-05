@@ -1,0 +1,53 @@
+stcfun count = (u32 n) -> u64 {
+    xs = for i in 0..<n: i;
+    ret xs.$len;
+}
+stcfun skip_odd = () -> []u32: ret for i in 0..<10: if i % 2 == 1: cont else: i;
+stcfun stop_at = () -> []u32: ret for i in 0..<10: if i == 4: brk else: i * 3;
+stcfun both = () -> []u32: ret for i in 1..=20 { if i % 3 == 0: cont; if i > 10: brk; i; };
+stcfun rep_while = () -> []u32 {
+    mut u32 i = 0;
+    ret while i < 5, i += 2: i * 10;
+}
+stcfun rep_loop = () -> []u32 {
+    mut u32 i = 0;
+    ret loop i += 1: if i > 4: brk else: i;
+}
+stcfun empty = () -> []u32: ret for i in 3..<3: i;
+stcfun incl = () -> []i32: ret for i in -2..=2: i * i;
+stcfun of_arr = () -> []u8: ret for c in "abc": c + 1;
+stcfun nested_brk = () -> []u32: ret for i in 0..<5 { for j in 0..<5 { if j == 2: brk; } if i == 3: brk; i; };
+
+stc u64 C0 = count(0); #= C0 0
+stc u64 C7 = count(7); #= C7 7
+stc []u32 SO = skip_odd(); #= SO [0, 2, 4, 6, 8]
+stc []u32 SA = stop_at(); #= SA [0, 3, 6, 9]
+stc []u32 BO = both(); #= BO [1, 2, 4, 5, 7, 8, 10]
+stc []u32 RW = rep_while(); #= RW [0, 20, 40]
+stc []u32 RL = rep_loop(); #= RL [1, 2, 3, 4]
+stc []u32 EM = empty(); #= EM []
+stc []i32 IN = incl(); #= IN [4, 1, 0, 1, 4]
+stc []u8 OA = of_arr(); #= OA [98, 99, 100]
+stc []u32 NB = nested_brk(); #= NB [0, 1, 2]
+stc [][2]u32 SQ = for i in 0..<2: for j in 0..<2: i * 2 + j; #= SQ [[0, 1], [2, 3]]
+
+fun shapes = () {
+    a = for i in 0..<4: i; #: a [4]u32
+    b = for i in 0..=4: i; #: b [5]u32
+    c = for x in [1, 2, 3]: x * 2; #: c [3]u32
+    d = for i in 0..<4: if i == 2: cont else: i; #: d []u32
+    e = for i in 2..<2: i; #: e [0]u32
+    f = for i in 5..<2: i; #: f [0]u32
+    stc u32 N = 6;
+    g = for i in 0..<N: i; #: g [6]u32
+    h = for x in "hey": x; #: h [3]u8
+    nn = for i in 0..<3: for j in 0..<2: i + j; #: nn [3][2]u32
+}
+
+# a jagged loop value: its rows have different lengths, the row type is runtime-lengthed
+stcfun jagged = () -> [][]u32: ret for i in 0..<3: for j in 0..<i: j;
+stc JT = jagged(); #: JT [3][]u32
+stc JV = jagged(); #= JV [[], [0], [0, 1]]
+fun runtime_jagged = () { jr = for i in 0..<3: for j in 0..<i: j; } #: jr [3][]u32
+
+$main = () {}

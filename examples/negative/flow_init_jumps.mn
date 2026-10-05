@@ -1,0 +1,26 @@
+fun f = (bool c, u32 n) {
+    mut u32 a, b;
+    u32 x = a; #! use_before_initialization
+    a, b = 1, 2;
+    u32 y = a + b;
+    mut u32 d;
+    for i in 0..<3 { if c: cont; d = 1; brk; }
+    u32 d1 = d; #! use_before_initialization
+    mut u32 e;
+    loop { if c: cont; e = 1; brk; }
+    u32 e1 = e;
+    mut u32 g;
+    loop { match c { true => { g = 1; brk; }, false => cont } }
+    u32 g1 = g;
+    mut u32 h;
+    u32 sel = if c: { h = 1; h; } else: 0;
+    u32 h1 = h; #! use_before_initialization
+    mut u32 k;
+    k = if c: 1 else: 2;
+    u32 k1 = k;
+    mut u32 m;
+    m = m; #! use_before_initialization
+    mut u32 p;
+    u32 q = p ?? 0; #! use_before_initialization type_mismatch
+}
+$main = () {}

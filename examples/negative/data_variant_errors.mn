@@ -1,0 +1,34 @@
+variant Opt = +(Some(u8), None = 0xFF) tagof self;
+variant Res = +(Ok(u32), Err(u8 code, u8 line), Pending);
+variant Dir = +(N, E, S, W);
+variant Other = +(N, M);
+type Rec = *(u8 a);
+
+fun f = (Res r, Dir d, Opt o) {
+    Opt a = Opt.Some; #! type_mismatch
+    Res b = Res.Err(1); #! wrong_arity
+    Res c = Res.Err(1, 2, 3); #! wrong_arity
+    Res e = Res.Err(code = 1, row = 2); #! unknown_named_argument
+    Res g = Res.Ok("s"); #! type_mismatch
+    Dir h = Dir.N(1); #! wrong_arity
+    Dir i = Other.N; #! type_mismatch
+    Dir j = Dir.Up; #! unknown_member
+    Opt k = 300; #! type_mismatch
+    Opt l = -1; #! type_mismatch
+    Res m = 5; #! type_mismatch
+    u8 n = d ??; #! type_mismatch
+    u8 p = Dir.N ?? 0; #! type_mismatch
+    bool q = d ?<- v; #! type_mismatch
+    u32 s = r ?? "x"; #! type_mismatch
+    Rec t = Rec(1);
+    u8 u = t ??; #! type_mismatch
+    Dir w = 2 as Dir; #! invalid_cast
+    Dir.N x = d as Dir.N;
+    Other.N y = d as Other.N; #! invalid_cast
+    u8 z = d as u8;
+    Res.Ok aa = r; #! type_mismatch
+    Res.Pending bb = Res.Ok(1); #! type_mismatch
+    Res cc = Res.Err(line = 1, code = 2);
+}
+
+$main = () {}

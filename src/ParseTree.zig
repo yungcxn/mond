@@ -153,7 +153,6 @@ pub const Node = struct {
         .{ "BinaryModulus", "binary_mod", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryShiftLeft", "binary_shift_left", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryShiftRight", "binary_shift_right", struct { lhs: NodeId, rhs: NodeId } },
-        .{ "BinaryPower", "binary_pow", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryWrappingAdd", "binary_add_wrap", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryWrappingSubtract", "binary_sub_wrap", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryWrappingMultiply", "binary_mul_wrap", struct { lhs: NodeId, rhs: NodeId } },

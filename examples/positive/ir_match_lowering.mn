@@ -1,0 +1,44 @@
+# matches lower to switches on tags and integers, with guards falling back to pattern tests
+variant Op = +(Add(i32 a, i32 b), Neg(i32 v), Lit(i32 v), Nop) tagof u8;
+
+fun eval = (Op o) -> i32: ret match o {
+    Op.Add(a, b) => a + b,
+    Op.Neg(v) => -v,
+    Op.Lit(0) => 100,
+    Op.Lit(v) => v,
+    Op.Nop => 0,
+}
+
+fun bucket = (u8 x) -> u8: ret match x {
+    0 => 0,
+    1 | 2 | 3 => 1,
+    4..=9 => 2,
+    10..<100 => 3,
+    _ => 4,
+}
+
+fun sign = (i8 x) -> i8: ret match x {
+    ..<0 => -1,
+    0 => 0,
+    1.. => 1,
+}
+
+stcfun s_eval = (Op o) -> i32: ret eval(o);
+stcfun s_bucket = (u8 x) -> u8: ret bucket(x);
+stcfun s_sign = (i8 x) -> i8: ret sign(x);
+
+stc i32 V1 = s_eval(Op.Add(2, 3)); #= V1 5
+stc i32 V2 = s_eval(Op.Neg(7)); #= V2 -7
+stc i32 V3 = s_eval(Op.Lit(0)); #= V3 100
+stc i32 V4 = s_eval(Op.Lit(8)); #= V4 8
+stc i32 V5 = s_eval(Op.Nop); #= V5 0
+stc [7]u8 XS = [0, 2, 9, 10, 99, 100, 255];
+stc []u8 B = stcfor x in XS: s_bucket(x); #= B [0, 1, 2, 3, 3, 4, 4]
+stc [5]i8 YS = [-128, -1, 0, 1, 127];
+stc []i8 SG = stcfor y in YS: s_sign(y); #= SG [-1, -1, 0, 1, 1]
+
+$main = () {
+    i32 r = eval(Op.Lit(3));
+    u8 b = bucket(42);
+    i8 s = sign(-3);
+}

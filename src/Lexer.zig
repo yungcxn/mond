@@ -98,7 +98,6 @@ pub const Token = struct {
         @"xpct_==",
         @"xpct_++",
         @"xpct_--",
-        @"xpct_**",
         @"xpct_||",
         @"xpct_!=",
         @"xpct_<=",
@@ -216,19 +215,29 @@ inline fn safe_skip_set(self: *@This(), comptime charset: anytype) bool {
 }
 
 // -> `false`: outside of `src_bytes`
-// esc: escaped, exc: exclusive (cursor is at `char` + 1)
-inline fn take_esc(self: *@This(), char: u8) bool {
-    var escaped = false;
-    while (self.peek_srcbyte()) |c| : (self.cursor += 1) {
-        if (escaped) {
-            escaped = false;
-        } else if (c == '\\') {
-            escaped = true;
+// esc: escaped, exc: exclusive (cursor is at `char`)
+inline fn take_esc(self: *@This(), char: u8) !bool {
+    while (self.pop_srcbyte()) |c| {
+        if (c == '\\') {
+            try self.escape(self.pop_srcbyte() orelse return false);
         } else if (c == char) {
+            self.cursor -= 1;
             return true;
         }
     }
     return false;
+}
+
+// the byte after a `\`, `x` takes two hex digits
+inline fn escape(self: *@This(), c: u8) !void {
+    switch (c) {
+        'n', 't', 'r', '0', '\\', '\'', '"' => {},
+        'x' => for (0..2) |_| switch (self.pop_srcbyte() orelse return error.LexingError_InvalidEscape) {
+            '0'...'9', 'a'...'f', 'A'...'F' => {},
+            else => return error.LexingError_InvalidEscape,
+        },
+        else => return error.LexingError_InvalidEscape,
+    }
 }
 
 inline fn adv_until(self: *@This(), char: u8) !void {
@@ -249,8 +258,9 @@ inline fn peek_srcbyte(self: *@This()) ?u8 {
 }
 
 inline fn pop_srcbyte(self: *@This()) ?u8 {
-    defer self.cursor += 1;
-    return self.peek_srcbyte();
+    const c = self.peek_srcbyte() orelse return null;
+    self.cursor += 1;
+    return c;
 }
 
 // a span is always stored for user-debug purposes, but really needed only for certain token-types
@@ -316,8 +326,8 @@ inline fn gen_next_tok(self: *@This()) !bool {
                     '\'' => return error.LexingError_IllegalEmptyChar,
                     '\\' => {
                         const c2 = self.pop_srcbyte() orelse return error.LexingError_CharScanEOF;
-                        if (c2 == '\'') return error.LexingError_CharNothingAfterEscape;
-                        if (c2 == 'x') self.cursor += 2;
+                        if (c2 == '\'' and self.peek_srcbyte() != '\'') return error.LexingError_CharNothingAfterEscape;
+                        try self.escape(c2);
                     },
                     else => {},
                 }
@@ -332,7 +342,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
             },
             '"' => { // val_string
                 const cursor0 = self.cursor;
-                if (self.take_esc('"')) {
+                if (try self.take_esc('"')) {
                     self.push_tok(.val_string, cursor0);
                 } else return error.LexingError_StringScanEOF;
                 self.cursor += 1;

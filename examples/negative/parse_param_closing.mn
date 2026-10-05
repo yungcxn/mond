@@ -1,0 +1,1 @@
+fun f = (i32 a where a > 0]) {} #! ExpectedClosingParen

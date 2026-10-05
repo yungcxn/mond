@@ -1,0 +1,25 @@
+# without an expected type an array literal joins its elements, literals take the type every one of them fits
+fun f = (u8 x, i32 n, u16 w) {
+    a1 = [1, -2, 3]; #: a1 [3]i32
+    a2 = [1, 2.5]; #: a2 [2]f32
+    a3 = [x, 300]; #: a3 [2]u32
+    a4 = [300, x]; #: a4 [2]u32
+    a5 = [x, 7]; #: a5 [2]u8
+    a6 = [7, n]; #: a6 [2]i32
+    a7 = [w, x, 1]; #: a7 [3]u16
+    a8 = [5000000000, 1]; #: a8 [2]u64
+    a9 = [-5000000000, 1]; #: a9 [2]i64
+    a10 = ['a', 66]; #: a10 [2]u32
+}
+
+stc E = [1, -2, 3]; #: E [3]i32
+stc []i32 SUM = stcfor v in E: v * 2; #= SUM [2, -4, 6]
+
+stcfun mix = (u8 x) -> u32 {
+    a = [x, 300];
+    b = [2, -7];
+    ret a[0] + a[1] + (b[0] * b[1] + 20) as u32;
+}
+stc u32 MX = mix(5); #= MX 311
+
+$main = () { u32 r = mix(1); }

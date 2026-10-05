@@ -1,0 +1,44 @@
+variant A = +(X, Y);
+variant B = +(Z(u8), W);
+variant N = +(Leaf(bool), Pair(A l, A r), Nil);
+type R = *(A a, bool f);
+type Deep = *(R inner, B b);
+
+fun unions = (A || B u) -> u8: ret match u { A.X => 0, A.Y => 1, B.Z(_) => 2, B.W => 3 }
+fun unions_miss = (A || B u) -> u8: ret match u { A.X => 0, A.Y => 1, B.W => 3 } #! non_exhaustive_match
+fun unions_cast = (A || B u) -> u8: ret match u { A a => 0, B b => 1 }
+fun unions_cast_miss = (A || B u) -> u8: ret match u { A a => 0, B.W => 1 } #! non_exhaustive_match
+fun nested_ok = (N n) -> u8: ret match n {
+    N.Leaf(true) => 0,
+    N.Leaf(false) => 1,
+    N.Pair(A.X, _) => 2,
+    N.Pair(A.Y, A.X) => 3,
+    N.Pair(A.Y, A.Y) => 4,
+    N.Nil => 5,
+}
+fun nested_miss = (N n) -> u8: ret match n { #! non_exhaustive_match
+    N.Leaf(_) => 0,
+    N.Pair(A.X, _) => 2,
+    N.Pair(_, A.X) => 3,
+    N.Nil => 5,
+}
+fun rec_ok = (R r) -> u8: ret match r { R(A.X, true) => 0, R(A.X, false) => 1, R(a = A.Y) => 2 }
+fun rec_miss = (R r) -> u8: ret match r { R(A.X, true) => 0, R(A.Y, false) => 1, R(f = false) => 2 } #! non_exhaustive_match
+fun deep_ok = (Deep d) -> u8: ret match d {
+    Deep(R(A.X, _), B.Z(_)) => 0,
+    Deep(R(A.Y, _), _) => 1,
+    Deep(_, B.W) => 2,
+}
+fun deep_miss = (Deep d) -> u8: ret match d { #! non_exhaustive_match
+    Deep(R(A.X, _), B.Z(0..=254)) => 0,
+    Deep(R(A.Y, _), _) => 1,
+    Deep(_, B.W) => 2,
+}
+fun ptr_ok = (&A p) -> u8: ret match p { A.X => 0, A.Y => 1 }
+fun ptr_miss = (*B p) -> u8: ret match p { B.W => 0 } #! non_exhaustive_match
+fun label_ok = (B b) -> u8: ret match b { B.Z <- v => v, B.W => 0 }
+fun label_miss = (B b) -> u8: ret match b { B.Z <- v => v } #! non_exhaustive_match
+fun or_ok = (N n) -> u8: ret match n { N.Leaf(_) | N.Nil => 0, N.Pair(_, _) => 1 }
+fun payload_range = (B b) -> u8: ret match b { B.Z(0..=127) => 0, B.Z(128..) => 1, B.W => 2 }
+fun payload_gap = (B b) -> u8: ret match b { B.Z(0..=127) => 0, B.Z(129..) => 1, B.W => 2 } #! non_exhaustive_match
+$main = () {}

@@ -1,0 +1,39 @@
+stc i8 I8MAX = 127;
+stc i8 I8MIN = -128;
+stc u16 U16MAX = 65535;
+stc i64 I64MAX = 9223372036854775807;
+stc i64 I64MIN = -9223372036854775808;
+stc u64 U64MAX = 18446744073709551615;
+
+stc i8 A = I8MAX + 1; #! static_eval_failed
+stc i8 B = I8MIN - 1; #! static_eval_failed
+stc i8 C = I8MIN * -1; #! static_eval_failed
+stc i8 D = I8MIN / -1; #! static_eval_failed
+stc i8 E = -I8MIN; #! static_eval_failed
+stc u16 F = U16MAX + 1; #! static_eval_failed
+stc u16 G = 256 * 256; #! static_eval_failed
+stc i64 H = I64MAX + 1; #! static_eval_failed
+stc i64 I = I64MIN - 1; #! static_eval_failed
+stc i64 J = I64MIN / -1; #! static_eval_failed
+stc u64 K = U64MAX + 1; #! static_eval_failed
+stc u64 L = U64MAX * 2; #! static_eval_failed
+stc u32 M = 3 - 4; #! static_eval_failed
+stc u8 N = 16 * 16; #! static_eval_failed
+stc u32 O = 7 % 0; #! static_eval_failed
+stc i32 P = -7 / 0; #! static_eval_failed
+stc u8 Q = 1 << 8; #! static_eval_failed
+stc u64 R = 1 << 64; #! static_eval_failed
+stc i32 S = 1 >> 32; #! static_eval_failed
+
+# an overflow in a dependency is reported once, at its own declaration
+stc i8 T = A + 0;
+
+# folding sees through groups and chains
+stc u8 U = (100 + 100) + (20 + 40); #! static_eval_failed
+stc u8 V = 255 - 100 + 101; #! static_eval_failed
+
+# the same chains wrapped are fine
+stc u8 W = (100 +% 100) +% (20 +% 40); #= W 4
+stc u8 X = 255 -% 100 +% 101; #= X 0
+
+$main = () {}

@@ -1,0 +1,2 @@
+fun f = (i32 a, i32 b) {}
+fun g = () { f(1 2); } #! IllegalFunCallParam

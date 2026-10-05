@@ -1,0 +1,33 @@
+# parser and inference regressions met while writing the programs
+type R = *(i32 a, i32 b);
+fun g = (i32 a, i32 b) -> i32: ret a - b;
+fun apply = ((i64) -> i64 f, i64 x) -> i64: ret f(x);
+
+# an if in a named argument ends at the comma, it is no destructuring assignment
+stc R NAMED = R(a = if true: 1 else: 2, b = 3); #= NAMED [1, 3]
+stc i32 CALL = g(a = if false: 1 else: 2, b = 3); #= CALL -1
+stc i32 POS = g(if true: 10 else: 20, 3); #= POS 7
+stc R WITH = NAMED with (a = if false: 0 else: 5, b = 6); #= WITH [5, 6]
+
+# an array literal right before the body of a head is a value, no array type
+stcfun heads = () -> u32 {
+    mut u32 s = 0;
+    for x in [5, 6] { s += x; }
+    for x in [7] { s += x * 10; }
+    [1]u32 one = [7];
+    if one == [7] { s += 1000; }
+    match [s] { _ => s += 10000, }
+    ret s;
+}
+stc u32 HEADS = heads(); #= HEADS 11081
+
+# a lambda without a return type takes it from the expected function type
+stc i64 A = apply((i64 x): 7, 1); #= A 7
+stc i64 B = apply((i64 x): -x, 4); #= B -4
+
+$main = () {
+    (i64) -> i64 k = (i64 x): -1;
+    (u8) -> u8 c = (u8 x): 200;
+    r = k(2) + apply((i64 x): x * 3, 2); #: r i64
+    u = c(1); #: u u8
+}

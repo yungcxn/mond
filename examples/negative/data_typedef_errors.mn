@@ -1,0 +1,36 @@
+variant T255 = +(A = 255) tagof u8;
+variant T256 = +(A = 256) tagof u8; #! tag_overflow
+variant Next = +(A = 255, B) tagof u8; #! tag_overflow
+variant NextOk = +(A = 254, B) tagof u8;
+variant Max16 = +(A = 65535) tagof u16;
+variant Over16 = +(A = 65536) tagof u16; #! tag_overflow
+variant Signed = +(A = 127, B) tagof i8; #! tag_overflow
+variant SignedOk = +(A = 126, B) tagof i8;
+variant Rec2 = +(A(u8, u8), B) tagof self; #! self_tag_without_niche
+variant Arr = +(A([2]u8), B) tagof self; #! self_tag_without_niche
+variant Bool = +(A(bool), B) tagof self; #! self_tag_without_niche
+variant NoneTagFits = +(Some(u8), None = 0xFF) tagof self;
+variant NoneTagOver = +(Some(u8), None = 0x100) tagof self; #! tag_overflow
+type Fits = *(u32 a, u32 b) assertsize 8;
+type FitsType = *(u32 a, u32 b) assertsize u64;
+type Short = *(u32 a, u32 b) assertsize u32; #! assertsize_failed
+type Long = *(u8 a) assertsize 2; #! assertsize_failed
+variant VFits = +(A(u32), B) assertsize 8;
+variant VLong = +(A(u32), B) assertsize 5; #! assertsize_failed
+type DupF = *(u8 x, u16 y, u32 x); #! duplicate_declaration
+type DupAnon = *(u8, u8 $0); #! duplicate_declaration
+variant DupC = +(A, B, C, B(u8)); #! duplicate_declaration
+type Self = *(u8 a, Self b); #! recursive_by_value_type
+type ByArr = *([2]ByArr kids); #! recursive_by_value_type
+type MutA = *(MutB b); #! recursive_by_value_type
+# the cycle is reported once, at the type that closes it
+type MutB = *(MutA a);
+variant VRec = +(Node(VRec next), Leaf); #! recursive_by_value_type
+type Ptr = *(*Ptr next, u8 v);
+type PtrArr = *([2]&PtrArr kids);
+variant VPtr = +(Node(&VPtr next), Leaf);
+type Undef = *(Missing m); #! undefined_name
+type NotType = *(3 x); #! not_a_type
+variant NoPayload = +(A, B) tagof self; #! self_tag_without_niche
+trait UndefSuper = implof Nope !{ fun a = (); } #! undefined_name
+type OnUndefSuper = *(u8 v) implof UndefSuper !{ fun a = () {} }

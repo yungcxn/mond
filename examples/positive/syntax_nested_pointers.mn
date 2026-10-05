@@ -1,0 +1,23 @@
+# pointer prefixes stack without spaces, `&&` in front of a type is a pointer to a pointer, after a value the logical and
+fun f = (&&u8 rr, **u8 ww, &*u8 rw, *&u8 wr) {
+    a = rr; #: a &&u8
+    b = ww; #: b **u8
+    c = rr.*.*; #: c u8
+    ww.*.* = 1;
+    rw.*.* = 2;
+    t = true && false; #: t bool
+}
+
+stcfun deref2 = () -> u8 {
+    mut u8 v = 7;
+    mut *u8 p = v.&;
+    **u8 pp = p.&;
+    &*u8 rr = pp;
+    pp.*.* = 9;
+    ret rr.*.* + v;
+}
+
+stc u8 D = deref2(); #= D 18
+stc bool L = true && 2 > 1; #= L true
+
+$main = () {}

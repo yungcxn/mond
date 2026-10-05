@@ -1,0 +1,1 @@
+$main = (bool argc, &[]&u8 argv) {} #! type_mismatch

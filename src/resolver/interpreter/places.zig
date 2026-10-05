@@ -119,7 +119,7 @@ pub fn cell(self: *Interpreter, n: NodeId) ?u32 {
         const d = decl_of(self, n);
         if (d == .none) return null;
         if (slot(self, d)) |s| return s;
-        if (impure(self, n)) return null;
+        if (self.res().decl_pool.kinds()[@intFromEnum(d)] != .static_parameter and impure(self, n)) return null;
         const c = self.put(stored(self, n, d));
         self.adopted.push(.{ .decl = d, .cell = c });
         return c;
@@ -180,11 +180,18 @@ pub fn declare(self: *Interpreter, n0: NodeId) Value {
         return .unit;
     }
     const d0 = if (s.assignees.len > 0) self.info(.decl, s.assignees[0]) else .none;
+    const mark = self.list.head;
+    defer self.list.head = mark;
+    if (values.len > 1) for (values) |v| {
+        const x = self.eval(v);
+        if (self.unwind != .none or x.is(.poison_type)) return x;
+        self.list.push(x);
+    };
     const dyn = if (s.type != 0 and d0 != .none and self.info(.value, s.type) == .none and types.unknown(&r.static_pool, r.decl_pool.tys()[@intFromEnum(d0)])) types.of(self, s.type) orelse return .poison else .none;
     for (s.assignees, 0..) |id, i| {
         const d = self.info(.decl, id);
         if (d == .none) continue;
-        const x = if (values.len > 1) self.eval(values[i]) else if (values.len == 1) shared else self.zero(if (dyn != .none) dyn else r.decl_pool.tys()[@intFromEnum(d)]);
+        const x = if (values.len > 1) self.list.buf[mark + i] else if (values.len == 1) shared else self.zero(if (dyn != .none) dyn else r.decl_pool.tys()[@intFromEnum(d)]);
         if (x.is(.poison_type)) return x;
         if (dyn != .none and values.len > 0 and !types.admits(self, x, dyn)) return self.fail(values[@min(i, values.len - 1)], .type_mismatch, self.vtype(x), dyn);
         if (!store(self, id, d, self.coerce(x, dyn))) return .poison;

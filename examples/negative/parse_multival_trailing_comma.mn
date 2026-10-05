@@ -1,0 +1,2 @@
+# a list of assigned values takes no trailing comma
+mut a, b = 1, 2,; #! NoRuleFound

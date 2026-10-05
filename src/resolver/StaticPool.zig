@@ -312,6 +312,9 @@ layouts: SoD(Layout),
 // - covers `stcfun` calls and functions compiled per array length (args = the tuple of lengths).
 realized_abstracts: std.AutoHashMapUnmanaged(AbstractKey, Index),
 
+// lists rebuilt by `apply_vars`, nested ones stack above, read by index as the buffer may move
+scratch: DynBuf(Index),
+
 pub const IndexContext = struct {
     pool: *const StaticPool,
 
@@ -500,6 +503,7 @@ pub fn init(alloc: std.mem.Allocator) StaticPool {
         .map = .empty,
         .layouts = .init(alloc, 1024),
         .realized_abstracts = .empty,
+        .scratch = .init(alloc, 64),
     };
     for ([_]u16{ 8, 16, 32, 64, 8, 16, 32, 64 }, 0..) |bits, i| _ = self.intern(.{ .int_type = .{ .signedness = if (i < 4) .unsigned else .signed, .bits = bits } });
     for ([_]u16{ 16, 32, 64 }) |bits| _ = self.intern(.{ .float_type = .{ .bits = bits } });
@@ -518,6 +522,7 @@ pub fn deinit(self: *StaticPool) void {
     self.map.deinit(self.alloc);
     self.layouts.deinit();
     self.realized_abstracts.deinit(self.alloc);
+    self.scratch.deinit();
 }
 
 pub fn intern(self: *StaticPool, key: Key) Index {
@@ -1041,6 +1046,7 @@ pub fn coerce(self: *StaticPool, vars: *AbstractPool, from0: Index, to0: Index) 
     if (from == .poison_type or to == .poison_type) return .poison;
     if (from == .never_type) return .never_to_any;
     if (from == .unit_type and to == .runit_type) return .unit_to_runit;
+    if (to == .fun_type and self.tag(from) == .function_type) return .identity;
     if (self.has_vars(from) or self.has_vars(to)) {
         const ptrs = self.is_ptr(from) and self.is_ptr(to) and (self.tag(from) == .ptr_mut_type or self.tag(to) == .ptr_type);
         return if (self.unify(vars, if (ptrs) self.pointee(from) else from, if (ptrs) self.pointee(to) else to) == .ok) .unified else .incompatible;
@@ -1131,21 +1137,27 @@ pub fn apply_vars(self: *StaticPool, vars: *AbstractPool, index: Index) Index {
     if (index == .none or !self.has_vars(index)) return index;
     const s = self.shallow(vars, index);
     if (s != index) return self.apply_vars(vars, s);
-    var buf: [64]Index = undefined;
+    const mark = self.scratch.head;
+    defer self.scratch.head = mark;
     return switch (self.get(index)) {
         .array_type => |a| self.intern(.{ .array_type = .{ .len = self.apply_vars(vars, a.len), .elem = self.apply_vars(vars, a.elem) } }),
         .ptr_type => |p| self.intern(.{ .ptr_type = .{ .child = self.apply_vars(vars, p.child), .mutable = p.mutable } }),
         .function_type => |f| blk: {
-            const params = buf[0..f.params.len];
-            @memcpy(params, f.params);
-            for (params) |*p| p.* = self.apply_vars(vars, p.*);
-            break :blk self.intern(.{ .function_type = .{ .category = f.category, .params = params, .ret = self.apply_vars(vars, f.ret) } });
+            self.scratch.append(f.params);
+            for (mark..self.scratch.head) |i| {
+                const p = self.apply_vars(vars, self.scratch.buf[i]);
+                self.scratch.buf[i] = p;
+            }
+            const ret = self.apply_vars(vars, f.ret);
+            break :blk self.intern(.{ .function_type = .{ .category = f.category, .params = self.scratch.buf[mark..self.scratch.head], .ret = ret } });
         },
         .variant_union_type => |u| blk: {
-            const members = buf[0..u.len];
-            @memcpy(members, u);
-            for (members) |*m| m.* = self.apply_vars(vars, m.*);
-            break :blk self.intern(.{ .variant_union_type = members });
+            self.scratch.append(u);
+            for (mark..self.scratch.head) |i| {
+                const m = self.apply_vars(vars, self.scratch.buf[i]);
+                self.scratch.buf[i] = m;
+            }
+            break :blk self.intern(.{ .variant_union_type = self.scratch.buf[mark..self.scratch.head] });
         },
         else => index,
     };

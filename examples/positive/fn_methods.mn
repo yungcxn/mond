@@ -1,0 +1,41 @@
+type Acc = *(mut i64 total, mut u32 calls) !{
+    $init = (i64 start) -> Acc: ret Acc(total = start, calls = 0);
+    fun add = (i64 v) -> i64 { self.total += v; self.calls += 1; ret self.total; }
+    fun add_twice = (i64 v) { self.add(v); self.add(v); }
+    fun peek = () -> i64: ret self.total;
+    fun scaled = (i64 k = 2) -> i64: ret self.total * k;
+    fun same = (Acc other) -> bool: ret self.total == other.total;
+}
+
+fun bump = (*Acc a) { a.add(10); }
+
+stcfun run = () -> i64 {
+    mut Acc a = Acc.$init(5);
+    a.add(1);
+    a.add_twice(2);
+    bump(a.&);
+    Acc.add(a.&, 100);
+    *Acc p = a.&;
+    p.add(1000);
+    i64 s = a.scaled() + a.scaled(k = 10) * 0;
+    ret a.peek() * 1000000 + a.calls as i64 * 1000 + s % 1000;
+}
+
+stcfun receivers = () -> u32 {
+    Acc ro = Acc.$init(7);
+    mut Acc rw = Acc.$init(7);
+    u32 r = if ro.same(rw): 1 else: 0;
+    rw.add(1);
+    ret r * 10 + (if Acc.peek(ro.&) == 7: 1 else: 0) + (if rw.same(ro): 100 else: 0);
+}
+
+stc i64 RUN = run(); #= RUN 1120006240
+stc u32 RE = receivers(); #= RE 11
+
+$main = () {
+    mut Acc a = Acc.$init(1); #: a *(i64 total, u32 calls)
+    v = a.add(2); #: v i64
+    pk = Acc.peek(a.&); #: pk i64
+    bump(a.&);
+    a.add_twice(3);
+}

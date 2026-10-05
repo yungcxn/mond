@@ -1,0 +1,56 @@
+# mutable locals across nested loops, brk and cont need phis at every join
+fun nested = (u32 n) -> u32 {
+    mut u32 acc = 0;
+    mut u32 i = 0;
+    while i < n, i++: {
+        mut u32 j = 0;
+        loop {
+            if j >= i: brk;
+            j++;
+            if j % 2 == 0: cont;
+            acc += j;
+        }
+        if acc > 1000: brk;
+    }
+    ret acc;
+}
+
+fun early = (u32 n) -> u32 {
+    mut u32 x = n;
+    for k in 0..<10 {
+        if x == 0: ret k;
+        x = if x % 2 == 0: x / 2 else: x - 1;
+    }
+    ret 99;
+}
+
+fun swap_loop = (u32 n) -> u32 {
+    mut u32 a = 0;
+    mut u32 b = 1;
+    for _k in 0..<n: a, b = b, a + b;
+    ret a;
+}
+
+fun short_circuit = (u32 a, u32 b) -> u32 {
+    mut u32 hits = 0;
+    if a > 0 and b / a > 1: hits++;
+    if a == 0 or b / a > 1: hits++;
+    ret hits;
+}
+
+stcfun s_nested = (u32 n) -> u32: ret nested(n);
+stcfun s_early = (u32 n) -> u32: ret early(n);
+stcfun s_swap = (u32 n) -> u32: ret swap_loop(n);
+stcfun s_short = (u32 a, u32 b) -> u32: ret short_circuit(a, b);
+
+stc u32 N = s_nested(6); #= N 19
+stc u32 E1 = s_early(0); #= E1 0
+stc u32 E2 = s_early(12); #= E2 5
+stc u32 E3 = s_early(1000000); #= E3 99
+stc u32 F = s_swap(10); #= F 55
+stc u32 S1 = s_short(0, 5); #= S1 1
+stc u32 S2 = s_short(2, 9); #= S2 2
+
+$main = () {
+    u32 r = nested(6) + early(12) + swap_loop(10) + short_circuit(0, 5);
+}

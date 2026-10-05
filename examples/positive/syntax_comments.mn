@@ -1,0 +1,14 @@
+# comments run to the end of the line, also between the tokens of one statement
+stc u32 A = 1 + #= A 3
+    2 # second operand
+    ;
+# no space before a comment
+stc u32 B = 4;#= B 4
+stc []u8 S = "# not a comment"; #: S [15]u8
+stc u8 C = '#'; #= C 35
+###### several hashes
+$main = () {
+    # inside a block
+    u32 x = A; # trailing
+}
+# the file ends in a comment without a newline

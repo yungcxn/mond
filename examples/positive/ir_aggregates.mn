@@ -1,0 +1,50 @@
+# aggregates in memory: arrays of records written through pointers and indices inside loops
+type Cell = *(mut u32 hits, mut u32 last);
+
+fun touch = (*Cell c, u32 at) {
+    c.hits++;
+    c.last = at;
+}
+
+fun histogram = ([8]u32 xs) -> [4]Cell {
+    mut [4]Cell cells = [Cell(hits = 0, last = 0), Cell(hits = 0, last = 0), Cell(hits = 0, last = 0), Cell(hits = 0, last = 0)];
+    for i in 0..<8: touch(cells[xs[i] % 4].&, i);
+    ret cells;
+}
+
+fun score = ([8]u32 xs) -> u32 {
+    cs = histogram(xs);
+    mut u32 s = 0;
+    for c in cs: s = s * 10 + c.hits;
+    ret s * 100 + cs[1].last;
+}
+
+fun reverse = (*[6]u8 a) {
+    mut u64 i = 0;
+    mut u64 j = 5;
+    while i < j {
+        u8 t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+        i++;
+        j--;
+    }
+}
+
+fun reversed = () -> u32 {
+    mut [6]u8 a = [1, 2, 3, 4, 5, 6];
+    reverse(a.&);
+    mut u32 s = 0;
+    for x in a: s = s * 10 + x;
+    ret s;
+}
+
+stcfun s_score = ([8]u32 xs) -> u32: ret score(xs);
+stcfun s_reversed = () -> u32: ret reversed();
+
+stc u32 SC = s_score([1, 5, 2, 9, 4, 4, 7, 13]); #= SC 241107
+stc u32 RV = s_reversed(); #= RV 654321
+
+$main = () {
+    u32 r = score([1, 2, 3, 4, 5, 6, 7, 8]) + reversed();
+}

@@ -1,0 +1,28 @@
+type Node = *(u32 v, *Node next, [2]&Node kids); #: Node type
+type Even = *(u32 v, &Odd odd);
+type Odd = *(u32 v, &Even even);
+variant List = +(Cons(u32 h, &List t), Nil);
+type SA = *(u8 a, u8 b) assertsize sizeof SA;
+type Tree = *(u32 v, [2]*Tree kids);
+
+stc u64 SN = sizeof Node; #= SN 32
+stc u64 SE = sizeof Even; #= SE 16
+stc u64 SL = sizeof List; #= SL 24
+stc u64 ST = sizeof Tree; #= ST 24
+
+fun len = (&List l) -> u32: ret match l.* {
+    List.Cons(h, t) => 1 + len(t),
+    List.Nil => 0,
+}
+fun sum = (&List l) -> u32: ret match l.* {
+    List.Cons(h, t) => h + sum(t),
+    List.Nil => 0,
+}
+fun build = () -> u32 {
+    List n = List.Nil;
+    List c = List.Cons(3, n.&);
+    List b = List.Cons(4, c.&);
+    ret len(b.&) * 100 + sum(b.&);
+}
+stc u32 B = build(); #= B 207
+$main = (u64 n, *u8 p) -> i64 { u32 b = build(); } #: $main (u64, *u8) -> i64

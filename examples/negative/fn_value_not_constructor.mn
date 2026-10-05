@@ -1,0 +1,8 @@
+# a variable of a record or case type is a value, calling it constructs nothing
+type Rec = *(i32 a);
+variant V = +(A, B(u8));
+fun f = (Rec r, V.B c) {
+    Rec q = r(1); #! not_callable
+    V.B d = c(2); #! not_callable
+}
+$main = () {}

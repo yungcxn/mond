@@ -1,7 +1,7 @@
-stcfun Inf = (u32 N): Inf(N + 1); #! static_eval_failed
+stcfun Inf = (u32 N): Inf(N + 1);
 
-type T = Inf(0);
+type T = Inf(0); #! static_eval_failed
 
-stcfun Deep = (u32 N) -> u32: ret Deep(N + 1); #! static_eval_failed
+stcfun Deep = (u32 N) -> u32: ret Deep(N + 1);
 
-stc u32 D = Deep(0);
+stc u32 D = Deep(0); #! static_eval_failed

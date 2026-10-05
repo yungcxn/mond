@@ -1,0 +1,9 @@
+# nothing ever fixes these types, each declaration holding one reports it
+fun a4 = (): ret a4(); #! uninferable_type
+fun a7 = (bool c) { x = []; ret x; } #! uninferable_type uninferable_type
+fun a8 = () { x = []; y = [x]; } #! uninferable_type uninferable_type
+fun a9 = (u32 n): ret if n > 0: a9(n - 1) else: a9(n + 1); #! uninferable_type
+fun fixed = () { x = []; [0]u8 y = x; }
+fun later = () -> [0]i16 { x = []; ret x; }
+
+$main = () {}

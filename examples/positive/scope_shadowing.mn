@@ -1,0 +1,92 @@
+variant O = +(Some(u32), None);
+type R = *(u32 a, u32 b);
+
+fun inner_scope = () -> u32 {
+    u32 a = 1;
+    u32 b = {
+        u32 a = a + 10;
+        a * 2;
+    };
+    ret b;
+}
+fun param_hidden = (u32 p) -> u32 {
+    u32 p = p + 1;
+    ret p;
+}
+fun global_hidden = (u32 G) -> u32: ret G;
+fun upper_binder = (u32 v) -> u32: ret match v { 0 => 100, BINDER => BINDER + 1, };
+fun unwrap_scope = (O o) -> u32 {
+    u32 v = 7;
+    u32 inside = if o ?<- v: v else: v + 1000;
+    ret inside * 10 + v;
+}
+# the label binder lives in its statement only, the outer `s` is back afterwards
+fun label_scope = () -> u32 {
+    u32 s = 1;
+    bool hit = (20 <- s) == 21 or s == 20;
+    ret if hit: s else: 0;
+}
+fun arm_scope = (O o) -> u32 {
+    u32 x = 5;
+    u32 r = match o {
+        O.Some(x) => x,
+        O.None => x,
+    };
+    ret r * 100 + x;
+}
+fun or_binders = (R r) -> u32: ret match r {
+    R(a = 1, b = x) | R(a = x, b = 1) => x,
+    _ => 0,
+}
+fun nested_it = () -> u32 {
+    mut u32 s = 0;
+    for 1..=3 {
+        u32 outer = $it;
+        for 0..<2: s += outer * 10 + $it;
+    }
+    ret s;
+}
+fun var_shadows_it = () -> u32 {
+    mut u32 s = 0;
+    for i in 0..<3 { for i in 10..<12: s += i; }
+    ret s;
+}
+fun dollar_params = (u32, u32, u32) -> u32: ret $0 * 100 + $1 * 10 + $2;
+fun lambda_shadows = () -> u32 {
+    u32 k = 3;
+    f = (u32 k): k * 2;
+    ret f(10) + k;
+}
+fun deep_blocks = () -> u32 {
+    u32 x = 1;
+    u32 y = { u32 x = x + 1; { u32 x = x * 10; x; }; };
+    ret y * 10 + x;
+}
+fun if_branch_scope = (bool c) -> u32 {
+    u32 x = 4;
+    if c { u32 x = 40; do x; } else { u32 x = 400; do x; }
+    ret x;
+}
+
+stc u32 G = 99;
+stc u32 SS = inner_scope(); #= SS 22
+stc u32 PH = param_hidden(4); #= PH 5
+stc u32 GH = global_hidden(3); #= GH 3
+stc u32 UB0 = upper_binder(0); #= UB0 100
+stc u32 UB = upper_binder(8); #= UB 9
+stc u32 US = unwrap_scope(O.Some(3)); #= US 37
+stc u32 UN = unwrap_scope(O.None); #= UN 10077
+stc u32 LS = label_scope(); #= LS 1
+stc u32 AS1 = arm_scope(O.Some(2)); #= AS1 205
+stc u32 AS2 = arm_scope(O.None); #= AS2 505
+stc u32 OB1 = or_binders(R(a = 1, b = 6)); #= OB1 6
+stc u32 OB2 = or_binders(R(a = 8, b = 1)); #= OB2 8
+stc u32 OB3 = or_binders(R(a = 2, b = 2)); #= OB3 0
+stc u32 NI = nested_it(); #= NI 123
+stc u32 VI = var_shadows_it(); #= VI 63
+stc u32 DP = dollar_params(1, 2, 3); #= DP 123
+stc u32 LA = lambda_shadows(); #= LA 23
+stc u32 DB = deep_blocks(); #= DB 201
+stc u32 IB = if_branch_scope(true); #= IB 4
+# argc / argv in any integer and pointer type, an integer result
+$main = (i32 argc, &[]&u8 argv) -> i32: ret argc + inner_scope() as i32; #: $main (i32, &[]&u8) -> i32

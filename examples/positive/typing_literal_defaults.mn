@@ -1,0 +1,23 @@
+# untyped literals: u32, else u64; negated i32, else i64; floats f32; strings [n]u8
+$main = () {
+    a = 0; #: a u32
+    b = 4294967295; #: b u32
+    c = 4294967296; #: c u64
+    d = -1; #: d i32
+    e = -2147483648; #: e i32
+    g = -2147483649; #: g i64
+    h = 0xFFFF_FFFF; #: h u32
+    i = 0x1_0000_0000; #: i u64
+    j = 0b1; #: j u32
+    k = 0o7; #: k u32
+    l = 1.0; #: l f32
+    m = -1.5; #: m f32
+    n = 1_0.0_1; #: n f32
+    p = "abc"; #: p [3]u8
+    q = ""; #: q [0]u8
+    r = "a\nb\x41"; #: r [4]u8
+    s = true; #: s bool
+    t = (7); #: t u32
+    u = -(7); #: u i32
+    v = - -7; #: v u32
+}

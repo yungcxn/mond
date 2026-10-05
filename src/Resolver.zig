@@ -15,6 +15,7 @@ const calls = @import("resolver/checker/calls.zig");
 const control = @import("resolver/checker/control.zig");
 const types = @import("resolver/checker/types.zig");
 const statics = @import("resolver/checker/statics.zig");
+const inits = @import("resolver/checker/inits.zig");
 
 pub const same_params = calls.same_params;
 pub const bind_args = calls.bind_args;
@@ -31,6 +32,12 @@ pub const generic_slot = statics.generic_slot;
 pub const templated = statics.templated;
 pub const realizes = statics.realizes;
 pub const holds_template = statics.holds_template;
+pub const init_new = inits.new;
+pub const init_release = inits.release;
+pub const init_copy = inits.copy;
+pub const init_save = inits.save;
+pub const init_merge = inits.merge;
+pub const init_clear = inits.clear;
 
 // the resolver answers two questions for every ast node:
 //   1. which declaration does this identifier mean?   -> node_decl
@@ -165,7 +172,8 @@ pub const Stmt = struct {
         }
 
         const decl_id = if (stmt_ids.len == 1) res.node_decl[stmt_ids[0]] else .none;
-        const assigns = stmt_type == 0 and decl_id != .none and !res.decl_pool.kinds()[@intFromEnum(decl_id)].is_fn();
+        const place = stmt_ids.len == 1 and res.tree.kind(stmt_ids[0]) != .identifier and res.tree.kind(stmt_ids[0]) != .identifier_self;
+        const assigns = stmt_type == 0 and (place or decl_id != .none and !res.decl_pool.kinds()[@intFromEnum(decl_id)].is_fn());
 
         var values: []const ParseTree.NodeId = &.{};
         if (stmt_value != 0) {
@@ -343,11 +351,15 @@ realized_args: std.AutoHashMapUnmanaged(DeclPool.Index, StaticPool.Index) = .emp
 // functions produced by a stcfun: the realization whose static parameters they see
 static_scope: std.AutoHashMapUnmanaged(DeclPool.Index, StaticPool.AbstractKey) = .empty,
 init_tracked: DynBuf(DeclPool.Index),
-uninit: u64 = 0,
+// one bit per tracked local not written yet (see inits.zig), set 0 of the open session is the current state
+init_words: DynBuf(u64),
+init_base: u32 = 0,
+init_width: u32 = 1,
+init_count: u32 = 0,
 deferrals: u32 = 0,
 // brk and cont seen so far: a loop without a brk never ends, one without either yields one element per step
 jumps: [2]u32 = .{ 0, 0 },
-loop_exits: DynBuf(u64),
+loop_exits: DynBuf(u32),
 
 // global names -> first declaration with that name
 // - overloads of the same name handled by `decls.next_overload` for single per-name entry
@@ -371,6 +383,9 @@ doc: Doctor,
 // "static" (compiletime) evaluation of what's static
 interpreter: Interpreter,
 
+// buffers that live while one top-level declaration is checked
+temp: std.heap.ArenaAllocator,
+
 pub inline fn init(alloc: std.mem.Allocator, tree: *ParseTree, src_bytes: []const u8, roots: []const ParseTree.NodeId) Resolver {
     return Resolver{
         .alloc = alloc,
@@ -387,6 +402,7 @@ pub inline fn init(alloc: std.mem.Allocator, tree: *ParseTree, src_bytes: []cons
         .bodies = .init(alloc, 256),
         .body_nodes = .init(alloc, 4096),
         .init_tracked = .init(alloc, 64),
+        .init_words = .init(alloc, 64),
         .loop_exits = .init(alloc, 16),
         .global_decls = .empty,
         .local_names = .init(alloc, 256),
@@ -394,6 +410,7 @@ pub inline fn init(alloc: std.mem.Allocator, tree: *ParseTree, src_bytes: []cons
         .local_scope_marks = .init(alloc, 16),
         .doc = .{ .diagnostics = .init(alloc, 16) },
         .interpreter = .init(alloc),
+        .temp = .init(alloc),
     };
 }
 
@@ -406,11 +423,13 @@ pub inline fn deinit(self: *Resolver) void {
     self.body_nodes.deinit();
     self.interpreter.deinit();
     self.init_tracked.deinit();
+    self.init_words.deinit();
     self.loop_exits.deinit();
     self.local_names.deinit();
     self.local_decls.deinit();
     self.local_scope_marks.deinit();
     self.doc.diagnostics.deinit();
+    self.temp.deinit();
 
     self.body_of.deinit(self.alloc);
     self.template_of.deinit(self.alloc);
@@ -443,6 +462,7 @@ fn s1_collect_globals(self: *Resolver) void {
     @memset(self.node_value, .none);
 
     self.name_pool.intern_predefineds();
+    _ = self.init_new();
 
     for (self.roots) |root| {
 
@@ -492,6 +512,7 @@ fn s2_check_globals(self: *Resolver) void {
     for (0..count) |i| {
         self.h05_ensure_signature(@enumFromInt(i));
         self.h06_check_body(@enumFromInt(i));
+        _ = self.temp.reset(.retain_capacity);
     }
     var ctx = FnCtx{};
     for (self.roots) |root| if (self.node_decl[root] == .none) {
@@ -504,13 +525,15 @@ fn s2_check_globals(self: *Resolver) void {
         while (c != .none) : (c = self.decl_pool.next_overloads()[@intFromEnum(c)]) {
             if (self.group_head(h.*, c) != c) continue;
             var size: u32 = 0;
-            var fallback = false;
+            var plain: u32 = 0;
             var m = c;
             while (m != .none) : (m = self.decl_pool.next_overloads()[@intFromEnum(m)]) if (calls.same_params(self, m, c)) {
                 size += 1;
-                fallback = fallback or !calls.dispatches(self, self.real(m));
+                const fallback = !calls.dispatches(self, self.real(m));
+                plain += @intFromBool(fallback);
+                if (fallback and plain > 1) self.doc.h21_report(.duplicate_declaration, self.decl_pool.nodes()[@intFromEnum(m)], self.decl_pool.names()[@intFromEnum(m)], c);
             };
-            if (size > 1 and !fallback) _ = self.report(.no_matching_overload, self.decl_pool.nodes()[@intFromEnum(c)], size, 0);
+            if (size > 1 and plain == 0) _ = self.report(.no_matching_overload, self.decl_pool.nodes()[@intFromEnum(c)], size, 0);
         }
     }
 }
@@ -537,7 +560,7 @@ fn s3_apply_inferred_types(self: *Resolver) void {
                 const f = if (k == .for_var_in_seq) self.tree.arg(origin, 0) else origin;
                 const seq = self.tree.arg(f, 0);
                 const st = self.deref(sp.apply_vars(&self.abstract_pool, self.node_type[seq]));
-                break :blk (is_range_kind(self.tree.kind(seq)) and self.tree.kind(seq) != .gen_lowerbound) or (st != .none and sp.tag(st) == .array_type) or control.is_ptr_array(self, self.node_type[seq]);
+                break :blk if (is_range_kind(self.tree.kind(seq))) self.tree.kind(seq) != .gen_lowerbound else (st != .none and sp.tag(st) == .array_type) or control.is_ptr_array(self, self.node_type[seq]);
             },
             .@"while", .while_with_repeat_stmt, .loop, .loop_with_repeat_stmt => false,
             .type_array_unlengthed, .array_index, .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => true,
@@ -575,10 +598,12 @@ fn s4_check_entry_point(self: *Resolver) void {
 pub fn h01_lookup(self: *Resolver, name: NamePool.Index) DeclPool.Index {
     const names = self.local_names.sliced();
     var i = names.len;
+    var walled = false;
     while (i > 0) {
         i -= 1;
-        if (names[i] == name) return self.local_decls.buf[i];
+        if (names[i] == name and (!walled or self.decl_pool.kinds()[@intFromEnum(self.local_decls.buf[i])].is_type_decl() or self.decl_pool.kinds()[@intFromEnum(self.local_decls.buf[i])] == .static_function)) return self.local_decls.buf[i];
         if (names[i] == .none) break; // barrier: a declaration body never sees its user's locals
+        walled = walled or names[i] == .wall; // a local type sees only the types and stcfuns of its function
     }
     return self.global_decls.get(name) orelse .none;
 }
@@ -587,7 +612,7 @@ pub fn use(self: *Resolver, node: ParseTree.NodeId) DeclPool.Index {
     const name = self.name_pool.name_of(self.tree, self.src_bytes, node);
     const d = self.h01_lookup(name);
     if (d == .none) {
-        _ = self.report(.undefined_name, node, name, 0);
+        if (!self.doc.has(node)) _ = self.report(.undefined_name, node, name, 0);
         return d;
     }
     self.node_decl[node] = d;
@@ -600,6 +625,29 @@ pub fn h02_declare_local(self: *Resolver, name: NamePool.Index, node: ParseTree.
     self.local_names.push(name);
     self.local_decls.push(d);
     return d;
+}
+
+// an overloaded function as a value is the overload of the expected type
+fn overload_for(self: *Resolver, node: ParseTree.NodeId, d: DeclPool.Index, expected: StaticPool.Index) DeclPool.Index {
+    const e = self.static_pool.apply_vars(&self.abstract_pool, expected);
+    if (d == .none or e == .none or self.static_pool.tag(e) != .function_type or !self.decl_pool.kinds()[@intFromEnum(d)].is_fn()) return d;
+    var c = d;
+    while (c != .none) : (c = self.decl_pool.next_overloads()[@intFromEnum(c)]) if (types.decl_type(self, c) == e) {
+        self.node_decl[node] = c;
+        return c;
+    };
+    return d;
+}
+
+pub fn in_scope(self: *Resolver, name: NamePool.Index) DeclPool.Index {
+    const from = self.local_scope_marks.buf[self.local_scope_marks.head - 1];
+    const i = std.mem.indexOfScalar(NamePool.Index, self.local_names.buf[from..self.local_names.head], name) orelse return .none;
+    return if (name == .underscore) .none else self.local_decls.buf[from + i];
+}
+
+pub fn redeclared(self: *Resolver, name: NamePool.Index, at: ParseTree.NodeId) void {
+    const d = self.in_scope(name);
+    if (d != .none) self.doc.h21_report(.duplicate_declaration, at, name, d);
 }
 
 pub fn h03_push_scope(self: *Resolver) void {
@@ -639,6 +687,10 @@ pub fn h05_ensure_signature(self: *Resolver, decl: DeclPool.Index) void {
     var ctx = FnCtx{ .decl = decl, .self_type = self.owner_of(decl), .in_static = flags.is_stc };
     const v = self.value_node(decl);
     self.open_scope(flags.is_global, if (self.self_off(decl) == 1) ctx.self_type else .none, v);
+    if (!flags.is_global and kind.is_type_decl()) {
+        self.local_names.push(.wall);
+        self.local_decls.push(.none);
+    }
     switch (kind) {
         .function, .static_function, .inlined_function, .trait_member => if (self.tree.kind(v) == .def_fun or self.tree.kind(v) == .def_fun_declaration) {
             // stcfun: the first tuple is static, whatever the body produces is the result (a second tuple belongs to the produced function)
@@ -660,6 +712,7 @@ pub fn h05_ensure_signature(self: *Resolver, decl: DeclPool.Index) void {
             };
             // a method's first parameter is the induced `*Self`, `init` constructs and has none
             self.decl_pool.tys()[@intFromEnum(decl)] = types.fun_type(self, &ctx, v, category, ret, if (self.self_off(decl) == 1) self.self_ptr(ctx.self_type) else .none);
+            if (!self.template_of.contains(decl)) for (self.params_of(v), 0..) |pn, i| for (self.params_of(v)[0..i], 0..) |q, j| if (self.param_name(q, j) == self.param_name(pn, i)) self.doc.h21_report(.duplicate_declaration, pn, self.param_name(pn, i), decl);
             if (flags.is_global and self.decl_pool.names()[@intFromEnum(decl)] == .main) self.decl_pool.tys()[@intFromEnum(decl)] = types.dynify(self, self.decl_pool.tys()[@intFromEnum(decl)]);
             self.decl_pool.values()[@intFromEnum(decl)] = if (kind == .static_function)
                 sp.intern(.{ .static_fun = .{ .decl = decl, .result_kind = if (sp.tag(ret) == .meta_type) sp.get(ret).meta_type else .stcfun } })
@@ -703,9 +756,9 @@ pub fn h06_check_body(self: *Resolver, decl: DeclPool.Index) void {
     const first = self.decl_pool.entries.len();
     const mark = self.doc.diagnostics.len();
     const outer = self.init_enter();
-    defer self.init_leave(outer.tracked, outer.uninit);
+    defer self.init_leave(outer);
     // a local function sees which enclosing locals are not written yet
-    if (kind == .function and !self.decl_pool.flags()[@intFromEnum(decl)].is_global) self.uninit = outer.uninit;
+    if (kind == .function and !self.decl_pool.flags()[@intFromEnum(decl)].is_global) inits.import(self, 0, outer.bits, 0);
     const off = self.self_off(decl);
     var ctx = FnCtx{ .decl = decl, .ret_type = sp.get(ty).function_type.ret, .self_type = self.owner_of(decl), .abstract = abstract };
     self.open_scope(self.decl_pool.flags()[@intFromEnum(decl)].is_global, if (off == 1) ctx.self_type else .none, v);
@@ -718,7 +771,6 @@ pub fn h06_check_body(self: *Resolver, decl: DeclPool.Index) void {
         const p = Param.from_node(self, pn);
         const pt = sp.get(ty).function_type.params[i + off];
         if (p.default != 0) _ = self.check(&ctx, p.default, pt);
-        for (self.params_of(v)[0..i], 0..) |q, j| if (self.param_name(q, j) == self.name_at(p, i)) self.doc.h21_report(.duplicate_declaration, pn, self.name_at(p, i), decl);
         const pd = self.h02_declare_local(self.name_at(p, i), pn, .parameter, pt);
         self.node_decl[pn] = pd;
         const gp = if (g) |t| self.sig(t).params[i + off] else pt;
@@ -783,7 +835,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
     const t: StaticPool.Index = switch (k) {
         .int, .float, .char, .string, .boolean_true, .boolean_false => statics.literal_type(self, node, expected),
         .identifier, .identifier_self => blk: {
-            const d = self.use(node);
+            const d = self.overload_for(node, self.use(node), expected);
             if (d == .none) break :blk .poison_type;
             self.check_init(node, d);
             const ty = self.decl_pool.tys()[@intFromEnum(d)];
@@ -799,6 +851,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             for (stmts) |s| {
                 const st = Stmt.from_node(self, s);
                 if (st.kind != .function or st.assignees.len != 1 or st.type == 0 or self.tree.kind(st.type) != .type_fun) continue;
+                if (self.in_scope(self.name_pool.name_of(self.tree, self.src_bytes, st.assignees[0])) != .none) continue;
                 const d = self.h02_declare_local(self.name_pool.name_of(self.tree, self.src_bytes, st.assignees[0]), st.node, .function, .none);
                 self.decl_pool.flags()[@intFromEnum(d)] = st.flags;
                 self.node_decl[st.assignees[0]] = d;
@@ -822,9 +875,12 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             const lt = self.h18_check_place(ctx, a0);
             break :blk if (self.elem_ptr(lt)) lt else self.numeric(node, lt, lt);
         },
-        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap => blk: {
+        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap => blk: {
             const j = self.pair(ctx, node, a0, a1, if (self.is_numeric(expected)) expected else .none);
-            const wraps = k == .binary_add_wrap or k == .binary_sub_wrap or k == .binary_mul_wrap;
+            const wraps = switch (k) {
+                .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod => false,
+                else => true,
+            };
             const r = if ((k == .binary_add or k == .binary_sub) and self.elem_ptr(j)) j else if (wraps and !sp.get_tag_prop(j).is_integer and sp.tag(j) != .type_var) self.mismatch(node, j, .none) else self.numeric(node, j, j);
             // arithmetic on constants is folded, an overflow is an error as soon as it can be seen
             if (r != .poison_type and !ctx.abstract and self.folded(a0) and self.folded(a1)) {
@@ -838,8 +894,11 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             break :blk if (j == .poison_type) j else .bool_type;
         },
         .binary_logic_or, .binary_logic_and => blk: {
+            const m = self.init_count;
+            defer self.init_release(m);
             const w = self.condition(ctx, node);
-            self.uninit = w[0] | w[1];
+            self.init_copy(0, w[0]);
+            self.init_merge(0, w[1]);
             break :blk .bool_type;
         },
         .binary_logic_xor => blk: {
@@ -876,7 +935,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             break :blk if (sp.is_ptr(st)) sp.pointee(st) else self.mismatch(node, st, .none);
         },
         .address_of => blk: {
-            if (self.tree.kind(a0) == .identifier) self.uninit &= ~self.init_bit(self.h01_lookup(self.name_pool.name_of(self.tree, self.src_bytes, a0)));
+            if (self.tree.kind(a0) == .identifier) self.written(self.h01_lookup(self.name_pool.name_of(self.tree, self.src_bytes, a0)));
             const exp = sp.apply_vars(ap, expected);
             const st = self.h09_check_expr(ctx, a0, if (sp.is_ptr(exp)) sp.pointee(exp) else .none);
             // write access only to what could be written directly
@@ -887,10 +946,28 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         .array, .array_empty => blk: {
             const exp = sp.apply_vars(ap, expected);
             var elem = sp.array_elem(exp);
+            const given = elem != .none;
             const elems = if (k == .array) self.tree.manychildren(node) else &[_]ParseTree.NodeId{};
+            // without an expectation the elements join, literals last: `[1, -2]` is [2]i32, `[x, 300]` with u8 x [2]u32
             for (elems) |e| {
+                if (!given and self.is_literal(e)) continue;
                 const et = self.h09_check_expr(ctx, e, elem);
-                if (elem == .none) elem = et else _ = self.h10_expect(e, et, elem);
+                const joined = if (given or elem == .none) .none else sp.join(ap, elem, et).ty;
+                if (elem == .none) elem = et else if (joined != .none) elem = joined else _ = self.h10_expect(e, et, elem);
+            }
+            if (!given) {
+                for (elems) |e| if (self.is_literal(e)) {
+                    _ = self.h09_check_expr(ctx, e, .none);
+                };
+                if (elem == .none) elem = control.literals_type(self, elems);
+                if (elem == .none and elems.len > 0) elem = self.node_type[elems[0]];
+                for (elems) |e| if (self.is_literal(e) and elem != .none) {
+                    const j = sp.join(ap, elem, statics.literal_type(self, e, elem)).ty;
+                    if (j != .none) elem = j;
+                };
+                for (elems) |e| if (self.is_literal(e)) {
+                    _ = self.h10_expect(e, self.node_type[e], elem);
+                };
             }
             if (elem == .none) elem = self.fresh_var(node);
             break :blk sp.intern(.{ .array_type = .{ .len = sp.intern(.{ .int = .{ .ty = .u64_type, .bits = elems.len } }), .elem = elem } });
@@ -944,7 +1021,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         .ret_void => if (ctx.ret_type != .none and sp.coerce(ap, .unit_type, ctx.ret_type) == .incompatible) self.report(.ret_type_mismatch, node, .unit_type, ctx.ret_type) else .never_type,
         .brk, .cont => if (ctx.loop_depth > 0) blk: {
             self.jumps[@intFromBool(k == .cont)] += 1;
-            if (k == .brk and self.loop_exits.head > 0) self.loop_exits.buf[self.loop_exits.head - 1] |= self.uninit;
+            if (k == .brk and self.loop_exits.head > 0) self.init_merge(self.loop_exits.buf[self.loop_exits.head - 1], 0);
             break :blk .never_type;
         } else self.report(if (k == .brk) .brk_outside_loop else .cont_outside_loop, node, 0, 0),
         .do, .@"defer" => blk: {
@@ -956,8 +1033,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             self.need_deinit(node, st);
             // a deinitialized local has to be written again before it is read
             if (k == .deinit and self.tree.kind(a0) == .identifier and self.node_decl[a0] != .none and !self.decl_pool.flags()[@intFromEnum(self.node_decl[a0])].is_global) {
-                const bit = self.init_bit(self.node_decl[a0]);
-                if (bit != 0) self.uninit |= bit else self.track(self.node_decl[a0]);
+                if (self.tracked_at(self.node_decl[a0])) |i| inits.put(self, 0, i, true) else self.track(self.node_decl[a0]);
             }
             break :blk if (k == .deinit) .unit_type else st;
         },
@@ -966,6 +1042,9 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             const d = self.decl_pool.push_decl(.empty, node, .function, .none, .{});
             self.node_decl[node] = d;
             self.h05_ensure_signature(d);
+            const e = sp.apply_vars(ap, expected);
+            const ft = self.decl_pool.tys()[@intFromEnum(d)];
+            if (e != .none and sp.tag(e) == .function_type and ft != .none and sp.tag(ft) == .function_type and std.mem.eql(StaticPool.Index, sp.get(ft).function_type.params, sp.get(e).function_type.params) and sp.tag(sp.apply_vars(ap, sp.get(ft).function_type.ret)) == .type_var) _ = sp.unify(ap, sp.get(ft).function_type.ret, sp.get(e).function_type.ret);
             self.h06_check_body(d);
             break :blk self.decl_pool.tys()[@intFromEnum(d)];
         },
@@ -976,7 +1055,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
 }
 
 // the locals not written yet when a condition is true and when it is false: `and` runs its right side only after a true left one
-pub fn condition(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId) [2]u64 {
+pub fn condition(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId) [2]u32 {
     const k = self.tree.kind(n);
     if (k == .capture) {
         const w = self.condition(ctx, self.tree.arg(n, 0));
@@ -985,13 +1064,16 @@ pub fn condition(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId) [2]u64 {
     }
     if (k != .binary_logic_and and k != .binary_logic_or) {
         _ = self.check(ctx, n, .bool_type);
-        return .{ self.uninit, self.uninit };
+        const s = self.init_save(0);
+        return .{ s, s };
     }
     const l = self.condition(ctx, self.tree.arg(n, 0));
-    self.uninit = l[@intFromBool(k == .binary_logic_or)];
+    self.init_copy(0, l[@intFromBool(k == .binary_logic_or)]);
     const r = self.condition(ctx, self.tree.arg(n, 1));
     _ = self.set(n, .bool_type);
-    return if (k == .binary_logic_and) .{ r[0], l[1] | r[1] } else .{ l[0] | r[0], r[1] };
+    const both = self.init_save(l[@intFromBool(k == .binary_logic_and)]);
+    self.init_merge(both, r[@intFromBool(k == .binary_logic_and)]);
+    return if (k == .binary_logic_and) .{ r[0], both } else .{ both, r[1] };
 }
 
 pub fn h10_expect(self: *Resolver, node: ParseTree.NodeId, actual: StaticPool.Index, expected: StaticPool.Index) StaticPool.Index {
@@ -1045,25 +1127,45 @@ pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) St
     const declaring = parts.type != 0 or @as(u8, @bitCast(flags)) != 0;
     var ty: StaticPool.Index = if (parts.type != 0) types.realized_type(self, ctx, parts.type) else .none;
     // untyped: visible names are assigned, their type is shared by the new ones
-    var existing: [64]DeclPool.Index = undefined;
+    const existing = self.scratch(DeclPool.Index, parts.assignees.len);
     for (parts.assignees, 0..) |id, i| {
         existing[i] = if (declaring or self.pre_declared(self.node_decl[id], n)) .none else self.h01_lookup(self.name_pool.name_of(self.tree, self.src_bytes, id));
         if (existing[i] == .none) continue;
-        const outer = self.uninit;
-        self.uninit = 0;
+        const outer = self.init_save(0);
+        self.init_clear(0);
         const et = self.h18_check_place(ctx, id);
-        self.uninit = outer;
+        self.init_copy(0, outer);
+        self.init_release(outer);
         if (ty == .none) ty = et else if (et != ty and et != .poison_type) _ = self.report(.destructure_type_conflict, id, et, ty);
     }
     self.h03_push_scope();
     if (values.len > 1) {
         var shared = ty;
+        const lits = self.scratch(bool, values.len);
         for (values, 0..) |v, i| {
-            const vt = self.check(ctx, v, if (i < parts.assignees.len and existing[i] != .none) self.decl_pool.tys()[@intFromEnum(existing[i])] else ty);
+            const want = if (i < parts.assignees.len and existing[i] != .none) self.decl_pool.tys()[@intFromEnum(existing[i])] else ty;
+            lits[i] = want == .none and self.is_literal(v);
+            if (lits[i]) continue;
+            const vt = self.check(ctx, v, want);
             if (shared == .none) shared = vt else if (ty == .none) {
                 const j = sp.join(&self.abstract_pool, shared, vt);
                 shared = if (j.ty == .none) self.report(.destructure_type_conflict, v, shared, vt) else j.ty;
             }
+        }
+        if (ty == .none) {
+            for (values, 0..) |v, i| if (lits[i]) {
+                _ = self.h09_check_expr(ctx, v, .none);
+            };
+            if (shared == .none) shared = control.literals_type(self, values);
+            if (shared == .none) shared = self.node_type[values[0]];
+            for (values, 0..) |v, i| if (lits[i] and shared != .poison_type) {
+                const lt = statics.literal_type(self, v, shared);
+                const j = sp.join(&self.abstract_pool, shared, lt);
+                shared = if (j.ty == .none) self.report(.destructure_type_conflict, v, shared, lt) else j.ty;
+            };
+            for (values, 0..) |v, i| if (lits[i] and shared != .poison_type) {
+                _ = self.h10_expect(v, self.node_type[v], shared);
+            };
         }
         ty = shared;
     } else if (values.len == 1) {
@@ -1075,9 +1177,9 @@ pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) St
     self.h04_pop_scope();
     for (parts.assignees, 0..) |id, i| {
         const d = if (existing[i] != .none) existing[i] else self.declare(id, n, .variable, if (ty == .none) .poison_type else ty, flags);
-        if (existing[i] != .none) self.uninit &= ~self.init_bit(d) else if (values.len == 0 and !self.decl_pool.flags()[@intFromEnum(d)].is_global and self.scalar(self.decl_pool.tys()[@intFromEnum(d)])) self.track(d);
-        if (values.len > 0 and self.node_type[values[@min(i, values.len - 1)]] != .poison_type and (existing[i] == .none or (self.interpreter.depth > 0 and !ctx.interpreted)) and (self.decl_pool.flags()[@intFromEnum(d)].is_stc or ctx.in_static)) {
-            self.decl_pool.values()[@intFromEnum(d)] = statics.retype(self, statics.static_of(self, ctx, values[@min(i, values.len - 1)]), self.decl_pool.tys()[@intFromEnum(d)]);
+        if (existing[i] != .none) self.written(d) else if (values.len == 0 and !self.decl_pool.flags()[@intFromEnum(d)].is_global and self.scalar(self.decl_pool.tys()[@intFromEnum(d)])) self.track(d);
+        if (values.len > 0 and (existing[i] == .none or (self.interpreter.depth > 0 and !ctx.interpreted)) and (self.decl_pool.flags()[@intFromEnum(d)].is_stc or ctx.in_static)) {
+            self.decl_pool.values()[@intFromEnum(d)] = if (self.node_type[values[@min(i, values.len - 1)]] == .poison_type) .poison_type else statics.retype(self, statics.static_of(self, ctx, values[@min(i, values.len - 1)]), self.decl_pool.tys()[@intFromEnum(d)]);
             // an unlengthed static takes the length of its value
             const v = self.decl_pool.values()[@intFromEnum(d)];
             if (v != .none and sp.tag(v) == .aggregate_value and sp.has_vars(self.decl_pool.tys()[@intFromEnum(d)])) _ = sp.unify(&self.abstract_pool, self.decl_pool.tys()[@intFromEnum(d)], sp.type_of(v));
@@ -1149,6 +1251,10 @@ fn wrote(self: *Resolver, place: ParseTree.NodeId) void {
 
 // HELPERS! must be interned TODO
 
+pub fn scratch(self: *Resolver, comptime T: type, n: usize) []T {
+    return self.temp.allocator().alloc(T, n) catch @panic("OOM");
+}
+
 pub inline fn set(self: *Resolver, n: ParseTree.NodeId, t: StaticPool.Index) StaticPool.Index {
     self.node_type[n] = t;
     return t;
@@ -1164,14 +1270,17 @@ pub fn check_guards(self: *Resolver, ctx: *FnCtx, p: Param, t: StaticPool.Index)
     if (p.@"else" != 0) _ = if (self.tree.kind(p.@"else") == .assign) self.h09_check_expr(ctx, p.@"else", .none) else self.check(ctx, p.@"else", t);
 }
 
-pub fn init_enter(self: *Resolver) struct { tracked: u32, uninit: u64 } {
-    defer self.uninit = 0;
-    return .{ .tracked = self.init_tracked.head, .uninit = self.uninit };
+pub const InitState = struct { tracked: u32, bits: inits.Session };
+
+pub fn init_enter(self: *Resolver) InitState {
+    const s = InitState{ .tracked = self.init_tracked.head, .bits = inits.enter(self) };
+    _ = inits.new(self);
+    return s;
 }
 
-pub fn init_leave(self: *Resolver, tracked: u32, uninit: u64) void {
-    self.init_tracked.head = tracked;
-    self.uninit = uninit;
+pub fn init_leave(self: *Resolver, s: InitState) void {
+    self.init_tracked.head = s.tracked;
+    inits.leave(self, s.bits);
 }
 
 pub fn check(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
@@ -1189,6 +1298,7 @@ pub fn is_range_kind(k: ParseTree.Node.Kind) bool {
 fn declare(self: *Resolver, id: ParseTree.NodeId, stmt: ParseTree.NodeId, kind: DeclPool.Entry.Kind, ty: StaticPool.Index, flags: DeclPool.Entry.Flags) DeclPool.Index {
     var d = self.node_decl[id];
     if (!self.pre_declared(d, stmt)) {
+        self.redeclared(self.name_pool.name_of(self.tree, self.src_bytes, id), id);
         d = self.h02_declare_local(self.name_pool.name_of(self.tree, self.src_bytes, id), stmt, kind, ty);
         self.decl_pool.flags()[@intFromEnum(d)] = flags;
         self.node_decl[id] = d;
@@ -1313,7 +1423,10 @@ pub fn name_at(self: *Resolver, p: Param, i: usize) NamePool.Index {
         break :blk t;
     };
 
-    return if (p.name != 0) self.name_pool.name_of(self.tree, self.src_bytes, p.name) else self.name_pool.intern_string(autoinserted_dollarnames[@min(i, 63)]);
+    if (p.name != 0) return self.name_pool.name_of(self.tree, self.src_bytes, p.name);
+    if (i < autoinserted_dollarnames.len) return self.name_pool.intern_string(autoinserted_dollarnames[i]);
+    var buf: [24]u8 = undefined;
+    return self.name_pool.intern_owned(std.fmt.bufPrint(&buf, "${d}", .{i}) catch unreachable);
 }
 
 pub fn template_field(self: *Resolver, g: DeclPool.Index, name: NamePool.Index) ?ParseTree.NodeId {
@@ -1368,6 +1481,12 @@ pub fn fn_ret(self: *Resolver, d: DeclPool.Index) StaticPool.Index {
 pub fn method(self: *Resolver, node: ParseTree.NodeId, m: DeclPool.Index) StaticPool.Index {
     self.node_decl[node] = m;
     return types.decl_type(self, m);
+}
+
+// `T.$init()` / `x.$deinit()` of a type that declares neither: a default value, nothing
+pub fn builtin_of(self: *Resolver, callee: ParseTree.NodeId, pt: StaticPool.Index, t: StaticPool.Index) StaticPool.Member {
+    if (pt == .none or pt == .poison_type or t == .none) return .none;
+    return self.static_pool.lookup_member(if (self.static_pool.tag(pt) == .meta_type) t else self.deref(pt), self.name_pool.name_of(self.tree, self.src_bytes, self.tree.arg(callee, 1)));
 }
 
 // the function a declaration stands for (`fun f = my_templ(..)` stands for the realization)
@@ -1441,7 +1560,7 @@ fn is_numeric(self: *Resolver, t: StaticPool.Index) bool {
 
 fn folded(self: *Resolver, n: ParseTree.NodeId) bool {
     return self.is_literal(n) or self.node_value[n] != .none and switch (self.tree.kind(n)) {
-        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap => true,
+        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap => true,
         else => false,
     };
 }
@@ -1461,7 +1580,8 @@ fn operand(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId, hint: StaticPool.I
 
 // both sides of a binary operator: the non-literal side first, so a literal takes its type
 fn pair(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, l: ParseTree.NodeId, r: ParseTree.NodeId, hint: StaticPool.Index) StaticPool.Index {
-    const swap = self.is_literal(l) and !self.is_literal(r);
+    var neg = false;
+    const swap = self.is_literal(l) and (!self.is_literal(r) or self.tree.kind(self.literal_core(r, &neg)) == .float);
     const t1 = self.operand(ctx, if (swap) r else l, hint);
     const add = self.tree.kind(node) == .binary_add;
     if ((add or !swap and self.tree.kind(node) == .binary_sub) and self.elem_ptr(t1)) return if (self.integer(ctx, if (swap) l else r)) t1 else .poison_type;
@@ -1526,23 +1646,24 @@ fn scalar(self: *Resolver, t: StaticPool.Index) bool {
 }
 
 fn track(self: *Resolver, d: DeclPool.Index) void {
-    if (self.init_tracked.head >= 64) return;
-    self.uninit |= @as(u64, 1) << @intCast(self.init_tracked.head);
+    inits.put(self, 0, self.init_tracked.head, true);
     self.init_tracked.push(d);
 }
 
-fn init_bit(self: *Resolver, d: DeclPool.Index) u64 {
-    return for (self.init_tracked.sliced(), 0..) |x, i| {
-        if (x == d) break @as(u64, 1) << @intCast(i);
-    } else 0;
+fn tracked_at(self: *Resolver, d: DeclPool.Index) ?u32 {
+    return @intCast(std.mem.indexOfScalar(DeclPool.Index, self.init_tracked.sliced(), d) orelse return null);
+}
+
+fn written(self: *Resolver, d: DeclPool.Index) void {
+    if (self.tracked_at(d)) |i| inits.put(self, 0, i, false);
 }
 
 fn check_init(self: *Resolver, node: ParseTree.NodeId, d: DeclPool.Index) void {
-    if (self.uninit == 0) return;
-    const bit = self.init_bit(d);
-    if (self.uninit & bit == 0) return;
+    if (inits.empty(self, 0)) return;
+    const i = self.tracked_at(d) orelse return;
+    if (!inits.get(self, 0, i)) return;
     self.doc.h21_report(.use_before_initialization, node, self.decl_pool.names()[@intFromEnum(d)], 0);
-    self.uninit &= ~bit;
+    inits.put(self, 0, i, false);
 }
 
 pub fn node_info(self: *const Resolver, b: Body, comptime field: @EnumLiteral(), n: ParseTree.NodeId) @FieldType(EphemeralNodeInfo, @tagName(field)) {

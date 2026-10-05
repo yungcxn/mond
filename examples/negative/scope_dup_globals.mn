@@ -1,0 +1,24 @@
+type A = *(u8 a);
+type A = *(u16 b); #! duplicate_declaration
+variant V = +(X);
+u32 V = 1; #! duplicate_declaration
+trait Tr = !{ fun t = (); }
+fun Tr = () {} #! duplicate_declaration
+type Alias = u32;
+type Alias = u64; #! duplicate_declaration
+stc u32 S = 1;
+stc u32 S = 1; #! duplicate_declaration
+pub u32 P = 1;
+u32 P = 2; #! duplicate_declaration
+u32 d1, d2 = 1, 2;
+u32 d2 = 3; #! duplicate_declaration
+fun over = () {}
+type over = *(u8 a); #! duplicate_declaration
+u32 third = 1;
+u32 third = 2; #! duplicate_declaration
+u32 third = 3; #! duplicate_declaration
+# overloads are fine, also when the function comes first or last
+fun ok = (u8 a) {}
+fun ok = (u16 a) {}
+fun ok = (u32 a) {}
+$main = () {}

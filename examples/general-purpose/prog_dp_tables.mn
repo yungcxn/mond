@@ -1,0 +1,143 @@
+# dynamic programming over 2d tables, none of them already in the suite
+
+# minimal scalar multiplications for a chain of matrices with the given dimensions
+fun matrix_chain = (&[]u64 dims) -> u64 {
+    u64 n = dims.$len - 1;
+    mut [8][8]u64 cost;
+    for len in 2..=n {
+        for i in 0..=(n - len) {
+            u64 j = i + len - 1;
+            cost[i][j] = 18446744073709551615;
+            for k in i..<j {
+                u64 c = cost[i][k] + cost[k + 1][j] + dims.*[i] * dims.*[k + 1] * dims.*[j + 1];
+                if c < cost[i][j]: cost[i][j] = c;
+            }
+        }
+    }
+    ret cost[0][n - 1];
+}
+
+# longest palindromic subsequence, filled by increasing span
+fun lps = (&[]u8 s) -> u32 {
+    u64 n = s.$len;
+    if n == 0: ret 0;
+    mut [16][16]u32 t;
+    for i in 0..<n: t[i][i] = 1;
+    for span in 2..=n {
+        for i in 0..=(n - span) {
+            u64 j = i + span - 1;
+            t[i][j] = if s.*[i] == s.*[j]: (if span == 2: 2 else: t[i + 1][j - 1] + 2) else: (if t[i + 1][j] > t[i][j - 1]: t[i + 1][j] else: t[i][j - 1]);
+        }
+    }
+    ret t[0][n - 1];
+}
+
+# longest common substring (contiguous), rolling a single row
+fun lcsubstr = (&[]u8 a, &[]u8 b) -> u32 {
+    mut [17]u32 prev;
+    mut u32 best = 0;
+    for i in 1..=a.$len {
+        mut [17]u32 cur;
+        for j in 1..=b.$len {
+            if a.*[i - 1] == b.*[j - 1] {
+                cur[j] = prev[j - 1] + 1;
+                if cur[j] > best: best = cur[j];
+            }
+        }
+        prev = cur;
+    }
+    ret best;
+}
+
+# minimum worst case drops with e eggs and f floors
+fun egg_drop = (u32 e, u32 f) -> u32 {
+    mut [4][37]u32 t;
+    for j in 0..=f: t[1][j] = j;
+    for i in 2..=e {
+        for j in 1..=f {
+            mut u32 best = 4294967295;
+            for x in 1..=j {
+                u32 broke = t[i - 1][x - 1];
+                u32 held = t[i][j - x];
+                u32 worst = 1 + (if broke > held: broke else: held);
+                if worst < best: best = worst;
+            }
+            t[i][j] = best;
+        }
+    }
+    ret t[e][f];
+}
+
+# lattice paths around obstacles, 1 marks a blocked cell
+fun paths = (&[5][5]u8 grid) -> u64 {
+    mut [5][5]u64 w;
+    for r in 0..<5 {
+        for c in 0..<5 {
+            if grid.*[r][c] == 1: cont;
+            if r == 0 and c == 0 {
+                w[r][c] = 1;
+                cont;
+            }
+            u64 up = if r > 0: w[r - 1][c] else: 0;
+            u64 lt = if c > 0: w[r][c - 1] else: 0;
+            w[r][c] = up + lt;
+        }
+    }
+    ret w[4][4];
+}
+
+# side of the largest all ones square
+fun max_square = (&[4][5]u8 m) -> u32 {
+    mut [5][6]u32 t;
+    mut u32 best = 0;
+    for r in 1..=4 {
+        for c in 1..=5 {
+            if m.*[r - 1][c - 1] == 0: cont;
+            u32 a = t[r - 1][c];
+            u32 b = t[r][c - 1];
+            u32 d = t[r - 1][c - 1];
+            mut u32 m3 = if a < b: a else: b;
+            if d < m3: m3 = d;
+            t[r][c] = m3 + 1;
+            if t[r][c] > best: best = t[r][c];
+        }
+    }
+    ret best;
+}
+
+stcfun chains = () -> u64 {
+    [5]u64 a = [40, 20, 30, 10, 30];
+    [4]u64 b = [10, 20, 30, 40];
+    [3]u64 c = [5, 10, 3];
+    [2]u64 d = [7, 7];
+    ret matrix_chain(a.&) * 100000000 + matrix_chain(b.&) * 1000 + matrix_chain(c.&) + matrix_chain(d.&);
+}
+
+stcfun pals = () -> u32: ret lps("bbbab".&) * 1000 + lps("character".&) * 100 + lps("".&) * 10 + lps("z".&);
+stcfun substrs = () -> u32: ret lcsubstr("ABABC".&, "BABCA".&) * 100 + lcsubstr("xyz".&, "abc".&) * 10 + lcsubstr("mondmond".&, "dmon".&);
+stcfun eggs = () -> u32: ret egg_drop(1, 10) * 10000 + egg_drop(2, 36) * 100 + egg_drop(3, 36);
+stcfun grids = () -> u64 {
+    [5][5]u8 open = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]];
+    [5][5]u8 some = [[0, 0, 0, 0, 0], [0, 1, 0, 1, 0], [0, 0, 0, 0, 0], [1, 0, 1, 0, 0], [0, 0, 0, 0, 0]];
+    [5][5]u8 wall = [[0, 0, 1, 0, 0], [0, 0, 1, 0, 0], [1, 1, 1, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]];
+    ret paths(open.&) * 10000 + paths(some.&) * 10 + paths(wall.&);
+}
+stcfun squares = () -> u32 {
+    [4][5]u8 m = [[1, 0, 1, 0, 0], [1, 0, 1, 1, 1], [1, 1, 1, 1, 1], [1, 0, 0, 1, 0]];
+    [4][5]u8 z = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]];
+    [4][5]u8 f = [[1, 1, 1, 1, 1], [1, 1, 1, 1, 1], [1, 1, 1, 1, 1], [1, 1, 1, 1, 1]];
+    ret max_square(m.&) * 100 + max_square(z.&) * 10 + max_square(f.&);
+}
+
+stc u64 MC = chains(); #= MC 2600018000150
+stc u32 LPS = pals(); #= LPS 4501
+stc u32 LCS = substrs(); #= LCS 404
+stc u32 EGG = eggs(); #= EGG 100806
+stc u64 PATHS = grids(); #= PATHS 700080
+stc u32 SQ = squares(); #= SQ 204
+
+$main = () -> u64 {
+    [3]u64 d = [2, 3, 4];
+    m = matrix_chain(d.&); #: m u64
+    ret m + lps("abcba".&) as u64 + egg_drop(2, 10) as u64;
+}
