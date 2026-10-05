@@ -990,17 +990,22 @@ fn assign(self: *HighLowerer, n0: NodeId) void {
     const values = parts.values;
     if (parts.assignees.len == 1 and self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, parts.assignees[0]) == .none) return self.store_to(parts.assignees[0], self.expr_to(values[0], self.ty(parts.assignees[0])));
     const shared = if (values.len == 1) self.expr(values[0]) else Ref.none;
-    var xs: [64]Ref = undefined;
+    const mark = self.tmp.head;
+    defer self.tmp.head = mark;
     for (parts.assignees, 0..) |id, i| {
         const d = self.decl(id);
-        if (d == .none or (self.r.decl_pool.flags()[@intFromEnum(d)].is_stc and self.r.decl_pool.values()[@intFromEnum(d)] != .none)) continue;
+        if (d == .none or (self.r.decl_pool.flags()[@intFromEnum(d)].is_stc and self.r.decl_pool.values()[@intFromEnum(d)] != .none)) {
+            self.tmp.push(@intFromEnum(Ref.none));
+            continue;
+        }
         const t = self.var_ty(@intFromEnum(d));
-        xs[i] = if (values.len == 0) (if (self.aggregate(t) and !self.global_of.contains(d)) self.default_value(t) else Ref.none) else if (values.len > 1) self.expr_to(values[i], t) else self.coerce(shared, self.ty(values[0]), t);
+        const x = if (values.len == 0) (if (self.aggregate(t) and !self.global_of.contains(d)) self.default_value(t) else Ref.none) else if (values.len > 1) self.expr_to(values[i], t) else self.coerce(shared, self.ty(values[0]), t);
+        self.tmp.push(@intFromEnum(x));
     }
     for (parts.assignees, 0..) |id, i| {
         const d = self.decl(id);
         if (d == .none or (self.r.decl_pool.flags()[@intFromEnum(d)].is_stc and self.r.decl_pool.values()[@intFromEnum(d)] != .none)) continue;
-        const x = xs[i];
+        const x: Ref = @enumFromInt(self.tmp.buf[mark + i]);
         if (self.r.decl_pool.nodes()[@intFromEnum(d)] != n) {
             self.store_var(d, x);
         } else if (self.global_of.get(d)) |g| {

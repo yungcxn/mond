@@ -92,11 +92,11 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
     self.h03_push_scope();
     defer self.h04_pop_scope();
 
-    var traits: [65]StaticPool.Index = undefined;
     var nt: usize = 0;
     // the anonymous `!{..}` body, completed after the type: member signatures may realize types that construct this one
     var own: StaticPool.Index = .none;
     const members = if (!is_trait and body != 0) self.tree.arg(body, if (self.tree.kind(body) == .def_trait_implof) 1 else 0) else 0;
+    const traits = self.scratch(StaticPool.Index, if (members != 0 and self.tree.kind(body) == .def_trait_implof) self.tree.manychildren(self.tree.arg(body, 0)).len + 1 else 1);
     if (members != 0) {
         const impls = if (self.tree.kind(body) == .def_trait_implof) self.tree.manychildren(self.tree.arg(body, 0)) else &[_]NodeId{};
         if (self.tree.manychildren(members).len > 0) {
@@ -113,8 +113,8 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
 
     switch (ck) {
         .def_trait, .def_trait_implof => {
-            var supers: [64]StaticPool.Index = undefined;
             const impls = if (ck == .def_trait_implof) self.tree.manychildren(self.tree.arg(c, 0)) else &[_]NodeId{};
+            const supers = self.scratch(StaticPool.Index, impls.len);
             var ns: usize = 0;
             for (impls) |t| {
                 supers[ns] = h07_lower_type(self, ctx, t);
@@ -125,7 +125,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
         },
         .def_variant, .def_variant_unionsized => {
             const params = self.tree.manychildren(self.tree.arg(c, 0));
-            var cases: [256]StaticPool.Index = undefined;
+            const cases = self.scratch(StaticPool.Index, params.len);
             var payload_case: ?usize = null;
             var payloads: usize = 0;
             var next_tag: StaticPool.IntValue = .{ .ty = .u64_type, .bits = 0 };
@@ -169,8 +169,8 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
         },
         else => { // records: `*(..)`, `**(..)` and payload tuples
             const fields = self.fields_of_node(c);
-            var names: [64]NamePool.Index = undefined;
-            var types: [64]StaticPool.Index = undefined;
+            const names = self.scratch(NamePool.Index, fields.len);
+            const types = self.scratch(StaticPool.Index, fields.len);
             for (fields, 0..) |f, i| {
                 const p = Resolver.Param.from_node(self, f);
                 types[i] = dynify(self, realized_type(self, ctx, p.ty));
@@ -207,8 +207,8 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
         }
         // a default sees the fields before its own, a where-clause all of them
         const at = self.local_names.head - fields.len;
-        var names: [64]NamePool.Index = undefined;
-        @memcpy(names[0..fields.len], self.local_names.buf[at..][0..fields.len]);
+        const names = self.scratch(NamePool.Index, fields.len);
+        @memcpy(names, self.local_names.buf[at..][0..fields.len]);
         @memset(self.local_names.buf[at..][0..fields.len], .empty);
         for (fields, 0..) |f, i| {
             const p = Resolver.Param.from_node(self, f);
@@ -249,8 +249,7 @@ fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.I
     if (self.template_of.get(of)) |g| self.template_of.put(self.alloc, b, g) catch @panic("OOM");
     const tr = if (reserved != .none) reserved else sp.reserve_nominal(b);
     self.decl_pool.values()[@intFromEnum(b)] = if (self_ty != .none) self_ty else tr;
-    const names = self.alloc.alloc(NamePool.Index, self.tree.manychildren(body).len) catch @panic("OOM");
-    defer self.alloc.free(names);
+    const names = self.scratch(NamePool.Index, self.tree.manychildren(body).len);
     var n: usize = 0;
     for (self.tree.manychildren(body)) |s| {
         const m = Resolver.Stmt.from_node(self, s);
@@ -263,8 +262,7 @@ fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.I
     for (self.tree.manychildren(body)) |s| if (!Resolver.Stmt.from_node(self, s).is_member()) {
         _ = self.h11_check_assign(ctx, s);
     };
-    const types = self.alloc.alloc(StaticPool.Index, n) catch @panic("OOM");
-    defer self.alloc.free(types);
+    const types = self.scratch(StaticPool.Index, n);
     for (0..n) |i| types[i] = decl_type(self, b.member(i));
     sp.complete_nominal(tr, .{ .trait_type = .{ .decl = b, .member_names = names[0..n], .member_types = types[0..n], .supers = supers } });
     return tr;
@@ -327,28 +325,27 @@ pub fn fun_type(self: *Resolver, ctx: *FnCtx, v: NodeId, category: StaticPool.Fu
     const header = self.tree.arg(v, 0);
     const params = self.params_of(v);
     const off = @intFromBool(self_param != .none);
-    var buf: [65]StaticPool.Index = undefined;
-    buf[0] = self_param;
+    const buf = self.scratch(StaticPool.Index, params.len + off);
+    if (off == 1) buf[0] = self_param;
     for (params, 0..) |p, i| {
         buf[i + off] = h07_lower_type(self, ctx, Resolver.Param.from_node(self, p).ty);
         if (statics.holds_template(self, buf[i + off]) and statics.templated(self, buf[i + off]) == .none) buf[i + off] = self.report(.unrealized_template, Resolver.Param.from_node(self, p).ty, buf[i + off], 0);
     }
     const r = if (self.tree.kind(header) == .partial__fun_def_header_ret) realized_type(self, ctx, self.tree.arg(header, 1)) else ret;
-    return self.static_pool.intern(.{ .function_type = .{ .category = category, .params = buf[0 .. params.len + off], .ret = r } });
+    return self.static_pool.intern(.{ .function_type = .{ .category = category, .params = buf, .ret = r } });
 }
 
 // unlengthed arrays that are not inferred per value become runtime-length arrays
 pub fn dynify(self: *Resolver, t: StaticPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
     if (t == .none or !sp.has_vars(t)) return t;
-    var buf: [65]StaticPool.Index = undefined;
     return switch (sp.get(t)) {
         .array_type => |a| sp.intern(.{ .array_type = .{ .len = if (sp.tag(sp.apply_vars(&self.abstract_pool, a.len)) == .type_var) StaticPool.dyn_len else a.len, .elem = dynify(self, a.elem) } }),
         .ptr_type => |p| sp.intern(.{ .ptr_type = .{ .child = dynify(self, p.child), .mutable = p.mutable } }),
         .function_type => |f| blk: {
-            const n = f.params.len;
-            for (0..n) |i| buf[i] = dynify(self, sp.get(t).function_type.params[i]);
-            break :blk sp.intern(.{ .function_type = .{ .category = f.category, .params = buf[0..n], .ret = dynify(self, sp.get(t).function_type.ret) } });
+            const buf = self.scratch(StaticPool.Index, f.params.len);
+            for (buf, 0..) |*p, i| p.* = dynify(self, sp.get(t).function_type.params[i]);
+            break :blk sp.intern(.{ .function_type = .{ .category = f.category, .params = buf, .ret = dynify(self, sp.get(t).function_type.ret) } });
         },
         else => t,
     };

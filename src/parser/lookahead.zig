@@ -1,7 +1,6 @@
 const Parser = @import("../Parser.zig");
 const Lexer = @import("../Lexer.zig");
 const ParseTree = @import("../ParseTree.zig");
-const FixedStack = @import("../ds/fixedstack.zig").FixedStack;
 const NodeId = ParseTree.NodeId;
 const eval = @import("eval.zig");
 
@@ -39,6 +38,7 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_stcmatch)] = &eval.stcmatch;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = &eval.templ_prefix(.type_ptr, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = &eval.templ_prefix(.type_ptrmut, prec_unary + 1);
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_&&")] = &eval.type_ptr_ptr;
     t[@intFromEnum(Lexer.Token.Kind.kw_u8)] = &eval.type_u8;
     t[@intFromEnum(Lexer.Token.Kind.kw_u16)] = &eval.type_u16;
     t[@intFromEnum(Lexer.Token.Kind.kw_u32)] = &eval.type_u32;

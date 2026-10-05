@@ -31,16 +31,18 @@ pub fn h14_check_match(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, exp
     var quiet = statics.opened(self, ctx);
     var catch_all = false;
     var result: StaticPool.Index = .none;
-    const before = self.uninit;
-    var after: u64 = 0;
-    defer self.uninit = after;
+    const m = self.init_count;
+    defer self.init_release(m);
+    const before = self.init_save(0);
+    const after = self.init_new();
+    defer self.init_copy(0, after);
     var rows: std.ArrayList(NodeId) = .empty;
     defer rows.deinit(self.alloc);
     for (arms) |arm| rows.append(self.alloc, self.tree.arg(arm, 0)) catch @panic("OOM");
     var settled = arms.len;
     for (arms, 0..) |arm, i| {
         if (settled == arms.len and self.concrete(expected)) settled = i;
-        self.uninit = before;
+        self.init_copy(0, before);
         self.h03_push_scope();
         const mark = self.doc.diagnostics.len();
         const pat = pattern(self, ctx, self.tree.arg(arm, 0), st);
@@ -48,14 +50,14 @@ pub fn h14_check_match(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, exp
         if (!quiet and st != .poison_type and covers(self, ctx, &.{st}, rows.items[0..i], i, rows.items[i..][0..1])) self.doc.h21_report(.redundant_match_arm, arm, 0, 0);
         catch_all = catch_all or pat;
         const t = branch(self, ctx, self.tree.arg(arm, 1), expected);
-        if (t != .never_type) after |= self.uninit;
+        if (t != .never_type) self.init_merge(after, 0);
         self.h04_pop_scope();
         result = merge(self, arm, result, if (!self.concrete(expected) and self.is_literal(self.tree.arg(arm, 1))) .never_type else t, expected);
     }
     if (!self.concrete(expected) and (result == .none or result == .never_type)) {
-        var bodies: [512]NodeId = undefined;
+        const bodies = self.scratch(NodeId, arms.len);
         for (arms, 0..) |arm, i| bodies[i] = self.tree.arg(arm, 1);
-        const lt = literals_type(self, bodies[0..arms.len]);
+        const lt = literals_type(self, bodies);
         if (lt != .none) result = lt;
     }
     if (!self.concrete(expected)) for (arms) |arm| if (self.is_literal(self.tree.arg(arm, 1))) {
@@ -84,21 +86,24 @@ pub fn h15_check_branching(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId,
         return if (has_else) branch(self, ctx, self.tree.arg(node, 1), expected) else .unit_type;
     }
     // binders of the condition (`x ?<- v`) are visible in the then branch only
+    const m = self.init_count;
+    defer self.init_release(m);
     self.h03_push_scope();
     const w = self.condition(ctx, cond);
-    self.uninit = w[0];
+    self.init_copy(0, w[0]);
     const was = self.concrete(expected);
     const tt = branch(self, ctx, then, expected);
-    const after_then = if (tt == .never_type) 0 else self.uninit;
-    self.uninit = w[1];
+    const after_then = self.init_new();
+    if (tt != .never_type) self.init_copy(after_then, 0);
+    self.init_copy(0, w[1]);
     self.h04_pop_scope();
     if (!has_else) {
-        self.uninit |= after_then;
+        self.init_merge(0, after_then);
         const valued = tt != .never_type and tt != .runit_type and tt != .poison_type and tt != .unit_type;
         return if (self.concrete(expected) and valued) self.report(.runit_mixing, node, tt, .unit_type) else merge(self, node, tt, .unit_type, if (valued) .none else expected);
     }
     const et = branch(self, ctx, self.tree.arg(node, 1), expected);
-    self.uninit = after_then | if (et == .never_type) 0 else self.uninit;
+    if (et == .never_type) self.init_copy(0, after_then) else self.init_merge(0, after_then);
     const ts = if (was) tt else settle(self, then, tt, expected);
     return merge(self, node, adapt(self, then, ts, et), adapt(self, self.tree.arg(node, 1), et, ts), expected);
 }
@@ -148,8 +153,10 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
             _ = self.set(lp.head, .unit_type);
         }
     }
-    const at_exit = self.uninit;
-    self.loop_exits.push(0);
+    const m = self.init_count;
+    defer self.init_release(m);
+    const at_exit = self.init_save(0);
+    self.loop_exits.push(self.init_new());
     ctx.loop_depth += 1;
     const jumps = self.jumps;
     // a stc loop body is static per iteration: checked like a stcfun body, evaluated with the loop
@@ -162,7 +169,9 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
     const stepped = !broke and self.jumps[1] == jumps[1];
     self.jumps = jumps;
     self.loop_exits.head -= 1;
-    self.uninit = self.loop_exits.buf[self.loop_exits.head] | if (lp.cond != 0 or lp.seq != 0) at_exit else 0;
+    if (lp.cond == 0 and lp.seq == 0) self.init_clear(at_exit);
+    self.init_merge(at_exit, self.loop_exits.buf[self.loop_exits.head]);
+    self.init_copy(0, at_exit);
     if (!ctx.interpreted and !ctx.abstract and Resolver.node_props[@intFromEnum(k)].stc) _ = statics.static_of(self, ctx, node);
     // used as a value: an array of the body values; brk ends it without adding one, cont skips one
     if (lp.cond == 0 and lp.seq == 0 and !broke and elem_hint == .none) return .never_type;
@@ -197,9 +206,10 @@ pub fn h17_check_unwrap(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, ex
     if (pt == .none) return self.mismatch(self.tree.arg(node, 0), vt, .none);
     return switch (k) {
         .selftag_unwrap_fallback => blk: {
-            const before = self.uninit;
+            const before = self.init_save(0);
             _ = self.check(ctx, self.tree.arg(node, 1), pt);
-            self.uninit = before;
+            self.init_copy(0, before);
+            self.init_release(before);
             break :blk pt;
         },
         .selftag_arrow => blk: {
@@ -339,8 +349,8 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) bool {
             const is_case = sp.tag(target) == .variant_case_type;
             const rec = if (is_case) sp.get(target).variant_case_type.payload else target;
             const args = self.tree.manychildren(self.tree.arg(p, 1));
-            var map: [64]u32 = undefined;
-            if (rec == .none or sp.tag(rec) != .record_type or !calls.bind_args(self, self.fields_of(rec), args, &map, true)) {
+            const map = self.scratch(u32, args.len);
+            if (rec == .none or sp.tag(rec) != .record_type or !calls.bind_args(self, self.fields_of(rec), args, map, true)) {
                 if (args.len > 0) _ = self.report(.wrong_arity, p, args.len, 0);
                 return false;
             }
@@ -385,7 +395,6 @@ fn covers(self: *Resolver, ctx: *FnCtx, cols: []const StaticPool.Index, rows: []
     defer next.deinit(self.alloc);
     var nq: std.ArrayList(NodeId) = .empty;
     defer nq.deinit(self.alloc);
-    var tys: [64]StaticPool.Index = undefined;
     if (t == .bool_type) {
         for ([_]StaticPool.Index{ .bool_true, .bool_false }) |k| {
             nq.clearRetainingCapacity();
@@ -398,28 +407,29 @@ fn covers(self: *Resolver, ctx: *FnCtx, cols: []const StaticPool.Index, rows: []
     }
     switch (sp.tag(t)) {
         .variant_type, .variant_union_type, .record_type => {
-            var ks: [256]StaticPool.Index = undefined;
+            const ms = if (sp.tag(t) == .variant_union_type) sp.get(t).variant_union_type.len else 1;
             var nk: usize = 0;
-            if (sp.tag(t) == .record_type) {
-                ks[0] = t;
-                nk = 1;
-            } else for (0..if (sp.tag(t) == .variant_type) 1 else sp.get(t).variant_union_type.len) |mi| {
-                const m = if (sp.tag(t) == .variant_type) t else sp.get(t).variant_union_type[mi];
-                for (0..sp.get(m).variant_type.cases.len) |ci| {
-                    ks[nk] = sp.get(m).variant_type.cases[ci];
+            for (0..ms) |mi| nk += if (sp.tag(t) == .variant_union_type) sp.get(sp.get(t).variant_union_type[mi]).variant_type.cases.len else if (sp.tag(t) == .variant_type) sp.get(t).variant_type.cases.len else 1;
+            const ks = self.scratch(StaticPool.Index, nk);
+            nk = 0;
+            for (0..ms) |mi| {
+                const mv = if (sp.tag(t) == .variant_union_type) sp.get(t).variant_union_type[mi] else t;
+                for (0..if (sp.tag(mv) == .record_type) 1 else sp.get(mv).variant_type.cases.len) |ci| {
+                    ks[nk] = if (sp.tag(mv) == .record_type) mv else sp.get(mv).variant_type.cases[ci];
                     nk += 1;
                 }
             }
-            for (ks[0..nk]) |k| {
+            for (ks) |k| {
                 const rec = if (sp.tag(k) == .variant_case_type) sp.get(k).variant_case_type.payload else k;
                 const fields = if (rec == .none) &[_]NodeId{} else self.fields_of(rec);
                 nq.clearRetainingCapacity();
                 if (specialize(self, qs.items, w, k, fields, &nq) == 0) continue;
+                const tys = self.scratch(StaticPool.Index, fields.len + w - 1);
                 for (0..fields.len) |i| tys[i] = sp.get(rec).custom_type.field_types[i];
                 @memcpy(tys[fields.len..][0 .. w - 1], cols[1..]);
                 next.clearRetainingCapacity();
                 const m = specialize(self, flat.items, w, k, fields, &next);
-                if (!covers(self, ctx, tys[0 .. fields.len + w - 1], next.items, m, nq.items)) return false;
+                if (!covers(self, ctx, tys, next.items, m, nq.items)) return false;
             }
             return true;
         },
@@ -502,9 +512,9 @@ fn specialize(self: *Resolver, rows: []const NodeId, w: usize, k: StaticPool.Ind
         if (!hit) continue;
         const at = out.items.len;
         out.appendNTimes(self.alloc, 0, fields.len) catch @panic("OOM");
-        var map: [64]u32 = undefined;
         const args = if (p != 0 and self.tree.kind(p) == .fun_call) self.tree.manychildren(self.tree.arg(p, 1)) else &[_]NodeId{};
-        if (calls.bind_args(self, fields, args, &map, true)) for (args, 0..) |a, i| {
+        const map = self.scratch(u32, args.len);
+        if (calls.bind_args(self, fields, args, map, true)) for (args, 0..) |a, i| {
             out.items[at + map[i]] = self.arg_value(a);
         };
         out.appendSlice(self.alloc, rows[r * w + 1 ..][0 .. w - 1]) catch @panic("OOM");

@@ -1,14 +1,14 @@
-# the recursion depth of the interpreter is bounded, not the depth reached before
-fun down = (u32 n) -> u32: ret if n == 0: 0 else: 1 + down(n - 1); #! static_eval_failed
+# an exhausted depth or budget fails the evaluation that started it, reported where it was requested
+fun down = (u32 n) -> u32: ret if n == 0: 0 else: 1 + down(n - 1);
 stc u32 D1 = down(200); #= D1 200
-stc u32 D2 = down(300);
+stc u32 D2 = down(300); #! static_eval_failed
 # a failed evaluation does not poison the function for later ones
 stc u32 D3 = down(10); #= D3 10
 
 # mutual recursion without a base case
 stcfun ping = (u32 n) -> u32: ret pong(n + 1);
-stcfun pong = (u32 n) -> u32: ret ping(n + 1); #! static_eval_failed
-stc u32 PP = ping(0);
+stcfun pong = (u32 n) -> u32: ret ping(n + 1);
+stc u32 PP = ping(0); #! static_eval_failed
 
 # every evaluation has a budget of its own
 stcfun sum = (u64 n) -> u64 {
@@ -28,7 +28,7 @@ stc u64 S3 = sum(50002); #= S3 1250075001
 stc u32 W = 0;
 stc []u32 ENDLESS = stcwhile W < 10: 1; #! static_eval_failed
 stc []u32 FOREVER = stcloop 1; #! static_eval_failed
-stcfun never = () -> u32 { while true {} ret 0; } #! static_eval_failed
-stc u32 NV = never();
+stcfun never = () -> u32 { while true {} ret 0; }
+stc u32 NV = never(); #! static_eval_failed
 
 $main = () {}

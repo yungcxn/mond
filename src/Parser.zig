@@ -16,6 +16,8 @@ head: bool = false,
 // in the arguments of a call a comma ends the value, it starts no destructuring assignment
 list: bool = false,
 global_store: DynBuf(NodeId),
+// children of the lists being parsed, nested lists stack above their parents
+scratch: DynBuf(NodeId),
 tree: ParseTree,
 
 pub fn init(
@@ -30,12 +32,20 @@ pub fn init(
         .src_bytes = src_bytes,
         .tree = .init(alloc, span_store),
         .global_store = .init(alloc, 1000),
+        .scratch = .init(alloc, 256),
     };
 }
 
 pub fn deinit(self: *@This()) void {
     self.tree.deinit();
     self.global_store.deinit();
+    self.scratch.deinit();
+}
+
+// the children of `parent` pushed onto `scratch` since `mark`, they leave the scratch
+pub inline fn close(self: *@This(), parent: NodeId, mark: u32) void {
+    self.tree.set_children(parent, self.scratch.buf[mark..self.scratch.head]);
+    self.scratch.head = mark;
 }
 
 pub inline fn peek_tok(self: *@This()) !Lexer.Token.Kind {

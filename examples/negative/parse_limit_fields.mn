@@ -1,2 +1,0 @@
-# at most 64 fields
-type T = *(u8 m0, u8 m1, u8 m2, u8 m3, u8 m4, u8 m5, u8 m6, u8 m7, u8 m8, u8 m9, u8 m10, u8 m11, u8 m12, u8 m13, u8 m14, u8 m15, u8 m16, u8 m17, u8 m18, u8 m19, u8 m20, u8 m21, u8 m22, u8 m23, u8 m24, u8 m25, u8 m26, u8 m27, u8 m28, u8 m29, u8 m30, u8 m31, u8 m32, u8 m33, u8 m34, u8 m35, u8 m36, u8 m37, u8 m38, u8 m39, u8 m40, u8 m41, u8 m42, u8 m43, u8 m44, u8 m45, u8 m46, u8 m47, u8 m48, u8 m49, u8 m50, u8 m51, u8 m52, u8 m53, u8 m54, u8 m55, u8 m56, u8 m57, u8 m58, u8 m59, u8 m60, u8 m61, u8 m62, u8 m63, u8 m64); #! StackOverflow

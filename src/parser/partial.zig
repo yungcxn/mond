@@ -1,6 +1,5 @@
 const Parser = @import("../Parser.zig");
 const Lexer = @import("../Lexer.zig");
-const FixedStack = @import("../ds/fixedstack.zig").FixedStack;
 const lookahead = @import("lookahead.zig");
 const eval = @import("eval.zig");
 const NodeId = @import("../ParseTree.zig").NodeId;
@@ -41,16 +40,16 @@ pub fn ee_fun_param_tuple(p: *Parser, early_node0: ?NodeId) anyerror!NodeId {
         return parent;
     }
 
-    var params: FixedStack(64) = .{};
-    try params.push(try ee_fun_param(p, early_node0 orelse return error.IllegalFunParamTuple));
+    const params = p.scratch.head;
+    p.scratch.push(try ee_fun_param(p, early_node0 orelse return error.IllegalFunParamTuple));
     while (try p.peek_eq_tok(.@"pct_,")) {
         p.tok_cursor += 1;
         if (try p.peek_eq_tok(.@"pct_)")) break;
-        try params.push(try ee_fun_param(p, try eval.any(p, .forbid_assign, 0)));
+        p.scratch.push(try ee_fun_param(p, try eval.any(p, .forbid_assign, 0)));
     }
     try p.eat_assert_tok(.@"pct_)");
 
-    p.tree.set_children(parent, params.view());
+    p.close(parent, params);
     return parent;
 }
 
@@ -102,9 +101,9 @@ pub fn ee_fun_param(p: *Parser, early_node0: NodeId) anyerror!NodeId {
 pub fn match_body(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__match_body);
     try p.eat_assert_tok(.@"pct_{");
-    var match_cases: FixedStack(512) = .{};
+    const match_cases = p.scratch.head;
     while (true) {
-        try match_cases.push(try match_case(p));
+        p.scratch.push(try match_case(p));
         switch (try p.peek_tok()) {
             .@"pct_," => {
                 p.tok_cursor += 1;
@@ -115,7 +114,7 @@ pub fn match_body(p: *Parser) anyerror!NodeId {
         }
     }
     p.tok_cursor += 1;
-    p.tree.set_children(parent, match_cases.view());
+    p.close(parent, match_cases);
     return parent;
 }
 
@@ -139,15 +138,15 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
             def.pattern = typecast_node;
         },
         .@"xpct_|" => {
-            var or_patterns: FixedStack(64) = .{};
-            try or_patterns.push(def.pattern);
+            const or_patterns = p.scratch.head;
+            p.scratch.push(def.pattern);
             while (try p.peek_eq_tok(.@"xpct_|")) {
                 p.tok_cursor += 1;
                 if (try p.peek_eq_tok(.@"xpct_=>")) break;
-                try or_patterns.push(try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")));
+                p.scratch.push(try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")));
             }
             const or_node = p.tree.push_node(.partial__match_case_pattern_or);
-            p.tree.set_children(or_node, or_patterns.view());
+            p.close(or_node, or_patterns);
             def.pattern = or_node;
         },
         else => {},
@@ -167,16 +166,16 @@ pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
     defer p.list = outer;
 
     if (!try p.peek_eq_tok(.@"pct_)")) {
-        var params: FixedStack(64) = .{};
+        const params = p.scratch.head;
         while (true) {
             const expr_i = try eval.any(p, .forbid_assign, 0);
             switch (try p.peek_tok()) {
                 .@"pct_)" => {
-                    try params.push(expr_i);
+                    p.scratch.push(expr_i);
                     break;
                 },
                 .@"pct_," => {
-                    try params.push(expr_i);
+                    p.scratch.push(expr_i);
                     p.tok_cursor += 1;
                     if (try p.peek_eq_tok(.@"pct_)")) break;
                 },
@@ -188,7 +187,7 @@ pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
                         .value = try eval.any(p, .forbid_assign, 0),
                     };
                     p.tree.set_children(assigned_pair_node, assigned_pair);
-                    try params.push(assigned_pair_node);
+                    p.scratch.push(assigned_pair_node);
 
                     switch (try p.peek_tok()) {
                         .@"pct_)" => break,
@@ -202,7 +201,7 @@ pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
                 else => return error.IllegalFunCallParam,
             }
         }
-        p.tree.set_children(parent, params.view());
+        p.close(parent, params);
         try p.eat_assert_tok(.@"pct_)");
         return parent;
     } else {
@@ -216,15 +215,15 @@ pub fn destructure(p: *Parser, early_identifier0: NodeId) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__destructure);
 
     // , identifier , identifier [,]
-    var identifiers: FixedStack(64) = .{};
-    try identifiers.push(early_identifier0);
+    const identifiers = p.scratch.head;
+    p.scratch.push(early_identifier0);
     outer: while (true) {
         switch (try p.pop_tok()) {
             .@"pct_," => {
                 switch (try p.pop_tok()) {
                     .identifier => {
                         const id = try eval.identifier(p);
-                        try identifiers.push(id);
+                        p.scratch.push(id);
                     },
                     else => {
                         p.tok_cursor -= 2;
@@ -238,7 +237,7 @@ pub fn destructure(p: *Parser, early_identifier0: NodeId) anyerror!NodeId {
             },
         }
     }
-    p.tree.set_children(parent, identifiers.view());
+    p.close(parent, identifiers);
     return parent;
 }
 
@@ -246,12 +245,12 @@ pub fn assign_multival(p: *Parser, early_value0: NodeId) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__assign_multival);
 
     // , value , value [NO TRAILING COMMA ALLOWED - TODO]
-    var values: FixedStack(64) = .{};
-    try values.push(early_value0);
+    const values = p.scratch.head;
+    p.scratch.push(early_value0);
     outer: while (true) {
         switch (try p.pop_tok()) {
             .@"pct_," => {
-                try values.push(try eval.any(p, .forbid_assign, 0));
+                p.scratch.push(try eval.any(p, .forbid_assign, 0));
             },
             else => {
                 p.tok_cursor -= 1;
@@ -259,23 +258,23 @@ pub fn assign_multival(p: *Parser, early_value0: NodeId) anyerror!NodeId {
             },
         }
     }
-    p.tree.set_children(parent, values.view());
+    p.close(parent, values);
     return parent;
 }
 
 pub fn type_param_tuple(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__type_def_param_tuple);
 
-    var params: FixedStack(64) = .{};
+    const params = p.scratch.head;
     while (!try p.peek_eq_tok(.@"pct_)")) {
-        try params.push(try type_param(p));
+        p.scratch.push(try type_param(p));
         if (!try p.peek_eq_tok(.@"pct_,")) break;
         p.tok_cursor += 1;
     }
     try p.eat_assert_tok(.@"pct_)");
-    if (params.cursor == 0) return error.IllegalTypeParamList;
+    if (p.scratch.head == params) return error.IllegalTypeParamList;
 
-    p.tree.set_children(parent, params.view());
+    p.close(parent, params);
     return parent;
 }
 

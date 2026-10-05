@@ -27,13 +27,16 @@ pub const Index = enum(u32) {
 
 alloc: std.mem.Allocator,
 map: std.StringArrayHashMapUnmanaged(void),
+// names that are not in the source (`$64`, ...)
+owned: std.heap.ArenaAllocator,
 
 pub fn init(alloc: std.mem.Allocator) NamePool {
-    return .{ .alloc = alloc, .map = .{} };
+    return .{ .alloc = alloc, .map = .{}, .owned = .init(alloc) };
 }
 
 pub fn deinit(self: *NamePool) void {
     self.map.deinit(self.alloc);
+    self.owned.deinit();
 }
 
 pub inline fn name_of(self: *NamePool, tree: *const ParseTree, src_bytes: []const u8, n: ParseTree.NodeId) Index {
@@ -64,6 +67,11 @@ pub inline fn intern_predefineds(self: *NamePool) void {
 pub inline fn intern_string(self: *NamePool, str: []const u8) Index {
     const gop = self.map.getOrPut(self.alloc, str) catch @panic("OOM");
     return @enumFromInt(gop.index); // stable since we never remove entries
+}
+
+pub fn intern_owned(self: *NamePool, str: []const u8) Index {
+    if (self.map.getIndex(str)) |i| return @enumFromInt(i);
+    return self.intern_string(self.owned.allocator().dupe(u8, str) catch @panic("OOM"));
 }
 
 pub inline fn get(self: *const NamePool, name: Index) []const u8 {

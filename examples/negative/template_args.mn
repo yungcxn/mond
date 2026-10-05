@@ -18,8 +18,8 @@ type Node = (type T): *(T value, Node(T) next); #! recursive_by_value_type
 type Tree = (type T): *(T value, [2]Tree(T) kids); #! recursive_by_value_type
 type MA = (type T): *(MB(T) b); #! recursive_by_value_type
 type MB = (type T): *(MA(T) a);
-type Inf = (type T): *(*Inf(*T) p); #! static_eval_failed
-type Grow = (u32 N): *([N]u8 a, *Grow(N + 1) next); #! static_eval_failed
+type Inf = (type T): *(*Inf(*T) p);
+type Grow = (u32 N): *([N]u8 a, *Grow(N + 1) next);
 
 fun sizes = (Stack(u8, 4) s4, Opt(Opt(u8)) oo, Pair(Pair(u8, u8), u8) pp) {
     Stack(u8, 8) a = s4; #! type_mismatch
@@ -59,8 +59,8 @@ fun instances = () {
     Node(u8) n;
     Tree(u8) t;
     MA(u8) m;
-    Inf(u8) i;
-    Grow(1) g;
+    Inf(u8) i; #! static_eval_failed
+    Grow(1) g; #! static_eval_failed
 }
 
 $main = () {}

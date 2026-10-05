@@ -1,3 +1,4 @@
+const std = @import("std");
 const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const StaticPool = @import("../StaticPool.zig");
@@ -112,7 +113,7 @@ pub fn deinit(self: *Interpreter, n: NodeId, c: u32) void {
 fn invoke(self: *Interpreter, n: NodeId, d0: DeclPool.Index, all: []const NodeId, self0: Value, env: Value) Value {
     const r = self.res();
     const sp = &r.static_pool;
-    if (self.frames.head > Interpreter.max_depth) return self.fail(n, .static_eval_failed, 0, 0);
+    if (self.frames.head > Interpreter.max_depth) return self.fail(self.origin(n), .static_eval_failed, 0, 0);
     const mark = self.list.head;
     defer self.list.head = mark;
     for (all) |a| {
@@ -148,8 +149,8 @@ fn realize(self: *Interpreter, n: NodeId, d: DeclPool.Index, args: []const NodeI
     const r = self.res();
     const sp = &r.static_pool;
     const pnodes = r.params_of(r.value_node(d));
-    var map: [64]u32 = undefined;
-    if (!r.bind_args(pnodes, args, &map, false)) return null;
+    const map = r.scratch(u32, args.len);
+    if (!r.bind_args(pnodes, args, map, false)) return null;
     const mark = self.ids.head;
     defer self.ids.head = mark;
     for (0..pnodes.len) |j| {
@@ -177,8 +178,8 @@ fn attempt(self: *Interpreter, n: NodeId, d: DeclPool.Index, args: []const NodeI
     const v = r.value_node(d);
     if (r.decl_pool.states()[@intFromEnum(d)] == .failed) return Value.poison;
     const pnodes = r.params_of(v);
-    var map: [64]u32 = undefined;
-    if (!r.bind_args(pnodes, args, &map, false)) return self.fail(n, .wrong_arity, args.len, pnodes.len);
+    const map = r.scratch(u32, args.len);
+    if (!r.bind_args(pnodes, args, map, false)) return self.fail(n, .wrong_arity, args.len, pnodes.len);
     const body = r.bodies.get(bi).?;
     const caller = self.frames.buf[self.frames.head - 1].body.decl;
     const unchecked = caller != .none and r.decl_pool.kinds()[@intFromEnum(caller)] == .static_function;
@@ -187,12 +188,10 @@ fn attempt(self: *Interpreter, n: NodeId, d: DeclPool.Index, args: []const NodeI
     var keep = false;
     defer self.leave(keep);
     if (r.self_off(d) == 1) places.bind(self, @enumFromInt(body.first), valueself);
-    var bound: u64 = 0;
     for (0..args.len) |i| {
-        bound |= @as(u64, 1) << @intCast(map[i]);
         _ = places.store(self, pnodes[map[i]], self.info(.decl, pnodes[map[i]]), self.list.buf[base + i]);
     }
-    for (pnodes, 0..) |pn, j| if (bound >> @intCast(j) & 1 == 0) {
+    for (pnodes, 0..) |pn, j| if (std.mem.indexOfScalar(u32, map, @intCast(j)) == null) {
         _ = places.store(self, pn, self.info(.decl, pn), self.eval(Resolver.Param.from_node(self.res(), pn).default));
     };
     for (pnodes) |pn| {

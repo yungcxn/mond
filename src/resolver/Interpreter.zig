@@ -27,6 +27,8 @@ const Defer = struct { node: NodeId, cell: u32 };
 
 budget: u32 = step_budget,
 depth: u32 = 0,
+// the node whose evaluation is running, an exhausted budget or depth is its failure
+root: NodeId = 0,
 unwind: enum { none, ret, brk, cont } = .none,
 ctx: *Resolver.FnCtx = undefined,
 frames: DynBuf(Frame),
@@ -81,6 +83,7 @@ pub fn export_(self: *Interpreter, n: NodeId, v: Value) Index {
 }
 
 pub fn static_value(self: *Interpreter, ctx: *Resolver.FnCtx, n: NodeId) Index {
+    if (self.depth == 0) self.root = n;
     const s = self.open(ctx, .{});
     defer self.close(s);
     const v = self.export_(n, self.eval(n));
@@ -89,6 +92,7 @@ pub fn static_value(self: *Interpreter, ctx: *Resolver.FnCtx, n: NodeId) Index {
 }
 
 pub fn static_match(self: *Interpreter, ctx: *Resolver.FnCtx, pat: NodeId, v: Index) bool {
+    if (self.depth == 0) self.root = pat;
     const s = self.open(ctx, .{});
     defer self.close(s);
     return control.matches(self, pat, Value.of(&self.res().static_pool, v));
@@ -141,9 +145,13 @@ pub fn charge(self: *Interpreter, n: NodeId, cost: u32) bool {
         self.budget -= cost;
         return true;
     }
-    if (self.budget > 0) _ = self.fail(n, .static_eval_failed, 0, 0);
+    if (self.budget > 0) _ = self.fail(self.origin(n), .static_eval_failed, 0, 0);
     self.budget = 0;
     return false;
+}
+
+pub fn origin(self: *const Interpreter, n: NodeId) NodeId {
+    return if (self.depth > 0) self.root else n;
 }
 
 pub fn fail(self: *Interpreter, n: NodeId, code: @import("Doctor.zig").Disorder, a: anytype, b: anytype) Value {

@@ -1,7 +1,6 @@
 const Parser = @import("../Parser.zig");
 const Lexer = @import("../Lexer.zig");
 const ParseTree = @import("../ParseTree.zig");
-const FixedStack = @import("../ds/fixedstack.zig").FixedStack;
 const lookahead = @import("lookahead.zig");
 const partial = @import("partial.zig");
 const NodeId = ParseTree.NodeId;
@@ -95,13 +94,13 @@ pub fn block(p: *Parser) anyerror!NodeId {
     p.list = false;
     defer p.head, p.list = outer;
     const parent = p.tree.push_node(.block);
-    var children: FixedStack(4096) = .{};
+    const children = p.scratch.head;
     while (!try p.peek_eq_tok(.@"pct_}")) {
-        try children.push(try any(p, .allow_assign, 0));
+        p.scratch.push(try any(p, .allow_assign, 0));
         try p.eat_stmt_end();
     }
     p.tok_cursor += 1;
-    p.tree.set_children(parent, children.view());
+    p.close(parent, children);
     return parent;
 }
 
@@ -168,17 +167,17 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
         switch (try p.peek_tok()) {
             .@"pct_," => {
                 p.tok_cursor += 1;
-                var children: FixedStack(4096) = .{};
-                try children.push(parent);
+                const children = p.scratch.head;
+                p.scratch.push(parent);
                 while (true) {
                     if (try p.peek_eq_tok(.@"pct_]")) break;
-                    try children.push(try any(p, .forbid_assign, 0));
+                    p.scratch.push(try any(p, .forbid_assign, 0));
                     if (try p.peek_eq_tok(.@"pct_]")) break;
                     try p.eat_assert_tok(.@"pct_,");
                 }
                 p.tok_cursor += 1;
                 parent = p.tree.push_node(.array);
-                p.tree.set_children(parent, children.view());
+                p.close(parent, children);
             },
             .@"pct_]" => { // no comma -> type, unless nothing that can be a type follows
                 p.tok_cursor += 1;
@@ -390,6 +389,12 @@ fn ee_match(p: *Parser, comptime match_kind: Node.Kind) anyerror!NodeId {
     return parent;
 }
 
+// `&&T` in front of a value is `&(&T)`, after one it is the logical and
+pub fn type_ptr_ptr(p: *Parser) anyerror!NodeId {
+    const inner = p.tree.push_node_with(.type_ptr, .{ .subnode = try any(p, .forbid_assign, lookahead.prec_unary + 1) });
+    return p.tree.push_node_with(.type_ptr, .{ .subnode = inner });
+}
+
 pub fn type_u8(p: *Parser) anyerror!NodeId {
     return p.tree.push_node(.type_u8);
 }
@@ -501,17 +506,17 @@ pub fn variant(p: *Parser) anyerror!NodeId {
         else => return error.IllegalVariantStart,
     };
 
-    var params: FixedStack(64) = .{};
+    const params = p.scratch.head;
     while (!try p.peek_eq_tok(.@"pct_)")) {
-        try params.push(try partial.variant_param(p));
+        p.scratch.push(try partial.variant_param(p));
         if (!try p.peek_eq_tok(.@"pct_,")) break;
         p.tok_cursor += 1;
     }
     try p.eat_assert_tok(.@"pct_)");
-    if (params.cursor == 0) return error.IllegalVariantParamList;
+    if (p.scratch.head == params) return error.IllegalVariantParamList;
 
     const param_tuple = p.tree.push_node(.partial__variant_def_param_tuple);
-    p.tree.set_children(param_tuple, params.view());
+    p.close(param_tuple, params);
 
     var node = p.tree.push_node(parent);
     p.tree.set_children(node, Node.LayoutStruct(.def_variant){ .param_tuple = param_tuple });
@@ -549,9 +554,9 @@ pub fn trait(p: *Parser) anyerror!NodeId {
 
     if (try p.peek_eq_tok(.kw_implof)) {
         p.tok_cursor += 1;
-        var impls: FixedStack(64) = .{};
+        const impls = p.scratch.head;
         while (true) {
-            try impls.push(try any(p, .forbid_assign, 0));
+            p.scratch.push(try any(p, .forbid_assign, 0));
             switch (try p.peek_tok()) {
                 .@"xpct_!{" => break,
                 .@"pct_," => {
@@ -562,20 +567,20 @@ pub fn trait(p: *Parser) anyerror!NodeId {
             }
         }
         const implof_tuple = p.tree.push_node(.partial__trait_def_implof_tuple);
-        p.tree.set_children(implof_tuple, impls.view());
+        p.close(implof_tuple, impls);
         opt_implof_tuple = implof_tuple;
     }
 
     try p.eat_assert_tok(.@"xpct_!{");
-    var members: FixedStack(4096) = .{};
+    const members = p.scratch.head;
     while (!try p.peek_eq_tok(.@"pct_}")) {
-        try members.push(try any(p, .allow_assign, 0));
+        p.scratch.push(try any(p, .allow_assign, 0));
         try p.eat_stmt_end();
     }
     p.tok_cursor += 1; // consume "}"
 
     const body = p.tree.push_node(.partial__trait_def_body);
-    p.tree.set_children(body, members.view());
+    p.close(body, members);
 
     if (opt_implof_tuple) |implof_tuple| {
         return p.tree.push_node_with(.def_trait_implof, .{ .implof_tuple = implof_tuple, .body = body });

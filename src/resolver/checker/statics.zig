@@ -124,11 +124,11 @@ pub fn h20_instantiate(self: *Resolver, generic: DeclPool.Index, args: StaticPoo
     if (sp.realized_abstracts.get(key)) |r| return r;
     const node = self.decl_pool.nodes()[@intFromEnum(generic)];
     // a realization that realizes itself forever eats the static budget and stops there
-    if (self.local_scope_marks.head > max_nesting) return self.report(.static_eval_failed, node, generic, 0);
+    if (self.local_scope_marks.head > max_nesting) return self.report(.static_eval_failed, self.interpreter.origin(node), generic, 0);
     if (!self.interpreter.charge(node, 64)) return .poison_type;
-    var argv: [64]StaticPool.Index = undefined;
-    const argc = sp.get(args).aggregate.elems.len;
-    @memcpy(argv[0..argc], sp.get(args).aggregate.elems);
+    const argv = self.scratch(StaticPool.Index, sp.get(args).aggregate.elems.len);
+    const argc = argv.len;
+    @memcpy(argv, sp.get(args).aggregate.elems);
 
     if (self.decl_pool.kinds()[@intFromEnum(generic)] != .static_function) {
         // length-generic function: a new declaration per tuple of lengths, the lengths bound in order of appearance
@@ -148,10 +148,10 @@ pub fn h20_instantiate(self: *Resolver, generic: DeclPool.Index, args: StaticPoo
         self.h05_ensure_signature(d);
         self.realized_args.put(self.alloc, d, args) catch @panic("OOM");
         const ft = sp.get(self.decl_pool.tys()[@intFromEnum(d)]).function_type;
-        var ps: [65]StaticPool.Index = undefined;
-        @memcpy(ps[0..ft.params.len], ft.params);
+        const ps = self.scratch(StaticPool.Index, ft.params.len);
+        @memcpy(ps, ft.params);
         var i: usize = 0;
-        for (ps[0..ft.params.len]) |*q| {
+        for (ps) |*q| {
             var p = q.*;
             if (!generic_slot(self, p) or i >= argc) continue;
             i += 1;
@@ -159,7 +159,7 @@ pub fn h20_instantiate(self: *Resolver, generic: DeclPool.Index, args: StaticPoo
             if (sp.get(p) == .ptr_type) p = sp.get(p).ptr_type.child;
             if (sp.get(p) == .array_type) _ = sp.unify(&self.abstract_pool, sp.get(p).array_type.len, argv[i - 1]);
         }
-        self.decl_pool.tys()[@intFromEnum(d)] = sp.intern(.{ .function_type = .{ .category = ft.category, .params = ps[0..ft.params.len], .ret = ft.ret } });
+        self.decl_pool.tys()[@intFromEnum(d)] = sp.intern(.{ .function_type = .{ .category = ft.category, .params = ps, .ret = ft.ret } });
         self.h06_check_body(d);
         return fv;
     }
@@ -202,7 +202,7 @@ pub fn h20_instantiate(self: *Resolver, generic: DeclPool.Index, args: StaticPoo
     const mark = self.doc.diagnostics.len();
     self.check_unit(&ctx, unit);
     ctx.interpreted = false;
-    self.init_leave(outer.tracked, outer.uninit);
+    self.init_leave(outer);
     if (self.errors_since(mark, unit)) {
         memo(self, key, .poison_type);
         return .poison_type;
@@ -221,9 +221,8 @@ pub fn h20_instantiate(self: *Resolver, generic: DeclPool.Index, args: StaticPoo
 // the static parameters of a stcfun as locals holding the arguments of one realization
 fn bind_static(self: *Resolver, generic: DeclPool.Index, args: StaticPool.Index) void {
     const sp = &self.static_pool;
-    var argv: [64]StaticPool.Index = undefined;
-    const argc = sp.get(args).aggregate.elems.len;
-    @memcpy(argv[0..argc], sp.get(args).aggregate.elems);
+    const argv = self.scratch(StaticPool.Index, sp.get(args).aggregate.elems.len);
+    @memcpy(argv, sp.get(args).aggregate.elems);
     for (self.params_of(self.value_node(generic)), 0..) |pn, i| {
         const pt = if (sp.has_vars(self.sig(generic).params[i])) sp.type_of(argv[i]) else self.sig(generic).params[i];
         const p = Resolver.Param.from_node(self, pn);
