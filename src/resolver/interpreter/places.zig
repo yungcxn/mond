@@ -167,7 +167,7 @@ pub fn declare(self: *Interpreter, n0: NodeId) Value {
     }
     const s = Resolver.Stmt.from_node(r, n0);
     if (s.kind != .variable) {
-        if (!Resolver.is_type_decl(s.kind)) return .unit;
+        if (!s.kind.is_type_decl()) return .unit;
         const t = self.eval(s.values[0]);
         for (s.assignees) |id| _ = store(self, id, self.info(.decl, id), t);
         return if (t.is(.poison_type)) t else .unit;

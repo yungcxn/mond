@@ -131,7 +131,7 @@ pub fn h20_instantiate(self: *Resolver, generic: DeclPool.Index, args: StaticPoo
         // length-generic function: a new declaration per tuple of lengths, the lengths bound in order of appearance
         self.h06_check_body(generic);
         if (self.decl_pool.states()[@intFromEnum(generic)] == .failed) return .poison_type;
-        const d = self.push_decl(self.decl_pool.names()[@intFromEnum(generic)], node, self.decl_pool.kinds()[@intFromEnum(generic)], .none, self.decl_pool.flags()[@intFromEnum(generic)]);
+        const d = self.decl_pool.push_decl(self.decl_pool.names()[@intFromEnum(generic)], node, self.decl_pool.kinds()[@intFromEnum(generic)], .none, self.decl_pool.flags()[@intFromEnum(generic)]);
         self.template_of.put(self.alloc, d, generic) catch @panic("OOM");
         const fv = sp.intern(.{ .function = d });
         memo(self, key, fv);
@@ -174,7 +174,7 @@ pub fn h20_instantiate(self: *Resolver, generic: DeclPool.Index, args: StaticPoo
     const unit = self.tree.arg(v, 1);
     const kind = self.type_kind(unit);
     if (kind != .variable) { // a type: memoized before its body, so it can mention itself (`Stream(Child)` inside Stream)
-        const d = self.push_decl(self.decl_pool.names()[@intFromEnum(generic)], unit, kind, .none, .{});
+        const d = self.decl_pool.push_decl(self.decl_pool.names()[@intFromEnum(generic)], unit, kind, .none, .{});
         self.realized_args.put(self.alloc, d, args) catch @panic("OOM");
         self.template_of.put(self.alloc, d, generic) catch @panic("OOM");
         self.decl_pool.values()[@intFromEnum(d)] = sp.reserve_nominal(d);
@@ -182,7 +182,7 @@ pub fn h20_instantiate(self: *Resolver, generic: DeclPool.Index, args: StaticPoo
         return types.h19_check_type_def(self, &ctx, d, unit);
     }
     if (self.tree.kind(unit) == .def_fun) {
-        const d = self.push_decl(self.decl_pool.names()[@intFromEnum(generic)], unit, .function, .none, .{});
+        const d = self.decl_pool.push_decl(self.decl_pool.names()[@intFromEnum(generic)], unit, .function, .none, .{});
         const fv = sp.intern(.{ .function = d });
         memo(self, key, fv);
         self.static_scope.put(self.alloc, d, key) catch @panic("OOM");

@@ -46,6 +46,10 @@ pub const Entry = struct {
                 else => false,
             };
         }
+
+        pub fn is_type_decl(kind: Kind) bool {
+            return kind == .type_alias or kind == .record or kind == .variant or kind == .trait;
+        }
     };
 
     pub const Flags = packed struct(u8) {
@@ -96,6 +100,31 @@ pub inline fn init(alloc: std.mem.Allocator, initial_cap: usize) DeclPool {
 
 pub inline fn deinit(self: *DeclPool) void {
     self.entries.deinit();
+}
+
+pub fn push_decl(
+    self: *DeclPool,
+    name: NamePool.Index,
+    node: ParseTree.NodeId,
+    kind: DeclPool.Entry.Kind,
+    ty: StaticPool.Index,
+    flagss: DeclPool.Entry.Flags,
+) DeclPool.Index {
+    const d: DeclPool.Index = @enumFromInt(self.entries.len());
+    const lazy = flagss.is_global or kind.is_fn() or kind.is_type_decl();
+
+    self.entries.push(.{
+        .name = name,
+        .node = node,
+        .kind = kind,
+        .flags = flagss,
+        .state = if (lazy) .unresolved else .done,
+        .ty = ty,
+        .value = .none,
+        .next_overload = .none,
+    });
+
+    return d;
 }
 
 pub inline fn names(self: *DeclPool) []NamePool.Index {

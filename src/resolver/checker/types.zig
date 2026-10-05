@@ -65,7 +65,7 @@ pub fn static_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
             break :blk sp.intern(.{ .variant_union_type = members[0..n] });
         },
         .def_type, .def_type_packed, .def_type_assertsize, .def_type_implof, .def_variant, .def_variant_unionsized, .def_variant_tagof, .def_variant_assertsize, .def_variant_implof, .def_trait, .def_trait_implof => blk: {
-            const d = self.push_decl(.empty, node, self.type_kind(node), .none, .{});
+            const d = self.decl_pool.push_decl(.empty, node, self.type_kind(node), .none, .{});
             self.node_decl[node] = d;
             break :blk h19_check_type_def(self, ctx, d, node);
         },
@@ -137,7 +137,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
                     payload_node = self.tree.arg(q, 1);
                     q = self.tree.arg(q, 0);
                 }
-                const payload = if (payload_node == 0) .none else h19_check_type_def(self, ctx, self.push_decl(.empty, payload_node, .record, .none, .{}), payload_node);
+                const payload = if (payload_node == 0) .none else h19_check_type_def(self, ctx, self.decl_pool.push_decl(.empty, payload_node, .record, .none, .{}), payload_node);
                 if (payload != .none) {
                     payload_case = i;
                     payloads += 1;
@@ -215,7 +215,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
 // contiguous, so member i is row + 1 + i. static members (`stc u32 MASK = ..`) are plain locals of the body.
 fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.Index, self_ty: StaticPool.Index, supers: []const StaticPool.Index, of: DeclPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
-    const b = self.push_decl(if (self_ty == .none) self.decl_pool.names()[@intFromEnum(of)] else .empty, body, .trait, .trait_type, .{});
+    const b = self.decl_pool.push_decl(if (self_ty == .none) self.decl_pool.names()[@intFromEnum(of)] else .empty, body, .trait, .trait_type, .{});
     if (self.realized_args.get(of)) |a| self.realized_args.put(self.alloc, b, a) catch @panic("OOM");
     if (self.template_of.get(of)) |g| self.template_of.put(self.alloc, b, g) catch @panic("OOM");
     const tr = if (reserved != .none) reserved else sp.reserve_nominal(b);
@@ -226,7 +226,7 @@ fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.I
         const m = Resolver.Stmt.from_node(self, s);
         if (!m.is_member()) continue;
         names[n] = self.name_pool.name_of(self.tree, self.src_bytes, m.assignees[0]);
-        self.node_decl[m.assignees[0]] = self.push_decl(names[n], m.node, .trait_member, .none, m.flags);
+        self.node_decl[m.assignees[0]] = self.decl_pool.push_decl(names[n], m.node, .trait_member, .none, m.flags);
         n += 1;
     }
     for (self.tree.manychildren(body)) |s| if (!Resolver.Stmt.from_node(self, s).is_member()) {

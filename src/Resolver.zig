@@ -471,8 +471,7 @@ fn s1_collect_globals(self: *Resolver) void {
                 continue;
             }
 
-            // TODO NEXT
-            const new_decl = self.push_decl(name, s.node, s.kind, .none, flags);
+            const new_decl = self.decl_pool.push_decl(name, s.node, s.kind, .none, flags);
 
             // overloads with a where clause come before the ones without, so every group of same-typed
             // overloads reads as a runtime dispatch: its where-clauses in order, the where-less fallback last
@@ -597,7 +596,7 @@ pub fn use(self: *Resolver, node: ParseTree.NodeId) DeclPool.Index {
 }
 
 pub fn h02_declare_local(self: *Resolver, name: NamePool.Index, node: ParseTree.NodeId, kind: DeclPool.Entry.Kind, ty: StaticPool.Index) DeclPool.Index {
-    const d = self.push_decl(name, node, kind, ty, .{});
+    const d = self.decl_pool.push_decl(name, node, kind, ty, .{});
     self.local_names.push(name);
     self.local_decls.push(d);
     return d;
@@ -964,7 +963,7 @@ pub fn h09_check_expr(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
         },
         .selftag_unwrap, .selftag_unwrap_fallback, .selftag_arrow, .labelarrow => control.h17_check_unwrap(self, ctx, node, expected),
         .def_fun => blk: { // lambdas and local functions are checked on the spot and see the enclosing locals
-            const d = self.push_decl(.empty, node, .function, .none, .{});
+            const d = self.decl_pool.push_decl(.empty, node, .function, .none, .{});
             self.node_decl[node] = d;
             self.h05_ensure_signature(d);
             self.h06_check_body(d);
@@ -1011,7 +1010,7 @@ pub fn h11_check_assign(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) St
     const n = parts.node;
     const flags = parts.flags;
     const kind = parts.kind;
-    if (ctx.interpreted and is_type_decl(kind)) {
+    if (ctx.interpreted and kind.is_type_decl()) {
         _ = self.h09_check_expr(ctx, parts.values[0], .none);
         const t = statics.deferred(self, ctx, parts.values[0]);
         for (parts.assignees) |id| {
@@ -1184,17 +1183,6 @@ pub fn check(self: *Resolver, ctx: *FnCtx, n: ParseTree.NodeId, expected: Static
 
 pub fn is_range_kind(k: ParseTree.Node.Kind) bool {
     return node_props[@intFromEnum(k)].range;
-}
-
-pub fn push_decl(self: *Resolver, name: NamePool.Index, node: ParseTree.NodeId, kind: DeclPool.Entry.Kind, ty: StaticPool.Index, flags: DeclPool.Entry.Flags) DeclPool.Index {
-    const d: DeclPool.Index = @enumFromInt(self.decl_pool.entries.len());
-    const lazy = flags.is_global or kind.is_fn() or is_type_decl(kind);
-    self.decl_pool.entries.push(.{ .name = name, .node = node, .kind = kind, .flags = flags, .state = if (lazy) .unresolved else .done, .ty = ty, .value = .none, .next_overload = .none });
-    return d;
-}
-
-pub fn is_type_decl(kind: DeclPool.Entry.Kind) bool {
-    return kind == .type_alias or kind == .record or kind == .variant or kind == .trait;
 }
 
 // a declared global row is reused, anything else becomes a new local
