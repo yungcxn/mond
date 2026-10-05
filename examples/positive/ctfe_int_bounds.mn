@@ -1,0 +1,76 @@
+# every integer type at both ends of its range, folded at compile time
+stc u8 U8MAX = 255; #= U8MAX 255
+stc u8 U8DOWN = U8MAX - 255; #= U8DOWN 0
+stc i8 I8MIN = -128; #= I8MIN -128
+stc i8 I8MAX = 127; #= I8MAX 127
+stc i8 I8SPAN = I8MAX + I8MIN; #= I8SPAN -1
+stc u16 U16MAX = 65535; #= U16MAX 65535
+stc i16 I16MIN = -32768; #= I16MIN -32768
+stc i16 I16MAX = 32767; #= I16MAX 32767
+stc u32 U32MAX = 4294967295; #= U32MAX 4294967295
+stc i32 I32MIN = -2147483648; #= I32MIN -2147483648
+stc i32 I32MAX = 2147483647; #= I32MAX 2147483647
+stc u64 U64MAX = 18446744073709551615; #= U64MAX 18446744073709551615
+stc i64 I64MIN = -9223372036854775808; #= I64MIN -9223372036854775808
+stc i64 I64MAX = 9223372036854775807; #= I64MAX 9223372036854775807
+
+# the extreme results that still fit are no overflow
+stc i8 NEAR1 = -127 - 1; #= NEAR1 -128
+stc i8 NEAR2 = -64 * 2; #= NEAR2 -128
+stc i16 NEAR3 = 181 * 181; #= NEAR3 32761
+stc u32 NEAR4 = 65535 * 65537; #= NEAR4 4294967295
+stc i64 NEAR5 = -4611686018427387904 * 2; #= NEAR5 -9223372036854775808
+stc u64 NEAR6 = 4294967295 * 4294967297; #= NEAR6 18446744073709551615
+stc i32 NEAR7 = I32MIN / 1; #= NEAR7 -2147483648
+stc i32 NEAR8 = I32MIN % -1; #= NEAR8 0
+stc i64 NEAR9 = I64MIN + I64MAX; #= NEAR9 -1
+
+# wrapping arithmetic at both ends
+stc i8 WR1 = I8MAX +% 1; #= WR1 -128
+stc i8 WR2 = I8MIN -% 1; #= WR2 127
+stc i8 WR3 = I8MIN *% -1; #= WR3 -128
+stc u16 WR4 = 0 -% U16MAX; #= WR4 1
+stc i16 WR5 = I16MAX *% 2; #= WR5 -2
+stc u64 WR6 = U64MAX *% U64MAX; #= WR6 1
+stc i64 WR7 = I64MIN *% -1; #= WR7 -9223372036854775808
+stc u32 WR8 = U32MAX +% U32MAX; #= WR8 4294967294
+
+# division and remainder truncate toward zero for every sign combination
+stc i32 D1 = 17 / 5; #= D1 3
+stc i32 D2 = -17 / 5; #= D2 -3
+stc i32 D3 = 17 / -5; #= D3 -3
+stc i32 D4 = -17 / -5; #= D4 3
+stc i32 M1 = 17 % 5; #= M1 2
+stc i32 M2 = -17 % 5; #= M2 -2
+stc i32 M3 = 17 % -5; #= M3 2
+stc i32 M4 = -17 % -5; #= M4 -2
+stc i8 M5 = I8MIN % 3; #= M5 -2
+stc i64 M6 = I64MIN / 7; #= M6 -1317624576693539401
+stc i64 M7 = I64MIN % 7; #= M7 -1
+stc u64 M8 = U64MAX / 10; #= M8 1844674407370955161
+stc u64 M9 = U64MAX % 10; #= M9 5
+stc i32 M10 = (D2 * 5 + M2); #= M10 -17
+
+# shifts: left drops the bits it shifts out, right is arithmetic on signed values
+stc u8 SH1 = 0x81 << 1; #= SH1 2
+stc i8 SH2 = -128 >> 7; #= SH2 -1
+stc i8 SH3 = -1 >> 3; #= SH3 -1
+stc i8 SH4 = -100 >> 2; #= SH4 -25
+stc u8 SH5 = 128 >> 7; #= SH5 1
+stc i32 SH6 = 1 << 31; #= SH6 -2147483648
+stc u64 SH7 = 1 << 63; #= SH7 9223372036854775808
+stc i64 SH8 = I64MIN >> 63; #= SH8 -1
+stc u64 SH9 = U64MAX >> 63; #= SH9 1
+stc u16 SH10 = 0xABCD >> 0; #= SH10 43981
+
+# bitwise operators and `!` as complement on integers
+stc u8 B1 = !0; #= B1 255
+stc i8 B2 = !0; #= B2 -1
+stc u16 B3 = !0x00FF; #= B3 65280
+stc i32 B4 = !-1; #= B4 0
+stc u64 B5 = !0; #= B5 18446744073709551615
+stc u32 B6 = 0xF0F0 ^ 0xFF00; #= B6 4080
+stc u32 B7 = 0xF0F0 & 0xFF00 | 0x000F; #= B7 61455
+stc i8 B8 = -1 & 0x0F; #= B8 15
+
+$main = () {}

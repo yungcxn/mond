@@ -1,0 +1,76 @@
+type Inner = *(mut [3]u32 xs);
+type Outer = *(mut Inner a, mut Inner b, mut u32 n);
+
+# assignment, parameters and returns copy aggregates, nothing aliases
+fun bump_copy = (Outer o) -> u32 {
+    mut Outer c = o;
+    c.a.xs[0] += 100;
+    ret c.a.xs[0];
+}
+
+stcfun copies = () -> u32 {
+    mut Outer o = Outer(a = Inner(xs = [1, 2, 3]), b = Inner(xs = [4, 5, 6]), n = 0);
+    mut Outer p = o;
+    p.a.xs[1] = 20;
+    p.b = p.a;
+    p.b.xs[2] = 30;
+    u32 inside = bump_copy(o);
+    ret o.a.xs[1] * 1000000 + p.a.xs[2] * 10000 + p.b.xs[2] * 100 + inside - 100;
+}
+
+# arrays of records and records of arrays copy deeply
+stcfun deep = () -> u32 {
+    mut [2]Inner arr = [Inner(xs = [1, 1, 1]), Inner(xs = [2, 2, 2])];
+    mut [2]Inner other = arr;
+    other[0].xs[0] = 9;
+    mut Inner single = arr[1];
+    single.xs[2] = 7;
+    ret arr[0].xs[0] * 1000 + other[0].xs[0] * 100 + arr[1].xs[2] * 10 + single.xs[2];
+}
+
+# with builds a new value and leaves its source alone
+stcfun renew = () -> u32 {
+    mut Outer o = Outer(a = Inner(xs = [1, 2, 3]), b = Inner(xs = [4, 5, 6]), n = 1);
+    Outer q = o with (n = 2);
+    o.n = 3;
+    ret o.n * 10 + q.n;
+}
+
+# a pointer is the one way to share
+fun set_through = (*Inner i, u32 v) { i.xs[0] = v; }
+stcfun shared = () -> u32 {
+    mut Outer o = Outer(a = Inner(xs = [1, 2, 3]), b = Inner(xs = [4, 5, 6]), n = 0);
+    set_through(o.b.&, 77);
+    *Inner p = o.a.&;
+    p.xs[2] = 33;
+    ret o.b.xs[0] * 100 + o.a.xs[2];
+}
+
+# a loop variable is a copy of the element
+stcfun loop_copy = () -> u32 {
+    mut [3]u32 xs = [1, 2, 3];
+    mut u32 s = 0;
+    for x in xs {
+        mut u32 y = x;
+        y *= 10;
+        s += y;
+    }
+    ret s + xs[0] + xs[1] + xs[2];
+}
+
+# strings are arrays of bytes and copy like any array
+stcfun text = () -> u32 {
+    mut [3]u8 a = "abc";
+    mut [3]u8 b = a;
+    b[0] = 'z';
+    ret a[0] as u32 * 1000 + b[0] as u32;
+}
+
+stc u32 CO = copies(); #= CO 2033001
+stc u32 DE = deep(); #= DE 1927
+stc u32 RE = renew(); #= RE 32
+stc u32 SH = shared(); #= SH 7733
+stc u32 LC = loop_copy(); #= LC 66
+stc u32 TX = text(); #= TX 97122
+
+$main = () {}

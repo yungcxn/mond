@@ -1,0 +1,56 @@
+# the type of every expression form, read back from untyped declarations
+fun f = (u8 a, u16 b, i8 c, i64 d, f32 x, f64 y, bool t, *u32 pm, &u32 pr, [4]u16 arr) {
+    s1 = a + a; #: s1 u8
+    s2 = a + b; #: s2 u16
+    s3 = b + a; #: s3 u16
+    s4 = c * d; #: s4 i64
+    s5 = a + 1; #: s5 u8
+    s6 = 1 + a; #: s6 u8
+    s8 = c + 1; #: s8 i8
+    s9 = c - 1; #: s9 i8
+    s10 = x + 1.0; #: s10 f32
+    s11 = x * y; #: s11 f64
+    s12 = x + 1; #: s12 f32
+    s13 = d / 2; #: s13 i64
+    s14 = d % 3; #: s14 i64
+    s15 = a << 2; #: s15 u8
+    s16 = b >> a; #: s16 u16
+    s17 = a & 15; #: s17 u8
+    s18 = a | b; #: s18 u16
+    s19 = c ^ c; #: s19 i8
+    s21 = a +% 1; #: s21 u8
+    s22 = c -% d; #: s22 i64
+    s23 = b *% b; #: s23 u16
+    c1 = a < b; #: c1 bool
+    c2 = x == 1.0; #: c2 bool
+    c3 = t != false; #: c3 bool
+    c4 = pm == pr; #: c4 bool
+    l1 = t and t; #: l1 bool
+    l2 = t or false; #: l2 bool
+    l3 = t xor t; #: l3 bool
+    l4 = t && !t; #: l4 bool
+    u1 = !a; #: u1 u8
+    u2 = !t; #: u2 bool
+    u3 = -c; #: u3 i8
+    u4 = -x; #: u4 f32
+    u5 = -d; #: u5 i64
+    p1 = pm.*; #: p1 u32
+    p2 = pr.*; #: p2 u32
+    p3 = arr[1]; #: p3 u16
+    p4 = arr.$len; #: p4 u64
+    p5 = arr.&; #: p5 &[4]u16
+    p6 = pm + 1; #: p6 *u32
+    p7 = 2 + pr; #: p7 &u32
+    p8 = pm - 1; #: p8 *u32
+    k1 = a as i64; #: k1 i64
+    k2 = x as u8; #: k2 u8
+    k3 = t as u32; #: k3 u32
+    k4 = y asbits u64; #: k4 u64
+    k5 = a oftype u8; #: k5 bool
+    k6 = sizeof a; #: k6 u64
+    k7 = typeof a; #: k7 type
+    g1 = 1..<4; #: g1 []u32
+    g2 = a..=b; #: g2 []u16
+}
+
+$main = () {}

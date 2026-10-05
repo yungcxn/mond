@@ -1,0 +1,20 @@
+variant V = +(A, B(u8), C);
+stc u32 K = 5;
+stc V SV = V.B(9);
+
+fun f = (u32 n) {
+    u32 a = stcmatch K { 4 => "never checked", 5 => 1, _ => true };
+    u32 b = stcmatch K { 1 => 0, 2 => 0 }; #! non_exhaustive_match
+    u32 c = stcmatch n { _ => 0 }; #! not_static
+    u32 d = stcmatch SV { V.A => "no", V.B(x) => x, V.C => false };
+    u32 e = stcmatch SV { V.B(0..=8) => "no", V.B(9) => 2, _ => "no" };
+    u32 g = stcmatch K { 0..=4 => "low", 5.. => 3 };
+    u32 h = stcmatch K { _ => 1, 5 => "first arm wins" };
+    u32 k = stcmatch 2 + 3 { 5 => 7, _ => "no" };
+    u32 l = stcmatch K { 5 => missing_name, _ => 0 }; #! undefined_name
+    u32 m = stcmatch K { 4 => missing_name, _ => 0 };
+    u32 o = stcmatch true { false => "no", true => 8 };
+}
+stcfun sel = (u32 x) -> u32: ret stcmatch x { 0 => 10, 1 => 11, _ => 12 }; #! redundant_stc
+stc u32 S = sel(1);
+$main = () {}

@@ -1,0 +1,15 @@
+fun later = (u32 a = b, u32 b = 1) -> u32: ret a; #! undefined_name
+fun itself = (u32 a = a) -> u32: ret a; #! undefined_name
+fun bad_call = (u32 a = nope()) -> u32: ret a; #! undefined_name
+fun wrong_ty = (u8 a = 256) -> u8: ret a; #! type_mismatch
+fun wrong_lambda = ((u32) -> u32 f = (i32 y): y) -> u32: ret f(1); #! type_mismatch
+fun middle = (u32 a, u32 b = 5, u32 c) -> u32: ret a + b + c;
+
+fun f = () {
+    u32 m1 = middle(1, 2); #! wrong_arity
+    u32 m2 = middle(1); #! wrong_arity
+    u32 m3 = middle(1, b = 2); #! wrong_arity
+    u32 m4 = middle(c = 1, a = 2, b = 3);
+}
+
+$main = () {}

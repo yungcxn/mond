@@ -1,0 +1,165 @@
+# parser combinators: parsers are closures, combinators build closures out of closures
+
+type Src = *(&[]u8 s);
+type Res = *(bool ok, i64 v, u32 at);
+type Parser = (&Src, u32) -> Res;
+type Join = (i64, i64) -> i64;
+
+fun fail = (u32 at) -> Res: ret Res(ok = false, v = 0, at = at);
+
+fun chr = (u8 c) -> Parser: ret (&Src src, u32 at) -> Res {
+    if at as u64 < src.s.$len and src.s.*[at] == c: ret Res(ok = true, v = c as i64, at = at + 1);
+    ret fail(at);
+}
+
+fun digit = () -> Parser: ret (&Src src, u32 at) -> Res {
+    if at as u64 >= src.s.$len: ret fail(at);
+    u8 c = src.s.*[at];
+    if c < '0' or c > '9': ret fail(at);
+    ret Res(ok = true, v = (c - '0') as i64, at = at + 1);
+}
+
+# one or more, folded left to right
+fun many1 = (Parser p, Join f) -> Parser: ret (&Src src, u32 at) -> Res {
+    mut Res r = p(src, at);
+    if !r.ok: ret r;
+    loop {
+        Res n = p(src, r.at);
+        if !n.ok: brk;
+        r = Res(ok = true, v = f(r.v, n.v), at = n.at);
+    }
+    ret r;
+}
+
+fun seq = (Parser a, Parser b, Join f) -> Parser: ret (&Src src, u32 at) -> Res {
+    Res x = a(src, at);
+    if !x.ok: ret x;
+    Res y = b(src, x.at);
+    if !y.ok: ret fail(at);
+    ret Res(ok = true, v = f(x.v, y.v), at = y.at);
+}
+
+fun alt = (Parser a, Parser b) -> Parser: ret (&Src src, u32 at) -> Res {
+    Res x = a(src, at);
+    ret if x.ok: x else: b(src, at);
+}
+
+fun map = (Parser p, (i64) -> i64 f) -> Parser: ret (&Src src, u32 at) -> Res {
+    Res r = p(src, at);
+    ret if r.ok: Res(ok = true, v = f(r.v), at = r.at) else: r;
+}
+
+fun optional = (Parser p, i64 dflt) -> Parser: ret (&Src src, u32 at) -> Res {
+    Res r = p(src, at);
+    ret if r.ok: r else: Res(ok = true, v = dflt, at = at);
+}
+
+fun number = () -> Parser: ret many1(digit(), (i64 a, i64 b): a * 10 + b);
+fun left = (i64 a, i64 b) -> i64: ret a;
+fun right = (i64 a, i64 b) -> i64: ret b;
+
+# a signed integer: optional minus, then digits
+fun integer = () -> Parser {
+    Parser sign = optional(map(chr('-'), (i64 x) -> i64: -1), 1);
+    ret seq(sign, number(), (i64 s, i64 n): s * n);
+}
+
+# comma separated list of integers summed, with an optional trailing comma
+fun int_list = () -> Parser {
+    Parser item = seq(integer(), optional(chr(','), 0), left);
+    ret many1(item, (i64 a, i64 b): a + b);
+}
+
+# recursive grammar through plain functions using the combinators inside
+fun expr = (&Src src, u32 at) -> Res {
+    mut Res l = term(src, at);
+    if !l.ok: ret l;
+    loop {
+        Parser op = alt(chr('+'), chr('-'));
+        Res o = op(src, l.at);
+        if !o.ok: brk;
+        Res r = term(src, o.at);
+        if !r.ok: ret fail(at);
+        l = Res(ok = true, v = if o.v == '+': l.v + r.v else: l.v - r.v, at = r.at);
+    }
+    ret l;
+}
+
+fun term = (&Src src, u32 at) -> Res {
+    mut Res l = factor(src, at);
+    if !l.ok: ret l;
+    loop {
+        Res o = chr('*')(src, l.at);
+        if !o.ok: brk;
+        Res r = factor(src, o.at);
+        if !r.ok: ret fail(at);
+        l = Res(ok = true, v = l.v * r.v, at = r.at);
+    }
+    ret l;
+}
+
+fun factor = (&Src src, u32 at) -> Res {
+    Res n = integer()(src, at);
+    if n.ok: ret n;
+    Parser open = chr('(');
+    Res o = open(src, at);
+    if !o.ok: ret o;
+    Res e = expr(src, o.at);
+    if !e.ok: ret e;
+    Res c = chr(')')(src, e.at);
+    ret if c.ok: Res(ok = true, v = e.v, at = c.at) else: fail(at);
+}
+
+# value * 100 + consumed length, -1 when the parse fails
+fun whole = (Parser p, &Src src) -> i64 {
+    Res r = p(src, 0);
+    ret if r.ok: r.v * 100 + r.at as i64 else: -1;
+}
+
+stcfun numbers = () -> i64 {
+    Src a = Src(s = "4096x".&);
+    Src b = Src(s = "x1".&);
+    Src c = Src(s = "-37".&);
+    ret whole(number(), a.&) * 100000 + whole(number(), b.&) * 1000 + whole(integer(), c.&) + 4000;
+}
+
+stcfun lists = () -> i64 {
+    Src a = Src(s = "1,2,-3,40,".&);
+    Src b = Src(s = "7".&);
+    ret whole(int_list(), a.&) * 10000 + whole(int_list(), b.&);
+}
+
+stcfun exprs = () -> i64 {
+    Src a = Src(s = "2+3*4".&);
+    Src b = Src(s = "(2+3)*4-5".&);
+    Src c = Src(s = "-2*(3-10)".&);
+    ret whole(expr, a.&) * 100000000 + whole(expr, b.&) * 10000 + whole(expr, c.&);
+}
+
+stcfun failures = () -> i64 {
+    Src a = Src(s = "(1+2".&);
+    Src b = Src(s = "".&);
+    Src c = Src(s = "3+".&);
+    ret whole(expr, a.&) * 1000000 + whole(digit(), b.&) * 1000 + whole(expr, c.&);
+}
+
+stcfun choice = () -> i64 {
+    Parser ab = alt(chr('a'), chr('b'));
+    Parser pair = seq(ab, ab, (i64 x, i64 y): x * 1000 + y);
+    Src s1 = Src(s = "ba".&);
+    Src s2 = Src(s = "bc".&);
+    ret whole(pair, s1.&) * 10 + whole(pair, s2.&);
+}
+
+stc i64 NUM = numbers(); #= NUM 40960399303
+stc i64 LST = lists(); #= LST 40100701
+stc i64 EXP = exprs(); #= EXP 140515091409
+stc i64 FAIL = failures(); #= FAIL -1001001
+stc i64 CHO = choice(); #= CHO 98097019
+
+$main = () -> i64 {
+    Src s = Src(s = "12*(3+4)".&);
+    p = int_list(); #: p (&*(&[]u8 s), u32) -> *(bool ok, i64 v, u32 at)
+    r = expr(s.&, 0); #: r *(bool ok, i64 v, u32 at)
+    ret r.v + whole(p, s.&);
+}

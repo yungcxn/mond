@@ -1,0 +1,68 @@
+# a stcfun with a second tuple produces a function per realization
+stcfun scaler = (u32 k): (u32 x) -> u32: ret x * k;
+fun triple = scaler(3); #: triple (u32) -> u32
+fun quad = scaler(4);
+stc u32 T = triple(5); #= T 15
+stc u32 Q = quad(5) + scaler(3)(1); #= Q 23
+
+# the produced function sees the static parameters of its realization
+stcfun clamp = (type T, u32 hi): (T x) -> T: ret if x > hi: hi as T else: x;
+fun clamp8 = clamp(u8, 100);
+stc u8 C1 = clamp8(200); #= C1 100
+stc u8 C2 = clamp8(7); #= C2 7
+stc u16 C3 = clamp(u16, 1000)(5000); #= C3 1000
+
+# a function value computed by a stcfun, with an induced or a `fun` result
+stcfun pick = (bool add): ret if add: (u32 a, u32 b) -> u32: a + b else: (u32 a, u32 b) -> u32: a - b;
+stcfun pick_fun = (bool add) -> fun: ret if add: (u32 a, u32 b) -> u32: a + b else: (u32 a, u32 b) -> u32: a - b;
+stcfun adder = (u32 n): ret (u32 x) -> u32: x + n;
+fun adds = pick(true); #: adds (u32, u32) -> u32
+fun subs = pick_fun(false); #: subs (u32, u32) -> u32
+fun add5 = adder(5); #: add5 (u32) -> u32
+stc u32 P1 = adds(7, 2); #= P1 9
+stc u32 P2 = pick(false)(7, 2); #= P2 5
+stc u32 P3 = subs(9, 2) + pick_fun(true)(1, 1); #= P3 9
+stc u32 P4 = add5(1) + adder(10)(1); #= P4 17
+
+# stcfuns returning aggregates
+type Pt = *(i32 x, i32 y);
+variant Res = +(Ok(i32), Err(u8));
+stcfun origin = (i32 d) -> Pt: ret Pt(x = d, y = -d);
+stcfun checked = (i32 v) -> Res: ret if v < 0: Res.Err(1) else: Res.Ok(v * 2);
+stcfun table = (u32 n) -> [4]u32 {
+    mut [4]u32 t;
+    for i in 0..<4: t[i] = i * n;
+    ret t;
+}
+stc Pt O = origin(3); #= O [3, -3]
+stc i32 OY = origin(5).y; #= OY -5
+stc i32 OK = checked(21) ?? 0; #= OK 42
+stc i32 ER = checked(-1) ?? -7; #= ER -7
+stc [4]u32 TB = table(5); #= TB [0, 5, 10, 15]
+stc u32 TE = table(2)[3]; #= TE 6
+
+# realizations are memoized: the same arguments give the same type
+type Box = (type T): *(T v);
+type B1 = Box(u8);
+type B2 = Box(u8);
+type B3 = Box(u16);
+stc bool SAME = B1 == B2; #= SAME true
+stc bool DIFF = B1 == B3; #= DIFF false
+stc bool OF = B1(v = 1) oftype Box(u8); #= OF true
+stc bool NOF = B1(v = 1) oftype Box(u16); #= NOF false
+stc bool TOF = B3(v = 1) oftype Box; #= TOF true
+stcfun Wide = (u32 n) -> type: ret if n > 8: u16 else: u8;
+stc bool WS = Wide(9) == Wide(16); #= WS true
+stc bool WD = Wide(9) == Wide(8); #= WD false
+B1 b1 = B2(v = 3);
+
+# a value parameter keeps its declared type in the realization
+type Fixed = (u8 N): *([N]u8 bytes);
+type F255 = Fixed(255); #= F255 *([255]u8 bytes)
+stc u64 FS = sizeof Fixed(255); #= FS 255
+
+$main = () {
+    u32 r = triple(2) + quad(1);
+    u8 c = clamp8(250);
+    u32 a = adds(1, 2) + subs(3, 1) + add5(2);
+}

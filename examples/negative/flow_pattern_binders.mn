@@ -1,0 +1,30 @@
+variant P = +(Two(i32 a, i32 b), One(i32 v), Zero);
+variant A = +(X, Y);
+variant B = +(Z(u8), W);
+trait T = !{ fun m = () -> u32; }
+type S = *(u32 v) implof T !{ fun m = () -> u32: ret self.v; }
+type Q = *(u32 v);
+
+fun orders = (P p) -> i32: ret match p {
+    P.Two(x, y) | P.Two(y, x) => x - y,
+    P.One(z) | P.Zero => 0, #! undefined_name
+    _ => 1,
+}
+fun extra = (P p) -> i32: ret match p {
+    P.Zero | P.One(w) => 0, #! undefined_name
+    _ => 1,
+}
+fun typecast = (A || B u, i32 n, A a) -> u32 {
+    match u { A x => 0, B y => 1 }
+    match u { Q q => 0, _ => 1 } #! type_mismatch
+    match n { i64 wide => 0 }
+    match n { u8 small => 0, _ => 1 } #! type_mismatch
+    match a { A.X <- lx => 0, A.Y => 1 }
+    ret 0;
+}
+fun traits = (T t) -> u32: ret match t { S s => s.v, _ => 0 }
+fun use_binders = (P p) -> i32: ret match p {
+    P.Two(k, _) | P.One(k) => k,
+    P.Zero => z, #! undefined_name
+}
+$main = () {}

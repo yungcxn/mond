@@ -1,0 +1,2 @@
+# an escaped quote does not end the string
+&u8 s = "ends with \"; #! LexingError_StringScanEOF

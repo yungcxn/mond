@@ -1,0 +1,30 @@
+# returned values coerce to the declared result type like any other expectation
+variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+
+fun r1 = (u8 x) -> u16: ret x;
+fun r2 = (u16 x) -> u8: ret x; #! type_mismatch
+fun r3 = () -> u8: ret 255;
+fun r4 = () -> u8: ret 256; #! type_mismatch
+fun r5 = () -> i8: ret -128;
+fun r6 = (*u8 p) -> &u8: ret p;
+fun r7 = (&u8 p) -> *u8: ret p; #! type_mismatch
+fun r8 = (u8 x) -> Opt8: ret x;
+fun r9 = () -> Opt8: ret Opt8.None;
+fun r10 = () -> () { ret; }
+fun r11 = () -> () { ret 1; } #! type_mismatch
+fun r12 = () -> u8 { ret; } #! ret_type_mismatch
+fun r13 = (bool c) -> u8 { if c: ret 1; ret 2; }
+fun r14 = (bool c) -> u8 { if c: ret 1; ret true; } #! type_mismatch
+fun r15 = () -> [2]u8: ret [1, 2];
+fun r16 = () -> [2]u8: ret [1, 2, 3]; #! type_mismatch
+fun r17 = () -> []u8: ret [1, 2, 3]; #: r17 () -> [3]u8
+fun r18 = (bool c) -> f64: ret if c: 1.5 else: 2;
+fun r19 = () -> f32 { f64 d = 1.0; ret d; } #! type_mismatch
+fun r20 = () -> u64 { ret 1; ret 2; }
+
+# induced results take the type of every returned value
+fun i1 = (bool c, u8 x, u16 y) { if c: ret x; ret y; } #! type_mismatch
+fun i2 = (bool c, u8 x) { if c: ret x; ret 7; } #: i2 (bool, u8) -> u8
+fun i3 = (bool c) { if c: ret; ret; } #: i3 (bool) -> ()
+
+$main = () {}

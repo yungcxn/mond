@@ -1,0 +1,2 @@
+# the error points at the last token before the end of the file
+i32 x = #! EOF

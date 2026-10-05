@@ -1,0 +1,80 @@
+# the analysis tracks up to 64 scalars per body in a u64
+fun many = () {
+    mut u8 v0;
+    mut u8 v1;
+    mut u8 v2;
+    mut u8 v3;
+    mut u8 v4;
+    mut u8 v5;
+    mut u8 v6;
+    mut u8 v7;
+    mut u8 v8;
+    mut u8 v9;
+    mut u8 v10;
+    mut u8 v11;
+    mut u8 v12;
+    mut u8 v13;
+    mut u8 v14;
+    mut u8 v15;
+    mut u8 v16;
+    mut u8 v17;
+    mut u8 v18;
+    mut u8 v19;
+    mut u8 v20;
+    mut u8 v21;
+    mut u8 v22;
+    mut u8 v23;
+    mut u8 v24;
+    mut u8 v25;
+    mut u8 v26;
+    mut u8 v27;
+    mut u8 v28;
+    mut u8 v29;
+    mut u8 v30;
+    mut u8 v31;
+    mut u8 v32;
+    mut u8 v33;
+    mut u8 v34;
+    mut u8 v35;
+    mut u8 v36;
+    mut u8 v37;
+    mut u8 v38;
+    mut u8 v39;
+    mut u8 v40;
+    mut u8 v41;
+    mut u8 v42;
+    mut u8 v43;
+    mut u8 v44;
+    mut u8 v45;
+    mut u8 v46;
+    mut u8 v47;
+    mut u8 v48;
+    mut u8 v49;
+    mut u8 v50;
+    mut u8 v51;
+    mut u8 v52;
+    mut u8 v53;
+    mut u8 v54;
+    mut u8 v55;
+    mut u8 v56;
+    mut u8 v57;
+    mut u8 v58;
+    mut u8 v59;
+    mut u8 v60;
+    mut u8 v61;
+    mut u8 v62;
+    mut u8 v63;
+    mut u8 v64;
+    u8 first = v0; #! use_before_initialization
+    u8 last_tracked = v63; #! use_before_initialization
+    # LIMIT: the 65th uninitialized scalar is not tracked, its read goes unreported
+    u8 untracked = v64;
+}
+
+# a new body starts with a fresh set
+fun fresh = () {
+    mut u8 w;
+    u8 r = w; #! use_before_initialization
+}
+
+$main = () {}

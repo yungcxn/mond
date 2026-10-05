@@ -18,10 +18,11 @@ pub const Index = enum(u32) {
     has_next,
     next,
     tag,
+    wall,
     none = std.math.maxInt(u32),
     _,
 
-    pub const first_dynamic: u32 = @intFromEnum(Index.tag) + 1;
+    pub const first_dynamic: u32 = @intFromEnum(Index.wall) + 1;
 };
 
 alloc: std.mem.Allocator,

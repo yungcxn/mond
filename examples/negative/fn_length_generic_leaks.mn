@@ -1,0 +1,16 @@
+# a failed call must not fix the length of a length-generic parameter for later calls
+fun total = (&[]u32 a) -> u64: ret a.$len;
+fun copy_in = ([]u16 a) -> u64: ret a.$len;
+fun copy_in = (bool b) -> u64: ret 0;
+fun f = () {
+    [3]u8 b = [1, 2, 3];
+    u64 bad = total(b.&); #! type_mismatch
+    [4]u32 w = [1, 2, 3, 4];
+    u64 ok = total(w.&);
+    [2]u32 w2 = [1, 2];
+    u64 ok2 = total(w2.&);
+    u64 bad2 = copy_in("abc"); #! no_matching_overload
+    u64 ok3 = copy_in([1, 2, 3, 4]);
+    u64 ok4 = copy_in([1]);
+}
+$main = () {}

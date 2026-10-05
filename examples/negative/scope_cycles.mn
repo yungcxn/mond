@@ -1,0 +1,24 @@
+stc u32 S = S + 1; #! declaration_cycle
+# through a function body evaluated for the initializer
+stc u32 A = f(); #! declaration_cycle
+fun f = () -> u32: ret A;
+# through a type that needs the value for its layout
+stc u64 N = sizeof T; #! declaration_cycle
+type T = *([N]u8 a);
+# aliases are expanded eagerly, even behind pointers
+type P = *Q; #! declaration_cycle
+type Q = *P;
+x = typeof x; #! declaration_cycle
+# through a signature
+u64 y = sizeof (typeof g); #! declaration_cycle
+fun g = ([y]u8 a) {}
+# the members of a cycle and their users report nothing more
+stc u32 C1 = C2 * 2; #! declaration_cycle
+stc u32 C2 = C3 + 1;
+stc u32 C3 = C1;
+stc u32 C4 = C2 + C3;
+type AB = *(BA b); #! recursive_by_value_type
+type BA = *(AB a);
+type AR = *([2]AR kids); #! recursive_by_value_type
+variant L = +(Cons(u32 h, L t), Nil); #! recursive_by_value_type
+$main = () {}

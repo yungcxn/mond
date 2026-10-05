@@ -1,0 +1,139 @@
+# open addressing with linear probing and tombstones in a fixed table
+
+variant Slot = +(Empty, Dead, Full(u32 key, i32 val));
+variant Got = +(Hit(i32), Miss);
+
+fun hash = (u32 k) -> u32 {
+    mut u32 h = k *% 2654435761;
+    h = h ^ (h >> 15);
+    ret h;
+}
+
+type Map = *(mut [16]Slot slots, mut u32 used = 0, mut u32 dead = 0, mut u32 probes = 0) !{
+    fun find_slot = (u32 key) -> u32 {
+        mut u32 i = hash(key) % 16;
+        mut u32 tomb = 16;
+        for 0..<16 {
+            self.probes += 1;
+            match self.slots[i] {
+                Slot.Empty => ret if tomb < 16: tomb else: i,
+                Slot.Dead => if tomb == 16: tomb = i,
+                Slot.Full(k, _) => if k == key: ret i,
+            }
+            i = (i + 1) % 16;
+        }
+        ret tomb;
+    }
+    fun put = (u32 key, i32 val) -> bool {
+        u32 i = self.find_slot(key);
+        if i == 16: ret false;
+        match self.slots[i] {
+            Slot.Full(_, _) => {},
+            Slot.Dead => {
+                self.dead -= 1;
+                self.used += 1;
+            },
+            Slot.Empty => self.used += 1,
+        }
+        self.slots[i] = Slot.Full(key, val);
+        ret true;
+    }
+    fun get = (u32 key) -> Got {
+        u32 i = self.find_slot(key);
+        if i == 16: ret Got.Miss;
+        ret match self.slots[i] {
+            Slot.Full(k, v) => if k == key: Got.Hit(v) else: Got.Miss,
+            _ => Got.Miss,
+        };
+    }
+    fun del = (u32 key) -> bool {
+        u32 i = self.find_slot(key);
+        if i == 16: ret false;
+        ret match self.slots[i] {
+            Slot.Full(k, _) => {
+                if k != key: ret false;
+                self.slots[i] = Slot.Dead;
+                self.used -= 1;
+                self.dead += 1;
+                ret true;
+            },
+            _ => false,
+        };
+    }
+}
+
+fun empty_map = () -> Map {
+    [16]Slot s = [Slot.Empty, Slot.Empty, Slot.Empty, Slot.Empty, Slot.Empty, Slot.Empty, Slot.Empty, Slot.Empty,
+                  Slot.Empty, Slot.Empty, Slot.Empty, Slot.Empty, Slot.Empty, Slot.Empty, Slot.Empty, Slot.Empty];
+    ret Map(slots = s);
+}
+
+fun value_or = (Got g, i32 d) -> i32: ret match g {
+    Got.Hit(v) => v,
+    Got.Miss => d,
+}
+
+stcfun basic = () -> i32 {
+    mut Map m = empty_map();
+    m.put(1, 10);
+    m.put(17, 170);
+    m.put(33, 330);
+    m.put(1, 11);
+    ret value_or(m.get(1), -1) * 10000 + value_or(m.get(33), -1) * 10 + value_or(m.get(2), -1) + m.used as i32 * 100000000;
+}
+
+# deleting leaves a tombstone that keeps probe chains intact and is reused by the next insert
+stcfun tombstones = () -> i32 {
+    mut Map m = empty_map();
+    for k in 0..<8: m.put(k * 16, k as i32);
+    m.del(16);
+    m.del(48);
+    bool still = value_or(m.get(112), -1) == 7;
+    bool gone = value_or(m.get(16), -1) == -1;
+    u32 before = m.dead;
+    m.put(80, 50);
+    m.put(16, 5);
+    ret (if still: 1000 else: 0) + (if gone: 100 else: 0) + before as i32 * 10 + m.dead as i32;
+}
+
+stcfun fill_up = () -> u32 {
+    mut Map m = empty_map();
+    mut u32 ok = 0;
+    for k in 100..<120: if m.put(k, 1): ok += 1;
+    bool update_full = m.put(105, 2);
+    bool miss_full = value_or(m.get(5000), 9) == 9;
+    ret ok * 100 + m.used + (if update_full: 1000000 else: 0) + (if miss_full: 10000 else: 0);
+}
+
+stcfun churn = () -> i32 {
+    mut Map m = empty_map();
+    mut i32 sum = 0;
+    for round in 0..<5 {
+        for k in 0..<10: m.put(k + round * 3, (k * k) as i32);
+        for k in 0..<10: if k % 3 != 0: m.del(k + round * 3);
+    }
+    for k in 0..<40: sum += value_or(m.get(k), 0);
+    ret sum * 100 + m.used as i32;
+}
+
+stcfun deletes = () -> u32 {
+    mut Map m = empty_map();
+    m.put(4, 1);
+    bool a = m.del(4);
+    bool b = m.del(4);
+    bool c = m.del(77);
+    ret (if a: 100 else: 0) + (if b: 10 else: 0) + (if c: 1 else: 0) + m.dead * 1000;
+}
+
+stc i32 BASIC = basic(); #= BASIC 300113299
+stc i32 TOMB = tombstones(); #= TOMB 1121
+stc u32 FILL = fill_up(); #= FILL 1011616
+stc i32 CHURN = churn(); #= CHURN 12608
+stc u32 DEL = deletes(); #= DEL 1100
+
+$main = () -> i32 {
+    mut Map m = empty_map();
+    m.put(3, 4);
+    g = m.get(3); #: g +(Hit, Miss)
+    ret value_or(g, 0) + hash(7) as i32;
+}

@@ -1,0 +1,22 @@
+fun seven = () -> u32: ret 7;
+fun from_call = (u32 a = seven()) -> u32: ret a;
+fun chain = (u32 a, u32 b = a + 1, u32 c = b * 2) -> u32: ret a * 100 + b * 10 + c;
+fun middle = (u32 a, u32 b = 5, u32 c) -> u32: ret a * 100 + b * 10 + c;
+fun lambda_default = (u32 x, (u32) -> u32 f = (u32 y): y * 3) -> u32: ret f(x);
+fun arr_default = ([3]u8 a = [1, 2, 3]) -> u32: ret a[0] + a[1] + a[2];
+
+stc u32 FC = from_call(); #= FC 7
+stc u32 FC2 = from_call(2); #= FC2 2
+stc u32 CH1 = chain(1); #= CH1 124
+stc u32 CH2 = chain(1, 5); #= CH2 160
+stc u32 CH3 = chain(1, c = 9); #= CH3 129
+stc u32 MI = middle(1, c = 2); #= MI 152
+stc u32 MI2 = middle(1, 2, 3); #= MI2 123
+stc u32 LD = lambda_default(4); #= LD 12
+stc u32 LD2 = lambda_default(4, (u32 y): y + 1); #= LD2 5
+stc u32 AD = arr_default(); #= AD 6
+
+$main = () {
+    u32 x = chain(seven()); #: x u32
+    u32 y = middle(c = 1, a = 2); #: y u32
+}

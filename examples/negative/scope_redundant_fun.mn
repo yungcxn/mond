@@ -1,0 +1,14 @@
+trait It = !{ fun $next = () -> u32; fun $has_next = () -> bool; } #! redundant_fun redundant_fun
+type R = *(mut u32 at) !{
+    fun $init = () -> R: ret R(at = 0); #! redundant_fun
+    fun $deinit = () {} #! redundant_fun
+    fun $next = () -> u32: ret self.at++; #! redundant_fun
+    $has_next = () -> bool: ret self.at < 3;
+}
+type S = *(u32 a) !{
+    $init = () -> S: ret S(a = 1);
+    $deinit = () {}
+    fun init = () -> u32: ret 1;
+    fun next = () -> u32: ret 2;
+}
+fun $main = () {} #! redundant_fun

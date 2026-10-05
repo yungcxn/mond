@@ -1,0 +1,4 @@
+# there is no empty statement
+fun f = () {
+    mut i32 a = 1;; #! NoRuleFound
+}

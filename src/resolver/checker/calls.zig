@@ -30,7 +30,8 @@ pub fn h12_check_call(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
         for (args) |a| _ = self.h09_check_expr(ctx, self.arg_value(a), .none);
         return .poison_type;
     };
-    switch (sp.tag(target)) {
+    const value = sp.tag(ct) != .meta_type and (self.tree.kind(callee) != .member or recv != 0);
+    switch (if (value and (sp.tag(target) == .record_type or sp.tag(target) == .variant_case_type)) .simple_type else sp.tag(target)) {
         // type constructors: records (`Person(name = ..)`) and variant cases (`Event.Key(13)`)
         .record_type, .variant_case_type => {
             const rec = if (sp.tag(target) == .variant_case_type) sp.get(target).variant_case_type.payload else target;
@@ -137,7 +138,10 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: DeclPool.Index, 
     if (best == .none) {
         if (count > 1) return self.report(.no_matching_overload, node, args.len, 0);
         if (!f0_ok) return bad_args(self, node, self.params_of(self.value_node(f0)), args);
-        for (args, 0..) |a, i| _ = self.h10_expect(self.arg_value(a), tys[i], self.sig(f0).params[map[i] + off]);
+        for (args, 0..) |a, i| {
+            const p = self.sig(f0).params[map[i] + off];
+            _ = if (!sp.has_vars(p)) self.h10_expect(self.arg_value(a), tys[i], p) else if (statics.arg_len(self, tys[i], p) == .none) self.mismatch(self.arg_value(a), tys[i], p) else tys[i];
+        }
         return .poison_type;
     }
     if (ambiguous) _ = self.report(.ambiguous_overload, node, best, 0);
@@ -152,7 +156,7 @@ fn call_decl(self: *Resolver, ctx: *FnCtx, node: NodeId, first: DeclPool.Index, 
         if (recv == 0) {
             if (sp.tag(rt) == .ptr_type) _ = self.report(.type_mismatch, r, rt, self.sig(callee).params[0]);
         } else if (sp.is_ptr(rt)) {
-            if (sp.tag(rt) == .ptr_type) self.write_access(r, .through_ptr);
+            self.write_access(r, if (sp.tag(rt) == .ptr_type) .through_ptr else .ok);
         } else if (place) self.write_access(r, self.writable(r));
     }
     const pnodes = self.params_of(self.value_node(callee));
@@ -199,18 +203,18 @@ fn check_stcwhere(self: *Resolver, ctx: *FnCtx, node: NodeId, callee: DeclPool.I
     } else return;
     const ft = self.decl_pool.tys()[@intFromEnum(callee)];
     const off = self.self_off(callee);
+    var vs: [64]StaticPool.Index = @splat(.none);
+    var ts: [64]StaticPool.Index = @splat(.none);
+    for (args, 0..) |a, i| {
+        vs[map[i]] = statics.try_static(self, ctx, self.arg_value(a)) orelse .none;
+        ts[map[i]] = self.node_type[self.arg_value(a)];
+    }
     self.open_scope(true, .none, 0);
     defer self.h04_pop_scope();
     for (pnodes, 0..) |pn, j| {
-        var v: StaticPool.Index = .none;
-        var at: StaticPool.Index = .none;
-        for (args, 0..) |a, i| if (map[i] == j) {
-            v = statics.try_static(self, ctx, self.arg_value(a)) orelse .none;
-            at = self.node_type[self.arg_value(a)];
-        };
         const pt0 = self.static_pool.get(ft).function_type.params[j + off];
-        const pt = if (statics.templated(self, pt0) != .none and at != .none) at else pt0;
-        self.decl_pool.values()[@intFromEnum(self.h02_declare_local(self.param_name(pn, j), pn, .static_parameter, pt))] = if (v == .none) v else statics.retype(self, v, pt);
+        const pt = if (statics.templated(self, pt0) != .none and ts[j] != .none) ts[j] else pt0;
+        self.decl_pool.values()[@intFromEnum(self.h02_declare_local(self.param_name(pn, j), pn, .static_parameter, pt))] = if (vs[j] == .none) .none else statics.retype(self, vs[j], pt);
     }
     for (pnodes) |pn| {
         const p = Resolver.Param.from_node(self, pn);
@@ -246,10 +250,10 @@ fn score(self: *Resolver, c: DeclPool.Index, args: []const NodeId, tys: []const 
         const v = self.arg_value(a);
         total += if (statics.templated(self, p) != .none)
             (if (statics.passes(self, t, p)) 5 else return -1)
+        else if (sp.has_vars(p) and t != .poison_type)
+            (if (statics.arg_len(self, t, p) != .none) 2 else return -1)
         else if (t == p or t == .poison_type or (self.is_literal(v) and sp.coerce(&self.abstract_pool, statics.literal_type(self, v, p), p) == .identity))
             @as(i32, 6) - @intFromBool(sp.get_tag_prop(p).is_float and !sp.get_tag_prop(t).is_float)
-        else if (sp.has_vars(p))
-            (if (statics.arg_len(self, t, p) != .none) 2 else return -1)
         else if (sp.coerce(&self.abstract_pool, t, p) != .incompatible) 4 else return -1;
         if (Resolver.Param.from_node(self, pnodes[map[i]]).where != 0) total += 1;
     }

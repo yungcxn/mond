@@ -1,0 +1,22 @@
+# trait methods dispatch on variant values too, cases without payload included
+trait Base = !{ fun id = () -> u32; }
+variant Bit = +(Zero, One) implof Base !{
+    fun id = () -> u32: ret match self.* { Bit.Zero => 10, Bit.One => 11 }
+}
+variant Box = +(Has(u32), Nil) implof Base !{
+    fun id = () -> u32: ret self.* ?? 5;
+}
+type Num = *(u32 v) implof Base !{ fun id = () -> u32: ret self.v; }
+fun via_val = (Base b) -> u32: ret b.id();
+fun via_ref = (&Base b) -> u32: ret b.id();
+stcfun a = () -> u32: ret via_val(Num(v = 3));
+stcfun b = () -> u32: ret via_val(Bit.One);
+stcfun c = () -> u32 { Bit x = Bit.One; ret via_ref(x.&); }
+stcfun d = () -> u32: ret via_val(Box.Has(7));
+stcfun e = () -> u32 { Bit x = Bit.Zero; ret x.id(); }
+stc u32 A = a(); #= A 3
+stc u32 B = b(); #= B 11
+stc u32 C = c(); #= C 11
+stc u32 D = d(); #= D 7
+stc u32 E = e(); #= E 10
+$main = () {}

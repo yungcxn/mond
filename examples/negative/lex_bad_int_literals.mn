@@ -1,0 +1,9 @@
+# malformed or too large integer literals are one error each
+fun f = () {
+    u32 a = 0x; #! type_mismatch
+    u32 b = 0b102; #! type_mismatch
+    u32 c = 1_; #! type_mismatch
+    u64 d = 18446744073709551616; #! type_mismatch
+    e = 0o8; #! type_mismatch
+}
+$main = () {}

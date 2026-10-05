@@ -1,0 +1,13 @@
+# a field with `where .. else x = ..` may be followed by more fields
+type Range = *(mut u8 lo where lo < 10 else lo = 10, mut u8 hi = 200 where hi >= lo else hi = lo);
+
+fun clamp = (i32 a where a >= 0 else 0, i32 b where b < 100 else 100, i32 c) -> i32: ret a + b + c;
+
+stc Range R1 = Range(3); #= R1 [3, 200]
+stc Range R2 = Range(50); #= R2 [10, 200]
+stc Range R3 = Range(5, 2); #= R3 [5, 5]
+stc Range R4 = Range(80, 1); #= R4 [10, 10]
+stc i32 C1 = clamp(-5, 2, 1); #= C1 3
+stc i32 C2 = clamp(5, 200, 1); #= C2 106
+
+$main = () {}

@@ -1,0 +1,46 @@
+# closures share mutable locals by reference and copy immutable ones, also after the frame moves on
+fun counter_sum = (u32 n) -> u32 {
+    mut u32 c = 0;
+    bump = (u32 by) { c += by; };
+    for i in 1..=n: bump(i);
+    ret c;
+}
+
+fun captured_copy = () -> u32 {
+    u32 k = 5;
+    add_k = (u32 x) -> u32: ret x + k;
+    mut u32 s = 0;
+    for i in 0..<3: s += add_k(i);
+    ret s;
+}
+
+fun apply_twice = ((u32) -> u32 f, u32 x) -> u32: ret f(f(x));
+
+fun composed = (u32 x) -> u32 {
+    mut u32 calls = 0;
+    sq = (u32 v) -> u32 {
+        calls++;
+        ret v * v;
+    };
+    r = apply_twice(sq, x);
+    ret r + calls;
+}
+
+fun make_scaler = (u32 m): (u32 v) -> u32: ret v * m;
+
+stcfun s_counter = (u32 n) -> u32: ret counter_sum(n);
+stcfun s_copy = () -> u32: ret captured_copy();
+stcfun s_composed = (u32 x) -> u32: ret composed(x);
+stcfun s_scaled = () -> u32 {
+    tri = make_scaler(3);
+    ret tri(make_scaler(2)(7));
+}
+
+stc u32 C = s_counter(10); #= C 55
+stc u32 K = s_copy(); #= K 18
+stc u32 P = s_composed(3); #= P 83
+stc u32 SC = s_scaled(); #= SC 42
+
+$main = () {
+    u32 r = counter_sum(4) + captured_copy() + composed(2) + make_scaler(4)(5);
+}

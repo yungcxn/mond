@@ -1,0 +1,25 @@
+# `do` and unit blocks are runit and mix with values, a plain unit value does not
+fun unit_fn = () {}
+variant V = +(A, B);
+
+fun f = (bool c, V v, i32 n) {
+    i32 a = if c: 1 else: do unit_fn();
+    i32 b = if c { unit_fn(); } else: 2;
+    i32 b2 = if c { 1; } else: 2;
+    x = if c: 1 else: do unit_fn(); #: x u32
+    y = if c: do unit_fn() else: do unit_fn(); #: y runit
+    z = if c: 1; #: z ()
+    i32 m = match v { V.A => 1, V.B => do unit_fn() }
+    w = match v { V.A => 1, V.B => do unit_fn() } #: w u32
+    i32 k = match n { 0 => { unit_fn(); }, _ => 3 }
+    i32 q = if c: unit_fn() else: unit_fn(); #! runit_mixing runit_mixing
+    u = if c: unit_fn() else: unit_fn(); #: u ()
+    i32 j = if c: if n > 0: 1 else: 2 else: 3;
+    i32 jj = if c: if n > 0: 1 else: 3; #! runit_mixing
+    i32 kk = if c: 1 else: if n > 0: 2; #! runit_mixing
+    i32 mm = match v { V.A => 1, V.B => unit_fn() } #! runit_mixing
+    i32 nn = match v { V.A => unit_fn(), V.B => unit_fn() } #! runit_mixing runit_mixing
+    i32 dd = do unit_fn(); #! type_mismatch
+    i32 rr = if c: 1 else: ret;
+}
+$main = () {}

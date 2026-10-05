@@ -1,0 +1,1 @@
+fun outer = () { $main = () {}; } #! missing_main

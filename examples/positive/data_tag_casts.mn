@@ -1,0 +1,15 @@
+# a case without payload cast to an integer is its tag, at the top level as inside a stcfun
+variant D = +(N, S, E = 7, W);
+
+stcfun f = () -> u32: ret D.E as u32;
+stc u32 A = f(); #= A 7
+stc u32 B = D.E as u32; #= B 7
+stc D DD = D.W;
+stc u32 C = DD as u32; #= C 8
+stc u8 N = D.N as u8; #= N 0
+
+fun runtime = (D d) -> u16: ret d as u16;
+
+$main = () {
+    x = runtime(D.S); #: x u16
+}

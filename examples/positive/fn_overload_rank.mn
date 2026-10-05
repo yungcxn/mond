@@ -1,0 +1,54 @@
+# exact beats widening, an int literal prefers an int parameter over a float one, a literal fitting two parameters is ambiguous (see negative/fn_overload_errors.mn)
+fun w = (i32 x) -> u32: ret 1;
+fun w = (i64 x) -> u32: ret 2;
+fun lit = (u8 x) -> u32: ret 1;
+fun lit = (f32 x) -> u32: ret 2;
+fun big = (u8 x) -> u32: ret 1;
+fun big = (u32 x) -> u32: ret 2;
+fun neg = (u64 x) -> u32: ret 1;
+fun neg = (i8 x) -> u32: ret 2;
+fun pm = (*i32 p) -> u32: ret 1;
+fun pm = (&i32 p) -> u32: ret 2;
+fun ar = (&[]u8 s) -> u32: ret 10;
+fun ar = (&[3]u8 s) -> u32: ret 3;
+fun mix = (u8 a, f32 b) -> u32: ret 1;
+fun mix = (f32 a, u8 b) -> u32: ret 2;
+fun case_or_variant = (Sh s) -> u32: ret 1;
+fun case_or_variant = (Sh.Dot d) -> u32: ret 2;
+variant Sh = +(Dot, Box(u32 side));
+
+stcfun widening = () -> u32 {
+    i32 a = 1;
+    i64 c = 3;
+    ret w(a) * 10 + w(c);
+}
+
+stcfun literals = () -> u32: ret lit(7) * 100 + lit(7.0) * 10 + big(256);
+stcfun negatives = () -> u32: ret neg(-1) * 10 + neg(5000000000);
+
+stcfun pointers = () -> u32 {
+    mut i32 m = 4;
+    i32 r = 5;
+    ret pm(m.&) * 10 + pm(r.&);
+}
+
+stcfun lengths = () -> u32 {
+    [3]u8 three = [1, 2, 3];
+    [4]u8 four = [1, 2, 3, 4];
+    ret ar(three.&) * 10000 + ar(four.&) * 100 + ar("ab".&);
+}
+
+stcfun mixed = () -> u32: ret mix(1, 2.0) * 10 + mix(2.0, 1);
+stcfun cases = () -> u32: ret case_or_variant(Sh.Dot) * 10 + case_or_variant(Sh.Box(2));
+
+stc u32 WI = widening(); #= WI 12
+stc u32 LI = literals(); #= LI 122
+stc u32 NE = negatives(); #= NE 21
+stc u32 PO = pointers(); #= PO 12
+stc u32 LE = lengths(); #= LE 31010
+stc u32 MI = mixed(); #= MI 12
+stc u32 CA = cases(); #= CA 21
+
+$main = () {
+    r = w(1 as i32); #: r u32
+}

@@ -1,0 +1,57 @@
+# binary operators: * / % > + - > << >> > relational > == != > & > ^ > | > and > xor > or, all left associative
+stc i32 MUL_ADD = 2 + 3 * 4; #= MUL_ADD 14
+stc i32 SUB_LEFT = 10 - 4 - 3; #= SUB_LEFT 3
+stc i32 DIV_LEFT = 100 / 10 / 5; #= DIV_LEFT 2
+stc i32 MUL_MOD = 2 * 3 % 4; #= MUL_MOD 2
+stc i32 MOD_MUL = 17 % 5 * 3; #= MOD_MUL 6
+stc i32 DIV_MUL = 64 / 4 / 2 * 3; #= DIV_MUL 24
+stc i32 MIXED = 8 - 2 * 3 + 1; #= MIXED 3
+stc u32 SHL_ADD = 1 << 2 + 1; #= SHL_ADD 8
+stc u32 ADD_SHL = 1 + 2 << 1; #= ADD_SHL 6
+stc u32 SHR_LEFT = 256 >> 2 >> 1; #= SHR_LEFT 32
+stc u32 BIT_ORDER = 1 | 2 ^ 3 & 4; #= BIT_ORDER 3
+stc u32 AND_OR = 0xF0 | 0x0F & 0x3C; #= AND_OR 252
+stc u32 AND_FIRST = 6 & 3 | 8; #= AND_FIRST 10
+stc u32 XOR_FIRST = 1 ^ 3 | 4; #= XOR_FIRST 6
+stc u32 WRAP_ORDER = 1 +% 2 *% 3; #= WRAP_ORDER 7
+stc bool REL_EQ = 1 < 2 == true; #= REL_EQ true
+stc bool EQ_NEQ = 1 == 1 != false; #= EQ_NEQ true
+stc bool AND_XOR = false and false xor true; #= AND_XOR true
+stc bool XOR_AND = true xor false and false; #= XOR_AND true
+stc bool AMP_SAME = true or false && false; #= AMP_SAME true
+stc bool XOR_OR = true or true xor true; #= XOR_OR true
+stc bool CMP_LOGIC = 1 < 2 and 3 > 4 or 5 >= 5; #= CMP_LOGIC true
+
+# groups override precedence
+stc i32 GROUP = (2 + 3) * (4 - 1); #= GROUP 15
+stc i32 GROUP_NESTED = ((((7)))); #= GROUP_NESTED 7
+stc i32 GROUP_MUL = 2 * (3 + 4); #= GROUP_MUL 14
+
+# unary operators bind tighter than binary ones, binary minus needs no space before a negated operand
+stc i32 NEG_MUL = -2 * 3; #= NEG_MUL -6
+stc i32 NEG_ADD = -2 + 3; #= NEG_ADD 1
+stc i32 SUB_NEG = 7 - -1; #= SUB_NEG 8
+stc i32 ADD_NEG = 1 +-1; #= ADD_NEG 0
+stc i32 DOUBLE_NEG = -(-3); #= DOUBLE_NEG 3
+stc bool NOT_OR = !true or true; #= NOT_OR true
+stc bool NOT_NOT = !!false; #= NOT_NOT false
+stc u8 BIT_NOT = !0x0F as u8; #= BIT_NOT 240
+
+# `as` binds tighter than binary operators, a negation takes its operand before `as`
+stc i32 Y = 300;
+stc u8 AS_DIV = Y as u8 / 2; #= AS_DIV 22
+stc u8 NEG_AS = -Y as u8 + 0; #= NEG_AS 212
+stc u64 AS_JOIN = 3 + 4 as u64; #: AS_JOIN u64
+
+# postfix operators bind tightest
+stc [3]u32 ARR = [10, 20, 30];
+stc u32 IDX_MUL = ARR[1] * 2; #= IDX_MUL 40
+stc u32 IDX_NEG = ARR[2] - ARR[0]; #= IDX_NEG 20
+
+$main = () {
+    mut i32 x = 1;
+    x += 2 * 3;
+    i32 y = x++ + ++x;
+    bool b = x < -1;
+    j = 3 + 4 as u64; #: j u64
+}

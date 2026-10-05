@@ -1,0 +1,24 @@
+fun mixed = (bool c) { if c: ret 1; ret "s"; } #! type_mismatch
+fun void_then_value = (bool c) { if c: ret; ret 1; } #! type_mismatch
+fun value_then_void = (bool c) { if c: ret 1; ret; } #! ret_type_mismatch
+fun unit_typed = () -> () { ret 1; } #! type_mismatch
+fun unit_typed_ok = () -> () { ret; }
+fun typed_void = () -> u8 { ret; } #! ret_type_mismatch
+fun typed_short = () -> u8: "s"; #! type_mismatch
+fun typed_short_ret = () -> u8: ret 300; #! type_mismatch
+fun typed_fits = () -> u8: ret 255;
+fun typed_neg = () -> u8: ret -1; #! type_mismatch
+fun no_value = (bool c) -> u8 { if c { ret 1; } } #! missing_ret
+fun match_all = (bool c) -> u8 { match c { true => ret 1, false => ret 2 } }
+fun while_true = () -> u8 { while true { ret 1; } } #! missing_ret
+fun recursion_mismatch = (u32 n) -> u32: ret if n == 0: true else: recursion_mismatch(n - 1); #! type_mismatch
+fun ret_in_lambda = () -> u8 {
+    f = (): ret "s";
+    ret 1;
+}
+fun lambda_unit = () -> u8 {
+    g = (i32 x) -> i32 { }; #! missing_ret
+    ret 1;
+}
+
+$main = () {}

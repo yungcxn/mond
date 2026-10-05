@@ -1,0 +1,36 @@
+type Buf = (type T, u32 N): *(mut [N]T items, mut u32 len = 0, u32 cap = N, u64 width = sizeof T);
+type Pair = (type A, type B): *(A first, B second = B.$init());
+variant Maybe = (type T): +(Just(T), Nothing) tagof u8;
+trait Eq = (type T): !{ fun eq = (T other) -> bool; }
+type Cell = (type T): *(T v) implof Eq(Cell(T)) !{ fun eq = (Cell(T) o) -> bool: ret self.v == o.v; }
+
+stc u64 S1 = sizeof Buf(u8, 3); #= S1 24
+stc u64 S2 = sizeof Buf(u64, 2); #= S2 32
+stc u64 S3 = sizeof Maybe(u16); #= S3 4
+stc u64 S4 = sizeof Maybe(u64); #= S4 16
+stc u64 S5 = sizeof Pair(u8, Maybe(u32)); #= S5 12
+
+stcfun defaults = () -> u64 {
+    Buf(u16, 4) b = Buf(u16, 4)(items = [1, 2, 3, 4]);
+    ret b.cap as u64 * 100 + b.width * 10 + b.len as u64;
+}
+stcfun eqs = () -> u32 {
+    Cell(u8) a = Cell(u8)(v = 3);
+    Cell(u8) b = Cell(u8)(v = 3);
+    Cell(u8) c = Cell(u8)(v = 4);
+    ret (if a.eq(b): 1 else: 0) + (if a.eq(c): 10 else: 0);
+}
+stcfun maybe = (Maybe(u32) m) -> u32: ret m ?? 9;
+
+stc u64 DF = defaults(); #= DF 420
+stc u32 EQ = eqs(); #= EQ 1
+stc u32 M1 = maybe(Maybe(u32).Just(5)); #= M1 5
+stc u32 M2 = maybe(Maybe(u32).Nothing); #= M2 9
+stc bool O1 = Cell(u8)(v = 1) oftype Eq(Cell(u8)); #= O1 true
+stc bool O2 = Cell(u8)(v = 1) oftype Cell; #= O2 true
+stc bool O3 = Cell(u8)(v = 1) oftype Maybe; #= O3 false
+stc bool O4 = Cell(u8)(v = 1) oftype Cell(u16); #= O4 false
+
+$main = () {
+    b = Buf(u8, 2)(items = [1, 2]); #: b *([2]u8 items, u32 len, u32 cap, u64 width)
+}

@@ -1,0 +1,97 @@
+fun make_adder = (i32 n): (i32 x): x + n;
+fun compose = ((i32) -> i32 f, (i32) -> i32 g): (i32 x): g(f(x));
+fun apply_n = ((i32) -> i32 f, u32 n, i32 x) -> i32 {
+    mut i32 v = x;
+    for 0..<n: v = f(v);
+    ret v;
+}
+
+# a mutable local is captured by reference, an immutable one by value
+stcfun by_ref = () -> i32 {
+    mut i32 count = 0;
+    inc = (): count += 1;
+    inc();
+    inc();
+    inc();
+    ret count;
+}
+
+stcfun by_value = () -> i32 {
+    i32 base = 10;
+    add = (i32 x): x + base;
+    ret add(1) + add(2);
+}
+
+stcfun shared_state = () -> i32 {
+    mut i32 total = 0;
+    add = (i32 v): total += v;
+    get = (): total;
+    add(5);
+    add(7);
+    ret get();
+}
+
+stcfun nested_capture = () -> i32 {
+    i32 a = 1;
+    outer = (i32 b): (i32 c): a * 100 + b * 10 + c;
+    ret outer(2)(3);
+}
+
+stcfun returned = () -> i32 {
+    add3 = make_adder(3);
+    add4 = make_adder(4);
+    ret add3(1) * 100 + add4(1);
+}
+
+stcfun composed = () -> i32 {
+    f = compose(make_adder(1), (i32 x): x * 10);
+    ret f(2) + apply_n(make_adder(2), 5, 0) * 1000;
+}
+
+stcfun aggregate_capture = () -> i32 {
+    [3]i32 arr = [4, 5, 6];
+    sum = (): arr[0] + arr[1] + arr[2];
+    ret sum();
+}
+
+stcfun capture_param = (i32 k) -> i32 {
+    times = (i32 x): x * k;
+    ret times(times(2));
+}
+
+stcfun loop_closures = () -> i32 {
+    mut i32 acc = 0;
+    for i in 0..<4 {
+        step = (i32 x): x + i as i32;
+        acc = step(acc);
+    }
+    ret acc;
+}
+
+stcfun sees_later_writes = () -> i32 {
+    mut i32 x = 1;
+    g = (): x;
+    x = 5;
+    ret g();
+}
+
+stc i32 BR = by_ref(); #= BR 3
+stc i32 BV = by_value(); #= BV 23
+stc i32 SS = shared_state(); #= SS 12
+stc i32 NC = nested_capture(); #= NC 123
+stc i32 RT = returned(); #= RT 405
+stc i32 CO = composed(); #= CO 10030
+stc i32 AC = aggregate_capture(); #= AC 15
+stc i32 CP = capture_param(3); #= CP 18
+stc i32 LC = loop_closures(); #= LC 6
+stc i32 SL = sees_later_writes(); #= SL 5
+
+$main = () {
+    mut i32 c = 0;
+    inc = (): c += 1; #: inc () -> ()
+    inc();
+    add = make_adder(c); #: add (i32) -> i32
+    r = apply_n(add, 3, 1); #: r i32
+    pair = compose(add, add); #: pair (i32) -> i32
+    twice = (i32 x): pair(pair(x)); #: twice (i32) -> i32
+}

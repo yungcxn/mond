@@ -1,0 +1,1 @@
+fun f = (i32 x): ret x <- 5; #! ExpectedIdentifier

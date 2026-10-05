@@ -1,0 +1,33 @@
+fun none = () -> u32: ret 0;
+fun one = (u32 a) -> u32: ret a;
+fun three = (u32 a, u32 b, u32 c) -> u32: ret a + b + c;
+fun tail = (u32 a, u32 b = 2, u32 c = 3) -> u32: ret a + b + c;
+fun all_def = (u32 a = 1, u32 b = 2) -> u32: ret a + b;
+
+fun f = () {
+    none(1); #! wrong_arity
+    one(); #! wrong_arity
+    one(1, 2); #! wrong_arity
+    three(1, 2); #! wrong_arity
+    three(1, 2, 3, 4); #! wrong_arity
+    three(a = 1, b = 2); #! wrong_arity
+    three(1, 2, a = 3); #! wrong_arity
+    three(1, b = 2, b = 3); #! wrong_arity
+    three(1, 2, d = 3); #! unknown_named_argument
+    tail(b = 5); #! wrong_arity
+    tail(1, 2, 3, 4); #! wrong_arity
+    tail(1, z = 1); #! unknown_named_argument
+    all_def(1, 2, 3); #! wrong_arity
+    all_def(c = 1); #! unknown_named_argument
+    u32 x0 = none();
+    u32 x1 = one(a = 1);
+    u32 x2 = three(c = 3, a = 1, b = 2);
+    u32 x3 = tail(1);
+    u32 x4 = tail(1, c = 9);
+    u32 x5 = tail(a = 1, c = 9, b = 8);
+    u32 x6 = all_def();
+    u32 x7 = all_def(b = 5);
+    u32 x8 = three(1, 2, 3,);
+}
+
+$main = () {}

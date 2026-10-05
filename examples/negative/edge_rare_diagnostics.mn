@@ -1,0 +1,19 @@
+# the rarer diagnostics in more shapes: ret in type templates, destructuring conflicts, ranges as indices
+variant Opt = (type T): ret +(Some(T), None); #! redundant_ret
+trait Show = (type T): ret !{ fun show = (T x); }; #! redundant_ret
+
+fun conflicts = (i8 s8, bool on) {
+    x, y = 1, true; #! destructure_type_conflict
+    p, q = s8, 300; #! destructure_type_conflict
+    u, w = on, s8; #! destructure_type_conflict
+    s, t = s8, -1;
+}
+
+fun ranges = ([6]u8 arr, *[6]u8 wp) {
+    u8 e1 = arr[2..]; #! genexpr_index
+    u8 e2 = arr[..=3]; #! genexpr_index
+    u8 e3 = wp[1..=2]; #! genexpr_index
+    u8 ok = arr[5];
+}
+
+$main = () {}

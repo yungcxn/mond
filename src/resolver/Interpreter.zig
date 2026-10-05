@@ -97,7 +97,7 @@ pub fn static_match(self: *Interpreter, ctx: *Resolver.FnCtx, pat: NodeId, v: In
 pub fn run(self: *Interpreter, ctx: *Resolver.FnCtx, root: NodeId, body: Resolver.Body) Index {
     const s = self.open(ctx, body);
     defer self.close(s);
-    return self.export_(root, self.result(self.eval(root)));
+    return self.export_(root, self.coerce(self.result(self.eval(root)), ctx.ret_type));
 }
 
 pub fn enter(self: *Interpreter, body: Resolver.Body) void {
@@ -141,7 +141,7 @@ pub fn charge(self: *Interpreter, n: NodeId, cost: u32) bool {
         self.budget -= cost;
         return true;
     }
-    if (self.budget > 0) _ = self.report(.static_eval_failed, n, 0, 0);
+    if (self.budget > 0) _ = self.fail(n, .static_eval_failed, 0, 0);
     self.budget = 0;
     return false;
 }
@@ -189,7 +189,7 @@ pub fn fill(self: *Interpreter, c: usize, v: Value, t: Index) void {
 }
 
 pub fn vtype(self: *Interpreter, v: Value) Index {
-    return if (!v.is_pool()) v.ty else if (v.is(.none)) .none else self.res().static_pool.type_of(v.index());
+    return if (!v.is_pool()) v.ty else if (v.is(.none)) .none else if (self.res().static_pool.tag(v.index()) == .variant_case_type) v.index() else self.res().static_pool.type_of(v.index());
 }
 
 pub fn deref(self: *Interpreter, v: Value) Value {
@@ -366,7 +366,7 @@ pub fn eval(self: *Interpreter, n: NodeId) Value {
             const l = self.eval(a0);
             break :blk if (l.ty == .bool_type and (l.bits != 0) == (k == .binary_logic_or)) l else self.arith(n, k, l, self.eval(a1));
         },
-        .binary_add, .binary_sub, .binary_mul, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap, .binary_div, .binary_mod, .binary_pow, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_eq, .binary_neq, .binary_less, .binary_greater, .binary_less_eq, .binary_greater_eq, .binary_logic_xor => self.arith(n, k, self.eval(a0), self.eval(a1)),
+        .binary_add, .binary_sub, .binary_mul, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap, .binary_div, .binary_mod, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_eq, .binary_neq, .binary_less, .binary_greater, .binary_less_eq, .binary_greater_eq, .binary_logic_xor => self.arith(n, k, self.eval(a0), self.eval(a1)),
         .if_then, .stcif_then, .if_else, .stcif_else => control.branch(self, n, k),
         .match, .stcmatch => control.match(self, n),
         .for_seq, .stcfor_seq, .for_var_in_seq, .stcfor_var_in_seq, .@"while", .stcwhile, .while_with_repeat_stmt, .stcwhile_with_repeat_stmt, .loop, .stcloop, .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => control.loop(self, n),
@@ -418,7 +418,7 @@ fn array(self: *Interpreter, n: NodeId) Value {
         self.fill(at + i, x, et);
     }
     const whole = et != .none and !r.static_pool.has_vars(ct);
-    if (et == .none) et = if (len > 0) self.vtype(self.mem.buf[at]) else .unit_type;
+    if (et == .none) et = types.joined(self, self.mem.buf[at..][0..len]);
     return .block(if (whole) ct else types.array_type(self, len, et), at, len);
 }
 

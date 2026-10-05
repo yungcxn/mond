@@ -155,7 +155,7 @@ pub fn loop(ip: *Interpreter, n: NodeId) Value {
     if (!want) return .unit;
     const len = ip.list.head - mark;
     var et = types.elem_type(ip, ip.hint(n));
-    if (et == .none) et = if (len > 0) ip.vtype(ip.list.buf[mark]) else .unit_type;
+    if (et == .none) et = types.joined(ip, ip.list.buf[mark..][0..len]);
     const at = ip.alloc(len);
     for (0..len) |j| ip.fill(at + j, ip.list.buf[mark + j], et);
     return .block(types.array_type(ip, len, et), at, len);
@@ -284,7 +284,9 @@ pub fn unwrap(ip: *Interpreter, n: NodeId) Value {
         label(ip, r.tree.arg(n, 1), v);
         return v;
     }
-    const p = payload(ip, v);
+    const sp = &r.static_pool;
+    const c = case_of(ip, v);
+    const p = if (c == .none or sp.tag(ip.hint(r.tree.arg(n, 0))) == .variant_case_type or sp.payload_case(sp.get(c).variant_case_type.variant) == c) payload(ip, v) else null;
     return switch (k) {
         .selftag_arrow => blk: {
             if (p) |x| label(ip, r.tree.arg(n, 1), x);

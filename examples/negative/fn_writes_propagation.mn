@@ -1,0 +1,15 @@
+# a method calling a method that writes self writes self too, also when the callee comes later
+type C = *(mut u32 n) !{
+    fun first = () { self.inc(); }
+    fun inc = () { self.n += 1; }
+    fun last = () { self.inc(); }
+}
+fun f = () {
+    C imm = C(n = 1);
+    imm.first(); #! assign_to_immutable
+    imm.last(); #! assign_to_immutable
+    mut C m = C(n = 1);
+    m.first();
+    m.last();
+}
+$main = () {}

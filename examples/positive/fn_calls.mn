@@ -1,0 +1,47 @@
+fun add = (i32 a, i32 b) -> i32: ret a + b;
+fun sub_auto = (i32, i32): ret $0 - $1; #: sub_auto (i32, i32) -> i32
+fun third = (u8, u8, u8 c): ret c; #: third (u8, u8, u8) -> u8
+fun unit_explicit = () -> () {} #: unit_explicit () -> ()
+fun unit_induced = (i32 x) { i32 y = x; } #: unit_induced (i32) -> ()
+fun early = (i32 x) { if x > 0: ret; } #: early (i32) -> ()
+fun block_ret = (i32 x) { ret x * 2; } #: block_ret (i32) -> i32
+fun short_ret = (i32 x): x * 3; #: short_ret (i32) -> i32
+fun choose = (bool c) { if c: ret 1; ret 2; } #: choose (bool) -> u32
+fun apply2 = ((i32, i32) -> i32 op, i32 a, i32 b) -> i32: ret op(a, b);
+fun twice = ((i32) -> i32 f): (i32 x): f(f(x)); #: twice ((i32) -> i32) -> (i32) -> i32
+fun adder = (i32 n): (i32 x): x + n; #: adder (i32) -> (i32) -> i32
+fun curry3 = (i32 a): (i32 b): (i32 c): a * 100 + b * 10 + c; #: curry3 (i32) -> (i32) -> (i32) -> i32
+fun even = (u32 n) -> bool: ret if n == 0: true else: odd(n - 1);
+fun odd = (u32 n): ret if n == 0: false else: even(n - 1); #: odd (u32) -> bool
+fun ack = (u64 m, u64 n) -> u64: ret if m == 0: n + 1 else: if n == 0: ack(m - 1, 1) else: ack(m - 1, ack(m, n - 1));
+fun fact = (u64 n): ret if n <= 1: 1 else: n * fact(n - 1); #: fact (u64) -> u64
+
+stcfun run = () -> i32 {
+    i32 a = apply2(add, 3, 4);
+    i32 b = apply2(sub_auto, 10, 4);
+    i32 c = apply2((i32 x, i32 y): x * y, 5, 6);
+    i32 d = twice(adder(5))(1);
+    i32 e = curry3(1)(2)(3);
+    ret a + b * 10 + c * 100 + d * 10000 + e * 100000;
+}
+
+stc i32 R = run(); #= R 12413067
+stc bool EV = even(10); #= EV true
+stc bool OD = odd(7); #= OD true
+stc u64 AK = ack(2, 3); #= AK 9
+stc u64 FA = fact(10); #= FA 3628800
+stc u8 TH = third(1, 2, 3); #= TH 3
+stc u32 CH = choose(false); #= CH 2
+
+$main = () {
+    op = add; #: op (i32, i32) -> i32
+    s = op(1, 2); #: s i32
+    inc = adder(1); #: inc (i32) -> i32
+    v = inc(inc(1)); #: v i32
+    imm = ((i32 x): x + 1)(1); #: imm i32
+    deep = curry3(1)(2); #: deep (i32) -> i32
+    []((i32, i32) -> i32) ops = [add, sub_auto]; #: ops [2](i32, i32) -> i32
+    o = ops[1](5, 2); #: o i32
+    unit_explicit();
+    early(1);
+}

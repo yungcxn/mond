@@ -1,0 +1,2 @@
+# argv has to come behind a pointer
+$main = (i32 argc, []&u8 argv) {} #! type_mismatch

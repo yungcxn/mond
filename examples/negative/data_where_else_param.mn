@@ -1,0 +1,5 @@
+# parameters are immutable, their fallback is a value
+fun clamp = (i32 a where a >= 0 else a = 0, i32 b) -> i32: ret a + b; #! assign_to_immutable
+fun fine = (i32 a where a >= 0 else 0, i32 b) -> i32: ret a + b;
+
+$main = () {}

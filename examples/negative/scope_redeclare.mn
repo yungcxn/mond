@@ -1,0 +1,25 @@
+# a name declared twice in one scope is a redeclaration, binders included
+type R = *(u32 a, u32 b);
+variant V = +(A(u32), B(u32 l, u32 r));
+
+fun locals = () {
+    u32 a = 1;
+    u32 a = 2; #! duplicate_declaration
+    mut u32 m;
+    mut u32 m; #! duplicate_declaration
+    u32 p, p = 1, 2; #! duplicate_declaration
+    fun g = () {}
+    fun g = () {} #! duplicate_declaration
+    {
+        u32 a = 3;
+    }
+}
+
+fun binders = (R r, V v) -> u32 {
+    u32 x = match r { R(q, q) => q, }; #! duplicate_declaration
+    u32 y = match v { V.A(w) | V.B(w, w) => w, }; #! duplicate_declaration
+    u32 z = (r <- s, s).a; #! duplicate_declaration
+    ret x + y + z;
+}
+
+$main = () {}

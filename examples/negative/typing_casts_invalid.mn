@@ -1,0 +1,48 @@
+# conversions `as` refuses
+type R = *(u8 a);
+type S = *(u8 a);
+variant V = +(A, B(u8));
+variant W = +(X, Y);
+variant P = ++(I(i32), F(f32));
+trait T = !{ fun m = (); }
+
+fun f = (u8 n, f32 x, bool b, R r, V v, *u8 p, &u8 q, [4]u8 a, &[4]u8 ap, (u8) -> u8 fp) {
+    c1 = n as bool; #! invalid_cast
+    c2 = x as bool; #! invalid_cast
+    c3 = r as S; #! invalid_cast
+    c4 = r as u8; #! invalid_cast
+    c5 = n as R; #! invalid_cast
+    c6 = v as W; #! invalid_cast
+    c7 = W.X as V.A; #! invalid_cast
+    c8 = x as P.I; #! invalid_cast
+    c9 = n as V; #! invalid_cast
+    c10 = q as *u8; #! invalid_cast
+    c11 = n as *u8; #! invalid_cast
+    c12 = p as u64; #! invalid_cast
+    c13 = a as [8]u8; #! invalid_cast
+    c14 = a as [2]i8; #! invalid_cast
+    c15 = a as [3..<9]u8; #! invalid_cast
+    c16 = a as [3..<2]u8; #! invalid_cast
+    c17 = ap as &[5]u8; #! invalid_cast
+    c18 = ap as *[2]u8; #! invalid_cast
+    c19 = fp as u64; #! invalid_cast
+    c20 = n as T; #! invalid_cast
+    c21 = x as [4]u8; #! invalid_cast
+    c22 = "ab" as u16; #! invalid_cast
+    c23 = b as R; #! invalid_cast
+}
+
+fun g = (u64 w, u8 n, R r, [2]u8 a, *u8 p) {
+    s1 = w asbits u32; #! invalid_cast
+    s2 = w asbits f32; #! invalid_cast
+    s3 = n asbits u8;
+    s4 = n asbits u64;
+    s5 = r asbits u8;
+    s6 = a asbits u16;
+    s7 = a asbits u8; #! invalid_cast
+    s8 = p asbits u64;
+    s9 = p asbits u32; #! invalid_cast
+    s10 = w asbits T; #! invalid_cast
+}
+
+$main = () {}

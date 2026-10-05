@@ -1,0 +1,4 @@
+fun f = () {
+    mut i32 a = 1 #! ExpectedSemicolon
+    a = 2;
+}

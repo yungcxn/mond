@@ -1,0 +1,2 @@
+# a match needs at least one arm
+fun f = (i32 x): match x { }; #! NoRuleFound

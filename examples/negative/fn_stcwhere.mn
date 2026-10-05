@@ -1,0 +1,32 @@
+fun nonzero = (u32 d stcwhere d != 0) -> u32: ret 100 / d;
+fun ordered = (u32 lo, u32 hi stcwhere lo < hi) -> u32: ret hi - lo;
+fun sized = (type T stcwhere sizeof T == 4, u32 n) -> u64: ret sizeof T * n;
+fun mixed = (u32 rt, u32 st stcwhere st > 1) -> u32: ret rt * st;
+
+stc u32 GZ = 0;
+
+fun f = (u32 n) {
+    u32 gz = nonzero(GZ); #! stcwhere_violated
+    u32 a = nonzero(0); #! stcwhere_violated
+    u32 b = nonzero(5);
+    u32 c = nonzero(n); #! not_static
+    u32 d = ordered(3, 2); #! stcwhere_violated
+    u32 e = ordered(2, 2); #! stcwhere_violated
+    u32 g = ordered(2, 3);
+    u32 h = ordered(hi = 3, lo = 9); #! stcwhere_violated
+    u32 i = ordered(hi = 9, lo = 3);
+    u32 j = ordered(n, 9); #! not_static
+    u64 k = sized(u8, 2); #! stcwhere_violated
+    u64 l = sized(f32, n);
+    u32 m = mixed(n, 2);
+    u32 o = mixed(n, 1); #! stcwhere_violated
+    u32 p = nonzero(2 - 2); #! stcwhere_violated
+    stc u32 Z = 0;
+    u32 q = nonzero(Z); #! stcwhere_violated
+    stc u32 F = 5;
+    u32 r = nonzero(F);
+}
+
+stc u32 S5 = nonzero(5); #= S5 20
+
+$main = () {}

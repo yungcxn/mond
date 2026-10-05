@@ -1,0 +1,44 @@
+type Fixed = (u8 N): *([N]u8 bytes);
+type Flag = (bool B): *([stcif B: 1 else: 2]u8 x);
+type Signed = (i8 S): *([3]u8 x);
+type Real = (f32 F): *([3]u8 x);
+type Pt = *(u8 a);
+type ByPt = (Pt P): *([P.a]u8 x);
+type Box = (type T): *(T v);
+trait Speak = !{ fun speak = () -> u32; }
+variant Bit = +(Zero, One);
+stcfun need_trait = (trait T) -> u64: ret 1;
+stcfun need_variant = (variant V) -> u64: ret sizeof V;
+
+# value parameters keep the range of their type, at both ends
+type F1 = Fixed(255); #= F1 *([255]u8 bytes)
+type F2 = Fixed(256); #! type_mismatch
+type F3 = Fixed(-1); #! type_mismatch
+type S1 = Signed(-128);
+type S2 = Signed(-129); #! type_mismatch
+type S3 = Signed(128); #! type_mismatch
+
+# and their kind: booleans, floats, records
+type L1 = Flag(true); #= L1 *([1]u8 x)
+type L2 = Flag(1); #! type_mismatch
+type R1 = Real(1);
+type R2 = Real(1.5);
+type R3 = Real(true); #! type_mismatch
+type P1 = ByPt(Pt(a = 2)); #= P1 *([2]u8 x)
+type P2 = ByPt(5); #! type_mismatch
+
+# kind parameters take exactly their kind
+stc u64 NT1 = need_trait(Speak); #= NT1 1
+stc u64 NT2 = need_trait(u8); #! type_mismatch
+stc u64 NV1 = need_variant(Bit); #= NV1 1
+stc u64 NV2 = need_variant(Speak); #! type_mismatch
+stc u64 AR2 = need_variant(Bit, Bit); #! wrong_arity
+stc u64 AR0 = need_variant(); #! wrong_arity
+
+# a template is no type until realized
+stc type B1 = typeof Box; #! unrealized_template
+stc []u64 B2 = stcfor T in [u8, Box]: sizeof T; #! type_mismatch
+type B3 = Box(Box); #! type_mismatch
+type B4 = Box(Box(u8));
+
+$main = () {}

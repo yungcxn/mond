@@ -1,0 +1,4 @@
+# the address of a static parameter inside a stcfun is no impure access
+stcfun f = (u32 a) -> u32 { &u32 p = a.&; ret p.*; }
+stc u32 X = f(3); #= X 3
+$main = () {}

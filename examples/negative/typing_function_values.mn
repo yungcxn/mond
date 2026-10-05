@@ -1,0 +1,33 @@
+# function values match by exact parameter and result types
+fun inc = (u8 x) -> u8: ret x + 1;
+fun widen = (u8 x) -> u16: ret x;
+fun two = (u8 a, u8 b) -> u8: ret a + b;
+fun noop = () {}
+fun apply = ((u8) -> u8 f, u8 x) -> u8: ret f(x);
+
+fun f = (u8 n) {
+    (u8) -> u8 a1 = inc;
+    (u8) -> u16 a2 = widen;
+    (u8, u8) -> u8 a3 = two;
+    () -> () a4 = noop;
+    (u8) -> u8 a5 = (u8 x): x * 2;
+    (u8) -> u8 b1 = widen; #! type_mismatch
+    (u16) -> u8 b2 = inc; #! type_mismatch
+    (u8) -> u8 b3 = two; #! type_mismatch
+    (u8) -> u8 b4 = noop; #! type_mismatch
+    (u8) -> u8 b5 = n; #! type_mismatch
+    u8 b6 = inc; #! type_mismatch
+    u8 c1 = apply(inc, n);
+    u8 c2 = apply(widen, n); #! type_mismatch
+    u8 c3 = apply((u8 x): x, n);
+    u8 c4 = apply((u16 x): 1, n); #! type_mismatch
+    u8 c5 = a1(n);
+    u8 c6 = a1(n, n); #! wrong_arity
+    u8 c7 = a1(true); #! type_mismatch
+    u16 c8 = a2(n);
+    u8 c9 = a2(n); #! type_mismatch
+    g = inc; #: g (u8) -> u8
+    h = (i64 a, bool b): if b: a else: 0; #: h (i64, bool) -> i64
+}
+
+$main = () {}

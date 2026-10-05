@@ -1,0 +1,22 @@
+type D = *(u8, u8 $0); #! duplicate_declaration
+type D3 = *(u8, u8, u8 $1); #! duplicate_declaration
+variant VC = +(A(u8 a, u8 a), B); #! duplicate_declaration
+variant VD = +(A(u8), B, A(u16)); #! duplicate_declaration
+fun unnamed = (u32, u32 $0) {} #! duplicate_declaration
+fun three = (u32 a, u32 b, u32 a) {} #! duplicate_declaration
+fun lam = () { f = (u32 x, u32 x): x; } #! duplicate_declaration
+fun local = () { fun inner = (u8 p, u8 p) {} } #! duplicate_declaration
+stcfun sf = (u32 n, u32 n) -> u32: ret n; #! duplicate_declaration
+fun generic_uncalled = (&[]u8 a, u8 a) {} #! duplicate_declaration
+# one report, not one per realization
+fun generic_called = (&[]u16 b, u16 b) {} #! duplicate_declaration
+trait T = !{ fun m = (); fun m = (); } #! duplicate_declaration
+type M = *(u8 a) !{ fun m = () {} fun m = (u8 x) {} } #! duplicate_declaration
+
+fun use = () {
+    [2]u16 x = [1, 2];
+    [3]u16 y = [1, 2, 3];
+    generic_called(x.&, 1);
+    generic_called(y.&, 1);
+}
+$main = () {}

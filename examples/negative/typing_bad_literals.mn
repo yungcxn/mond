@@ -1,0 +1,15 @@
+# malformed or oversized literals are reported once, where they stand
+stc u32 A = 0b102; #! type_mismatch
+stc u32 B = 0o9; #! type_mismatch
+stc u32 D = 0x; #! type_mismatch
+stc u32 M = 1_; #! type_mismatch
+stc u64 O = 18446744073709551616; #! type_mismatch
+stc u64 P = 0x1_0000_0000_0000_0000; #! type_mismatch
+
+fun f = () {
+    x = 99999999999999999999; #! type_mismatch
+    u8 y = 0b2; #! type_mismatch
+    z = -18446744073709551616; #! type_mismatch
+}
+
+$main = () {}

@@ -1,0 +1,10 @@
+# array elements without a common type
+fun f = (u8 x, i8 s) {
+    b1 = [1, "s"]; #! type_mismatch
+    b2 = [true, 1]; #! type_mismatch
+    b3 = [x, s]; #! type_mismatch
+    [2]u8 b4 = [1, 256]; #! type_mismatch
+    [2]u8 b5 = [x, -1]; #! type_mismatch
+}
+
+$main = () {}

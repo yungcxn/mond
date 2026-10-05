@@ -1,0 +1,8 @@
+# `..` binds to its lower bound only, the upper bound takes arithmetic
+stcfun total = () -> u32 {
+    mut u32 s = 0;
+    for i in 1..=2 + 2: s += i;
+    ret s;
+}
+stc u32 T = total(); #= T 10
+$main = () {}

@@ -1,0 +1,34 @@
+# a group right before the `{` or `:` of an if / while / for / match head is a condition, not a lambda
+fun apply = ((i32) -> i32 f, i32 x) -> i32: ret f(x);
+fun id = (i32 x) -> i32: ret x;
+
+stcfun heads = (i32 n) -> i32 {
+    mut i32 acc = 0;
+    if (n > 0) { acc += 1; }
+    if (n > 0): acc += 10;
+    if (n < 0) { acc += 100; } else (acc += 1000);
+    mut i32 i = 0;
+    while (i < 3) { i++; }
+    acc += i;
+    for k in (0..<2) { acc += 10000; }
+    acc += match (n) { 5 => 100000, _ => 0, };
+    # lambdas stay lambdas inside calls in a head
+    if apply((i32 a): a + 1, 1) == 2 { acc += 1000000; }
+    if id((n)) == 5: acc += 10000000;
+    ret acc;
+}
+
+stc i32 H = heads(5); #= H 11121014
+
+# outside heads a group followed by `:` or `{` starts a function
+fun lam = (i32 n) -> i32 {
+    f = (i32 a): a * n;
+    g = (i32 a) { ret a + n; };
+    ret f(2) + g(3);
+}
+
+$main = () {
+    i32 v = lam(4);
+    if (v > 0) {}
+    while (false) {}
+}

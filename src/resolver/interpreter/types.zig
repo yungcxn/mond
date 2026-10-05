@@ -37,6 +37,14 @@ pub fn array_type(ip: *Interpreter, len: u64, et: Index) Index {
     return sp.intern(.{ .array_type = .{ .len = sp.intern(.{ .int = .{ .ty = .u64_type, .bits = len } }), .elem = et } });
 }
 
+pub fn joined(ip: *Interpreter, vs: []const Value) Index {
+    if (vs.len == 0) return .unit_type;
+    const sp = &ip.res().static_pool;
+    const t = ip.vtype(vs[0]);
+    for (vs[1..]) |v| if (ip.vtype(v) != t and sp.tag(t) == .array_type) return sp.intern(.{ .array_type = .{ .len = StaticPool.dyn_len, .elem = sp.get(t).array_type.elem } });
+    return t;
+}
+
 pub fn elem_type(ip: *Interpreter, t0: Index) Index {
     const r = ip.res();
     if (t0 == .none) return .none;
@@ -107,10 +115,12 @@ pub fn cast(ip: *Interpreter, n: NodeId) Value {
     const framed = ip.framed();
     const x = ip.eval(a0);
     if (!framed or ip.info(.ty, n) != .poison_type) {
-        const from = if (framed) sp.apply_vars(&r.abstract_pool, ip.info(.ty, a0)) else ip.vtype(x);
+        const c = @import("control.zig").case_of(ip, x);
+        const from = if (framed) sp.apply_vars(&r.abstract_pool, ip.info(.ty, a0)) else if (c != .none) c else ip.vtype(x);
         const t = if (framed) ip.info(.ty, n) else r.cast_target(ip.ctx, a1, from);
         const ck = sp.cast(from, t);
         if (ck == .bit_reinterpret and Value.is_int(t) and sp.get_tag_prop(from).is_variant) return tag(ip, n, x, t);
+        if (ck == .variant_retag) return retag(ip, n, x, t);
         return if (ck == .array_narrow or ck == .pointer_relength) shrink(ip, n, x, t) else .cast(x, t);
     }
     if (ip.info(.value, a1) != .none) return .poison;
@@ -124,6 +134,27 @@ fn tag(ip: *Interpreter, n: NodeId, x: Value, t: Index) Value {
     const c = @import("control.zig").case_of(ip, x);
     if (c == .none or sp.get(c).variant_case_type.payload != .none) return ip.fail(n, .not_static, 0, 0);
     return .int(t, sp.get(sp.get(c).variant_case_type.tag).int.bits);
+}
+
+// another case of the same variant keeps the payload bits
+fn retag(ip: *Interpreter, n: NodeId, x: Value, t: Index) Value {
+    const sp = &ip.res().static_pool;
+    const c = @import("control.zig").case_of(ip, x);
+    if (c == t) return x;
+    const to = sp.get(t).variant_case_type.payload;
+    if (to == .none) return .pooled(t);
+    if (c == .none or !x.is_pool() or sp.tag(x.index()) != .variant_value) return ip.fail(n, .not_static, 0, 0);
+    const k = sp.get(to).custom_type.field_types.len;
+    if (sp.get(sp.get(c).variant_case_type.payload).custom_type.field_types.len != k) return ip.fail(n, .not_static, 0, 0);
+    const mark = ip.ids.head;
+    defer ip.ids.head = mark;
+    ip.ids.append(sp.get(sp.get(x.index()).variant_value.payload).aggregate.elems);
+    for (0..k) |i| {
+        const f = sp.get(sp.get(c).variant_case_type.payload).custom_type.field_types[i];
+        const into = sp.get(to).custom_type.field_types[i];
+        if (f != into) ip.ids.buf[mark + i] = ip.pool(Value.reinterpret(.of(sp, ip.ids.buf[mark + i]), into) orelse return ip.fail(n, .not_static, 0, 0));
+    }
+    return .pooled(sp.intern(.{ .variant_value = .{ .case = t, .payload = sp.intern(.{ .aggregate = .{ .ty = to, .elems = ip.ids.buf[mark..ip.ids.head] } }) } }));
 }
 
 fn shrink(ip: *Interpreter, n: NodeId, x: Value, t: Index) Value {
@@ -172,5 +203,5 @@ pub fn sizeof(ip: *Interpreter, n: NodeId) Value {
     const t = ip.checked(a0);
     const ty = if (sp.tag(t) == .meta_type) ip.pool(ip.eval(a0)) else sp.apply_vars(&r.abstract_pool, t);
     if (r.is_template(ip.info(.decl, a0)) or ty != .poison_type and r.holds_template(ty)) return ip.fail(a0, .unrealized_template, ty, 0);
-    return if (ty == .poison_type) .poison else .int(.u64_type, sp.layout(ty).size);
+    return if (ty == .poison_type) .poison else .int(.u64_type, sp.layout(@import("../checker/types.zig").dynify(r, ty)).size);
 }

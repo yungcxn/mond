@@ -1,0 +1,1 @@
+fun f = () { x = 1 defer 2; } #! ExpectedDeinit

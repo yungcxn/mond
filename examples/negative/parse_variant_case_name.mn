@@ -1,0 +1,1 @@
+variant V = +(A, 5); #! ExpectedIdentifier

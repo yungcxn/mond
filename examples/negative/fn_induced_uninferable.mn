@@ -1,0 +1,6 @@
+fun ping = (u32 n): ret pong(n); #! uninferable_type
+fun pong = (u32 n): ret ping(n); #! uninferable_type
+fun self_only = (u32 n): ret self_only(n); #! uninferable_type
+fun grounded = (u32 n): ret if n == 0: 1 else: grounded(n - 1);
+
+$main = () {}

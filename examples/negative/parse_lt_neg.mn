@@ -1,0 +1,2 @@
+# `<-` is one token, so `x<-1` is a label arrow missing its name
+fun f = (i32 x) -> bool: ret x<-1; #! ExpectedIdentifier

@@ -1,0 +1,26 @@
+# an overloaded function used as a value is the overload its expected type asks for
+fun pick = (u32 x) -> u32: ret x + 1;
+fun pick = (f32 x) -> f32: ret x * 2.0;
+fun pick = (u32 a, u32 b) -> u32: ret a * b;
+
+fun apply = ((u32, u32) -> u32 f, u32 a, u32 b) -> u32: ret f(a, b);
+
+stcfun via_values = () -> u32 {
+    (u32) -> u32 pi = pick;
+    (u32, u32) -> u32 pp = pick;
+    ret pi(4) * 100 + pp(3, 5) + apply(pick, 2, 3);
+}
+
+stcfun float_value = () -> f32 {
+    (f32) -> f32 pf = pick;
+    ret pf(1.5);
+}
+
+stc u32 V = via_values(); #= V 521
+stc f32 F = float_value(); #= F 3
+
+$main = () {
+    (f32) -> f32 pf = pick; #: pf (f32) -> f32
+    f32 r = pf(2.0);
+    u32 m = apply(pick, 6, 7);
+}

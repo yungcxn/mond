@@ -1,0 +1,28 @@
+# array literals, lengths and element types
+fun f = (u8 b) {
+    [3]u8 a1 = [1, 2, 3];
+    [3]u8 a2 = [1, 2, 3, 4]; #! type_mismatch
+    [0]u8 a3 = [];
+    [1]u8 a4 = []; #! type_mismatch
+    [1]u8 a5 = [b];
+    [2]u8 a6 = [b, 256]; #! type_mismatch
+    [2]u8 a7 = [b, -1]; #! type_mismatch
+    [2][2]u8 a8 = [[1, 2], [3, 4]];
+    [2][2]u8 a9 = [[1, 2], [3]]; #! type_mismatch
+    [2][2]u8 a10 = [[1, 2], [3, 4], [5, 6]]; #! type_mismatch
+    [2]u8 a11 = [1, 2,];
+    mixed = [b, true]; #! type_mismatch
+    []u8 s1 = "abc";
+    [3]u8 s2 = "abc";
+    [4]u8 s3 = "abc";
+    [2]u8 s4 = "abc"; #! type_mismatch
+    [3]i8 s5 = "abc"; #! type_mismatch
+    &u8 s6 = "abc";
+    *u8 s7 = "abc"; #! type_mismatch
+    u8 c = a1[3]; #! static_eval_failed
+    u8 d = a8[1][2]; #! static_eval_failed
+    u8 e = a8[1][1];
+    u8 g = a1[0][0]; #! type_mismatch
+}
+
+$main = () {}

@@ -1,0 +1,49 @@
+# defers run in reverse order on every exit of their block: fallthrough, ret, brk and cont
+type Log = *(mut u32 v) !{
+    fun push = (u32 d) { self.v = self.v * 10 + d; }
+}
+
+fun fall = () -> u32 {
+    mut Log l = Log(v = 0);
+    {
+        defer l.push(1);
+        defer l.push(2);
+        l.push(3);
+    }
+    ret l.v;
+}
+
+fun early = (bool stop) -> u32 {
+    mut Log l = Log(v = 0);
+    inner = (*Log p, bool s) {
+        defer p.push(1);
+        if s: ret;
+        p.push(2);
+    };
+    inner(l.&, stop);
+    ret l.v;
+}
+
+fun looped = () -> u32 {
+    mut Log l = Log(v = 0);
+    for i in 1..=4 {
+        defer l.push(9);
+        if i == 2: cont;
+        if i == 4: brk;
+        l.push(i);
+    }
+    ret l.v;
+}
+
+stcfun s_fall = () -> u32: ret fall();
+stcfun s_early = (bool b) -> u32: ret early(b);
+stcfun s_looped = () -> u32: ret looped();
+
+stc u32 FA = s_fall(); #= FA 321
+stc u32 E1 = s_early(true); #= E1 1
+stc u32 E2 = s_early(false); #= E2 21
+stc u32 LO = s_looped(); #= LO 199399
+
+$main = () {
+    u32 r = fall() + early(true) + looped();
+}

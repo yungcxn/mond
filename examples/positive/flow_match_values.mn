@@ -1,0 +1,45 @@
+variant A = +(X, Y);
+variant B = +(Z(u8), W);
+variant N = +(Leaf(bool), Pair(A l, A r), Nil);
+variant P = +(Two(i32 a, i32 b), One(i32 v), Zero);
+type R = *(A a, bool f);
+
+stcfun un = (A || B u) -> u32: ret match u { A.X => 1, A.Y => 2, B.Z(k) => 10 + k, B.W => 4 }
+stcfun nest = (N n) -> u32: ret match n {
+    N.Leaf(true) => 1,
+    N.Leaf(false) => 2,
+    N.Pair(A.X, r) => 3 + (match r { A.X => 0, A.Y => 10 }),
+    N.Pair(A.Y, _) => 5,
+    N.Nil => 6,
+}
+stcfun orb = (P p) -> i32: ret match p { P.Two(x, 0) | P.Two(0, x) => x, P.One(x) => x * 10, _ => -1 }
+stcfun rec = (R r) -> u32: ret match r { R(A.X, true) => 1, R(f = false) => 2, R(a = A.Y, f = f) => if f: 3 else: 4 }
+stcfun lab = (B b) -> u32: ret match b { B.Z <- v => v * 2, B.W => 7 }
+stcfun ptr = (A a) -> u32 { &A p = a.&; ret match p { A.X => 1, A.Y => 2 }; }
+stcfun ranges = (i32 x) -> u32: ret match x { ..<-10 => 0, -10..<0 => 1, 0 => 2, 1..=9 => 3, 10.. => 4 }
+stcfun first_arm = (u8 x) -> u32: ret match x { 1 | 2 => 12, 1..=5 => 15, _ => 0 }
+stcfun bind_all = (u8 x) -> u32: ret match x { 0 => 100, y => y + 1 }
+
+stc u32 U1 = un(A.Y); #= U1 2
+stc u32 U2 = un(B.Z(5)); #= U2 15
+stc u32 U3 = un(B.W); #= U3 4
+stc u32 N1 = nest(N.Leaf(false)) * 1000 + nest(N.Pair(A.X, A.Y)) * 10 + nest(N.Nil); #= N1 2136
+stc u32 N2 = nest(N.Pair(A.X, A.X)) * 10 + nest(N.Pair(A.Y, A.X)); #= N2 35
+stc i32 O1 = orb(P.Two(7, 0)); #= O1 7
+stc i32 O2 = orb(P.Two(0, 8)); #= O2 8
+stc i32 O3 = orb(P.Two(0, 0)); #= O3 0
+stc i32 O4 = orb(P.Two(3, 4)); #= O4 -1
+stc i32 O5 = orb(P.One(-2)); #= O5 -20
+stc u32 R1 = rec(R(A.X, true)) * 100 + rec(R(A.X, false)) * 10 + rec(R(A.Y, true)); #= R1 123
+stc u32 L1 = lab(B.Z(21)) + lab(B.W); #= L1 49
+stc u32 PT = ptr(A.Y); #= PT 2
+stc []u32 RG = stcfor x in [-11, -10, -1, 0, 1, 9, 10, 99]: ranges(x); #= RG [0, 1, 1, 2, 3, 3, 4, 4]
+stc u32 FA = first_arm(1) + first_arm(4) * 100 + first_arm(6) * 10000; #= FA 1512
+stc u32 BA = bind_all(0) + bind_all(9); #= BA 110
+
+fun types = (P p, B b) {
+    v = match p { P.Two(x, _) => x, P.One(y) => y, P.Zero => 0 }; #: v i32
+    w = match b { B.Z <- k => k, B.W => 0 }; #: w u8
+    bb = match p { P.Zero => true, _ => false }; #: bb bool
+}
+$main = () {}

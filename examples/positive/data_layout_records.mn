@@ -1,0 +1,55 @@
+type Tail = *(u32 a, u8 b);
+type BoolWide = *(bool f, u64 v);
+type ArrField = *(u8 a, [3]u16 b);
+type F16s = *(u8 a, f16 h, u8 b);
+type FnField = *(u8 tag, (i32) -> i32 f);
+type PkIn = **(u8 a, u32 b);
+type HoldsPk = *(u8 x, PkIn p);
+type AlIn = *(u8 a, u32 b);
+type PkHoldsAl = **(u8 x, AlIn p);
+type PkArr = **(u8 x, [2]u32 y);
+type Single = *(u64 only);
+type Bytes3 = *(u8 a, u8 b, u8 c);
+type ArrOfRec = *([2]Tail t, u8 z);
+type WithVar = *(u8 a, Opt v);
+variant Opt = +(Some(u32), None);
+variant Payload64 = +(A(u64), B);
+variant Payload16 = +(A(u16), B) tagof u8;
+variant TagU16 = +(A(u8), B) tagof u16;
+variant TagU64 = +(A(u8), B) tagof u64;
+variant MultiField = +(P(u8 a, u32 b), Q);
+variant PayRec = +(R(Tail t), N);
+variant Union = ++(I(i32), F(f32), B([4]u8));
+variant UnionMixed = ++(I(i64), S(u8));
+variant SelfPtr = +(Some(u16), None = 0xFFFF) tagof self;
+variant SelfI8 = +(Val(i8), Nil = 0x7F) tagof self;
+variant NoPay = +(A, B, C) tagof u32;
+
+stc u64 S1 = sizeof Tail; #= S1 8
+stc u64 S2 = sizeof BoolWide; #= S2 16
+stc u64 S3 = sizeof ArrField; #= S3 8
+stc u64 S4 = sizeof F16s; #= S4 6
+stc u64 S5 = sizeof FnField; #= S5 16
+stc u64 S6 = sizeof HoldsPk; #= S6 6
+stc u64 S7 = sizeof PkHoldsAl; #= S7 9
+stc u64 S8 = sizeof PkArr; #= S8 9
+stc u64 S9 = sizeof Single; #= S9 8
+stc u64 S10 = sizeof Bytes3; #= S10 3
+stc u64 S11 = sizeof ArrOfRec; #= S11 20
+stc u64 S12 = sizeof WithVar; #= S12 12
+stc u64 V1 = sizeof Opt; #= V1 8
+stc u64 V2 = sizeof Payload64; #= V2 16
+stc u64 V3 = sizeof Payload16; #= V3 4
+stc u64 V4 = sizeof TagU16; #= V4 4
+stc u64 V5 = sizeof TagU64; #= V5 16
+stc u64 V6 = sizeof MultiField; #= V6 12
+stc u64 V7 = sizeof PayRec; #= V7 12
+stc u64 V8 = sizeof Union; #= V8 8
+stc u64 V9 = sizeof UnionMixed; #= V9 16
+stc u64 V10 = sizeof SelfPtr; #= V10 2
+stc u64 V11 = sizeof SelfI8; #= V11 1
+stc u64 V12 = sizeof NoPay; #= V12 4
+stc u64 A1 = sizeof [3]Opt; #= A1 24
+stc u64 A2 = sizeof [2]PkIn; #= A2 10
+
+$main = () {}

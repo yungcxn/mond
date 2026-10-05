@@ -1,0 +1,50 @@
+# every valid kind of `as`, evaluated statically
+variant Color = +(Red, Green = 5, Blue);
+variant Reg = ++(AsInt(i32), AsFloat(f32), AsByte(u8)) tagof u8;
+variant Small = +(Lo = 0, Hi = 255) tagof u8;
+
+stc u32 B1 = true as u32; #= B1 1
+stc u8 B0 = false as u8; #= B0 0
+stc f32 BF = true as f32; #= BF 1
+stc u8 T0 = Color.Red as u8; #= T0 0
+stc u8 T1 = Color.Green as u8; #= T1 5
+stc u16 T2 = Color.Blue as u16; #= T2 6
+stc u8 T3 = Small.Hi as u8; #= T3 255
+stc i8 T4 = Small.Hi as i8; #= T4 -1
+stc u64 R1 = 300 as u8; #= R1 44
+stc i64 R2 = 65535 as i16; #= R2 -1
+stc u64 R3 = -1 as u16; #= R3 65535
+stc i64 R4 = 4294967296 as i32; #= R4 0
+stc f64 F1 = 0.1 as f64; #: F1 f64
+stc f32 F2 = 3 as f32; #= F2 3
+stc f64 F3 = -7 as f64; #= F3 -7
+stc i32 F4 = -2.5 as i32; #= F4 -2
+stc u8 F5 = 255.9 as u8; #= F5 255
+stc u8 F6 = -0.5 as u8; #= F6 0
+stc i8 F7 = 1000.0 as i8; #= F7 127
+stc i8 F8 = -1000.0 as i8; #= F8 -128
+stc f16 F9 = 65504.0 as f16; #= F9 65504
+stc f32 F10 = (1.5 as f16) as f32; #= F10 1.5
+
+fun retag = (Reg r) -> Reg.AsFloat: ret r as Reg.AsFloat; #: retag (++(AsInt, AsFloat, AsByte)) -> ++(AsInt, AsFloat, AsByte).AsFloat
+fun wrap = (f32 x) -> Reg.AsFloat: ret x as Reg.AsFloat;
+fun wrap_lit = () -> Reg.AsFloat: ret 4.5 as Reg.AsFloat;
+fun narrow = ([6]u8 a) -> [2]u8: ret a as [2..<4]u8; #: narrow ([6]u8) -> [2]u8
+fun narrow_incl = ([6]u8 a) -> [3]u8: ret a as [3..=5]u8;
+fun narrow_head = ([6]u8 a) -> [4]u8: ret a as [4]u8;
+fun narrow_upto = ([6]u8 a) -> [3]u8: ret a as [..<3]u8;
+fun relength = (&[6]u8 a) -> &[3]u8: ret a as &[3]u8;
+fun relength_mut = (*[6]u8 a) -> &[2]u8: ret a as &[1..<3]u8;
+fun keep_mut = (*[6]u8 a) -> *[6]u8: ret a as *[6]u8;
+fun reinterpret = (*u32 p) -> *u8: ret p as *u8;
+
+stcfun mid = () -> u32 {
+    [6]u8 a = [10, 20, 30, 40, 50, 60];
+    [2]u8 m = a as [2..<4]u8;
+    [3]u8 t = a as [3..=5]u8;
+    ret m[0] as u32 * 1000 + m[1] as u32 + t[2] as u32 * 100000;
+}
+
+stc u32 MID = mid(); #= MID 6030040
+
+$main = () {}

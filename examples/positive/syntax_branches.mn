@@ -1,0 +1,24 @@
+# every spelling of if / else and stcif
+stcfun pick = (i32 n) -> i32 {
+    i32 a = if n > 0: 1 else: 2;
+    i32 b = if n > 0 { 10; } else { 20; };
+    i32 c = if n > 0: 100 else 200;
+    i32 d = if n > 10: 1000 else: if n > 0: 2000 else: 3000;
+    i32 e = if n > 10 { 10000; } else if n > 0 { 20000; } else { 30000; };
+    mut i32 f = 0;
+    if n > 0: f = 100000;
+    if n < 0 { f = 1; } else: f += 100000;
+    ret a + b + c + d + e + f;
+}
+
+stc i32 P = pick(5); #= P 222111
+stc i32 N = pick(-5); #= N 33223
+
+stc i32 STC = stcif 1 < 2: 4 else: 5; #= STC 4
+stc i32 STC_BLOCK = stcif false { 1; } else { 6; }; #= STC_BLOCK 6
+stc i32 STC_CHAIN = stcif false: 1 else: stcif true: 7 else: 8; #= STC_CHAIN 7
+
+$main = () {
+    i32 x = pick(1);
+    if x > 0 {} else: if x < 0 {} else {}
+}

@@ -1,0 +1,41 @@
+# every statement ends with `;` unless it ends with `}`, the last statement is the value of a block
+stc u32 LAST = { 1; 2; }; #= LAST 2
+stc u32 NESTED = { { { 3; }; }; }; #= NESTED 3
+stc u32 AFTER_BRACE = { if true { 4; } else { 5; } }; #= AFTER_BRACE 4
+
+stcfun sum_to = (u32 n) -> u32 {
+    mut u32 s = 0;
+    mut u32 i = 0;
+    while i < n { i++; s += i; }
+    {
+        u32 inner = 1;
+        s += inner;
+    }
+    if s > 100 { ret 0; }
+    for k in 0..<2 { s += k; }
+    ret s;
+}
+
+stc u32 S = sum_to(4); #= S 12
+
+fun no_semicolons = () {
+    {}
+    { {} }
+    if true {} else {}
+    while false {}
+    loop { brk; }
+    match 1 { 1 => {}, _ => {}, }
+}
+
+fun with_semicolons = () {
+    {};
+    if true {};
+    while false {};
+}
+
+$main = () {
+    no_semicolons();
+    with_semicolons();
+    u32 v = { 7; };
+    e = {}; #: e ()
+}

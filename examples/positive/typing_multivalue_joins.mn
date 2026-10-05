@@ -1,0 +1,16 @@
+# untyped multi values join like array elements, literals take the type every one of them fits
+fun f = (u8 n) {
+    a, b = 1, -1; #: a i32
+    c, d = 1, 2.5; #: d f32
+    e, g = n, 300; #: e u32
+    h, k = n, 7; #: h u8
+    p, q, r = 5000000000, 1, 2; #: r u64
+}
+
+stcfun sum = () -> i32 {
+    x, y, z = 4, -9, 2;
+    ret x + y + z;
+}
+stc i32 S = sum(); #= S -3
+
+$main = () {}

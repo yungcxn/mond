@@ -1,0 +1,19 @@
+fun f = () {
+    u32 late = 5;
+    mut u32 unset;
+    fun reads_unset = () -> u32: ret unset; #! use_before_initialization
+    unset = 1;
+    fun bad_body = () -> u32: ret "s"; #! type_mismatch
+    fun ok = () -> u32: ret 1;
+    u32 x = ok(1); #! wrong_arity
+    fun writes_imm = () { late = 2; } #! assign_to_immutable
+}
+
+fun g = () {
+    {
+        fun scoped = () -> u32: ret 1;
+    }
+    u32 y = scoped(); #! undefined_name
+}
+
+$main = () {}

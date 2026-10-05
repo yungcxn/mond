@@ -1,0 +1,154 @@
+# state machines: a connection protocol over variant states and recognizers dispatched through a trait pointer
+
+variant State = +(Closed, Listen, SynSent(u32 seq), Established(u32 seq, u32 acked), Closing(u32 left), Failed(u8 code));
+variant Ev = +(Open, Connect(u32 seq), SynAck(u32 ack), Data(u32 n), Close, Reset);
+type Step = *(State s, Ev e);
+
+# the transition table as one match over a record of state and event, catch all last
+fun next = (State s, Ev e) -> State: ret match Step(s = s, e = e) {
+    Step(_, Ev.Reset) => State.Failed(1),
+    Step(State.Closed, Ev.Open) => State.Listen,
+    Step(State.Closed, Ev.Connect(q)) => State.SynSent(q),
+    Step(State.Listen, Ev.Connect(q)) => State.Established(q + 1, 0),
+    Step(State.SynSent(q), Ev.SynAck(a)) => if a == q + 1: State.Established(a, 0) else: State.Failed(2),
+    Step(State.Established(q, n), Ev.Data(k)) => State.Established(q + k, n + k),
+    Step(State.Established(q, n), Ev.Close) => if n == 0: State.Closed else: State.Closing(n),
+    Step(State.Closing(left), Ev.Data(k)) => if k >= left: State.Closed else: State.Closing(left - k),
+    Step(State.Failed(c), _) => State.Failed(c),
+    _ => State.Failed(9),
+}
+
+fun code = (State s) -> u32: ret match s {
+    State.Closed => 0,
+    State.Listen => 1,
+    State.SynSent(q) => 2000 + q,
+    State.Established(q, n) => 300000 + q * 100 + n,
+    State.Closing(l) => 40000 + l,
+    State.Failed(c) => 500 + c as u32,
+}
+
+fun drive = (&[]Ev evs) -> u32 {
+    mut State s = State.Closed;
+    for e in evs.*: s = next(s, e);
+    ret code(s);
+}
+
+stcfun handshake = () -> u32 {
+    [5]Ev evs = [Ev.Connect(10), Ev.SynAck(11), Ev.Data(5), Ev.Data(7), Ev.Close];
+    ret drive(evs.&);
+}
+
+stcfun bad_ack = () -> u32 {
+    [3]Ev evs = [Ev.Connect(10), Ev.SynAck(13), Ev.Data(1)];
+    ret drive(evs.&);
+}
+
+stcfun passive = () -> u32 {
+    [4]Ev evs = [Ev.Open, Ev.Connect(40), Ev.Data(3), Ev.Data(2)];
+    ret drive(evs.&);
+}
+
+stcfun drained = () -> u32 {
+    [5]Ev evs = [Ev.Open, Ev.Connect(1), Ev.Close, Ev.Data(1), Ev.Data(1)];
+    ret drive(evs.&);
+}
+
+stcfun unexpected = () -> u32 {
+    [2]Ev evs = [Ev.Open, Ev.Close];
+    [3]Ev rs = [Ev.Connect(4), Ev.Reset, Ev.Open];
+    ret drive(evs.&) * 1000 + drive(rs.&);
+}
+
+# recognizers: a trait implemented by two hand written automata, driven through a mutable trait pointer
+trait Machine = !{
+    fun feed = (u8 c) -> bool;
+    fun accepts = () -> bool;
+    fun reset = ();
+}
+
+# identifiers: a letter or underscore, then letters, digits, underscores
+type Ident = *(mut u8 st = 0) implof Machine !{
+    fun feed = (u8 c) -> bool {
+        bool alpha = c >= 'a' and c <= 'z' or c >= 'A' and c <= 'Z' or c == '_';
+        bool digit = c >= '0' and c <= '9';
+        self.st = match self.st {
+            0 => if alpha: 1 else: 2,
+            1 => if alpha or digit: 1 else: 2,
+            _ => 2,
+        };
+        ret self.st != 2;
+    }
+    fun accepts = () -> bool: ret self.st == 1;
+    fun reset = () { self.st = 0; }
+}
+
+# decimal numbers: optional sign, digits, optional fraction, optional exponent with sign
+type Number = *(mut u8 st = 0) implof Machine !{
+    fun feed = (u8 c) -> bool {
+        bool digit = c >= '0' and c <= '9';
+        bool sign = c == '+' or c == '-';
+        self.st = match self.st {
+            0 => if sign: 1 else: if digit: 2 else: 9,
+            1 => if digit: 2 else: 9,
+            2 => if digit: 2 else: if c == '.': 3 else: if c == 'e' or c == 'E': 5 else: 9,
+            3 => if digit: 4 else: 9,
+            4 => if digit: 4 else: if c == 'e' or c == 'E': 5 else: 9,
+            5 => if sign: 6 else: if digit: 7 else: 9,
+            6 => if digit: 7 else: 9,
+            7 => if digit: 7 else: 9,
+            _ => 9,
+        };
+        ret self.st != 9;
+    }
+    fun accepts = () -> bool: ret self.st == 2 or self.st == 4 or self.st == 7;
+    fun reset = () { self.st = 0; }
+}
+
+fun matches = (*Machine m, &[]u8 s) -> bool {
+    m.reset();
+    for c in s.*: if !m.feed(c): ret false;
+    ret m.accepts();
+}
+
+stcfun idents = () -> u32 {
+    mut Ident m = Ident();
+    mut u32 bits = 0;
+    if matches(m.&, "_tmp1".&): bits += 1;
+    if matches(m.&, "x".&): bits += 2;
+    if matches(m.&, "1abc".&): bits += 4;
+    if matches(m.&, "".&): bits += 8;
+    if matches(m.&, "a-b".&): bits += 16;
+    if matches(m.&, "Z9_".&): bits += 32;
+    ret bits;
+}
+
+stcfun numbers = () -> u32 {
+    mut Number m = Number();
+    mut u32 bits = 0;
+    if matches(m.&, "42".&): bits += 1;
+    if matches(m.&, "-3.25".&): bits += 2;
+    if matches(m.&, "1e10".&): bits += 4;
+    if matches(m.&, "6.02E+23".&): bits += 8;
+    if matches(m.&, "1.".&): bits += 16;
+    if matches(m.&, ".5".&): bits += 32;
+    if matches(m.&, "+".&): bits += 64;
+    if matches(m.&, "7e-".&): bits += 128;
+    if matches(m.&, "0.0e0".&): bits += 256;
+    ret bits;
+}
+
+stc u32 HS = handshake(); #= HS 40012
+stc u32 BA = bad_ack(); #= BA 502
+stc u32 PA = passive(); #= PA 304605
+stc u32 DR = drained(); #= DR 509
+stc u32 UN = unexpected(); #= UN 509501
+stc u32 ID = idents(); #= ID 35
+stc u32 NU = numbers(); #= NU 271
+
+$main = () -> u32 {
+    mut Number n = Number();
+    mut Ident i = Ident();
+    [2]Ev evs = [Ev.Open, Ev.Connect(7)];
+    s = next(State.Closed, Ev.Open); #: s +(Closed, Listen, SynSent, Established, Closing, Failed)
+    ret drive(evs.&) + code(s) + (if matches(n.&, "12.5".&): 1 else: 0) + (if matches(i.&, "a1".&): 1 else: 0);
+}

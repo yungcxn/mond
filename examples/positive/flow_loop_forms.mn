@@ -1,0 +1,67 @@
+# plain functions: interpreted for the stc values and lowered for main
+# a while repeat runs after every step, also after cont, never after brk
+fun while_cont = () -> u32 {
+    mut u32 i = 0;
+    mut u32 s = 0;
+    while i < 10, i += 1 { if i % 2 == 0: cont; s += i; }
+    ret s * 100 + i;
+}
+fun while_brk = () -> u32 {
+    mut u32 i = 0;
+    while i < 10, i += 1 { if i == 4: brk; }
+    ret i;
+}
+# a loop repeat runs before every step, the first one included
+fun loop_pre = () -> u32 {
+    mut u32 k = 0;
+    mut u32 s = 0;
+    loop k += 1 { if k > 4: brk; s = s * 10 + k; }
+    ret s;
+}
+fun loop_pre_cont = () -> u32 {
+    mut u32 k = 0;
+    mut u32 s = 0;
+    loop k += 1 { if k > 6: brk; if k % 3 == 0: cont; s = s * 10 + k; }
+    ret s;
+}
+fun while_false = () -> u32 {
+    mut u32 n = 7;
+    while false, n += 1 {}
+    ret n;
+}
+fun do_while = () -> u32 {
+    mut u32 n = 0;
+    loop { n += 5; if n >= 12: brk; }
+    ret n;
+}
+stcfun countdown = () -> []u32 {
+    mut u32 n = 4;
+    ret while n > 0, n -= 1: n;
+}
+fun nested_cont = () -> u32 {
+    mut u32 s = 0;
+    for i in 0..<4 {
+        for j in 0..<4 { if j == i: cont; s += 1; }
+        if i == 2: cont;
+        s += 100;
+    }
+    ret s;
+}
+stcfun loop_value_cont = () -> []u32 {
+    mut u32 k = 0;
+    ret loop k += 1: if k > 6: brk else: if k % 2 == 0: cont else: k;
+}
+
+stc u32 WC = while_cont(); #= WC 2510
+stc u32 WB = while_brk(); #= WB 4
+stc u32 LP = loop_pre(); #= LP 1234
+stc u32 LC = loop_pre_cont(); #= LC 1245
+stc u32 WF = while_false(); #= WF 7
+stc u32 DW = do_while(); #= DW 15
+stc []u32 CD = countdown(); #= CD [4, 3, 2, 1]
+stc u32 NC = nested_cont(); #= NC 312
+stc []u32 LV = loop_value_cont(); #= LV [1, 3, 5]
+
+$main = () -> u32 {
+    ret while_cont() + while_brk() + loop_pre() + loop_pre_cont() + while_false() + do_while() + nested_cont();
+}

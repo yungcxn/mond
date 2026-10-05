@@ -1,0 +1,23 @@
+variant V = +(A, B, C);
+
+fun if_no_else = (bool c) -> i32 { if c { ret 1; } } #! missing_ret
+fun if_else_both = (bool c) -> i32 { if c { ret 1; } else { ret 2; } }
+fun if_else_one = (bool c) -> i32 { if c { ret 1; } else { 2; } } #! missing_ret
+fun nested_block = (bool c) -> i32 { { { ret 1; } } }
+fun after_if = (bool c) -> i32 { if c { ret 1; } ret 2; }
+fun while_only = (bool c) -> i32 { while c { ret 1; } } #! missing_ret
+fun for_only = () -> i32 { for i in 0..<3 { ret 1; } } #! missing_ret
+fun loop_forever = () -> i32 { loop {} }
+fun loop_ret = (i32 x) -> i32 { loop { if x > 0: ret x; } }
+fun loop_brk = (i32 x) -> i32 { loop { if x > 0: brk; ret 1; } } #! missing_ret
+fun nested_loop_brk = (i32 x) -> i32 { loop { while true { brk; } ret 1; } }
+fun match_all = (V v) -> i32 { match v { V.A => ret 1, V.B => ret 2, V.C => ret 3 } }
+fun match_partial = (V v) -> i32 { match v { V.A => ret 1, V.B => ret 2, V.C => 3 } } #! missing_ret
+fun match_wild = (V v) -> i32 { match v { V.A => ret 1, _ => ret 2 } }
+fun empty_body = () -> u8 {} #! missing_ret
+fun only_stmt = () -> u8 { u8 x = 1; } #! missing_ret
+fun unit_explicit = () -> () { u8 x = 1; }
+fun unit_ret = () -> () { ret; }
+fun main_like = () -> i32 { if true { ret 1; } } #! missing_ret
+
+$main = () {}

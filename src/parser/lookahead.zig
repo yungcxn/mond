@@ -113,7 +113,7 @@ pub inline fn multival_follows(p: *Parser) bool {
     while (p.tokens.get_field(.tk, cur)) |tk| : (cur += 1) switch (tk) {
         .@"pct_(", .@"pct_[", .@"pct_{", .@"xpct_!{", .@"xpct_*(", .@"xpct_**(", .@"xpct_+(", .@"xpct_++(" => depth += 1,
         .@"pct_)", .@"pct_]", .@"pct_}" => {
-            if (depth == 0) return cur != p.tok_cursor + 1;
+            if (depth == 0) return tk == .@"pct_}" and cur != p.tok_cursor + 1;
             depth -= 1;
         },
         .@"xpct_=>" => if (depth == 0) return false,
@@ -169,6 +169,8 @@ pub const binary_compute = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_+%")] = .{ .f = &eval.templ_binary(.binary_add_wrap, 10), .prec = 10 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_-%")] = .{ .f = &eval.templ_binary(.binary_sub_wrap, 10), .prec = 10 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_*%")] = .{ .f = &eval.templ_binary(.binary_mul_wrap, 11), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_*(")] = .{ .f = &eval.templ_binary_group(.binary_mul, 11), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_+(")] = .{ .f = &eval.templ_binary_group(.binary_add, 10), .prec = 10 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .f = &eval.templ_binary(.binary_div, 11), .prec = 11 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .f = &eval.templ_binary(.binary_mod, 11), .prec = 11 };
 

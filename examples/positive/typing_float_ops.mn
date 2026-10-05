@@ -1,0 +1,22 @@
+# float arithmetic folds statically in the precision of its type
+stc f32 FA = 1.5 + 2.25; #= FA 3.75
+stc f32 FS = 1.0 - 2.5; #= FS -1.5
+stc f64 FMUL = 1.5 * -4.0; #= FMUL -6
+stc f64 FDIV = 1.0 / 8.0; #= FDIV 0.125
+stc f32 FM = 5.5 % 2.0; #= FM 1.5
+stc f64 FN = -7.5 % 2.0; #= FN -1.5
+stc bool FL = 0.5 < 0.25; #= FL false
+stc bool FE = 2.0 == 2; #= FE true
+stc f32 FNEG = -(1.25); #= FNEG -1.25
+stc f16 FH = 0.5 + 0.25; #= FH 0.75
+stc f64 FW = 0.1 as f32; #: FW f64
+
+stcfun mean = ([4]f64 xs) -> f64 {
+    mut f64 s = 0.0;
+    for x in xs: s += x;
+    ret s / 4.0;
+}
+
+stc f64 MEAN = mean([1.0, 2.0, 3.5, 5.5]); #= MEAN 3
+
+$main = () {}

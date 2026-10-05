@@ -1,0 +1,19 @@
+# branches whose types have no common type
+variant V = +(A, B);
+variant W = +(X, Y);
+type R = *(u8 a);
+
+fun f = (bool c, u8 x, i8 s, f32 fl, R r, V v) {
+    b1 = if c: x else: s; #! type_mismatch
+    b2 = if c: x else: true; #! type_mismatch
+    b3 = if c: 1 else: "s"; #! type_mismatch
+    b4 = if c: x else: fl; #! type_mismatch
+    b5 = if c: V.A else: W.X; #! type_mismatch
+    b6 = if c: r else: x; #! type_mismatch
+    b7 = match v { V.A => x, V.B => s } #! type_mismatch
+    b8 = if c: x else: 256;
+    u8 b9 = if c: x else: 256; #! type_mismatch
+    i8 b12 = if c: x else: s; #! type_mismatch
+}
+
+$main = () {}

@@ -1,0 +1,14 @@
+# a tag value is a static integer
+variant Flag = +(A = true, B); #! type_mismatch
+variant Text = +(A = "a", B); #! type_mismatch
+variant NegU = +(A = -1, B) tagof u8; #! tag_overflow
+variant Fine = +(A = 2 + 3, B = 1 << 4) tagof u8;
+
+# implicit tags continue after a negative one
+variant Neg = +(A = -2, B, C, D) tagof i8;
+stc i8 NA = Neg.A.$tag; #= NA -2
+stc i8 NB = Neg.B.$tag; #= NB -1
+stc i8 NC = Neg.C.$tag; #= NC 0
+stc i8 ND = Neg.D.$tag; #= ND 1
+
+$main = () {}

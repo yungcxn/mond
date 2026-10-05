@@ -1,0 +1,62 @@
+trait Addable = !{ fun add = ((typeof self) other) -> u32; }
+trait Base = !{
+    fun id = () -> u32;
+    fun twice = () -> u32: ret self.id() * 2;
+}
+trait Left = implof Base !{ fun l = () -> u32: ret self.id() + 1; }
+trait Right = implof Base !{ fun r = () -> u32: ret self.id() + 2; }
+trait Both = implof Left, Right !{ }
+trait Konst = !{
+    stc u32 MASK = 0xF0;
+    fun masked = () -> u32;
+}
+
+type Num = *(u32 v) implof Addable, Both, Konst !{
+    fun add = (Num other) -> u32: ret self.v + other.v;
+    fun id = () -> u32: ret self.v;
+    fun masked = () -> u32: ret self.v & 0xF0;
+}
+type Over = *(u32 v) implof Base !{
+    fun id = () -> u32: ret self.v;
+    fun twice = () -> u32: ret 77;
+}
+variant Bit = +(Zero, One) implof Base !{
+    fun id = () -> u32: ret match self.* { Bit.Zero => 0, Bit.One => 1 }
+}
+
+fun via_ref = (&Base b) -> u32: ret b.twice();
+fun via_val = (Base b) -> u32: ret b.id();
+fun via_left = (Left l) -> u32: ret l.l() + l.twice();
+
+stcfun all = () -> u32 {
+    Num n = Num(v = 0x35);
+    Num m = Num(v = 1);
+    Over o = Over(v = 4);
+    ret n.add(m) + n.twice() * 1000 + n.l() * 100000 + n.r() * 10000000;
+}
+stcfun refs = () -> u32 {
+    Over o = Over(v = 4);
+    Num n = Num(v = 3);
+    ret via_ref(o.&) + via_ref(n.&) * 100 + via_val(Num(v = 1)) * 10000 + via_left(n) * 100000;
+}
+stcfun masks = () -> u32 {
+    Num n = Num(v = 0x1234);
+    ret n.masked();
+}
+
+stc u32 ALL = all(); #= ALL 555506054
+stc u32 REFS = refs(); #= REFS 1010677
+stc u32 MK = masks(); #= MK 48
+stc bool O1 = Num(v = 1) oftype Base; #= O1 true
+stc bool O2 = Num(v = 1) oftype Both; #= O2 true
+stc bool O3 = Over(v = 1) oftype Left; #= O3 false
+stc bool O4 = Bit.One oftype Base; #= O4 true
+stc bool O5 = Num(v = 1) oftype Num; #= O5 true
+stc bool O6 = Num(v = 1) oftype Over; #= O6 false
+
+$main = () {
+    Num n = Num(v = 1);
+    &Base b = n.&;
+    t = b.twice(); #: t u32
+    x = n.add(n); #: x u32
+}

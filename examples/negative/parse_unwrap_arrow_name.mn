@@ -1,0 +1,2 @@
+variant O = +(Some(u8), None = 0xFF) tagof self;
+fun f = (O o) -> bool: ret o ?<- 1; #! ExpectedIdentifier

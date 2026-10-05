@@ -1,0 +1,17 @@
+# a field default sees the fields before it, a where-clause sees all fields
+stc u32 b = 5;
+type Fwd = *(u32 a = b + 1, u32 b = 1);
+type Own = *(u32 a = a); #! undefined_name
+type Later = *(u32 a = z, u32 z = 1); #! undefined_name
+type Guard = *(mut u32 lo where lo <= hi else lo = hi, u32 hi);
+type Back = *(u32 a = 1, u32 b = a + 1, u32 c = a + b);
+
+stcfun fwd = () -> u32: ret Fwd().a;
+stcfun guard = () -> u32: ret Guard(9, 4).lo;
+stcfun back = () -> u32: ret Back().c;
+
+stc u32 FW = fwd(); #= FW 6
+stc u32 GU = guard(); #= GU 4
+stc u32 BA = back(); #= BA 3
+
+$main = () {}

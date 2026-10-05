@@ -1,0 +1,26 @@
+# wrapping operators never overflow, they reduce modulo the width of their type
+stc i8 W0 = 127 +% 1; #= W0 -128
+stc i8 W1 = -128 -% 1; #= W1 127
+stc i8 W2 = -128 *% -1; #= W2 -128
+stc i16 W3 = 32767 +% 1; #= W3 -32768
+stc u16 W4 = 65535 *% 65535; #= W4 1
+stc u64 W5 = 0 -% 1; #= W5 18446744073709551615
+stc u64 W6 = 9223372036854775808 *% 2; #= W6 0
+stc i64 W7 = (-9223372036854775807 - 1) -% 1; #= W7 9223372036854775807
+stc i32 W8 = 2147483647 +% 2147483647 +% 2; #= W8 0
+stc u8 W9 = 255 *% 255; #= W9 1
+stc u8 W10 = 200 +% 100 +% 100; #= W10 144
+stc u8 W11 = 1 -% 2 +% 2; #= W11 1
+
+stcfun step = (u8 x) -> u8: ret x *% 3 +% 7;
+stcfun spin = (u8 seed, u32 n) -> u8 {
+    mut u8 x = seed;
+    for i in 0..<n: x = step(x);
+    ret x;
+}
+
+stc u8 SP = spin(1, 10); #= SP 245
+
+fun at_runtime = (i8 a, u32 b) -> i8: ret a +% (b as i8) *% 2; #: at_runtime (i8, u32) -> i8
+
+$main = () {}

@@ -1,0 +1,29 @@
+variant O = +(Some(u32), None) tagof u8;
+type P = *(mut u32 a, mut u32 b);
+type C = *(mut u32 n) !{
+    $init = (u32 v) -> C { u32 w = self.n; ret C(n = v); } #! undefined_name
+}
+
+fun unnamed = (u32, u32) { $0 = 1; } #! assign_to_immutable
+
+fun f = (O o, P p, [3]u32 arr) {
+    for x in arr: x = 1; #! assign_to_immutable
+    for arr: $it += 1; #! assign_to_immutable
+    for i in 0..<3: i++; #! assign_to_immutable
+    match o {
+        O.Some(v) => v = 2, #! assign_to_immutable
+        O.None => {},
+    }
+    match p { P(a = x, b = y) => x += 1 } #! assign_to_immutable
+    if o ?<- inner { inner = 5; } #! assign_to_immutable
+    (p <- q).a = 3; #! assign_to_immutable
+    if (3 <- three) == 3 { three = 4; } #! assign_to_immutable
+    P(a = 1, b = 2).a = 5; #! assign_to_immutable
+    arr[0] = 1; #! assign_to_immutable
+    p.a = 1; #! assign_to_immutable
+    mut [3]u32 m = arr;
+    for x in m: x = 1; #! assign_to_immutable
+    m[0] = 1;
+}
+
+$main = () {}

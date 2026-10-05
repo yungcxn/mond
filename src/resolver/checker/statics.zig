@@ -74,12 +74,12 @@ pub fn literal_value(self: *Resolver, node: NodeId, negated: bool) StaticPool.In
         },
         .float => {
             const s = self.tree.span(n);
-            const f = std.fmt.parseFloat(f64, self.src_bytes[s[0]..s[1]]) catch return self.report(.type_mismatch, n, .none, .none);
+            const f = std.fmt.parseFloat(f64, self.src_bytes[s[0]..s[1]]) catch return if (self.doc.has(n)) .poison_type else self.report(.type_mismatch, n, .none, .none);
             return sp.intern(.{ .float = .{ .ty = .f64_type, .value = if (neg) -f else f } });
         },
         else => {
             const s = self.tree.span(n);
-            const bits: u64 = if (self.tree.kind(n) == .char) unescape(self.src_bytes[s[0]..s[1]], &buf)[0] else std.fmt.parseInt(u64, self.src_bytes[s[0]..s[1]], 0) catch return self.report(.type_mismatch, n, .none, .u64_type);
+            const bits: u64 = if (self.tree.kind(n) == .char) unescape(self.src_bytes[s[0]..s[1]], &buf)[0] else std.fmt.parseInt(u64, self.src_bytes[s[0]..s[1]], 0) catch return if (self.doc.has(n)) .poison_type else self.report(.type_mismatch, n, .none, .u64_type);
             return sp.intern(.{ .int = if (neg) .{ .ty = .i64_type, .bits = 0 -% bits } else .{ .ty = .u64_type, .bits = bits } });
         },
     }
@@ -94,10 +94,11 @@ pub fn literal_type(self: *Resolver, node: NodeId, expected: StaticPool.Index) S
     if (k == .boolean_true or k == .boolean_false) return .bool_type;
     const v = literal_value(self, n, neg);
     var target = sp.apply_vars(&self.abstract_pool, expected);
-    if (k == .string and target != .none and sp.get(target) == .ptr_type and sp.get(target).ptr_type.child == .u8_type) return target;
+    if (k == .string and target != .none and sp.tag(target) == .ptr_type and sp.get(target).ptr_type.child == .u8_type) return target;
     if (k == .string and target != .none and sp.get(target) == .array_type and sp.get(target).array_type.elem == .u8_type and
         sp.tag(sp.get(target).array_type.len) == .int_value and sp.get(sp.get(target).array_type.len).int.bits >= sp.get(v).string.len) return target;
-    if (v == .poison_type or k == .string) return sp.type_of(v);
+    if (v == .poison_type) return v;
+    if (k == .string) return sp.type_of(v);
     if (target != .none and sp.tag(target) == .variant_type) target = sp.single_payload(target); // `Opt8 x = 42`
     const c = if (target == .none) StaticPool.TagProperties{} else sp.get_tag_prop(target);
     if (k == .float) return if (c.is_float) target else .f32_type;
@@ -107,7 +108,9 @@ pub fn literal_type(self: *Resolver, node: NodeId, expected: StaticPool.Index) S
 
 pub fn retype(self: *Resolver, v: StaticPool.Index, ty: StaticPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
-    if (v == .none or ty == .none or sp.tag(v) != .int_value) return v;
+    if (v == .none or ty == .none) return v;
+    if ((sp.tag(v) == .int_value or sp.tag(v) == .float_value) and sp.single_payload(ty) != .none) return self.interpreter.pool(self.interpreter.coerce(.of(sp, v), ty));
+    if (sp.tag(v) != .int_value) return v;
     if (sp.get_tag_prop(ty).is_integer) return sp.intern(.{ .int = .{ .ty = ty, .bits = sp.get(v).int.bits } });
     if (!sp.get_tag_prop(ty).is_float) return v;
     const i = sp.get(v).int;
@@ -145,7 +148,7 @@ pub fn h20_instantiate(self: *Resolver, generic: DeclPool.Index, args: StaticPoo
         self.h05_ensure_signature(d);
         self.realized_args.put(self.alloc, d, args) catch @panic("OOM");
         const ft = sp.get(self.decl_pool.tys()[@intFromEnum(d)]).function_type;
-        var ps: [64]StaticPool.Index = undefined;
+        var ps: [65]StaticPool.Index = undefined;
         @memcpy(ps[0..ft.params.len], ft.params);
         var i: usize = 0;
         for (ps[0..ft.params.len]) |*q| {

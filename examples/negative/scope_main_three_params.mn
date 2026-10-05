@@ -1,0 +1,2 @@
+# a defaulted third parameter still makes three
+$main = (i32 argc, &[]&u8 argv, i32 extra = 0) {} #! type_mismatch

@@ -584,8 +584,8 @@ type Id = *(u32 raw) assertsize 4 implof Comparable(Id) !{
 }
 
 # real example: a byte stream implementing the builtin `Iterable`
-type ByteStream = *(*u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
-    $init = (*u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
+type ByteStream = *(&u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
+    $init = (&u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
     $deinit = () {}
 
     $next = () -> u8: ret self.buf[self.cursor++];
@@ -813,7 +813,6 @@ fun handle_event = (Event e): match e {
 fun handle_anyfixed = (AnyFixed32 a): match a {
     AnyFixed32.AsInt(i) => print("Int: %d", i),
     AnyFixed32.AsFloat(f) => print("Float: %f", f),
-    AnyFixed32.AsBits(bits) => print("Bits..."),
     AnyFixed32 non_specific => print("Non-specific: %d", non_specific),
 }
 
@@ -1382,7 +1381,7 @@ fun is_digit = (u8 c) -> bool: ret c >= '0' and c <= '9';
 fun is_alpha = (u8 c) -> bool: ret c >= 'a' and c <= 'z' or c >= 'A' and c <= 'Z' or c == '_';
 fun is_space = (u8 c) -> bool: ret match c { ' ' | '\t' | '\n' | '\r' => true, _ => false }
 
-fun tokenize = (*u8 src, u32 len) -> [1024]Tok {
+fun tokenize = (&u8 src, u32 len) -> [1024]Tok {
     mut ByteStream bs = ByteStream.$init(src, len) defer deinit;
     mut [1024]Tok out;
     mut u32 count = 0;

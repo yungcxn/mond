@@ -1,0 +1,119 @@
+# q16.16 fixed point: products widen to i64, signed shifts are arithmetic, division truncates
+
+stc i32 ONE = 65536;
+stc [16]i32 ATAN = [51472, 30386, 16055, 8150, 4091, 2047, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2];
+stc i32 GAIN = 39797;
+
+fun fx = (i32 whole) -> i32: ret whole * ONE;
+fun ratio = (i32 num, i32 den) -> i32: ret ((num as i64 * 65536) / den as i64) as i32;
+fun mul = (i32 a, i32 b) -> i32: ret ((a as i64 * b as i64) >> 16) as i32;
+fun div = (i32 a, i32 b) -> i32: ret ((a as i64 << 16) / b as i64) as i32;
+fun floor_int = (i32 a) -> i32: ret a >> 16;
+fun milli = (i32 a) -> i64: ret (a as i64 * 1000) >> 16;
+fun abs_fx = (i32 a) -> i32: ret if a < 0: -a else: a;
+
+fun sqrt_fx = (i32 n) -> i32 {
+    if n <= 0: ret 0;
+    mut i32 x = if n > ONE: n / 2 else: ONE;
+    for 0..<24 {
+        i32 next = (x + div(n, x)) / 2;
+        if next == x: brk;
+        x = next;
+    }
+    ret x;
+}
+
+# horner evaluation of a polynomial with fixed point coefficients, highest first
+fun horner = (&[]i32 cs, i32 x) -> i32 {
+    mut i32 acc = 0;
+    for c in cs.*: acc = mul(acc, x) + c;
+    ret acc;
+}
+
+type Rot = *(i32 cos, i32 sin);
+
+# cordic in rotation mode for |theta| <= pi / 2
+fun cordic = (i32 theta) -> Rot {
+    mut i32 x = GAIN;
+    mut i32 y = 0;
+    mut i32 z = theta;
+    for i in 0..<16 {
+        i32 dx = y >> i as i32;
+        i32 dy = x >> i as i32;
+        if z >= 0 {
+            x -= dx;
+            y += dy;
+            z -= ATAN[i];
+        } else {
+            x += dx;
+            y -= dy;
+            z += ATAN[i];
+        }
+    }
+    ret Rot(cos = x, sin = y);
+}
+
+# exp by squaring of a fixed point base to an integer power
+fun pow_fx = (i32 base, u32 e) -> i32 {
+    mut i32 r = ONE;
+    mut i32 b = base;
+    mut u32 k = e;
+    while k > 0 {
+        if (k & 1) == 1: r = mul(r, b);
+        b = mul(b, b);
+        k = k >> 1;
+    }
+    ret r;
+}
+
+# linear interpolation and clamped saturating add
+fun lerp = (i32 a, i32 b, i32 t) -> i32: ret a + mul(b - a, t);
+fun sat_add = (i32 a, i32 b) -> i32 {
+    i64 s = a as i64 + b as i64;
+    ret if s > 2147483647: 2147483647 else: if s < -2147483648: -2147483648 else: s as i32;
+}
+
+stcfun basics = () -> i64 {
+    i32 a = ratio(3, 2);
+    i32 b = ratio(-5, 4);
+    ret milli(mul(a, b)) * 1000000 + milli(div(a, b)) * 1000 + (floor_int(b) + 10) as i64;
+}
+
+stcfun roots = () -> i64 {
+    ret milli(sqrt_fx(fx(2))) * 1000000 + milli(sqrt_fx(fx(144))) + milli(sqrt_fx(ratio(1, 4))) * 100000000000;
+}
+
+stcfun poly = () -> i64 {
+    [3]i32 cs = [ONE, ratio(-3, 1), ratio(2, 1)];
+    ret milli(horner(cs.&, ratio(5, 2))) * 1000 + milli(horner(cs.&, ratio(1, 1)));
+}
+
+stcfun trig = () -> i64 {
+    Rot r0 = cordic(0);
+    Rot r30 = cordic(34315);
+    Rot r90 = cordic(102944);
+    Rot rn = cordic(-51472);
+    ret ((milli(r0.cos) * 1000 + milli(r30.sin)) * 1000 + milli(r90.sin)) * 10000 + milli(rn.sin) + 1000;
+}
+
+stcfun powers = () -> i64: ret milli(pow_fx(ratio(3, 2), 5)) * 1000000 + milli(pow_fx(ratio(1, 2), 10)) * 1000 + milli(pow_fx(fx(7), 0));
+stcfun mixes = () -> i64: ret milli(lerp(fx(10), fx(20), ratio(1, 4))) * 100000 + milli(lerp(fx(-4), fx(4), ratio(3, 4)));
+stc i32 SAT1 = sat_add(2147483000, 1000); #= SAT1 2147483647
+stc i32 SAT2 = sat_add(-2147483000, -1000); #= SAT2 -2147483648
+stc i32 SAT3 = sat_add(-5, 3); #= SAT3 -2
+stc i32 FLOORN = floor_int(ratio(-1, 3)); #= FLOORN -1
+stc i64 MILLIN = milli(ratio(-1, 3)); #= MILLIN -334
+
+stc i64 BAS = basics(); #= BAS -1876199992
+stc i64 RTS = roots(); #= RTS 50001414012000
+stc i64 POL = poly(); #= POL 750000
+stc i64 TRI = trig(); #= TRI 10005010000292
+stc i64 POW = powers(); #= POW 7593001000
+stc i64 MIX = mixes(); #= MIX 1250002000
+
+$main = () -> i32 {
+    h = ratio(1, 2); #: h i32
+    r = cordic(h); #: r *(i32 cos, i32 sin)
+    m = milli(mul(r.cos, r.sin)); #: m i64
+    ret floor_int(sqrt_fx(fx(81))) + pow_fx(h, 3) + m as i32 + sat_add(1, 2);
+}

@@ -1,0 +1,41 @@
+# postfix chains: calls, indexing, members, address and dereference, unwraps, label arrows
+type In = *(mut [3]u32 xs);
+type Out = *(mut In inner, u32 k) !{
+    fun get = (u32 i) -> u32: ret self.inner.xs[i] * self.k;
+}
+variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+
+fun maker = (u32 n): (u32 m): [n, m];
+
+stcfun chains = () -> u32 {
+    mut Out o = Out(inner = In(xs = [1, 2, 3]), k = 10);
+    o.inner.xs[1] = 5;
+    p = o.&;
+    u32 a = p.*.inner.xs[1];
+    u32 b = o.get(2);
+    u32 c = maker(7)(8)[1];
+    u32 d = o.&.*.inner.&.*.xs[0];
+    u32 e = (o with (k = 100)).get(0);
+    ret a + b + c + d + e;
+}
+
+stc u32 CH = chains(); #= CH 144
+
+stcfun unwraps = (Opt8 o) -> u32 {
+    u32 a = o ?? 1;
+    u32 b = if o ?<- v: v * 2 else: 0;
+    # a label arrow is postfix: it names `b`, not `a + b`
+    u32 c = (a + b <- s) + s;
+    ret c;
+}
+
+stc u32 U = unwraps(Opt8.Some(3)) * 1000 + unwraps(Opt8.None); #= U 15001
+
+$main = () {
+    mut i32 n = 1;
+    n++;
+    n--;
+    ++n;
+    --n;
+    x = n.&.*; #: x i32
+}

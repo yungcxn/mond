@@ -1,0 +1,51 @@
+# operand rules of the unary and binary operators
+type R = *(i32 v);
+variant V = +(A, B);
+
+fun f = (u8 a, i8 c, u32 n, f32 x, bool t, R r, V v, *u8 p, [2]u8 arr) {
+    e1 = a - 300; #! type_mismatch
+    e2 = a + c; #! type_mismatch
+    e3 = n + x; #! type_mismatch
+    e4 = t + 1; #! type_mismatch
+    e5 = r + r; #! type_mismatch
+    e6 = v * 2; #! type_mismatch
+    e7 = arr + arr; #! type_mismatch
+    e8 = x << 1; #! type_mismatch
+    e9 = x % 2.0;
+    e10 = x & x; #! type_mismatch
+    e11 = x +% x; #! type_mismatch
+    e12 = t *% t; #! type_mismatch
+    e13 = -t; #! type_mismatch
+    e14 = -r; #! type_mismatch
+    e15 = !x; #! type_mismatch
+    e16 = !r; #! type_mismatch
+    e17 = t and 1; #! type_mismatch
+    e18 = n or t; #! type_mismatch
+    e19 = t xor n; #! type_mismatch
+    e20 = n < t; #! type_mismatch
+    e21 = r == 1; #! type_mismatch
+    e22 = a == c; #! type_mismatch
+    e23 = x > n; #! type_mismatch
+    e24 = p * 2; #! type_mismatch
+    e25 = p + x; #! type_mismatch
+    e26 = 1 - p; #! type_mismatch
+    e27 = p + p; #! type_mismatch
+}
+
+fun g = () {
+    mut u8 a = 1;
+    mut f32 x = 1.0;
+    mut bool t = true;
+    mut R r = R(v = 1);
+    a += 300; #! type_mismatch
+    a += x; #! type_mismatch
+    x += 1.0;
+    x %= 2.0;
+    t += true; #! type_mismatch
+    t++; #! type_mismatch
+    r--; #! type_mismatch
+    ++x;
+    a *= 2;
+}
+
+$main = () {}

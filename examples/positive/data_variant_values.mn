@@ -1,0 +1,53 @@
+variant Opt = +(Some(u8), None = 0xFF) tagof self;
+variant Res = +(Ok(u32), Err(u8 code, u8 line), Pending);
+variant Reg = ++(AsInt(i32), AsBits([4]u8), AsFloat(f32)) tagof u8;
+variant Dir = +(N, E, S, W);
+
+stcfun unwrap_or = (Opt o, u8 d) -> u8: ret o ?? d;
+stcfun arrow = (Opt o) -> u32: ret if o ?<- v: v as u32 + 1000 else: 0;
+stcfun res_val = (Res r) -> u32: ret r ?? 99;
+stcfun err_sum = (Res r) -> u32: ret match r {
+    Res.Err(c, l) => (c as u32) * 100 + l as u32,
+    Res.Ok(v) => v,
+    Res.Pending => 7,
+}
+stcfun turn = (Dir d) -> Dir: ret match d { Dir.N => Dir.E, Dir.E => Dir.S, Dir.S => Dir.W, Dir.W => Dir.N }
+stcfun turns = (u32 k) -> u8 {
+    mut Dir d = Dir.N;
+    for i in 0..<k: d = turn(d);
+    ret d.$tag;
+}
+stcfun wrapped = () -> u8 {
+    Opt a = 7;
+    Opt b = Opt.None;
+    u8 three = 3;
+    Opt c = three as Opt.Some;
+    ret (a ?? 0) + (b ?? 100) + (c ?? 0);
+}
+
+stc u8 U1 = unwrap_or(Opt.Some(4), 9); #= U1 4
+stc u8 U2 = unwrap_or(Opt.None, 9); #= U2 9
+stc u32 A1 = arrow(Opt.Some(5)); #= A1 1005
+stc u32 A2 = arrow(Opt.None); #= A2 0
+stc u32 R1 = res_val(Res.Ok(12)); #= R1 12
+stc u32 R2 = res_val(Res.Pending); #= R2 99
+stc u32 E1 = err_sum(Res.Err(3, 4)); #= E1 304
+stc u32 E2 = err_sum(Res.Err(line = 1, code = 2)); #= E2 201
+stc u32 E3 = err_sum(Res.Pending); #= E3 7
+stc u8 T0 = turns(0); #= T0 0
+stc u8 T5 = turns(5); #= T5 1
+stc u8 T8 = turns(8); #= T8 0
+stc u8 WR = wrapped(); #= WR 110
+
+$main = () {
+    o = Opt.Some(1); #: o +(Some, None).Some
+    Opt p = o;
+    n = Opt.None; #: n +(Some, None).None
+    q = p ?? 5; #: q u8
+    e = Res.Err(1, 2); #: e +(Ok, Err, Pending).Err
+    Res r = e;
+    x = r ??; #: x u32
+    d = Dir.W; #: d +(N, E, S, W).W
+    Dir dd = d;
+    b = dd == Dir.W; #: b bool
+}

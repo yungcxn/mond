@@ -1,0 +1,2 @@
+[3]i32 a = [1, 2, 3];
+i32 b = a[1; #! ExpectedClosingBracket

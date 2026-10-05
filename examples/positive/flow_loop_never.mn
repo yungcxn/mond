@@ -1,0 +1,12 @@
+# a loop nothing ends never yields a value and fits any expectation
+fun forever = () -> u32: loop {}; #: forever () -> u32
+fun until_ret = (u32 n) -> u32: loop { if n > 3: ret n; ret 7; };
+fun as_branch = (bool c) -> u8 {
+    u8 x = if c: 5 else: loop {};
+    ret x;
+}
+fun in_match = (u8 n) -> u8: ret match n { 0 => loop {}, _ => n };
+stc u32 UR = until_ret(4) * 10 + until_ret(1); #= UR 47
+stc u8 AB = as_branch(true); #= AB 5
+stc u8 IM = in_match(9); #= IM 9
+$main = () {}

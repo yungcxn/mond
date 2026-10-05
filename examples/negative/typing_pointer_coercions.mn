@@ -1,0 +1,33 @@
+# pointer coercions: *T to &T, &[n]T to &T, &[n]T to &[]T, never & to * and never across element types
+fun first = (&u8 p) -> u8: ret p.*;
+fun total = (&[]u8 s) -> u64: ret s.$len;
+fun poke = (*u8 p) { p.* = 1; }
+
+fun f = (*u8 pm, &u8 pr, *[4]u8 am, &[4]u8 ar, &[4]i8 ai, *u16 wm) {
+    &u8 a1 = pm;
+    &u8 a2 = am;
+    &u8 a3 = ar;
+    &[]u8 a4 = ar;
+    &[]u8 a5 = am;
+    *[]u8 a6 = am;
+    u8 a7 = first(am);
+    u64 a8 = total(ar);
+    *u8 b1 = pr; #! type_mismatch
+    *u8 b2 = ar; #! type_mismatch
+    *[]u8 b3 = ar; #! type_mismatch
+    &u8 b4 = ai; #! type_mismatch
+    &[]u8 b5 = ai; #! type_mismatch
+    &u16 b6 = pm; #! type_mismatch
+    &u8 b7 = wm; #! type_mismatch
+    &[4]u8 b8 = pm; #! type_mismatch
+    &[2]u8 b9 = ar; #! type_mismatch
+    &[8]u8 b10 = ar; #! type_mismatch
+    u8 b11 = pm; #! type_mismatch
+    &u8 b12 = 0; #! type_mismatch
+    poke(pr); #! type_mismatch
+    poke(ar); #! type_mismatch
+    u64 b13 = total(ai); #! type_mismatch
+    u64 b14 = total(pm); #! type_mismatch
+}
+
+$main = () {}

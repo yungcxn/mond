@@ -1,0 +1,52 @@
+variant O = +(Some(u32), None);
+type R = *(u32 a, u32 b);
+
+fun unwrap_after = (O o) -> u32 {
+    if o ?<- w {}
+    ret w; #! undefined_name
+}
+fun label_next_stmt = () -> u32 {
+    bool hit = (3 <- l) == 3;
+    ret l; #! undefined_name
+}
+fun arm_leak = (O o) -> u32 {
+    u32 r = match o {
+        O.Some(x) => x,
+        O.None => x, #! undefined_name
+    };
+    ret x; #! undefined_name
+}
+fun named_loop_no_it = () -> u32 {
+    mut u32 n = 0;
+    for x in 0..<2: n += $it; #! undefined_name
+    ret n + x; #! undefined_name
+}
+fun it_outside = () -> u32: ret $it; #! undefined_name
+fun lambda_not_hoisted = () -> u32 {
+    g = (): later; #! undefined_name
+    u32 later = 1;
+    ret later;
+}
+fun lambda_var_before = () -> u32 {
+    u32 r = h(); #! undefined_name
+    h = (): 1;
+    ret r;
+}
+fun or_one_sided = (R r) -> u32: ret match r {
+    R(a = 1, b = x) | R(a = 2, b = 0) => x, #! undefined_name
+    _ => 0,
+}
+fun destructure_scope = (R r) -> u32 {
+    u32 s = (r <- p, q).a + p + q;
+    ret p; #! undefined_name
+}
+fun while_binder_after = (O o) -> u32 {
+    mut u32 n = 0;
+    while o ?<- v { n += v; brk; }
+    ret v; #! undefined_name
+}
+fun block_local_fn = () -> u32 {
+    { fun inner = () -> u32: ret 1; }
+    ret inner(); #! undefined_name
+}
+$main = () {}

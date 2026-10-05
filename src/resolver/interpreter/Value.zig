@@ -201,17 +201,6 @@ pub fn binary(k: Kind, a: Value, b: Value, t: Index) error{ NotStatic, Invalid }
             .binary_num_or => int(r, a.bits | b.bits),
             .binary_num_xor => int(r, a.bits ^ b.bits),
             .binary_num_and => int(r, a.bits & b.bits),
-            .binary_pow => blk: {
-                if (y < 0) return error.Invalid;
-                if (x == 0 or x == 1) break :blk exact(r, if (y == 0) 1 else x);
-                if (x == -1) break :blk exact(r, if (@rem(y, 2) == 0) 1 else -1);
-                var p: i128 = 1;
-                for (0..@intCast(@min(y, 128))) |_| {
-                    p *= x;
-                    _ = try exact(r, p);
-                }
-                break :blk exact(r, p);
-            },
             else => compare(k, a, b),
         };
     }
@@ -222,6 +211,7 @@ pub fn binary(k: Kind, a: Value, b: Value, t: Index) error{ NotStatic, Invalid }
             .binary_sub => float(r, a.f() - b.f()),
             .binary_mul => float(r, a.f() * b.f()),
             .binary_div => float(r, a.f() / b.f()),
+            .binary_mod => float(r, @rem(a.f(), b.f())),
             else => compare(k, a, b),
         };
     }

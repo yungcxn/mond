@@ -1,0 +1,63 @@
+# integer literal bases, case of the prefix, `_` separators and leading zeros
+stc u32 HEX = 0xFF; #= HEX 255
+stc u32 HEX_UP = 0XfF; #= HEX_UP 255
+stc u32 BIN = 0b1011; #= BIN 11
+stc u32 BIN_UP = 0B1011; #= BIN_UP 11
+stc u32 OCT = 0o755; #= OCT 493
+stc u32 OCT_UP = 0O17; #= OCT_UP 15
+stc u32 SEP = 1_000_000; #= SEP 1000000
+stc u32 HEX_SEP = 0xFFFF_FFFF; #= HEX_SEP 4294967295
+stc u32 BIN_SEP = 0b1111_0000; #= BIN_SEP 240
+stc u32 LEAD = 007; #= LEAD 7
+stc u64 U64_MAX = 18446744073709551615; #= U64_MAX 18446744073709551615
+stc u64 U64_MAX_HEX = 0xFFFF_FFFF_FFFF_FFFF; #= U64_MAX_HEX 18446744073709551615
+stc i64 I64_MIN = -9223372036854775808; #= I64_MIN -9223372036854775808
+stc u8 ZERO = 0; #= ZERO 0
+
+# floats, with and without fraction digits
+stc f64 FL = 2.5; #= FL 2.5
+stc f64 FL_SEP = 1_0.2_5; #= FL_SEP 10.25
+stc f64 FL_DOT = 3.; #= FL_DOT 3
+stc f64 FL_SMALL = 0.000_1; #= FL_SMALL 0.0001
+stc f32 FL_NEG = -0.5; #= FL_NEG -0.5
+
+# chars are u8 values
+stc u8 CH = 'a'; #= CH 97
+stc u8 CH_DQ = '"'; #= CH_DQ 34
+stc u8 CH_HASH = '#'; #= CH_HASH 35
+stc u8 CH_SP = ' '; #= CH_SP 32
+stc u8 CH_NL = '\n'; #= CH_NL 10
+stc u8 CH_TAB = '\t'; #= CH_TAB 9
+stc u8 CH_CR = '\r'; #= CH_CR 13
+stc u8 CH_NUL = '\0'; #= CH_NUL 0
+stc u8 CH_BS = '\\'; #= CH_BS 92
+stc u8 CH_HEX = '\x41'; #= CH_HEX 65
+stc u8 CH_HEX_LOW = '\x7f'; #= CH_HEX_LOW 127
+stc u8 CH_HEX_MAX = '\xFF'; #= CH_HEX_MAX 255
+
+# strings: escapes are one byte each, `#` and `'` inside are plain bytes
+stc []u8 STR = "a\x41\n\t\\\"\0z"; #: STR [8]u8
+stc u8 S1 = STR[1]; #= S1 65
+stc u8 S2 = STR[2]; #= S2 10
+stc u8 S3 = STR[3]; #= S3 9
+stc u8 S4 = STR[4]; #= S4 92
+stc u8 S5 = STR[5]; #= S5 34
+stc u8 S6 = STR[6]; #= S6 0
+stc u8 S7 = STR[7]; #= S7 122
+stc []u8 HASHED = "'#'"; #: HASHED [3]u8
+stc u8 H1 = HASHED[1]; #= H1 35
+stc []u8 EMPTY = ""; #: EMPTY [0]u8
+stc u64 EMPTY_LEN = EMPTY.$len; #= EMPTY_LEN 0
+
+# identifiers may start with `_` or `$` and contain keywords
+stc u32 _under = 1; #= _under 1
+stc u32 iffy = 2; #= iffy 2
+stc u32 u8x = 3; #= u8x 3
+stc u32 fun_ = 4; #= fun_ 4
+stc u32 a1b2 = 5; #= a1b2 5
+
+$main = () {
+    x = 0x10; #: x u32
+    y = 1_000.5; #: y f32
+    z = '\x30'; #: z u32
+}

@@ -162,6 +162,9 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
 
 pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__fun_call_param_tuple);
+    const outer = p.list;
+    p.list = true;
+    defer p.list = outer;
 
     if (!try p.peek_eq_tok(.@"pct_)")) {
         var params: FixedStack(64) = .{};

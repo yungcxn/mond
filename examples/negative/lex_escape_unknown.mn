@@ -1,0 +1,2 @@
+# only n t r 0 \\ ' " and x are escapes
+u8 c = '\q'; #! LexingError_InvalidEscape

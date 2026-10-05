@@ -1041,6 +1041,7 @@ pub fn coerce(self: *StaticPool, vars: *AbstractPool, from0: Index, to0: Index) 
     if (from == .poison_type or to == .poison_type) return .poison;
     if (from == .never_type) return .never_to_any;
     if (from == .unit_type and to == .runit_type) return .unit_to_runit;
+    if (to == .fun_type and self.tag(from) == .function_type) return .identity;
     if (self.has_vars(from) or self.has_vars(to)) {
         const ptrs = self.is_ptr(from) and self.is_ptr(to) and (self.tag(from) == .ptr_mut_type or self.tag(to) == .ptr_type);
         return if (self.unify(vars, if (ptrs) self.pointee(from) else from, if (ptrs) self.pointee(to) else to) == .ok) .unified else .incompatible;
@@ -1131,7 +1132,7 @@ pub fn apply_vars(self: *StaticPool, vars: *AbstractPool, index: Index) Index {
     if (index == .none or !self.has_vars(index)) return index;
     const s = self.shallow(vars, index);
     if (s != index) return self.apply_vars(vars, s);
-    var buf: [64]Index = undefined;
+    var buf: [65]Index = undefined;
     return switch (self.get(index)) {
         .array_type => |a| self.intern(.{ .array_type = .{ .len = self.apply_vars(vars, a.len), .elem = self.apply_vars(vars, a.elem) } }),
         .ptr_type => |p| self.intern(.{ .ptr_type = .{ .child = self.apply_vars(vars, p.child), .mutable = p.mutable } }),

@@ -1,0 +1,17 @@
+variant Res = +(Ok(i32), Err(u8));
+variant Bare = +(A, B);
+
+# a strict unwrap of an empty case fails the evaluation
+stcfun strict = (Res r) -> i32: ret r??; #! static_eval_failed
+stc i32 S1 = strict(Res.Ok(3)); #= S1 3
+stc i32 S2 = strict(Res.Err(3));
+
+# a variant without payload has nothing to unwrap
+stcfun bare = (Bare b) -> u8: ret b ?? 0; #! type_mismatch
+stc u8 BA = bare(Bare.A);
+
+# the fallback has the payload type
+stc i32 FB = Res.Ok(1) ?? "none"; #! type_mismatch
+stc u8 FU = Res.Ok(1) ?? 0; #! type_mismatch
+
+$main = () {}

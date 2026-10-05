@@ -1,0 +1,2 @@
+# two values in a group are neither a capture nor parameters
+i32 a = (1 2); #! IllegalParenSyntax

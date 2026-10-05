@@ -1,0 +1,19 @@
+fun f = (bool c) {
+    while true {
+        g = () { brk; }; #! brk_outside_loop
+        h = () { cont; }; #! cont_outside_loop
+        fun k = () { loop { brk; } };
+        fun k2 = () { for i in 0..<2 { cont; } };
+        brk;
+    }
+    for i in 0..<3 {
+        l = (u32 x) -> u32 { if x > 1: brk; ret x; }; #! brk_outside_loop
+        cont;
+    }
+    if c { brk; } #! brk_outside_loop
+    { cont; } #! cont_outside_loop
+    m = match c { true => brk, false => 1 }; #! brk_outside_loop
+    loop { stcif true { brk; } }
+    loop { defer c; brk; }
+}
+$main = () {}

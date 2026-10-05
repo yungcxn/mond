@@ -20,6 +20,14 @@ pub fn templ_binary(comptime kind: Node.Kind, comptime prec: u8) fn (parser: *Pa
     }.eval;
 }
 
+pub fn templ_binary_group(comptime kind: Node.Kind, comptime prec: u8) fn (parser: *Parser, lhs: NodeId) anyerror!NodeId {
+    return struct {
+        pub fn eval(p: *Parser, lhs: NodeId) anyerror!NodeId {
+            return p.tree.push_node_with(kind, .{ .lhs = lhs, .rhs = try rest(p, try paren(p), prec + 1) });
+        }
+    }.eval;
+}
+
 pub fn templ_prefix(comptime kind: Node.Kind, comptime prec: u8) fn (parser: *Parser) anyerror!NodeId {
     return struct {
         pub fn eval(p: *Parser) anyerror!NodeId {
@@ -44,7 +52,7 @@ pub fn any(
 
     const parent = try expr(p, prec);
 
-    if (assign_mode == .allow_assign and !p.prev_eq_tok(.@"pct_}") and lookahead.assign_follows(p)) {
+    if (assign_mode == .allow_assign and !p.prev_eq_tok(.@"pct_}") and lookahead.assign_follows(p) and !(p.list and try p.peek_eq_tok(.@"pct_,"))) {
         return ee_assign(p, parent);
     }
 
@@ -53,9 +61,11 @@ pub fn any(
 
 pub fn expr(p: *Parser, prec: u8) anyerror!NodeId {
     const lookup_f = lookahead.pre[@intFromEnum(try p.pop_tok())] orelse return error.NoRuleFound;
+    return rest(p, try lookup_f(p), prec);
+}
 
-    var parent = try lookup_f(p);
-
+fn rest(p: *Parser, first: NodeId, prec: u8) anyerror!NodeId {
+    var parent = first;
     if (p.prev_eq_tok(.@"pct_}")) return parent;
 
     while (p.tok_cursor < p.tokens.len()) {
@@ -80,9 +90,10 @@ pub fn expr(p: *Parser, prec: u8) anyerror!NodeId {
 }
 
 pub fn block(p: *Parser) anyerror!NodeId {
-    const outer = p.head;
+    const outer = .{ p.head, p.list };
     p.head = false;
-    defer p.head = outer;
+    p.list = false;
+    defer p.head, p.list = outer;
     const parent = p.tree.push_node(.block);
     var children: FixedStack(4096) = .{};
     while (!try p.peek_eq_tok(.@"pct_}")) {
@@ -171,7 +182,7 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
             },
             .@"pct_]" => { // no comma -> type, unless nothing that can be a type follows
                 p.tok_cursor += 1;
-                if (lookahead.pre[@intFromEnum(try p.peek_tok())] == null) {
+                if (!try type_follows(p)) {
                     const one = p.tree.push_node(.array);
                     p.tree.set_children(one, &[_]NodeId{parent});
                     return one;
@@ -187,13 +198,18 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
         }
     } else {
         p.tok_cursor += 1; // consume "]"
-        if (lookahead.pre[@intFromEnum(try p.peek_tok())] != null) {
+        if (try type_follows(p)) {
             parent = p.tree.push_node_with(.type_array_unlengthed, .{ .type = try any(p, .forbid_assign, 0) });
         } else {
             parent = p.tree.push_node(.array_empty);
         }
     }
     return parent;
+}
+
+fn type_follows(p: *Parser) !bool {
+    const t = try p.peek_tok();
+    return lookahead.pre[@intFromEnum(t)] != null and !(p.head and t == .@"pct_{");
 }
 
 pub fn true_(p: *Parser) anyerror!NodeId {
@@ -318,6 +334,7 @@ fn ee_for(p: *Parser, comptime seq_kind: Node.Kind, comptime var_kind: Node.Kind
         parent = p.tree.push_node(var_kind);
         p.tree.set_children(parent, def_var_extension);
     }
+    while (p.tree.kind(def.seq) == .capture) def.seq = p.tree.arg(def.seq, 0);
 
     switch (try p.peek_tok()) {
         .@"pct_:" => p.tok_cursor += 1,

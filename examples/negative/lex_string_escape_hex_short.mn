@@ -1,0 +1,1 @@
+&u8 s = "ab\x4g"; #! LexingError_InvalidEscape

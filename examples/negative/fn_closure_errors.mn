@@ -1,0 +1,29 @@
+fun apply = ((i32) -> i32 f, i32 x) -> i32: ret f(x);
+fun apply_u = ((u32) -> u32 f) -> u32: ret f(1);
+fun want_unit = (() -> () f) { f(); }
+
+fun f = () {
+    i32 fixed = 1;
+    bump = (): fixed += 1; #! assign_to_immutable
+    i32 r1 = apply((f32 x): x, 1); #! type_mismatch
+    i32 r2 = apply((i32 x, i32 y): x, 1); #! type_mismatch
+    i32 r3 = apply((i32 x): true, 1); #! type_mismatch
+    u32 r4 = apply_u((i32 x): x); #! type_mismatch
+    i32 r5 = apply((i32 x): x + 1, 1);
+    want_unit((): 1); #! type_mismatch
+    want_unit(() {});
+    g = (i32 a) -> i32: "s"; #! type_mismatch
+    h = (i32 a) -> bool { ret a; } #! type_mismatch
+    k = (i32 a): unknown_in_lambda; #! undefined_name
+    m = (i32 a): a;
+    i32 bad = m(); #! wrong_arity
+    bool wrong = m(1); #! type_mismatch
+    i32 inner_scope = { i32 q = 1; q; };
+    i32 leak = q; #! undefined_name
+    n = (i32 a): (i32 b): a + b;
+    i32 o = n(1)(true); #! type_mismatch
+    (i32) -> i32 typed = (u32 x): x; #! type_mismatch
+    (i32) -> i32 ok = (i32 x): x;
+}
+
+$main = () {}

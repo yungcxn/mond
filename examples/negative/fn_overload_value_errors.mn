@@ -1,0 +1,12 @@
+# no overload of the expected type: the first overload is taken and mismatches
+fun pick = (u32 x) -> u32: ret x + 1;
+fun pick = (f32 x) -> f32: ret x * 2.0;
+fun single = (u8 x) -> u8: ret x;
+
+fun f = () {
+    (bool) -> u32 pb = pick; #! type_mismatch
+    (u32) -> f32 mixed = pick; #! type_mismatch
+    (u16) -> u16 wide = single; #! type_mismatch
+}
+
+$main = () {}

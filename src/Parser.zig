@@ -13,6 +13,8 @@ alloc: std.mem.Allocator,
 tok_cursor: u32 = 0,
 // in the head of an if / while / for / match a group right before `{` or `:` is no lambda
 head: bool = false,
+// in the arguments of a call a comma ends the value, it starts no destructuring assignment
+list: bool = false,
 global_store: DynBuf(NodeId),
 tree: ParseTree,
 
@@ -41,8 +43,9 @@ pub inline fn peek_tok(self: *@This()) !Lexer.Token.Kind {
 }
 
 pub inline fn pop_tok(self: *@This()) !Lexer.Token.Kind {
-    defer self.tok_cursor += 1;
-    return self.tokens.get_field(.tk, self.tok_cursor) orelse return error.EOF;
+    const tk = self.tokens.get_field(.tk, self.tok_cursor) orelse return error.EOF;
+    self.tok_cursor += 1;
+    return tk;
 }
 
 pub inline fn eat_assert_tok(self: *@This(), comptime tok: Lexer.Token.Kind) !void {

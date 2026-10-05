@@ -1,0 +1,42 @@
+type C = *(mut u32 n, u32 fixed) !{
+    fun inc = () { self.n += 1; }
+    fun get = () -> u32: ret self.n;
+    fun inc_via = () { self.inc(); }
+    fun set_fixed = () { self.fixed = 1; } #! assign_to_immutable
+    fun add = (u32 k) -> u32 { self.n += k; ret self.n; }
+}
+type Outer = *(C inner, mut C minner);
+
+fun make = () -> C: ret C(n = 0, fixed = 0);
+
+fun f = (&C ro, *C rw, C byval, &Outer ro_o, *Outer rw_o) {
+    C imm = C(n = 1, fixed = 2);
+    mut C m = C(n = 1, fixed = 2);
+    imm.inc(); #! assign_to_immutable
+    imm.inc_via(); #! assign_to_immutable
+    u32 a = imm.get();
+    m.inc();
+    m.inc_via();
+    u32 b = m.add(2);
+    u32 c = imm.add(2); #! assign_to_immutable
+    ro.inc(); #! write_through_immutable_pointer
+    u32 d = ro.get();
+    rw.inc();
+    byval.inc(); #! assign_to_immutable
+    ro_o.minner.inc(); #! write_through_immutable_pointer
+    rw_o.inner.inc(); #! assign_to_immutable
+    rw_o.minner.inc();
+    C.inc(m.&);
+    C.inc(imm.&); #! type_mismatch
+    C.inc(ro); #! type_mismatch
+    C.inc(rw);
+    u32 e = C.get(imm.&);
+    u32 g = C.get(ro);
+    C.inc(); #! wrong_arity
+    C.get(1); #! type_mismatch
+    C.add(rw); #! wrong_arity
+    u32 h = make().get();
+    u32 i = C.add(rw, 1, 2); #! wrong_arity
+}
+
+$main = () {}

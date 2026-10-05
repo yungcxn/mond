@@ -1,0 +1,29 @@
+type Res = *(mut u32 n) !{ $deinit = () { self.n = 0; } }
+type Plain = *(u32 n);
+variant Kind = +(A, B);
+variant Owned = +(A, B) !{ $deinit = () {} }
+
+fun f = (*Res rp, &Plain pp) {
+    mut Res r = Res(n = 1);
+    deinit r;
+    u32 a = r.n; #! use_before_initialization
+    r = Res(n = 2);
+    u32 b = r.n;
+    Plain p = Plain(n = 1);
+    # records and variants always have a builtin deinit
+    deinit p;
+    deinit pp;
+    deinit rp;
+    deinit Kind.A;
+    Owned o = Owned.A;
+    deinit o;
+    q = Plain(n = 3) defer deinit;
+    s = Res(n = 3) defer deinit;
+    u32 c = s.n;
+    defer deinit r;
+    deinit 1 + 2; #! no_deinit
+    [2]Res arr = [Res(1), Res(2)];
+    deinit arr; #! no_deinit
+}
+
+$main = () {}

@@ -1,0 +1,40 @@
+# declarations with modifiers, several names, several values
+stc u32 A = 1; #= A 1
+pub stc u32 B = 2; #= B 2
+stc pub u32 C = 3; #= C 3
+pub u32 D = 4; #: D u32
+stc E = 5; #= E 5
+stc u32 F, G = 6, 7; #= F 6
+stc u32 G2, H2 = 8; #= H2 8
+stc u32 X1, X2, X3 = 1, 2, 3; #= X3 3
+
+type Pt = *(u32 x, u32 y);
+stc Pt ORIGIN = Pt(x = 4, y = 5);
+
+stcfun assigns = () -> u32 {
+    mut u32 a = 1;
+    mut b = 2;
+    mut u32 c, d = 3, 4;
+    a, b = 10;
+    mut u32 e;
+    e = 5;
+    stc mut u32 f = 6;
+    f += 1;
+    u32 sum = (ORIGIN <- x, y).x + x + y;
+    ret a + b + c * 100 + d * 1000 + e + f + sum;
+}
+
+stc u32 R = assigns(); #= R 4345
+
+# brackets: `[n]` alone is an array, followed by a type it is an array type
+stc [1]u32 ONE = [9]; #= ONE [9]
+stc [2]u8 TYPED = [1, 2]; #: TYPED [2]u8
+stc []u16 UNLEN = [3, 4, 5]; #: UNLEN [3]u16
+stc [2][2]u8 GRID = [[1, 2], [3, 4]]; #= GRID [[1, 2], [3, 4]]
+stc []u8 NONE = []; #: NONE [0]u8
+
+$main = () {
+    mut i32 x, y = 1, 2;
+    x, y = 3, 4;
+    z = x; #: z i32
+}

@@ -1,0 +1,175 @@
+# deeply nested loops with brk, cont, early ret and loops used as values, all lowered at runtime too
+
+fun gcd = (u32 a0, u32 b0) -> u32 {
+    mut u32 a = a0;
+    mut u32 b = b0;
+    while b != 0 {
+        u32 t = a % b;
+        a = b;
+        b = t;
+    }
+    ret a;
+}
+
+fun is_prime = (u32 n) -> bool {
+    if n < 2: ret false;
+    mut u32 d = 2;
+    while d * d <= n {
+        if n % d == 0: ret false;
+        d += 1;
+    }
+    ret true;
+}
+
+# primitive pythagorean triples with c <= limit, three loops deep with cont at two levels
+fun triples = (u32 limit) -> u32 {
+    mut u32 count = 0;
+    for a in 1..=limit {
+        for b in (a + 1)..=limit {
+            if gcd(a, b) != 1: cont;
+            for c in (b + 1)..=limit {
+                if a * a + b * b > c * c: cont;
+                if a * a + b * b == c * c: count += 1;
+                brk;
+            }
+        }
+    }
+    ret count;
+}
+
+# smallest p with p and n - p prime, 0 when none, found by an early return two loops deep
+fun goldbach = (u32 n) -> u32 {
+    for p in 2..=(n / 2) {
+        if !is_prime(p): cont;
+        for q in (n - p)..=(n - p) {
+            if is_prime(q): ret p;
+        }
+    }
+    ret 0;
+}
+
+# a saddle point is the minimum of its row and the maximum of its column, counted with the last one found
+fun saddles = (&[4][4]i32 m) -> u32 {
+    mut u32 found = 0;
+    for r in 0..<4 {
+        for c in 0..<4 {
+            i32 v = m.*[r][c];
+            mut bool ok = true;
+            for k in 0..<4 {
+                if m.*[r][k] < v or m.*[k][c] > v {
+                    ok = false;
+                    brk;
+                }
+            }
+            if !ok: cont;
+            found = (found / 100 + 1) * 100 + r * 10 + c + 1;
+        }
+    }
+    ret found;
+}
+
+# digital root with a loop repeat statement and a nested while
+fun digital_root = (u64 n) -> u64 {
+    mut u64 x = n;
+    mut u32 rounds = 0;
+    loop rounds += 1 {
+        if x < 10: brk;
+        mut u64 s = 0;
+        while x > 0, x = x / 10: s += x % 10;
+        x = s;
+    }
+    ret x * 10 + rounds as u64;
+}
+
+# first index where a running balance goes negative, scanning with a while with repeat
+fun first_negative = (&[]i32 xs) -> i64 {
+    mut i64 bal = 0;
+    mut u64 i = 0;
+    while i < xs.$len, i += 1 {
+        bal += xs.*[i] as i64;
+        if bal < 0: ret i as i64;
+    }
+    ret -1;
+}
+
+# a loop as a value: cont skips the element, brk ends the array
+stcfun skipped_squares = () -> []u32: ret for i in 0..<20 {
+    if i % 3 == 0: cont;
+    if i > 10: brk;
+    i * i;
+}
+
+stcfun loop_collect = () -> []u32 {
+    mut u32 n = 27;
+    ret loop {
+        if n == 1: brk;
+        n = if n % 2 == 0: n / 2 else: 3 * n + 1;
+        if n > 100: cont;
+        n;
+    };
+}
+
+# matching brackets with an explicit stack, returning early on the first mismatch
+fun balanced = (&[]u8 s) -> i32 {
+    mut [16]u8 stack;
+    mut u32 top = 0;
+    for i in 0..<s.$len {
+        u8 c = s.*[i];
+        match c {
+            '(' | '[' | '{' => {
+                if top == 16: ret -2;
+                stack[top] = c;
+                top += 1;
+            },
+            ')' | ']' | '}' => {
+                if top == 0: ret i as i32;
+                top -= 1;
+                u8 open = stack[top];
+                bool pair = open == '(' and c == ')' or open == '[' and c == ']' or open == '{' and c == '}';
+                if !pair: ret i as i32;
+            },
+            _ => cont,
+        }
+    }
+    ret if top == 0: -1 else: s.$len as i32;
+}
+
+stcfun s_triples = () -> u32: ret triples(30) * 100 + triples(5);
+stcfun s_goldbach = () -> u32: ret goldbach(28) * 10000 + goldbach(100) * 100 + goldbach(4);
+stcfun s_saddles = () -> u32 {
+    [4][4]i32 a = [[9, 8, 7, 6], [5, 3, 2, 1], [10, 12, 11, 7], [4, 4, 4, 4]];
+    [4][4]i32 b = [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]];
+    ret saddles(a.&) * 10000 + saddles(b.&);
+}
+stcfun s_roots = () -> u64: ret digital_root(0) * 1000000 + digital_root(9875) * 1000 + digital_root(18446744073709551615);
+stcfun s_negative = () -> i64 {
+    [6]i32 a = [3, -1, -1, 4, -6, 2];
+    [3]i32 b = [1, 2, 3];
+    [1]i32 c = [-1];
+    ret first_negative(a.&) * 100 + first_negative(b.&) * 10 + first_negative(c.&);
+}
+stcfun s_balanced = () -> i64 {
+    mut i64 s = 0;
+    s = s * 100 + balanced("([]{()})".&) + 10;
+    s = s * 100 + balanced("([)]".&) + 10;
+    s = s * 100 + balanced("((x)".&) + 10;
+    s = s * 100 + balanced("a)b".&) + 10;
+    s = s * 100 + balanced("".&) + 10;
+    ret s;
+}
+
+stc u32 TRI = s_triples(); #= TRI 501
+stc u32 GOL = s_goldbach(); #= GOL 50302
+stc u32 SAD = s_saddles(); #= SAD 1241634
+stc u64 DR = s_roots(); #= DR 1024064
+stc i64 NEG = s_negative(); #= NEG 390
+stc []u32 SKIP = skipped_squares(); #= SKIP [1, 4, 16, 25, 49, 64, 100]
+stc []u32 COLL = loop_collect(); #= COLL [82, 41, 62, 31, 94, 47, 71, 91, 61, 92, 46, 23, 70, 35, 53, 80, 40, 20, 10, 5, 16, 8, 4, 2, 1]
+stc i64 BAL = s_balanced(); #= BAL 912141109
+
+$main = () -> i64 {
+    [4][4]i32 m = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]];
+    t = triples(20); #: t u32
+    g = goldbach(50); #: g u32
+    ret (t + g + saddles(m.&)) as i64 + digital_root(12345) as i64 + balanced("[()]".&) as i64;
+}

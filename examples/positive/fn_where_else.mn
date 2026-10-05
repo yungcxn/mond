@@ -1,0 +1,23 @@
+fun clamp_div = (u32 a, u32 b where b != 0 else ret 0) -> u32: ret a / b;
+fun at_least = (u32 x where x >= 10 else 10) -> u32: ret x;
+fun both = (u32 a where a > 0 else 1, u32 b where b > a else a + 1) -> u32: ret a * 100 + b;
+fun guard_then_dispatch = (u32 x where x < 5) -> u32: ret 1;
+fun guard_then_dispatch = (u32 x where x < 50 else ret 7) -> u32: ret 2;
+
+stc u32 D0 = clamp_div(9, 0); #= D0 0
+stc u32 D3 = clamp_div(9, 3); #= D3 3
+stc u32 A3 = at_least(3); #= A3 10
+stc u32 A42 = at_least(42); #= A42 42
+stc u32 B00 = both(0, 0); #= B00 102
+stc u32 B55 = both(5, 5); #= B55 506
+stc u32 B29 = both(2, 9); #= B29 209
+stc u32 GD1 = guard_then_dispatch(1); #= GD1 1
+stc u32 GD2 = guard_then_dispatch(20); #= GD2 2
+stc u32 GD3 = guard_then_dispatch(200); #= GD3 7
+
+$main = () {
+    u32 v = clamp_div(1, 1);
+    u32 g = guard_then_dispatch(v); #: g u32
+    u32 b = both(v, g); #: b u32
+    u32 l = at_least(b); #: l u32
+}

@@ -1,0 +1,27 @@
+fun g1 = (u32 x where x > 5) -> u32: ret 1; #! no_matching_overload
+fun g1 = (u32 x where x > 1) -> u32: ret 2;
+fun g1 = (u32 x where x > 0) -> u32: ret 3;
+fun g2 = (u32 a, u32 b where b > 0) -> u32: ret 1; #! no_matching_overload
+fun g2 = (u32 a where a > 0, u32 b) -> u32: ret 2;
+fun g3 = (u32 x where x > 0) -> u32: ret 1;
+fun g3 = (i32 x) -> u32: ret 2;
+fun lone = (u32 x where x > 0) -> u32: ret 1;
+fun nb = (u32 x where x + 1) -> u32: ret 1; #! type_mismatch
+fun later = (u32 a where a < b, u32 b) -> u32: ret 1; #! undefined_name
+fun earlier = (u32 a, u32 b where a < b) -> u32: ret 1;
+fun bad_else = (u32 x where x > 0 else "zero") -> u32: ret x; #! type_mismatch
+fun bad_ret = (u32 x where x > 0 else ret "zero") -> u32: ret x; #! type_mismatch
+fun ok_else = (u32 x where x > 0 else 1) -> u32: ret x;
+fun ok_ret = (u32 x where x > 0 else ret 0) -> u32: ret x;
+fun undef_else = (u32 x where x > 0 else y) -> u32: ret x; #! undefined_name
+fun undef_where = (u32 x where q) -> u32: ret x; #! undefined_name
+fun reassign = (u32 x where x < 100 else x = 99) -> u32: ret x; #! assign_to_immutable
+
+# a static call whose where clauses all fail has no overload to take
+stc u32 L0 = lone(0); #! no_matching_overload
+stc u32 L1 = lone(1);
+stc u32 G0 = g1(0); #! no_matching_overload
+
+$main = () {
+    u32 a = g3(1);
+}

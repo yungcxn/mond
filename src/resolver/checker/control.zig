@@ -10,8 +10,6 @@ const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
 const is_range_kind = Resolver.is_range_kind;
 
-const Pat = struct { mask: u64 = 0, all: bool = false };
-
 pub fn h14_check_match(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
     const arms = self.tree.manychildren(self.tree.arg(node, 1));
     const st = self.deref(self.h09_check_expr(ctx, self.tree.arg(node, 0), .none));
@@ -31,30 +29,42 @@ pub fn h14_check_match(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, exp
         return self.report(.non_exhaustive_match, node, v, .none);
     }
     var quiet = statics.opened(self, ctx);
-    var covered: u64 = 0;
     var catch_all = false;
     var result: StaticPool.Index = .none;
     const before = self.uninit;
     var after: u64 = 0;
     defer self.uninit = after;
-    for (arms) |arm| {
+    var rows: std.ArrayList(NodeId) = .empty;
+    defer rows.deinit(self.alloc);
+    for (arms) |arm| rows.append(self.alloc, self.tree.arg(arm, 0)) catch @panic("OOM");
+    var settled = arms.len;
+    for (arms, 0..) |arm, i| {
+        if (settled == arms.len and self.concrete(expected)) settled = i;
         self.uninit = before;
         self.h03_push_scope();
         const mark = self.doc.diagnostics.len();
         const pat = pattern(self, ctx, self.tree.arg(arm, 0), st);
-        if (!quiet and (catch_all or (!pat.all and pat.mask != 0 and pat.mask & ~covered == 0))) self.doc.h21_report(.redundant_match_arm, arm, 0, 0);
         quiet = quiet or self.errors_since(mark, arm);
-        covered |= pat.mask;
-        catch_all = catch_all or pat.all;
+        if (!quiet and st != .poison_type and covers(self, ctx, &.{st}, rows.items[0..i], i, rows.items[i..][0..1])) self.doc.h21_report(.redundant_match_arm, arm, 0, 0);
+        catch_all = catch_all or pat;
         const t = branch(self, ctx, self.tree.arg(arm, 1), expected);
         if (t != .never_type) after |= self.uninit;
         self.h04_pop_scope();
-        result = merge(self, arm, result, t, expected);
+        result = merge(self, arm, result, if (!self.concrete(expected) and self.is_literal(self.tree.arg(arm, 1))) .never_type else t, expected);
     }
-    var rows: std.ArrayList(NodeId) = .empty;
-    defer rows.deinit(self.alloc);
-    for (arms) |arm| rows.append(self.alloc, self.tree.arg(arm, 0)) catch @panic("OOM");
-    if (!catch_all and st != .poison_type and !exhaustive(self, ctx, &.{st}, rows.items, arms.len))
+    if (!self.concrete(expected) and (result == .none or result == .never_type)) {
+        var bodies: [512]NodeId = undefined;
+        for (arms, 0..) |arm, i| bodies[i] = self.tree.arg(arm, 1);
+        const lt = literals_type(self, bodies[0..arms.len]);
+        if (lt != .none) result = lt;
+    }
+    if (!self.concrete(expected)) for (arms) |arm| if (self.is_literal(self.tree.arg(arm, 1))) {
+        result = merge(self, arm, result, adapt(self, self.tree.arg(arm, 1), self.node_type[self.tree.arg(arm, 1)], result), expected);
+    };
+    if (self.concrete(expected)) for (arms[0..settled]) |arm| {
+        _ = settle(self, self.tree.arg(arm, 1), self.static_pool.apply_vars(&self.abstract_pool, self.node_type[self.tree.arg(arm, 1)]), expected);
+    };
+    if (!catch_all and st != .poison_type and !covers(self, ctx, &.{st}, rows.items, arms.len, &.{0}))
         _ = self.report(.non_exhaustive_match, node, st, .none);
     return if (result == .none) .unit_type else result;
 }
@@ -77,6 +87,7 @@ pub fn h15_check_branching(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId,
     self.h03_push_scope();
     const w = self.condition(ctx, cond);
     self.uninit = w[0];
+    const was = self.concrete(expected);
     const tt = branch(self, ctx, then, expected);
     const after_then = if (tt == .never_type) 0 else self.uninit;
     self.uninit = w[1];
@@ -88,7 +99,25 @@ pub fn h15_check_branching(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId,
     }
     const et = branch(self, ctx, self.tree.arg(node, 1), expected);
     self.uninit = after_then | if (et == .never_type) 0 else self.uninit;
-    return merge(self, node, tt, et, expected);
+    const ts = if (was) tt else settle(self, then, tt, expected);
+    return merge(self, node, adapt(self, then, ts, et), adapt(self, self.tree.arg(node, 1), et, ts), expected);
+}
+
+// the first type of the literals among `ns` that every one of them fits
+pub fn literals_type(self: *Resolver, ns: []const NodeId) StaticPool.Index {
+    for (ns) |c| if (self.is_literal(c)) {
+        const ct = self.node_type[c];
+        for (ns) |n| {
+            if (self.is_literal(n) and statics.literal_type(self, n, ct) != ct) break;
+        } else return ct;
+    };
+    return .none;
+}
+
+// a literal branch takes the type of the others (`if c: n else: 3`)
+fn adapt(self: *Resolver, n: NodeId, t: StaticPool.Index, other: StaticPool.Index) StaticPool.Index {
+    if (!self.is_literal(n) or other == .none or statics.literal_type(self, n, other) != other) return t;
+    return self.set(n, other);
 }
 
 pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expected: StaticPool.Index) StaticPool.Index {
@@ -136,7 +165,8 @@ pub fn h16_check_loop(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, expe
     self.uninit = self.loop_exits.buf[self.loop_exits.head] | if (lp.cond != 0 or lp.seq != 0) at_exit else 0;
     if (!ctx.interpreted and !ctx.abstract and Resolver.node_props[@intFromEnum(k)].stc) _ = statics.static_of(self, ctx, node);
     // used as a value: an array of the body values; brk ends it without adding one, cont skips one
-    if (expected == .none) return if (lp.cond == 0 and lp.seq == 0 and !broke) .never_type else .unit_type;
+    if (lp.cond == 0 and lp.seq == 0 and !broke and elem_hint == .none) return .never_type;
+    if (expected == .none) return .unit_type;
     const n = if (stepped and lp.seq != 0) steps(self, ctx, lp.seq) else null;
     return sp.intern(.{ .array_type = .{ .len = if (n) |x| sp.intern(.{ .int = .{ .ty = .u64_type, .bits = x } }) else self.fresh_var(node), .elem = if (bt == .never_type or bt == .runit_type) (if (elem_hint != .none) elem_hint else .unit_type) else bt } });
 }
@@ -182,8 +212,11 @@ pub fn h17_check_unwrap(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId, ex
 
 // a branch of if / match: unit blocks and nested ifs / matches are runit, a plain unit value is not
 fn branch(self: *Resolver, ctx: *FnCtx, node: NodeId, expected: StaticPool.Index) StaticPool.Index {
-    var t = self.static_pool.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, node, expected));
-    if (t == .unit_type and Resolver.node_props[@intFromEnum(self.tree.kind(node))].runit) t = .runit_type;
+    return settle(self, node, self.static_pool.apply_vars(&self.abstract_pool, self.h09_check_expr(ctx, node, expected)), expected);
+}
+
+fn settle(self: *Resolver, node: NodeId, t0: StaticPool.Index, expected: StaticPool.Index) StaticPool.Index {
+    const t = if (t0 == .unit_type and Resolver.node_props[@intFromEnum(self.tree.kind(node))].runit) .runit_type else t0;
     if (!self.concrete(expected) or t == .never_type or t == .runit_type or t == .poison_type) return t;
     if (t == .unit_type and expected != .unit_type) return self.report(.runit_mixing, node, t, expected);
     return self.h10_expect(node, t, expected);
@@ -202,6 +235,7 @@ fn merge(self: *Resolver, node: NodeId, acc: StaticPool.Index, t: StaticPool.Ind
 fn bind_label(self: *Resolver, label: NodeId, t: StaticPool.Index) void {
     const sp = &self.static_pool;
     if (self.tree.kind(label) != .partial__destructure) {
+        self.redeclared(self.name_pool.name_of(self.tree, self.src_bytes, label), label);
         self.node_decl[label] = self.h02_declare_local(self.name_pool.name_of(self.tree, self.src_bytes, label), label, .arrow_binder, t);
         _ = self.set(label, t);
         return;
@@ -209,6 +243,7 @@ fn bind_label(self: *Resolver, label: NodeId, t: StaticPool.Index) void {
     const rt = sp.apply_vars(&self.abstract_pool, t);
     for (self.tree.manychildren(label), 0..) |id, i| {
         const ft = if (sp.tag(rt) == .record_type and i < sp.get(rt).custom_type.field_types.len) sp.get(rt).custom_type.field_types[i] else self.mismatch(id, t, .none);
+        self.redeclared(self.name_pool.name_of(self.tree, self.src_bytes, id), id);
         self.node_decl[id] = self.h02_declare_local(self.name_pool.name_of(self.tree, self.src_bytes, id), id, .arrow_binder, ft);
         _ = self.set(id, ft);
     }
@@ -230,25 +265,28 @@ pub fn payload_of(self: *Resolver, t0: StaticPool.Index) StaticPool.Index {
     return if (f.len == 1) f[0] else p;
 }
 
-fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
+// whether the pattern takes every value of its type
+fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) bool {
     const sp = &self.static_pool;
     switch (self.tree.kind(p)) {
         .identifier => {
             const name = self.name_pool.name_of(self.tree, self.src_bytes, p);
+            self.redeclared(name, p);
             if (name != .underscore) self.node_decl[p] = self.h02_declare_local(name, p, .pattern_binder, st);
             _ = self.set(p, st);
-            return .{ .all = true };
+            return true;
         },
         .partial__match_case_pattern_or => {
             // every alternative binds the same names, sharing the declarations of the first one
-            var r = Pat{};
+            var r = false;
             const names = &self.local_names;
             const from = names.head;
             var first = from;
             for (self.tree.manychildren(p), 0..) |alt, i| {
+                if (i > 0) self.h03_push_scope();
                 const mark = names.head;
                 const s = pattern(self, ctx, alt, st);
-                r = .{ .mask = r.mask | s.mask, .all = r.all or s.all };
+                r = r or s;
                 if (i == 0) {
                     first = names.head;
                     continue;
@@ -264,14 +302,14 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
                     const t = self.decl_pool.tys()[@intFromEnum(self.node_decl[id])];
                     if (self.node_type[id] != t and self.node_type[id] != .poison_type and t != .poison_type) _ = self.report(.type_mismatch, id, self.node_type[id], t);
                 }
-                names.head = mark;
-                self.local_decls.head = mark;
+                self.h04_pop_scope();
             }
             return r;
         },
         .partial__match_case_pattern_typecast => {
             const t = types.realized_type(self, ctx, self.tree.arg(p, 0));
             const v = self.tree.arg(p, 1);
+            self.redeclared(self.name_pool.name_of(self.tree, self.src_bytes, v), v);
             self.node_decl[v] = self.h02_declare_local(self.name_pool.name_of(self.tree, self.src_bytes, v), v, .pattern_binder, t);
             _ = self.set(v, t);
             const widen = t == st or t == .poison_type or st == .poison_type or sp.coerce(&self.abstract_pool, st, t) != .incompatible;
@@ -280,7 +318,7 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
                 else => false,
             };
             if (!widen and !narrow and !statics.sibling(self, ctx, t, st)) _ = self.report(.type_mismatch, p, t, st);
-            return .{ .all = widen, .mask = if (t != .poison_type and sp.tag(t) == .variant_type) member_bits(self, t, st) else 0 };
+            return widen;
         },
         .labelarrow => {
             const r = pattern(self, ctx, self.tree.arg(p, 0), st);
@@ -295,7 +333,7 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
             const target = self.set(p, if (sp.tag(ct) == .meta_type) statics.h08_eval_static(self, ctx, callee) else ct);
             if (target == .poison_type) { // binders still exist, as poison
                 for (self.tree.manychildren(self.tree.arg(p, 1))) |a| _ = pattern(self, ctx, self.arg_value(a), target);
-                return .{};
+                return false;
             }
             if (target != st and sp.coerce(&self.abstract_pool, target, st) == .incompatible and !statics.sibling(self, ctx, target, st)) _ = self.report(.type_mismatch, p, target, st);
             const is_case = sp.tag(target) == .variant_case_type;
@@ -304,46 +342,57 @@ fn pattern(self: *Resolver, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) Pat {
             var map: [64]u32 = undefined;
             if (rec == .none or sp.tag(rec) != .record_type or !calls.bind_args(self, self.fields_of(rec), args, &map, true)) {
                 if (args.len > 0) _ = self.report(.wrong_arity, p, args.len, 0);
-                return .{ .mask = if (is_case and args.len == 0) case_bit(self, target, st) else 0 };
+                return false;
             }
             var all = true;
-            for (args, 0..) |a, i| all = pattern(self, ctx, self.arg_value(a), calls.named(self, a, sp.get(rec).custom_type.field_types[map[i]])).all and all;
-            return if (is_case) .{ .mask = if (all) case_bit(self, target, st) else 0 } else .{ .all = all };
+            for (args, 0..) |a, i| all = pattern(self, ctx, self.arg_value(a), calls.named(self, a, sp.get(rec).custom_type.field_types[map[i]])) and all;
+            return !is_case and all;
         },
         else => { // literals, ranges and constant paths (`Toggle.On`)
             const t = self.h09_check_expr(ctx, p, st);
             if (is_range_kind(self.tree.kind(p))) {
                 const e = sp.apply_vars(&self.abstract_pool, t);
                 if (t != .poison_type and st != .poison_type and sp.get(e) == .array_type and sp.coerce(&self.abstract_pool, sp.get(e).array_type.elem, st) == .incompatible) _ = self.report(.type_mismatch, p, sp.get(e).array_type.elem, st);
-                return .{};
+                return false;
             }
             if (!statics.sibling(self, ctx, t, st)) _ = self.h10_expect(p, t, st);
-            if (sp.tag(t) == .variant_case_type) return .{ .mask = case_bit(self, t, st) };
-            return .{ .mask = if (st == .bool_type and self.tree.kind(p) == .boolean_true) 1 else if (st == .bool_type and self.tree.kind(p) == .boolean_false) 2 else 0 };
+            return false;
         },
     }
 }
 
-// exhaustiveness as the usefulness of a wildcard: rows of patterns over columns of types, 0 is a wildcard.
-// a column splits by the constructors of its type: bools, variant cases with their payload fields, the fields of
-// a record, the integer segments between the pattern bounds; any other type is covered by wildcards only
-fn exhaustive(self: *Resolver, ctx: *FnCtx, cols: []const StaticPool.Index, rows: []const NodeId, n: usize) bool {
+// whether the rows cover the pattern vector `q` (0 is a wildcard): exhaustiveness asks it for wildcards, redundancy for an arm,
+// rows of patterns over columns of types, a column splits by the constructors of its type: bools, variant cases with their
+// payload fields, the fields of a record, the integer segments between the pattern bounds; any other type by wildcards only
+fn covers(self: *Resolver, ctx: *FnCtx, cols: []const StaticPool.Index, rows: []const NodeId, n: usize, q: []const NodeId) bool {
     if (n == 0) return false;
     if (cols.len == 0) return true;
     const sp = &self.static_pool;
     const w = cols.len;
     const t = cols[0];
+    var qs: std.ArrayList(NodeId) = .empty;
+    defer qs.deinit(self.alloc);
+    spread(self, q, q[0], t, &qs);
+    if (qs.items.len > w) {
+        for (0..qs.items.len / w) |r| if (!covers(self, ctx, cols, rows, n, qs.items[r * w ..][0..w])) return false;
+        return true;
+    }
+    const p = qs.items[0];
     var flat: std.ArrayList(NodeId) = .empty;
     defer flat.deinit(self.alloc);
     for (0..n) |r| spread(self, rows[r * w ..][0..w], rows[r * w], t, &flat);
     var next: std.ArrayList(NodeId) = .empty;
     defer next.deinit(self.alloc);
+    var nq: std.ArrayList(NodeId) = .empty;
+    defer nq.deinit(self.alloc);
     var tys: [64]StaticPool.Index = undefined;
     if (t == .bool_type) {
         for ([_]StaticPool.Index{ .bool_true, .bool_false }) |k| {
+            nq.clearRetainingCapacity();
+            if (specialize(self, qs.items, w, k, &.{}, &nq) == 0) continue;
             next.clearRetainingCapacity();
             const m = specialize(self, flat.items, w, k, &.{}, &next);
-            if (!exhaustive(self, ctx, cols[1..], next.items, m)) return false;
+            if (!covers(self, ctx, cols[1..], next.items, m, nq.items)) return false;
         }
         return true;
     }
@@ -364,11 +413,13 @@ fn exhaustive(self: *Resolver, ctx: *FnCtx, cols: []const StaticPool.Index, rows
             for (ks[0..nk]) |k| {
                 const rec = if (sp.tag(k) == .variant_case_type) sp.get(k).variant_case_type.payload else k;
                 const fields = if (rec == .none) &[_]NodeId{} else self.fields_of(rec);
+                nq.clearRetainingCapacity();
+                if (specialize(self, qs.items, w, k, fields, &nq) == 0) continue;
                 for (0..fields.len) |i| tys[i] = sp.get(rec).custom_type.field_types[i];
                 @memcpy(tys[fields.len..][0 .. w - 1], cols[1..]);
                 next.clearRetainingCapacity();
                 const m = specialize(self, flat.items, w, k, fields, &next);
-                if (!exhaustive(self, ctx, tys[0 .. fields.len + w - 1], next.items, m)) return false;
+                if (!covers(self, ctx, tys[0 .. fields.len + w - 1], next.items, m, nq.items)) return false;
             }
             return true;
         },
@@ -378,9 +429,11 @@ fn exhaustive(self: *Resolver, ctx: *FnCtx, cols: []const StaticPool.Index, rows
             const one: i128 = 1;
             const min: i128 = if (it.signedness == .signed) -(one << (bits - 1)) else 0;
             const max: i128 = if (it.signedness == .signed) (one << (bits - 1)) - 1 else (one << bits) - 1;
+            const qi = if (p == 0) null else interval(self, ctx, p) orelse return false;
             var cuts: std.ArrayList(i128) = .empty;
             defer cuts.deinit(self.alloc);
             cuts.append(self.alloc, min) catch @panic("OOM");
+            if (qi) |iv| cuts.appendSlice(self.alloc, &.{ iv[0], iv[1] +| 1 }) catch @panic("OOM");
             for (0..flat.items.len / w) |r| if (flat.items[r * w] != 0) if (interval(self, ctx, flat.items[r * w])) |iv| {
                 cuts.appendSlice(self.alloc, &.{ iv[0], iv[1] +| 1 }) catch @panic("OOM");
             };
@@ -392,16 +445,17 @@ fn exhaustive(self: *Resolver, ctx: *FnCtx, cols: []const StaticPool.Index, rows
                     hi = @min(c - 1, max);
                     break;
                 };
+                if (qi) |iv| if (lo < iv[0] or hi > iv[1]) continue;
                 next.clearRetainingCapacity();
                 var m: usize = 0;
                 for (0..flat.items.len / w) |r| {
-                    const p = flat.items[r * w];
-                    const iv = if (p == 0) null else interval(self, ctx, p);
-                    if (p != 0 and (iv == null or iv.?[0] > lo or iv.?[1] < hi)) continue;
+                    const rp = flat.items[r * w];
+                    const iv = if (rp == 0) null else interval(self, ctx, rp);
+                    if (rp != 0 and (iv == null or iv.?[0] > lo or iv.?[1] < hi)) continue;
                     next.appendSlice(self.alloc, flat.items[r * w + 1 ..][0 .. w - 1]) catch @panic("OOM");
                     m += 1;
                 }
-                if (!exhaustive(self, ctx, cols[1..], next.items, m)) return false;
+                if (!covers(self, ctx, cols[1..], next.items, m, qs.items[1..w])) return false;
             }
             return true;
         },
@@ -411,7 +465,7 @@ fn exhaustive(self: *Resolver, ctx: *FnCtx, cols: []const StaticPool.Index, rows
                 next.appendSlice(self.alloc, flat.items[r * w + 1 ..][0 .. w - 1]) catch @panic("OOM");
                 m += 1;
             };
-            return exhaustive(self, ctx, cols[1..], next.items, m);
+            return covers(self, ctx, cols[1..], next.items, m, qs.items[1..w]);
         },
     }
 }
@@ -478,30 +532,6 @@ fn interval(self: *Resolver, ctx: *FnCtx, p: NodeId) ?[2]i128 {
     const lo = if (g.lo == 0) std.math.minInt(i128) else statics.static_int(self, ctx, g.lo) orelse return null;
     const hi = if (g.hi == 0) std.math.maxInt(i128) else (statics.static_int(self, ctx, g.hi) orelse return null) - @intFromBool(!g.incl);
     return .{ lo, hi };
-}
-
-fn case_base(self: *Resolver, variant: StaticPool.Index, st: StaticPool.Index) ?u64 {
-    const sp = &self.static_pool;
-    if (variant == st) return 0;
-    if (st == .none or sp.tag(st) != .variant_union_type) return null;
-    var base: u64 = 0;
-    for (sp.get(st).variant_union_type) |m| {
-        if (m == variant) return base;
-        base += sp.get(m).variant_type.cases.len;
-    }
-    return null;
-}
-
-fn case_bit(self: *Resolver, case: StaticPool.Index, st: StaticPool.Index) u64 {
-    const c = self.static_pool.get(case).variant_case_type;
-    const bit = (case_base(self, c.variant, st) orelse return 0) + c.case;
-    return if (bit < 64) @as(u64, 1) << @intCast(bit) else 0;
-}
-
-fn member_bits(self: *Resolver, member: StaticPool.Index, st: StaticPool.Index) u64 {
-    const base = case_base(self, member, st) orelse return 0;
-    const n = self.static_pool.get(member).variant_type.cases.len;
-    return if (base + n > 64) 0 else (@as(u64, std.math.maxInt(u64)) >> @intCast(64 - n)) << @intCast(base);
 }
 
 pub fn is_ptr_array(self: *Resolver, t0: StaticPool.Index) bool {

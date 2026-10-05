@@ -803,7 +803,6 @@ fn arith(k: Kind) ?Op {
         .binary_num_and => .bit_and,
         .binary_num_or => .bit_or,
         .binary_num_xor => .bit_xor,
-        .binary_pow => .pow,
         .binary_eq => .eq,
         .binary_neq => .ne,
         .binary_less => .lt,
@@ -991,11 +990,17 @@ fn assign(self: *HighLowerer, n0: NodeId) void {
     const values = parts.values;
     if (parts.assignees.len == 1 and self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, parts.assignees[0]) == .none) return self.store_to(parts.assignees[0], self.expr_to(values[0], self.ty(parts.assignees[0])));
     const shared = if (values.len == 1) self.expr(values[0]) else Ref.none;
+    var xs: [64]Ref = undefined;
     for (parts.assignees, 0..) |id, i| {
         const d = self.decl(id);
         if (d == .none or (self.r.decl_pool.flags()[@intFromEnum(d)].is_stc and self.r.decl_pool.values()[@intFromEnum(d)] != .none)) continue;
         const t = self.var_ty(@intFromEnum(d));
-        const x = if (values.len == 0) (if (self.aggregate(t) and !self.global_of.contains(d)) self.default_value(t) else Ref.none) else if (values.len > 1) self.expr_to(values[i], t) else self.coerce(shared, self.ty(values[0]), t);
+        xs[i] = if (values.len == 0) (if (self.aggregate(t) and !self.global_of.contains(d)) self.default_value(t) else Ref.none) else if (values.len > 1) self.expr_to(values[i], t) else self.coerce(shared, self.ty(values[0]), t);
+    }
+    for (parts.assignees, 0..) |id, i| {
+        const d = self.decl(id);
+        if (d == .none or (self.r.decl_pool.flags()[@intFromEnum(d)].is_stc and self.r.decl_pool.values()[@intFromEnum(d)] != .none)) continue;
+        const x = xs[i];
         if (self.r.decl_pool.nodes()[@intFromEnum(d)] != n) {
             self.store_var(d, x);
         } else if (self.global_of.get(d)) |g| {
@@ -1570,6 +1575,11 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
     if (self.realized(n)) |f| return self.fn_value(f);
     const d = self.decl(n);
     if (d != .none and self.r.decl_pool.kinds()[@intFromEnum(d)].is_fn()) return self.direct(d, callee, args, t);
+    if (d == .none and self.r.tree.kind(callee) == .member) switch (self.r.builtin_of(callee, self.ty(self.r.tree.arg(callee, 0)), t)) {
+        .builtin_init => return self.default_value(t),
+        .builtin_deinit => return unit(),
+        else => {},
+    };
     const ct = self.ty(callee);
     if (self.sp.tag(ct) == .meta_type or self.sp.tag(ct) == .variant_case_type) return self.construct(t, args);
     const f = self.expr(callee);
