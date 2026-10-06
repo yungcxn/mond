@@ -168,7 +168,7 @@ type Forth = *(
         } else if self.is(s, e, "*".&) {
             i64 b = self.pop();
             i64 a = self.pop();
-            self.push(a *% b);
+            self.push(a * b);
         } else if self.is(s, e, "/".&) {
             i64 b = self.pop();
             i64 a = self.pop();

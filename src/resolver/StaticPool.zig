@@ -256,14 +256,6 @@ pub const Key = union(enum) {
     function: DeclPool.Index,
 };
 
-// needed to map templates / generics to realizations
-// - e.g. of a `stcfun`, or of a function with unlengthed array param., or abstract types
-// - since the arguments are one pool index, the whole key is 8 bytes and compares as one.
-pub const AbstractKey = packed struct(u64) {
-    generic_tuple: DeclPool.Index,
-    args_tuple: Index, // due to them being a single `static_pool` index
-};
-
 pub const TagProperties = packed struct(u16) {
     is_type: bool = false,
     is_value: bool = false,
@@ -305,11 +297,6 @@ map: std.HashMapUnmanaged(Index, void, IndexContext, std.hash_map.default_max_lo
 // memoized layouts, one row per pool entry, filled lazily the first time a size is asked.
 // most types (all static-only ones) never get asked, so they cost nothing but the row.
 layouts: SoD(Layout),
-
-// FROM Resolver originally
-// covers templates / generics -> resulting type / function / value.
-// - covers `stcfun` calls and functions compiled per array length (args = the tuple of lengths).
-realized_abstracts: std.AutoHashMapUnmanaged(AbstractKey, Index),
 
 // lists rebuilt by `apply_vars`, nested ones stack above, read by index as the buffer may move
 scratch: DynBuf(Index),
@@ -501,7 +488,6 @@ pub fn init(alloc: std.mem.Allocator) StaticPool {
         .var_bits = .init(alloc, 16),
         .map = .empty,
         .layouts = .init(alloc, 1024),
-        .realized_abstracts = .empty,
         .scratch = .init(alloc, 64),
     };
     for ([_]u16{ 8, 16, 32, 64, 8, 16, 32, 64 }, 0..) |bits, i| _ = self.intern(.{ .int_type = .{ .signedness = if (i < 4) .unsigned else .signed, .bits = bits } });
@@ -520,7 +506,6 @@ pub fn deinit(self: *StaticPool) void {
     self.var_bits.deinit();
     self.map.deinit(self.alloc);
     self.layouts.deinit();
-    self.realized_abstracts.deinit(self.alloc);
     self.scratch.deinit();
 }
 
@@ -580,12 +565,27 @@ pub fn array_elem(self: *const StaticPool, t: Index) Index {
     return if (t != .none and self.tag(t) == .array_type) self.get(t).array_type.elem else .none;
 }
 
-pub fn ptr_mut(self: *StaticPool, t: Index) Index {
-    return self.intern(.{ .ptr_type = .{ .child = t, .mutable = true } });
+pub fn ptr_of(self: *StaticPool, child: Index, mutable: bool) Index {
+    return self.intern(.{ .ptr_type = .{ .child = child, .mutable = mutable } });
+}
+
+pub fn array_of(self: *StaticPool, len: u64, elem: Index) Index {
+    return self.intern(.{ .array_type = .{ .len = self.intern(.{ .int = .{ .ty = .u64_type, .bits = len } }), .elem = elem } });
+}
+
+// the length of an array type when it is static
+pub fn static_len(self: *const StaticPool, t: Index) ?u64 {
+    if (t == .none or t == .poison_type or self.tag(t) != .array_type) return null;
+    const len = self.get(t).array_type.len;
+    return if (self.tag(len) == .int_value) self.get(len).int.bits else null;
 }
 
 pub fn fresh_var(self: *StaticPool, vars: *AbstractPool, origin: u32) Index {
     return self.intern(.{ .abstract_type = vars.fresh(origin) });
+}
+
+pub fn field_type(self: *const StaticPool, rec: Index, i: usize) Index {
+    return self.get(rec).custom_type.field_types[i];
 }
 
 pub fn method_decl(self: *const StaticPool, m: @FieldType(Member, "trait_method")) DeclPool.Index {
@@ -690,6 +690,94 @@ pub fn open_type_var(self: *const StaticPool, t: Index) bool {
         } else self.open_type_var(f.ret),
         else => false,
     };
+}
+
+// poison or a type made of poison
+pub fn poisoned(self: *const StaticPool, t: Index) bool {
+    if (t == .none) return false;
+    return t == .poison_type or switch (self.get(t)) {
+        .array_type => |a| a.len == .poison_type or self.poisoned(a.elem),
+        .ptr_type => |p| self.poisoned(p.child),
+        else => false,
+    };
+}
+
+pub fn length_generic(self: *StaticPool, vars: *AbstractPool, ty: Index) bool {
+    if (ty == .none or self.tag(ty) != .function_type) return false;
+    for (0..self.get(ty).function_type.params.len) |i| {
+        const p = self.get(ty).function_type.params[i];
+        if (self.has_vars(self.apply_vars(vars, p)) or self.tag(p) == .meta_type or self.templated(p) != .none) return true;
+    }
+    return false;
+}
+
+pub fn only_templates(self: *const StaticPool, ty: Index) bool {
+    for (self.get(ty).function_type.params) |p| if (self.generic_slot(p) and self.templated(p) == .none) return false;
+    return true;
+}
+
+// parameters a function is realized for: unlengthed arrays (per length), `type` parameters (per type) and templates (per realization)
+pub fn generic_slot(self: *const StaticPool, p: Index) bool {
+    return self.has_vars(p) or self.tag(p) == .meta_type or self.templated(p) != .none;
+}
+
+pub fn unwrapped(self: *StaticPool, vars: *AbstractPool, t0: Index) Index {
+    const t = self.deref(vars, t0);
+    return if (self.tag(t) == .variant_case_type) self.get(t).variant_case_type.variant else t;
+}
+
+// the declaration of a nominal type, also through a pointer or a case
+pub fn nominal_decl(self: *StaticPool, vars: *AbstractPool, t0: Index) DeclPool.Index {
+    return switch (self.get(self.unwrapped(vars, t0))) {
+        .custom_type => |c| c.decl,
+        .variant_type => |v| v.decl,
+        .trait_type => |x| x.decl,
+        else => .none,
+    };
+}
+
+// the static length an argument gives an unlengthed parameter (`&[5]u32` for `&[]u32`), or none
+pub fn arg_len(self: *StaticPool, vars: *AbstractPool, t0: Index, p0: Index) Index {
+    var t = self.apply_vars(vars, t0);
+    var p = p0;
+    if (t == .poison_type) return .none;
+    if (self.get(p) == .ptr_type) {
+        if (self.get(t) != .ptr_type or (self.get(p).ptr_type.mutable and !self.get(t).ptr_type.mutable)) return .none;
+        t = self.get(t).ptr_type.child;
+        p = self.get(p).ptr_type.child;
+    }
+    if (self.get(t) != .array_type or self.get(p) != .array_type or self.get(t).array_type.elem != self.get(p).array_type.elem) return .none;
+    const len = self.get(t).array_type.len;
+    return if (self.tag(len) == .int_value or len == dyn_len) len else .none;
+}
+
+// what `??` / `?<-` unwrap: the payload of a case, or of the first case that has one
+pub fn payload_of(self: *StaticPool, vars: *AbstractPool, t0: Index) Index {
+    const t = self.apply_vars(vars, t0);
+    const case = switch (self.tag(t)) {
+        .variant_case_type => t,
+        .variant_type => self.payload_case(t),
+        else => .none,
+    };
+    if (case == .none) return .none;
+    const p = self.get(case).variant_case_type.payload;
+    if (p == .none) return .none;
+    const f = self.get(p).custom_type.field_types;
+    return if (f.len == 1) f[0] else p;
+}
+
+pub fn elem_ptr(self: *StaticPool, vars: *AbstractPool, t0: Index) bool {
+    if (t0 == .poison_type or t0 == .none) return false;
+    const t = self.apply_vars(vars, t0);
+    return self.is_ptr(t) and self.get(self.pointee(t)) != .array_type;
+}
+
+pub fn elem_type(self: *StaticPool, vars: *AbstractPool, t0: Index) Index {
+    if (t0 == .none) return .none;
+    const t = self.apply_vars(vars, t0);
+    if (self.tag(t) != .array_type) return .none;
+    const e = self.get(t).array_type.elem;
+    return if (self.has_vars(e)) .none else e;
 }
 
 pub fn implements(self: *const StaticPool, ty: Index, trait: Index) bool {
@@ -1174,7 +1262,7 @@ pub fn cast(self: *StaticPool, from: Index, to: Index) CastKind {
             .bit_reinterpret,
         .array_type => |a| blk: {
             const src = if (f == .ptr_type) f.ptr_type.child else from;
-            const sized = self.get(src) == .array_type and self.tag(self.get(src).array_type.len) == .int_value;
+            const sized = self.static_len(src) != null;
             break :blk if (self.elem_of(src) != a.elem or self.tag(a.len) != .int_value or f != .ptr_type and !sized or self.longer(to, src)) .invalid else .array_narrow;
         },
         else => .invalid,
@@ -1198,7 +1286,7 @@ pub fn apply_vars(self: *StaticPool, vars: *AbstractPool, index: Index) Index {
     defer self.scratch.head = mark;
     return switch (self.get(index)) {
         .array_type => |a| self.intern(.{ .array_type = .{ .len = self.apply_vars(vars, a.len), .elem = self.apply_vars(vars, a.elem) } }),
-        .ptr_type => |p| self.intern(.{ .ptr_type = .{ .child = self.apply_vars(vars, p.child), .mutable = p.mutable } }),
+        .ptr_type => |p| self.ptr_of(self.apply_vars(vars, p.child), p.mutable),
         .function_type => |f| blk: {
             self.scratch.append(f.params);
             for (mark..self.scratch.head) |i| {

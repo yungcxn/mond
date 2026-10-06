@@ -1,18 +1,15 @@
 const std = @import("std");
 const DynBuf = @import("../ds/dynbuf.zig").DynBuf;
 const ParseTree = @import("../ParseTree.zig");
-const syntax = @import("syntax.zig");
 const Resolver = @import("../Resolver.zig");
 const StaticPool = @import("StaticPool.zig");
 const BodyPool = @import("BodyPool.zig");
-const DeclPool = @import("DeclPool.zig");
 const Value = @import("interpreter/Value.zig");
-const places = @import("interpreter/places.zig");
-const control = @import("interpreter/control.zig");
-const calls = @import("interpreter/calls.zig");
-const types = @import("interpreter/types.zig");
-const exprs = @import("checker/exprs.zig");
-const statics = @import("checker/statics.zig");
+const Variables = @import("interpreter/Variables.zig");
+const Flow = @import("interpreter/Flow.zig");
+const Patterns = @import("interpreter/Patterns.zig");
+const Calls = @import("interpreter/Calls.zig");
+const Types = @import("interpreter/Types.zig");
 const Index = StaticPool.Index;
 const NodeId = ParseTree.NodeId;
 const Kind = ParseTree.Node.Kind;
@@ -24,10 +21,8 @@ pub const max_depth: u32 = 256;
 pub const no_cell = std.math.maxInt(u32);
 
 // env: the closure a frame was called through, its captures resolve to the closure's cells
-const Frame = struct { body: BodyPool.Body, base: u32, env: Value = .empty };
+pub const Frame = struct { body: BodyPool.Body, base: u32, env: Value = .empty };
 const Session = struct { ctx: *Resolver.FnCtx, mem: u32, adopted: u32 };
-const Adopted = struct { decl: DeclPool.Index, cell: u32 };
-const Defer = struct { node: NodeId, cell: u32 };
 
 budget: u32 = step_budget,
 depth: u32 = 0,
@@ -39,16 +34,18 @@ frames: DynBuf(Frame),
 mem: DynBuf(Value),
 list: DynBuf(Value),
 ids: DynBuf(Index),
-adopted: DynBuf(Adopted),
-defers: DynBuf(Defer),
 // a block stored into a cell older than its frame stays until that cell is gone
 floor: u32 = 0,
 floor_cell: u32 = no_cell,
-caps: std.AutoHashMapUnmanaged(DeclPool.Index, [2]u32) = .empty,
-cap_list: DynBuf(DeclPool.Index),
+// evaluation by kind of node
+variables: Variables,
+flow: Flow,
+patterns: Patterns = .{},
+calls: Calls = .{},
+types: Types = .{},
 
 pub fn init(a: std.mem.Allocator) Interpreter {
-    return .{ .frames = .init(a, 64), .mem = .init(a, 1024), .list = .init(a, 256), .ids = .init(a, 256), .adopted = .init(a, 16), .defers = .init(a, 16), .cap_list = .init(a, 64) };
+    return .{ .frames = .init(a, 64), .mem = .init(a, 1024), .list = .init(a, 256), .ids = .init(a, 256), .variables = .init(a), .flow = .init(a) };
 }
 
 pub fn deinit(self: *Interpreter) void {
@@ -56,9 +53,8 @@ pub fn deinit(self: *Interpreter) void {
     self.mem.deinit();
     self.list.deinit();
     self.ids.deinit();
-    self.adopted.deinit();
-    self.defers.deinit();
-    self.cap_list.deinit();
+    self.variables.deinit();
+    self.flow.deinit();
 }
 
 pub fn res(self: *Interpreter) *Resolver {
@@ -68,14 +64,14 @@ pub fn res(self: *Interpreter) *Resolver {
 fn open(self: *Interpreter, ctx: *Resolver.FnCtx, body: BodyPool.Body) Session {
     if (self.depth == 0) self.budget = step_budget;
     self.depth += 1;
-    const s = Session{ .ctx = self.ctx, .mem = self.mem.head, .adopted = self.adopted.head };
+    const s = Session{ .ctx = self.ctx, .mem = self.mem.head, .adopted = self.variables.adopted.head };
     self.ctx = ctx;
     self.enter(body);
     return s;
 }
 
 fn close(self: *Interpreter, s: Session) void {
-    places.flush(self, s.adopted);
+    self.variables.flush(s.adopted);
     self.depth -= 1;
     self.frames.head -= 1;
     self.truncate(s.mem);
@@ -86,7 +82,7 @@ pub fn export_(self: *Interpreter, n: NodeId, v: Value) Index {
     return if (self.escapes(v)) self.report(.not_static, n, 0, 0) else self.pool(v);
 }
 
-pub fn static_value(self: *Interpreter, ctx: *Resolver.FnCtx, n: NodeId) Index {
+pub fn eval_static(self: *Interpreter, ctx: *Resolver.FnCtx, n: NodeId) Index {
     if (self.depth == 0) self.root = n;
     const s = self.open(ctx, .{});
     defer self.close(s);
@@ -99,7 +95,7 @@ pub fn static_match(self: *Interpreter, ctx: *Resolver.FnCtx, pat: NodeId, v: In
     if (self.depth == 0) self.root = pat;
     const s = self.open(ctx, .{});
     defer self.close(s);
-    return control.matches(self, pat, Value.of(&self.res().static_pool, v));
+    return self.patterns.matches(pat, Value.of(&self.res().static_pool, v));
 }
 
 pub fn run(self: *Interpreter, ctx: *Resolver.FnCtx, root: NodeId, body: BodyPool.Body) Index {
@@ -165,7 +161,7 @@ pub fn fail(self: *Interpreter, n: NodeId, code: @import("Doctor.zig").Disorder,
 
 // checking is over for evaluated nodes: a failure is diagnosed without poisoning their types, `try_static` may rewind it
 pub fn report(self: *Interpreter, code: @import("Doctor.zig").Disorder, n: NodeId, a: anytype, b: anytype) Index {
-    self.res().doc.h21_report(code, n, a, b);
+    self.res().doc.report(code, n, a, b);
     return .poison_type;
 }
 
@@ -173,12 +169,8 @@ pub fn framed(self: *Interpreter) bool {
     return self.top().body.len != 0;
 }
 
-pub fn hint(self: *Interpreter, n: NodeId) Index {
-    return if (self.framed()) self.info(.ty, n) else self.res().node_type[n];
-}
-
 pub fn checked(self: *Interpreter, n: NodeId) Index {
-    return if (self.framed()) self.info(.ty, n) else exprs.h09_check_expr(self.res(), self.ctx, n, .none);
+    return if (self.framed()) self.info(.ty, n) else self.res().exprs.infer(self.ctx, n, .none);
 }
 
 pub fn info(self: *Interpreter, comptime field: @EnumLiteral(), n: NodeId) @FieldType(BodyPool.NodeInfo, @tagName(field)) {
@@ -286,7 +278,7 @@ pub fn coerce(self: *Interpreter, v: Value, t: Index) Value {
     if (sp.single_payload(t) == .none) return .fit(v, t);
     const case = sp.payload_case(t);
     const rec = sp.get(case).variant_case_type.payload;
-    const x = self.pool(.fit(v, sp.get(rec).custom_type.field_types[0]));
+    const x = self.pool(.fit(v, sp.field_type(rec, 0)));
     const agg = sp.intern(.{ .aggregate = .{ .ty = rec, .elems = &.{x} } });
     return .pooled(sp.intern(.{ .variant_value = .{ .case = case, .payload = agg } }));
 }
@@ -297,7 +289,7 @@ pub fn zero(self: *Interpreter, t: Index) Value {
     if (Value.is_float(t)) return .float(t, 0);
     if (t == .bool_type) return .boolean(false);
     if (t == .none or t == .poison_type) return .empty;
-    if (sp.tag(t) == .record_type) return calls.construct(self, t, &.{});
+    if (sp.tag(t) == .record_type) return self.calls.construct(t, &.{});
     if (sp.tag(t) == .variant_type) return self.zero_case(sp.get(t).variant_type);
     if (sp.tag(t) != .array_type or sp.tag(sp.get(t).array_type.len) != .int_value) return .empty;
     const n: u32 = @intCast(sp.get(sp.get(t).array_type.len).int.bits);
@@ -315,49 +307,9 @@ fn zero_case(self: *Interpreter, v: StaticPool.VariantType) Value {
     var payload: Index = .none;
     for (v.cases) |c| {
         const cs = sp.get(c).variant_case_type;
-        if (v.tag_mode == .self and cs.payload != .none) payload = c else if (sp.tag(cs.tag) == .int_value and sp.get(cs.tag).int.bits == 0) return calls.construct(self, c, &.{});
+        if (v.tag_mode == .self and cs.payload != .none) payload = c else if (sp.tag(cs.tag) == .int_value and sp.get(cs.tag).int.bits == 0) return self.calls.construct(c, &.{});
     }
-    return if (payload != .none) calls.construct(self, payload, &.{}) else .empty;
-}
-
-pub fn captures(self: *Interpreter, d: DeclPool.Index) []const DeclPool.Index {
-    if (self.caps.get(d)) |c| return self.cap_list.buf[c[0]..][0..c[1]];
-    const start = self.cap_list.head;
-    self.res().bodies.captures(&self.res().decl_pool, d, &self.cap_list);
-    self.caps.put(self.frames.alloc, d, .{ start, self.cap_list.head - start }) catch @panic("OOM");
-    return self.cap_list.buf[start..self.cap_list.head];
-}
-
-// a closure holds a pointer to a mutable or aggregate local, a copy of anything else
-fn by_ref(self: *Interpreter, c: DeclPool.Index) bool {
-    const r = self.res();
-    const sp = &r.static_pool;
-    const t = sp.apply_vars(&r.abstract_pool, r.decl_pool.tys()[@intFromEnum(c)]);
-    return r.decl_pool.flags()[@intFromEnum(c)].is_mut or t != .none and (sp.tag(t) == .record_type or sp.tag(t) == .array_type and sp.get(t).array_type.len != StaticPool.dyn_len);
-}
-
-// a function as a value: with captures a block of the function and its environment, like the lowerer's closure
-pub fn closure(self: *Interpreter, d: DeclPool.Index) Value {
-    const r = self.res();
-    const f: Value = .of(&r.static_pool, r.decl_pool.values()[@intFromEnum(d)]);
-    const caps = self.captures(d);
-    if (caps.len == 0) return f;
-    const at = self.alloc(@intCast(caps.len + 1));
-    self.mem.buf[at] = f;
-    for (caps, 1..) |c, i| {
-        const s = places.slot(self, c);
-        const x: Value = if (s != null and self.by_ref(c)) .ref(r.static_pool.ptr_mut(r.decl_pool.tys()[@intFromEnum(c)]), s.?) else self.own(places.peek(self, c));
-        self.mem.buf[at + i] = x;
-    }
-    return .block(r.decl_pool.tys()[@intFromEnum(d)], at, @intCast(caps.len + 1));
-}
-
-// the cell of a capture of the closure a frame runs in
-pub fn captured(self: *Interpreter, f: Frame, d: DeclPool.Index) ?u32 {
-    if (!f.env.is_heap() or f.body.decl == .none) return null;
-    const k = std.mem.indexOfScalar(DeclPool.Index, self.captures(f.body.decl), d) orelse return null;
-    const c = f.env.at() + 1 + @as(u32, @intCast(k));
-    return if (self.mem.buf[c].is_ref() and self.by_ref(d)) self.mem.buf[c].at() else c;
+    return if (payload != .none) self.calls.construct(payload, &.{}) else .empty;
 }
 
 pub fn eval(self: *Interpreter, n: NodeId) Value {
@@ -373,44 +325,44 @@ pub fn eval(self: *Interpreter, n: NodeId) Value {
     const a0 = r.tree.arg(n, 0);
     const a1 = r.tree.arg(n, 1);
     return switch (k) {
-        .int, .char, .float, .string, .boolean_true, .boolean_false => .fit(.of(sp, statics.literal_value(r, n, false)), self.hint(n)),
-        .neg_num => if (syntax.is_literal(r.tree, n)) .fit(.of(sp, statics.literal_value(r, a0, true)), self.hint(n)) else self.unary(n, k, self.eval(a0)),
+        .int, .char, .float, .string, .boolean_true, .boolean_false => .fit(.of(sp, r.statics.literal_value(n, false)), self.info(.ty, n)),
+        .neg_num => if (r.tree.is_literal(n)) .fit(.of(sp, r.statics.literal_value(a0, true)), self.info(.ty, n)) else self.unary(n, k, self.eval(a0)),
         .neg_logic => self.unary(n, k, self.eval(a0)),
         .capture, .do => self.eval(a0),
-        .ret, .ret_void, .brk, .cont => control.jump(self, n, k),
-        .identifier, .identifier_self => places.load(self, n),
-        .block => control.block(self, n),
-        .def_var, .assign, .assign_typed, .mod_pub, .mod_mut, .mod_stc => places.declare(self, n),
-        .inc_prefix, .dec_prefix, .inc_postfix, .dec_postfix, .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => places.update(self, n, k),
+        .ret, .ret_void, .brk, .cont => self.flow.jump(n, k),
+        .identifier, .identifier_self => self.variables.load(n),
+        .block => self.flow.block(n),
+        .def_var, .assign, .assign_typed, .mod_pub, .mod_mut, .mod_stc => self.variables.declare(n),
+        .inc_prefix, .dec_prefix, .inc_postfix, .dec_postfix, .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => self.variables.update(n, k),
         .binary_logic_and, .binary_logic_or => blk: {
             const l = self.eval(a0);
             break :blk if (l.ty == .bool_type and (l.bits != 0) == (k == .binary_logic_or)) l else self.arith(n, k, l, self.eval(a1));
         },
-        .binary_add, .binary_sub, .binary_mul, .binary_add_wrap, .binary_sub_wrap, .binary_mul_wrap, .binary_div, .binary_mod, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_eq, .binary_neq, .binary_less, .binary_greater, .binary_less_eq, .binary_greater_eq, .binary_logic_xor => self.arith(n, k, self.eval(a0), self.eval(a1)),
-        .if_then, .stcif_then, .if_else, .stcif_else => control.branch(self, n, k),
-        .match, .stcmatch => control.match(self, n),
-        .for_seq, .stcfor_seq, .for_var_in_seq, .stcfor_var_in_seq, .@"while", .stcwhile, .while_with_repeat_stmt, .stcwhile_with_repeat_stmt, .loop, .stcloop, .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => control.loop(self, n),
-        .selftag_unwrap, .selftag_unwrap_fallback, .selftag_arrow, .labelarrow => control.unwrap(self, n),
+        .binary_add, .binary_sub, .binary_mul, .binary_div, .binary_mod, .binary_shift_left, .binary_shift_right, .binary_num_or, .binary_num_xor, .binary_num_and, .binary_eq, .binary_neq, .binary_less, .binary_greater, .binary_less_eq, .binary_greater_eq, .binary_logic_xor => self.arith(n, k, self.eval(a0), self.eval(a1)),
+        .if_then, .stcif_then, .if_else, .stcif_else => self.flow.branch(n),
+        .match, .stcmatch => self.patterns.match(n),
+        .for_seq, .stcfor_seq, .for_var_in_seq, .stcfor_var_in_seq, .@"while", .stcwhile, .while_with_repeat_stmt, .stcwhile_with_repeat_stmt, .loop, .stcloop, .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => self.flow.loop(n),
+        .selftag_unwrap, .selftag_unwrap_fallback, .selftag_arrow, .labelarrow => self.flow.unwrap(n),
         .array, .array_empty => self.array(n),
         .array_index => self.index(n),
-        .member => calls.member(self, n),
-        .fun_call => calls.call(self, n),
-        .with => calls.with(self, n),
-        .address_of => places.address(self, n),
-        .dereference => places.dereference(self, n),
-        .deinit => places.deinit(self, n),
-        .@"defer", .inlined_defer_deinit => control.defer_(self, n, k),
-        .as => types.cast(self, n),
-        .asbits => types.asbits(self, n),
-        .oftype => types.oftype(self, n),
-        .sizeof => types.sizeof(self, n),
-        else => types.static(self, n, k),
+        .member => self.calls.member(n),
+        .fun_call => self.calls.call(n),
+        .with => self.calls.with(n),
+        .address_of => self.variables.address(n),
+        .dereference => self.variables.dereference(n),
+        .deinit => self.variables.deinit_assignable(n),
+        .@"defer", .inlined_defer_deinit => self.flow.defer_(n, k),
+        .as => self.types.cast(n),
+        .asbits => self.types.asbits(n),
+        .oftype => self.types.oftype(n),
+        .sizeof => self.types.sizeof(n),
+        else => self.types.static(n, k),
     };
 }
 
 fn unary(self: *Interpreter, n: NodeId, k: Kind, v: Value) Value {
     if (v.is(.poison_type)) return v;
-    return Value.unary(k, v, self.hint(n)) catch |e| self.fail(n, if (e == error.Invalid) .static_eval_failed else .not_static, self.pool(v), 0);
+    return Value.unary(k, v, self.info(.ty, n)) catch |e| self.fail(n, if (e == error.Invalid) .static_eval_failed else .not_static, self.pool(v), 0);
 }
 
 pub fn arith(self: *Interpreter, n: NodeId, k: Kind, a: Value, b: Value) Value {
@@ -422,15 +374,15 @@ pub fn arith(self: *Interpreter, n: NodeId, k: Kind, a: Value, b: Value) Value {
     if (a.is_ref() and b.is_ref()) return Value.binary(k, .int(.u64_type, a.at()), .int(.u64_type, b.at()), .bool_type) catch self.fail(n, .not_static, 0, 0);
     const x: Value = if (a.is_heap()) .pooled(self.pool(a)) else a;
     const y: Value = if (b.is_heap()) .pooled(self.pool(b)) else b;
-    return Value.binary(k, x, y, self.hint(n)) catch |e| self.fail(n, if (e == error.Invalid) .static_eval_failed else .not_static, self.pool(x), self.pool(y));
+    return Value.binary(k, x, y, self.info(.ty, n)) catch |e| self.fail(n, if (e == error.Invalid) .static_eval_failed else .not_static, self.pool(x), self.pool(y));
 }
 
 fn array(self: *Interpreter, n: NodeId) Value {
     const r = self.res();
     const elems = if (r.tree.kind(n) == .array) r.tree.manychildren(n) else &[_]NodeId{};
     const len: u32 = @intCast(elems.len);
-    const ct = r.static_pool.apply_vars(&r.abstract_pool, self.hint(n));
-    var et = types.elem_type(self, ct);
+    const ct = r.static_pool.apply_vars(&r.abstract_pool, self.info(.ty, n));
+    var et = r.static_pool.elem_type(&r.abstract_pool, ct);
     const at = self.alloc(len);
     for (elems, 0..) |e, i| {
         const x = self.eval(e);
@@ -438,8 +390,8 @@ fn array(self: *Interpreter, n: NodeId) Value {
         self.fill(at + i, x, et);
     }
     const whole = et != .none and !r.static_pool.has_vars(ct);
-    if (et == .none) et = types.joined(self, self.mem.buf[at..][0..len]);
-    return .block(if (whole) ct else types.array_type(self, len, et), at, len);
+    if (et == .none) et = self.types.joined(self.mem.buf[at..][0..len]);
+    return .block(if (whole) ct else self.res().static_pool.array_of(len, et), at, len);
 }
 
 fn index(self: *Interpreter, n: NodeId) Value {

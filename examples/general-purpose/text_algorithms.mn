@@ -190,7 +190,7 @@ fun run_length = (&[]u8 s, *[32]u8 out) -> u32 {
 
 fun sum_bytes = (&[]u8 s, u32 n) -> u32 {
     mut u32 t = 0;
-    for i in 0..<n: t = t *% 131 +% s.*[i] as u32;
+    for i in 0..<n: t = t * 131 + s.*[i] as u32;
     ret t;
 }
 

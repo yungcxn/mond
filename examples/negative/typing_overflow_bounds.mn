@@ -1,14 +1,14 @@
-# folded constant arithmetic: results at the exact edge pass, one past is an error
+# folded constant arithmetic: one past the edge wraps, a shift past the width or a division by zero has no value
 stc u8 A0 = 254 + 1; #= A0 255
-stc u8 A1 = 255 + 1; #! static_eval_failed
+stc u8 A1 = 255 + 1; #= A1 0
 stc i8 A2 = 127 - 0; #= A2 127
 stc i8 A3 = -128 + 0; #= A3 -128
 stc i8 A4 = -127 - 1; #= A4 -128
-stc i8 A5 = -127 - 2; #! static_eval_failed
+stc i8 A5 = -127 - 2; #= A5 127
 stc u16 M0 = 255 * 257; #= M0 65535
-stc u16 M1 = 256 * 256; #! static_eval_failed
+stc u16 M1 = 256 * 256; #= M1 0
 stc i16 M2 = -128 * 256; #= M2 -32768
-stc i16 M3 = 128 * 256; #! static_eval_failed
+stc i16 M3 = 128 * 256; #= M3 -32768
 stc u32 S0 = 1 << 31; #= S0 2147483648
 stc u32 S1 = 1 << 32; #! static_eval_failed
 stc u8 S2 = 1 << 8; #! static_eval_failed
@@ -21,29 +21,28 @@ stc u32 D1 = 7 % 0; #! static_eval_failed
 stc i32 D2 = -7 / 2; #= D2 -3
 stc i32 D3 = -7 % 2; #= D3 -1
 stc u32 Z0 = 0 - 0; #= Z0 0
-stc u32 Z1 = 0 - 1; #! static_eval_failed
+stc u32 Z1 = 0 - 1; #= Z1 4294967295
 stc u64 U0 = 18446744073709551614 + 1; #= U0 18446744073709551615
-stc u64 U1 = 18446744073709551615 + 1; #! static_eval_failed
+stc u64 U1 = 18446744073709551615 + 1; #= U1 0
 stc i64 I0 = 9223372036854775807 - 1 + 1; #= I0 9223372036854775807
-stc i64 I1 = 9223372036854775807 + 1; #! static_eval_failed
+stc i64 I1 = 9223372036854775807 + 1; #= I1 -9223372036854775808
 stc i64 I2 = -9223372036854775807 - 1; #= I2 -9223372036854775808
-stc i64 I3 = -9223372036854775807 - 2; #! static_eval_failed
+stc i64 I3 = -9223372036854775807 - 2; #= I3 9223372036854775807
 stc i32 N0 = -(-2147483647); #= N0 2147483647
 stc u8 X0 = 0xF0 | 0x0F; #= X0 255
 stc u8 X1 = 0xFF ^ 0x0F; #= X1 240
 stc u8 X2 = !0x0F; #= X2 240
 stc i8 X3 = !0; #= X3 -1
 
-# a nested fold reports once, at the operation that leaves the range
-stc u8 C0 = (200 + 100) - 100; #! static_eval_failed
+# a nested fold wraps at every step
+stc u8 C0 = (200 + 100) - 100; #= C0 200
 stc u8 C1 = 200 + (100 - 50); #= C1 250
 
 fun runtime = (u8 n) {
     u8 r0 = n + 255;
-    u8 r1 = 128 * 2; #! static_eval_failed
-    u8 r2 = 128 *% 2;
+    u8 r1 = 128 * 2;
     i8 r3 = -64 * 2;
-    i8 r4 = -64 * 3; #! static_eval_failed
+    i8 r4 = -64 * 3;
 }
 
 $main = () {}

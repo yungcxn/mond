@@ -33,8 +33,8 @@ type Machine = *(&[]u8 prog, mut [64]u8 tape, mut u32 ptr, mut u32 pc, mut [16]u
             match self.prog.*[self.pc] {
                 '>' => self.ptr += 1,
                 '<' => self.ptr -= 1,
-                '+' => self.tape[self.ptr] = self.tape[self.ptr] +% 1,
-                '-' => self.tape[self.ptr] = self.tape[self.ptr] -% 1,
+                '+' => self.tape[self.ptr] = self.tape[self.ptr] + 1,
+                '-' => self.tape[self.ptr] = self.tape[self.ptr] - 1,
                 '.' => {
                     self.out[self.outn] = self.tape[self.ptr];
                     self.outn += 1;

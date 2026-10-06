@@ -1,45 +1,45 @@
 stcfun wrap_u8 = () -> u32 {
     u8 a = 250;
-    u8 b = a +% 10;
-    u8 c = 3 -% a;
-    u8 d = a *% 2;
+    u8 b = a + 10;
+    u8 c = 3 - a;
+    u8 d = a * 2;
     ret b as u32 * 1000000 + c as u32 * 1000 + d as u32;
 }
 
 stcfun wrap_i8 = () -> i32 {
     i8 c = -128;
-    i8 d = c -% 1;
-    i8 e = c *% -1;
+    i8 d = c - 1;
+    i8 e = c * -1;
     ret d as i32 * 1000 + e as i32;
 }
 
 stcfun wrap_u16 = () -> u32 {
     u16 a = 65535;
-    u16 b = a +% 2;
+    u16 b = a + 2;
     u16 c = 0;
-    u16 d = c -% 1;
+    u16 d = c - 1;
     ret b as u32 * 100000 + d as u32 % 100000;
 }
 
 stcfun wrap_u32 = () -> u64 {
     u32 a = 4294967295;
-    u32 b = a +% 1;
-    u32 c = a *% a;
-    u32 d = 0 -% 1;
+    u32 b = a + 1;
+    u32 c = a * a;
+    u32 d = 0 - 1;
     ret b as u64 * 1000000000000 + c as u64 * 10 + (d == a) as u64;
 }
 
 stcfun wrap_u64 = () -> u64 {
     u64 a = 18446744073709551615;
-    u64 b = a +% 1;
-    u64 c = a *% 3;
+    u64 b = a + 1;
+    u64 c = a * 3;
     ret b + c;
 }
 
 stcfun wrap_i64 = () -> i64 {
     i64 hi = 9223372036854775807;
     i64 lo = -9223372036854775807 - 1;
-    ret (hi +% 1 == lo) as i64 * 10 + (lo -% 1 == hi) as i64;
+    ret (hi + 1 == lo) as i64 * 10 + (lo - 1 == hi) as i64;
 }
 
 stcfun signed_div = () -> i32 {

@@ -163,22 +163,19 @@ pub fn less(a: Value, b: Value) bool {
     return a.f() < b.f();
 }
 
-// integers as their exact value, results that do not fit their type are an overflow
+// integers as their exact value, results wrap around the width of their type
 fn wide(v: Value) i128 {
     return if (signed(v.ty)) @as(i64, @bitCast(v.bits)) else v.bits;
 }
 
-fn exact(r: Index, x: i128) error{ NotStatic, Invalid }!Value {
-    const w: u7 = widths[@intFromEnum(r)];
-    const one: i128 = 1;
-    const ok = if (signed(r)) x >= -(one << (w - 1)) and x < one << (w - 1) else x >= 0 and x < one << w;
-    return if (ok) int(r, @truncate(@as(u128, @bitCast(x)))) else error.Invalid;
+fn wrapped(r: Index, x: i128) Value {
+    return int(r, @truncate(@as(u128, @bitCast(x))));
 }
 
 pub fn unary(k: Kind, v: Value, t: Index) error{ NotStatic, Invalid }!Value {
     if (k == .neg_logic) return if (v.ty == .bool_type) boolean(v.bits == 0) else if (is_int(v.ty)) int(v.ty, ~v.bits) else error.NotStatic;
     if (is_float(v.ty)) return float(v.ty, -v.f());
-    return if (is_int(v.ty)) exact(if (is_int(t)) t else if (signed(v.ty)) v.ty else .i64_type, -wide(v)) else error.NotStatic;
+    return if (is_int(v.ty)) wrapped(if (is_int(t)) t else if (signed(v.ty)) v.ty else .i64_type, -wide(v)) else error.NotStatic;
 }
 
 pub fn binary(k: Kind, a: Value, b: Value, t: Index) error{ NotStatic, Invalid }!Value {
@@ -188,14 +185,11 @@ pub fn binary(k: Kind, a: Value, b: Value, t: Index) error{ NotStatic, Invalid }
         const r = if (is_int(t)) t else a.ty;
         if ((k == .binary_div or k == .binary_mod) and y == 0 or (k == .binary_shift_left or k == .binary_shift_right) and (y < 0 or y >= widths[@intFromEnum(r)])) return error.Invalid;
         return switch (k) {
-            .binary_add => exact(r, x + y),
-            .binary_sub => exact(r, x - y),
-            .binary_mul => exact(r, x * y),
-            .binary_add_wrap => int(r, a.bits +% b.bits),
-            .binary_sub_wrap => int(r, a.bits -% b.bits),
-            .binary_mul_wrap => int(r, a.bits *% b.bits),
-            .binary_div => exact(r, @divTrunc(x, y)),
-            .binary_mod => exact(r, @rem(x, y)),
+            .binary_add => int(r, a.bits +% b.bits),
+            .binary_sub => int(r, a.bits -% b.bits),
+            .binary_mul => int(r, a.bits *% b.bits),
+            .binary_div => wrapped(r, @divTrunc(x, y)),
+            .binary_mod => wrapped(r, @rem(x, y)),
             .binary_shift_left => int(r, a.bits << @intCast(y)),
             .binary_shift_right => int(r, if (signed(a.ty)) @bitCast(@as(i64, @bitCast(a.bits)) >> @intCast(y)) else a.bits >> @intCast(y)),
             .binary_num_or => int(r, a.bits | b.bits),

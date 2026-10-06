@@ -185,7 +185,7 @@ const Tree = struct {
             try s.w.writeAll(reset);
         }
         const d = r.node_decl[idx];
-        if (d != .none) try s.w.print(dim ++ "  → " ++ reset ++ bold ++ "#{d} {s}" ++ reset ++ dim ++ " {s}" ++ reset, .{ @intFromEnum(d), decl_name(r, d), @tagName(r.decl_pool.kinds()[@intFromEnum(d)]) });
+        if (d != .none) try s.w.print(dim ++ "  → " ++ reset ++ bold ++ "#{d} {s}" ++ reset ++ dim ++ " {s}" ++ reset, .{ @intFromEnum(d), decl_name(r, d), @tagName(r.decl_pool.get_kind(d)) });
         if (!s.marked[idx]) return;
         const diags = r.doc.diagnostics.sliced();
         for (diags.node, diags.code, diags.severity, diags.a, diags.b) |n, code, sev, a, b| if (n == idx) {
@@ -196,7 +196,7 @@ const Tree = struct {
 };
 
 fn decl_name(r: *Res, d: DeclPool.Index) []const u8 {
-    const n = r.decl_pool.names()[@intFromEnum(d)];
+    const n = r.decl_pool.get_name(d);
     return if (n == .empty or n == .none) "<anon>" else r.name_pool.get(n);
 }
 
@@ -474,10 +474,10 @@ pub const HighLowerer = struct {
     }
 
     fn nominal(w: *std.Io.Writer, l: *Low, d: DeclPool.Index) !bool {
-        const n = l.r.decl_pool.names()[@intFromEnum(d)];
+        const n = l.r.decl_pool.get_name(d);
         if (n == .empty or n == .none) return false;
         try w.writeAll(l.r.name_pool.get(n));
-        const args = l.r.decl_pool.realized_args.get(d) orelse return true;
+        const args = l.r.generics.realized_args.get(d) orelse return true;
         try w.writeAll("(");
         for (0..l.sp.get(args).aggregate.elems.len) |i| {
             if (i > 0) try w.writeAll(type_col ++ ", ");
@@ -817,7 +817,7 @@ pub const Inspector = struct {
             hit = true;
             try s.w.writeAll(func_col ++ "resolved\n" ++ reset);
             try Resolver.decl_row(s.w, s.r, s.starts, i);
-            try s.subtree(s.r.decl_pool.nodes()[i]);
+            try s.subtree(s.r.decl_pool.get_node(@enumFromInt(i)));
             if (id != null or s.l == null or !s.l.?.next_of.contains(@enumFromInt(i))) try s.lowered(@enumFromInt(i));
         };
         return hit or std.mem.eql(u8, q, "$init") and try s.funcs(.none) > 0;
@@ -870,7 +870,7 @@ pub const Inspector = struct {
                 if (l.ir.globals.pool.init.buf[g] != .none) return;
             }
             if (try s.types(cur) or try s.funcs(cur) > 0) return;
-            if (s.r.decl_pool.kinds()[@intFromEnum(cur)].is_fn()) return s.w.writeAll(dim ++ "  no code: unused or static only\n" ++ reset);
+            if (s.r.decl_pool.get_kind(cur).is_fn()) return s.w.writeAll(dim ++ "  no code: unused or static only\n" ++ reset);
         }
         _ = try s.funcs(.none);
     }
@@ -893,7 +893,7 @@ pub const Inspector = struct {
     }
 
     fn up(s: Inspector, d: DeclPool.Index) DeclPool.Index {
-        const n = s.r.decl_pool.nodes()[@intFromEnum(d)];
+        const n = s.r.decl_pool.get_node(d);
         return if (n < s.parent.len and s.parent[n] != none) s.enclosing(s.parent[n]) else .none;
     }
 
@@ -905,7 +905,7 @@ pub const Inspector = struct {
         const l = s.l.?;
         const h = l.head_of.get(d) orelse d;
         var count: usize = 0;
-        for (l.ir.functions.sliced_field(.decl), 0..) |fd, fi| if (fd == h or fd != .none and s.r.decl_pool.template_of.get(fd) == h) {
+        for (l.ir.functions.sliced_field(.decl), 0..) |fd, fi| if (fd == h or fd != .none and s.r.generics.template_of.get(fd) == h) {
             try HighLowerer.func(s.w, l, fi);
             count += 1;
         };
@@ -913,10 +913,10 @@ pub const Inspector = struct {
     }
 
     fn types(s: Inspector, d: DeclPool.Index) !bool {
-        if (!is_type(s.r.decl_pool.kinds()[@intFromEnum(d)])) return false;
+        if (!is_type(s.r.decl_pool.get_kind(d))) return false;
         for (s.r.decl_pool.entries.sliced_field(.value), 0..) |v, i| {
             const di: DeclPool.Index = @enumFromInt(i);
-            if (v != .none and (di == d or s.r.decl_pool.template_of.get(di) == d)) try HighLowerer.typedef(s.w, s.l.?, v);
+            if (v != .none and (di == d or s.r.generics.template_of.get(di) == d)) try HighLowerer.typedef(s.w, s.l.?, v);
         }
         return true;
     }

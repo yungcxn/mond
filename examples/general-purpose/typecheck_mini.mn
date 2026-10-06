@@ -128,7 +128,7 @@ type Checker = *(
         if c == 'v' {
             u8 d = self.word();
             if d < '0' or d > '9': self.bad = 3;
-            ret self.ex(Ex.Var((d -% '0') as u32));
+            ret self.ex(Ex.Var((d - '0') as u32));
         }
         if c == '+' or c == '<' or c == '=' {
             u32 a = self.parse();

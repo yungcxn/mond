@@ -29,15 +29,20 @@ alloc: std.mem.Allocator,
 list: SoD(Body),
 nodes: SoD(NodeInfo),
 of: std.AutoHashMapUnmanaged(DeclPool.Index, u32) = .empty,
+// the captures of each closure, computed once its body is checked
+caps: std.AutoHashMapUnmanaged(DeclPool.Index, [2]u32) = .empty,
+cap_list: DynBuf(DeclPool.Index),
 
 pub fn init(alloc: std.mem.Allocator) BodyPool {
-    return .{ .alloc = alloc, .list = .init(alloc, 256), .nodes = .init(alloc, 4096) };
+    return .{ .alloc = alloc, .list = .init(alloc, 256), .nodes = .init(alloc, 4096), .cap_list = .init(alloc, 64) };
 }
 
 pub fn deinit(self: *BodyPool) void {
     self.list.deinit();
     self.nodes.deinit();
     self.of.deinit(self.alloc);
+    self.caps.deinit(self.alloc);
+    self.cap_list.deinit();
 }
 
 // `b` with copies of its slice of the node tables
@@ -60,17 +65,20 @@ pub fn get(self: *BodyPool, d: DeclPool.Index) ?Body {
 }
 
 // the locals a function body reads from the bodies around it, its environment as a closure
-pub fn captures(self: *BodyPool, decls: *const DeclPool, d: DeclPool.Index, out: *DynBuf(DeclPool.Index)) void {
-    const start = out.head;
-    const b = self.get(d) orelse return;
+pub fn captures(self: *BodyPool, decls: *const DeclPool, d: DeclPool.Index) []const DeclPool.Index {
+    if (self.caps.get(d)) |c| return self.cap_list.buf[c[0]..][0..c[1]];
+    const b = self.get(d) orelse return &.{};
+    const start = self.cap_list.head;
     for (self.nodes.sliced_field(.decl)[b.start..][0..b.len]) |x| {
-        if (x == .none or std.mem.indexOfScalar(DeclPool.Index, out.buf[start..out.head], x) != null) continue;
-        const flags = decls.flags()[@intFromEnum(x)];
-        const node = decls.nodes()[@intFromEnum(x)];
-        const local = switch (decls.kinds()[@intFromEnum(x)]) {
+        if (x == .none or std.mem.indexOfScalar(DeclPool.Index, self.cap_list.buf[start..self.cap_list.head], x) != null) continue;
+        const flags = decls.get_flags(x);
+        const node = decls.get_node(x);
+        const local = switch (decls.get_kind(x)) {
             .variable, .parameter, .loop_variable, .pattern_binder, .arrow_binder, .autoins_it, .autoins_arg, .self => true,
             else => false,
         };
-        if (local and !flags.is_global and !(flags.is_stc and decls.values()[@intFromEnum(x)] != .none) and (node < b.lo or node >= b.lo + b.len)) out.push(x);
+        if (local and !flags.is_global and !(flags.is_stc and decls.get_value(x) != .none) and (node < b.lo or node >= b.lo + b.len)) self.cap_list.push(x);
     }
+    self.caps.put(self.alloc, d, .{ start, self.cap_list.head - start }) catch @panic("OOM");
+    return self.cap_list.buf[start..self.cap_list.head];
 }

@@ -1,27 +1,24 @@
-stc u8 X = 200 + 100; #! static_eval_failed
+# arithmetic wraps around the width of its type, a shift past the width has no value
+stc u8 X = 200 + 100; #= X 44
 stc u32 A = 1 << 32; #! static_eval_failed
-stc u8 W = 200 +% 100; #= W 44
-stc u32 M = 4294967295 *% 3; #= M 4294967293
+stc u32 M = 4294967295 * 3; #= M 4294967293
 
-stcfun low = (i64 a, i64 b) -> i64: ret a / b; #! static_eval_failed
-stc i64 LO = low(-9223372036854775807 - 1, -1);
-stcfun sq = (i32 x) -> i32: ret x * x; #! static_eval_failed
-stc i32 BIG = sq(100000);
-stc i32 FINE = sq(46340);
-stcfun neg = (i8 x) -> i8: ret -x; #! static_eval_failed
-stc i8 N = neg(-128);
-stcfun inc = () -> u8 { mut u8 x = 255; x++; ret x; } #! static_eval_failed
-stc u8 I = inc();
-stcfun down = () -> u32 { mut u32 x = 0; x -= 1; ret x; } #! static_eval_failed
-stc u32 D = down();
+stcfun low = (i64 a, i64 b) -> i64: ret a / b;
+stc i64 LO = low(-9223372036854775807 - 1, -1); #= LO -9223372036854775808
+stcfun sq = (i32 x) -> i32: ret x * x;
+stc i32 BIG = sq(100000); #= BIG 1410065408
+stc i32 FINE = sq(46340); #= FINE 2147395600
+stcfun neg = (i8 x) -> i8: ret -x;
+stc i8 N = neg(-128); #= N -128
+stcfun inc = () -> u8 { mut u8 x = 255; x++; ret x; }
+stc u8 I = inc(); #= I 0
+stcfun down = () -> u32 { mut u32 x = 0; x -= 1; ret x; }
+stc u32 D = down(); #= D 4294967295
 
 fun runtime = (u32 n) {
-    u8 g = 200 + 100; #! static_eval_failed
-    i32 h = 2147483647 + 1; #! static_eval_failed
-    u32 k = 0 - 1; #! static_eval_failed
-    u8 ok = 200 +% 100;
-    u32 m = n *% 3 +% 1;
-    f32 fl = 1.5 +% 2.0; #! type_mismatch
+    u8 g = 200 + 100;
+    i32 h = 2147483647 + 1;
+    u32 k = 0 - 1;
 }
 
 $main = () {}

@@ -66,7 +66,7 @@ type MinHeap = (u32 CAP): *(mut [CAP]i32 a, mut u32 n) !{
 
 type Table = (u32 CAP): *(mut [CAP]u32 keys, mut [CAP]i32 vals, mut [CAP]bool used, mut u32 count) !{
     fun slot = (u32 key) -> u32 {
-        mut u32 i = key *% 2654435761 % CAP;
+        mut u32 i = key * 2654435761 % CAP;
         while self.used[i] and self.keys[i] != key: i = (i + 1) % CAP;
         ret i;
     }

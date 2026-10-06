@@ -47,7 +47,7 @@ fn run(a: std.mem.Allocator, src: []u8) !Result {
                 const l = try a.create(HighLowerer);
                 l.* = HighLowerer.init(a, r);
                 l.lower();
-                if (try verify(a, l)) |v| try out.append(a, .{ .line = if (v.d == .none) 1 else if (debug.node_span(&parser.tree, src, r.decl_pool.nodes()[@intFromEnum(v.d)])) |s| line_at(src, s[0]) else 1, .code = "invalid_ir", .msg = v.msg });
+                if (try verify(a, l)) |v| try out.append(a, .{ .line = if (v.d == .none) 1 else if (debug.node_span(&parser.tree, src, r.decl_pool.get_node(v.d))) |s| line_at(src, s[0]) else 1, .code = "invalid_ir", .msg = v.msg });
             }
             const d = r.doc.diagnostics.sliced();
             for (d.code, d.node, d.a, d.b) |code, node, x, y| {

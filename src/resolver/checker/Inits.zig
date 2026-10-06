@@ -13,19 +13,18 @@ words: DynBuf(u64),
 base: u32 = 0,
 width: u32 = 1,
 count: u32 = 0,
-// per open loop the set its exits merge into
-exits: DynBuf(u32),
 
 pub const Session = struct { tracked: u32, base: u32, width: u32, count: u32 };
 
 pub fn init(alloc: std.mem.Allocator) Inits {
-    return .{ .tracked = .init(alloc, 64), .words = .init(alloc, 64), .exits = .init(alloc, 16) };
+    var self = Inits{ .tracked = .init(alloc, 64), .words = .init(alloc, 64) };
+    _ = self.new();
+    return self;
 }
 
 pub fn deinit(self: *Inits) void {
     self.tracked.deinit();
     self.words.deinit();
-    self.exits.deinit();
 }
 
 pub fn enter(self: *Inits) Session {

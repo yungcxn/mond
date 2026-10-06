@@ -47,6 +47,16 @@ pub const Entry = struct {
             };
         }
 
+        // the type of a type declared with this kind
+        pub fn meta(kind: Kind, other: StaticPool.Index) StaticPool.Index {
+            return switch (kind) {
+                .record => .type_type,
+                .variant => .variant_type,
+                .trait => .trait_type,
+                else => other,
+            };
+        }
+
         pub fn is_type_decl(kind: Kind) bool {
             return kind == .type_alias or kind == .record or kind == .variant or kind == .trait;
         }
@@ -93,11 +103,6 @@ pub const Index = enum(u32) {
 
 alloc: std.mem.Allocator,
 entries: SoD(Entry),
-// realizations: the template a declaration was realized from and the static arguments it was realized with
-template_of: std.AutoHashMapUnmanaged(Index, Index) = .empty,
-realized_args: std.AutoHashMapUnmanaged(Index, StaticPool.Index) = .empty,
-// functions produced by a stcfun: the realization whose static parameters they see
-static_scope: std.AutoHashMapUnmanaged(Index, StaticPool.AbstractKey) = .empty,
 
 pub inline fn init(alloc: std.mem.Allocator, initial_cap: usize) DeclPool {
     return .{ .alloc = alloc, .entries = SoD(Entry).init(alloc, initial_cap) };
@@ -105,9 +110,6 @@ pub inline fn init(alloc: std.mem.Allocator, initial_cap: usize) DeclPool {
 
 pub inline fn deinit(self: *DeclPool) void {
     self.entries.deinit();
-    self.template_of.deinit(self.alloc);
-    self.realized_args.deinit(self.alloc);
-    self.static_scope.deinit(self.alloc);
 }
 
 pub fn push_decl(
@@ -135,48 +137,71 @@ pub fn push_decl(
     return d;
 }
 
-pub inline fn names(self: *const DeclPool) []NamePool.Index {
-    return self.entries.pool.name.buf;
+pub inline fn get_name(self: *const DeclPool, d: Index) NamePool.Index {
+    return self.entries.pool.name.buf[@intFromEnum(d)];
 }
 
-pub inline fn nodes(self: *const DeclPool) []ParseTree.NodeId {
-    return self.entries.pool.node.buf;
+pub inline fn get_node(self: *const DeclPool, d: Index) ParseTree.NodeId {
+    return self.entries.pool.node.buf[@intFromEnum(d)];
 }
 
-pub inline fn kinds(self: *const DeclPool) []Entry.Kind {
-    return self.entries.pool.kind.buf;
+pub inline fn get_kind(self: *const DeclPool, d: Index) Entry.Kind {
+    return self.entries.pool.kind.buf[@intFromEnum(d)];
 }
 
-pub inline fn flags(self: *const DeclPool) []Entry.Flags {
-    return self.entries.pool.flags.buf;
+pub inline fn get_flags(self: *const DeclPool, d: Index) Entry.Flags {
+    return self.entries.pool.flags.buf[@intFromEnum(d)];
 }
 
-pub inline fn states(self: *const DeclPool) []Entry.State {
-    return self.entries.pool.state.buf;
+pub inline fn set_flags(self: *DeclPool, d: Index, v: Entry.Flags) void {
+    self.entries.pool.flags.buf[@intFromEnum(d)] = v;
 }
 
-pub inline fn tys(self: *const DeclPool) []StaticPool.Index {
-    return self.entries.pool.ty.buf;
+pub inline fn flags_ptr(self: *DeclPool, d: Index) *Entry.Flags {
+    return &self.entries.pool.flags.buf[@intFromEnum(d)];
 }
 
-pub inline fn values(self: *const DeclPool) []StaticPool.Index {
-    return self.entries.pool.value.buf;
+pub inline fn get_state(self: *const DeclPool, d: Index) Entry.State {
+    return self.entries.pool.state.buf[@intFromEnum(d)];
 }
 
-pub inline fn next_overloads(self: *const DeclPool) []Index {
-    return self.entries.pool.next_overload.buf;
+pub inline fn set_state(self: *DeclPool, d: Index, v: Entry.State) void {
+    self.entries.pool.state.buf[@intFromEnum(d)] = v;
+}
+
+pub inline fn state_ptr(self: *DeclPool, d: Index) *Entry.State {
+    return &self.entries.pool.state.buf[@intFromEnum(d)];
+}
+
+pub inline fn get_ty(self: *const DeclPool, d: Index) StaticPool.Index {
+    return self.entries.pool.ty.buf[@intFromEnum(d)];
+}
+
+pub inline fn set_ty(self: *DeclPool, d: Index, v: StaticPool.Index) void {
+    self.entries.pool.ty.buf[@intFromEnum(d)] = v;
+}
+
+pub inline fn get_value(self: *const DeclPool, d: Index) StaticPool.Index {
+    return self.entries.pool.value.buf[@intFromEnum(d)];
+}
+
+pub inline fn set_value(self: *DeclPool, d: Index, v: StaticPool.Index) void {
+    self.entries.pool.value.buf[@intFromEnum(d)] = v;
+}
+
+pub inline fn get_next_overload(self: *const DeclPool, d: Index) Index {
+    return self.entries.pool.next_overload.buf[@intFromEnum(d)];
+}
+
+pub inline fn set_next_overload(self: *DeclPool, d: Index, v: Index) void {
+    self.entries.pool.next_overload.buf[@intFromEnum(d)] = v;
+}
+
+pub inline fn next_overload_ptr(self: *DeclPool, d: Index) *Index {
+    return &self.entries.pool.next_overload.buf[@intFromEnum(d)];
 }
 
 // 1 when the declaration's function type starts with the induced `*Self` (methods except `init`)
 pub fn self_off(self: *const DeclPool, d: Index) usize {
-    return @intFromBool(self.kinds()[@intFromEnum(d)] == .trait_member and self.names()[@intFromEnum(d)] != .init);
-}
-
-// methods: the owning type is the value of the trait body row right before its members; realizations ask their template
-pub fn owner_of(self: *const DeclPool, decl: Index) StaticPool.Index {
-    if (self.template_of.get(decl)) |t| return self.owner_of(t);
-    if (self.kinds()[@intFromEnum(decl)] != .trait_member) return .none;
-    var d = @intFromEnum(decl);
-    while (self.kinds()[d] != .trait) d -= 1;
-    return self.values()[d];
+    return @intFromBool(self.get_kind(d) == .trait_member and self.get_name(d) != .init);
 }

@@ -11,7 +11,7 @@ fun prefix = (&[10]i32 xs) -> [11]i32 {
 
 fun range_sum = (&[11]i32 p, u32 lo, u32 hi) -> i32: ret p.*[hi] - p.*[lo];
 
-fun lowbit = (u32 i) -> u32: ret i & (0 -% i);
+fun lowbit = (u32 i) -> u32: ret i & (0 - i);
 
 type Fenwick = *(mut [11]i32 t) !{
     fun add = (u32 at, i32 d) {

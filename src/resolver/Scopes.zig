@@ -32,13 +32,13 @@ pub fn deinit(self: *Scopes, alloc: std.mem.Allocator) void {
     self.marks.deinit();
 }
 
-pub fn h01_lookup(self: *const Scopes, kinds: []const DeclPool.Entry.Kind, name: NamePool.Index) DeclPool.Index {
+pub fn lookup(self: *const Scopes, decls: *const DeclPool, name: NamePool.Index) DeclPool.Index {
     const names = self.names.sliced();
     var i = names.len;
     var walled = false;
     while (i > 0) {
         i -= 1;
-        if (names[i] == name and (!walled or kinds[@intFromEnum(self.decls.buf[i])].is_type_decl() or kinds[@intFromEnum(self.decls.buf[i])] == .static_function)) return self.decls.buf[i];
+        if (names[i] == name and (!walled or decls.get_kind(self.decls.buf[i]).is_type_decl() or decls.get_kind(self.decls.buf[i]) == .static_function)) return self.decls.buf[i];
         if (names[i] == .none) break; // barrier: a declaration body never sees its user's locals
         walled = walled or names[i] == .wall; // a local type sees only the types and stcfuns of its function
     }
@@ -50,11 +50,11 @@ pub fn bind(self: *Scopes, name: NamePool.Index, d: DeclPool.Index) void {
     self.decls.push(d);
 }
 
-pub fn h03_push_scope(self: *Scopes) void {
+pub fn push(self: *Scopes) void {
     self.marks.push(self.names.head);
 }
 
-pub fn h04_pop_scope(self: *Scopes) void {
+pub fn pop(self: *Scopes) void {
     self.marks.head -= 1;
     self.names.head = self.marks.buf[self.marks.head];
     self.decls.head = self.names.head;

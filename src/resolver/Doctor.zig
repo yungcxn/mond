@@ -63,7 +63,7 @@ diagnostics: SoD(Diagnosis),
 
 const Doctor = @This();
 
-pub fn h21_report(doc: *Doctor, code: Disorder, node: ParseTree.NodeId, a: anytype, b: anytype) void {
+pub fn report(doc: *Doctor, code: Disorder, node: ParseTree.NodeId, a: anytype, b: anytype) void {
     const severity: Disorder.Severity = if (code == .redundant_match_arm) .warning else .@"error";
     doc.diagnostics.push(.{ .code = code, .severity = severity, .node = node, .a = word(a), .b = word(b) });
 }

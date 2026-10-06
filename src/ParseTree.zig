@@ -3,6 +3,8 @@ const SoD = @import("ds/dynbuf.zig").SoD;
 const DynBuf = @import("ds/dynbuf.zig").DynBuf;
 const Lexer = @import("Lexer.zig");
 
+const ParseTree = @This();
+
 pub const NodeId = u32;
 pub const none_node: NodeId = std.math.maxInt(NodeId);
 
@@ -153,9 +155,6 @@ pub const Node = struct {
         .{ "BinaryModulus", "binary_mod", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryShiftLeft", "binary_shift_left", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryShiftRight", "binary_shift_right", struct { lhs: NodeId, rhs: NodeId } },
-        .{ "BinaryWrappingAdd", "binary_add_wrap", struct { lhs: NodeId, rhs: NodeId } },
-        .{ "BinaryWrappingSubtract", "binary_sub_wrap", struct { lhs: NodeId, rhs: NodeId } },
-        .{ "BinaryWrappingMultiply", "binary_mul_wrap", struct { lhs: NodeId, rhs: NodeId } },
         .{ "IdentifierSelf", "identifier_self", .leaf },
         .{ "Identifier", "identifier", .references_token },
         .{ "StringValue", "string", .references_token },
@@ -233,6 +232,220 @@ pub const Node = struct {
         }
         break :blk t;
     };
+
+    pub const nk_props = blk: {
+        var t: [256]Props = @splat(.{});
+
+        for ([_]Kind{
+            .stcif_then,
+            .stcif_else,
+            .stcwhile,
+            .stcwhile_with_repeat_stmt,
+            .stcfor_seq,
+            .stcfor_var_in_seq,
+            .stcloop,
+            .stcloop_with_repeat_stmt,
+            .stcmatch,
+        }) |k| t[@intFromEnum(k)].stc = true;
+
+        for ([_]Kind{
+            .@"while",
+            .while_with_repeat_stmt,
+            .stcwhile,
+            .stcwhile_with_repeat_stmt,
+            .for_seq,
+            .for_var_in_seq,
+            .stcfor_seq,
+            .stcfor_var_in_seq,
+            .loop,
+            .loop_with_repeat_stmt,
+            .stcloop,
+            .stcloop_with_repeat_stmt,
+        }) |k| t[@intFromEnum(k)].loop = true;
+
+        for ([_]Kind{
+            .gen_incl,
+            .gen_excl,
+            .gen_lowerbound,
+            .gen_upperbound_incl,
+            .gen_upperbound_excl,
+        }) |k| t[@intFromEnum(k)].range = true;
+
+        for (@intFromEnum(Kind.type_ptrmut)..@intFromEnum(Kind.type_stcfun) + 1) |i| t[i].type_expr = true;
+
+        for ([_]Kind{
+            .type_array,
+            .type_array_unlengthed,
+            .def_fun_declaration,
+            .typeof,
+        }) |k| t[@intFromEnum(k)].type_expr = true;
+
+        for ([_]Kind{
+            .def_var,
+            .assign,
+            .assign_typed,
+            .mod_pub,
+            .mod_mut,
+            .mod_stc,
+        }) |k| t[@intFromEnum(k)].declares = true;
+
+        for ([_]Kind{
+            .block,
+            .if_then,
+            .if_else,
+            .stcif_then,
+            .stcif_else,
+            .match,
+            .stcmatch,
+        }) |k| t[@intFromEnum(k)].runit = true;
+
+        for ([_]Kind{
+            .int,
+            .float,
+            .char,
+            .string,
+        }) |k| t[@intFromEnum(k)].literal = true;
+
+        t[@intFromEnum(Kind.identifier)].name = true;
+        t[@intFromEnum(Kind.identifier_self)].name = true;
+
+        for ([_]Kind{
+            .identifier,
+            .identifier_self,
+            .member,
+            .array_index,
+            .dereference,
+            .capture,
+        }) |k| t[@intFromEnum(k)].assignable = true;
+
+        t[@intFromEnum(Kind.def_fun)].function = true;
+        t[@intFromEnum(Kind.def_fun_declaration)].function = true;
+        t[@intFromEnum(Kind.type_ptr)].pointer = true;
+        t[@intFromEnum(Kind.type_ptrmut)].pointer = true;
+
+        break :blk t;
+    };
+};
+
+// how the language reads the nodes the parser builds: classes of kinds and the layouts of compound nodes
+pub const Props = packed struct(u16) {
+    stc: bool = false,
+    loop: bool = false,
+    range: bool = false,
+    type_expr: bool = false,
+    declares: bool = false,
+    runit: bool = false,
+    literal: bool = false,
+    name: bool = false,
+    // can be written to: names, fields, elements, dereferences
+    assignable: bool = false,
+    function: bool = false,
+    pointer: bool = false,
+    _pad: u5 = 0,
+};
+
+pub const Param = struct {
+    ty: NodeId = 0,
+    name: NodeId = 0,
+    default: NodeId = 0,
+    where: NodeId = 0,
+    @"else": NodeId = 0,
+    is_mut: bool = false,
+    stc: bool = false,
+
+    pub fn from_node(tree: *const ParseTree, n0: NodeId) Param {
+        var p = Param{};
+        var n = n0;
+        while (true) {
+            switch (tree.kind(n)) {
+                .partial__fun_def_param_named, .partial__type_def_param_named => p.name = tree.arg(n, 1),
+                .partial__fun_def_param_default, .partial__type_def_param_default => p.default = tree.arg(n, 1),
+                .partial__fun_def_param_where, .partial__type_def_param_where => p.where = tree.arg(n, 1),
+                .partial__fun_def_param_stcwhere => {
+                    p.where = tree.arg(n, 1);
+                    p.stc = true;
+                },
+                .partial__fun_def_param_where_else, .partial__type_def_param_where_else => p.@"else" = tree.arg(n, 1),
+                .partial__type_def_param_mut => p.is_mut = true,
+                .partial__fun_def_param, .partial__type_def_param => {
+                    p.ty = tree.arg(n, 0);
+                    return p;
+                },
+                else => {
+                    p.ty = n;
+                    return p;
+                },
+            }
+            n = tree.arg(n, 0);
+        }
+    }
+};
+
+pub const Def = struct {
+    core: NodeId,
+    body: NodeId = 0,
+    size: NodeId = 0,
+    tagof: NodeId = 0,
+
+    pub fn from_node(tree: *const ParseTree, n: NodeId) Def {
+        var d = Def{ .core = n };
+        while (true) : (d.core = tree.arg(d.core, 0)) switch (tree.kind(d.core)) {
+            .def_type_implof, .def_variant_implof => d.body = tree.arg(d.core, 1),
+            .def_type_assertsize, .def_variant_assertsize => d.size = tree.arg(d.core, 1),
+            .def_variant_tagof => d.tagof = tree.arg(d.core, 1),
+            else => return d,
+        };
+    }
+};
+
+pub const Loop = struct {
+    cond: NodeId = 0,
+    repeat: NodeId = 0,
+    head: NodeId = 0,
+    seq: NodeId = 0,
+    variable: NodeId = 0,
+    body: NodeId,
+
+    pub fn from_node(tree: *const ParseTree, n: NodeId) Loop {
+        const a0 = tree.arg(n, 0);
+        const a1 = tree.arg(n, 1);
+        return switch (tree.kind(n)) {
+            .@"while", .stcwhile => .{ .cond = a0, .body = a1 },
+            .while_with_repeat_stmt, .stcwhile_with_repeat_stmt => .{ .cond = tree.arg(a0, 0), .repeat = a1, .head = a0, .body = tree.arg(a0, 1) },
+            .loop, .stcloop => .{ .body = a0 },
+            .loop_with_repeat_stmt, .stcloop_with_repeat_stmt => .{ .repeat = a0, .body = a1 },
+            .for_var_in_seq, .stcfor_var_in_seq => .{ .head = a0, .seq = tree.arg(a0, 0), .variable = a1, .body = tree.arg(a0, 1) },
+            else => .{ .head = n, .seq = a0, .body = a1 },
+        };
+    }
+};
+
+pub const Branch = struct {
+    cond: NodeId,
+    then: NodeId,
+    @"else": NodeId = 0,
+
+    pub fn from_node(tree: *const ParseTree, n: NodeId) Branch {
+        const has_else = tree.kind(n) == .if_else or tree.kind(n) == .stcif_else;
+        const it = if (has_else) tree.arg(n, 0) else n;
+        return .{ .cond = tree.arg(it, 0), .then = tree.arg(it, 1), .@"else" = if (has_else) tree.arg(n, 1) else 0 };
+    }
+};
+
+pub const Range = struct {
+    lo: NodeId,
+    hi: NodeId,
+    incl: bool,
+
+    pub fn from_node(tree: *const ParseTree, n: NodeId) Range {
+        const k = tree.kind(n);
+        const two = k == .gen_incl or k == .gen_excl;
+        return .{
+            .lo = if (two or k == .gen_lowerbound) tree.arg(n, 0) else 0,
+            .hi = if (two) tree.arg(n, 1) else if (k == .gen_lowerbound) 0 else tree.arg(n, 0),
+            .incl = k == .gen_incl or k == .gen_upperbound_incl,
+        };
+    }
 };
 
 ast_nodes: SoD(Node),
@@ -368,4 +581,51 @@ pub fn subtree(self: *const @This(), n: NodeId) [2]NodeId {
         s = .{ @min(s[0], x[0]), @max(s[1], x[1]) };
     }
     return s;
+}
+
+// questions about nodes, nothing here looks further than the tree
+
+// the classes of the node's kind
+pub inline fn props(self: *const @This(), n: NodeId) Props {
+    return Node.nk_props[@intFromEnum(self.kind(n))];
+}
+
+pub fn literal_core(self: *const @This(), node: NodeId, neg: *bool) NodeId {
+    var n = node;
+    while (true) switch (self.kind(n)) {
+        .capture => n = self.arg(n, 0),
+        .neg_num => {
+            neg.* = !neg.*;
+            n = self.arg(n, 0);
+        },
+        else => return n,
+    };
+}
+
+pub fn is_literal(self: *const @This(), node: NodeId) bool {
+    var neg = false;
+    return self.props(self.literal_core(node, &neg)).literal;
+}
+
+pub fn params_of(self: *const @This(), v: NodeId) []const NodeId {
+    if (!self.props(v).function) return &.{};
+    return self.manychildren(self.arg(self.arg(v, 0), 0));
+}
+
+pub fn fields_of(self: *const @This(), c: NodeId) []const NodeId {
+    return if (self.kind(c) == .partial__type_def_param_tuple) self.manychildren(c) else self.manychildren(self.arg(c, 0));
+}
+
+// the name node of a named argument (`f(x = 1)`), 0 for a positional one
+pub fn arg_name(self: *const @This(), a: NodeId) NodeId {
+    return if (self.kind(a) == .partial__fun_call_assigned_param) self.arg(a, 0) else 0;
+}
+
+pub fn arg_value(self: *const @This(), a: NodeId) NodeId {
+    return if (self.kind(a) == .partial__fun_call_assigned_param) self.arg(a, 1) else a;
+}
+
+pub fn narrowed(self: *const @This(), target: NodeId) NodeId {
+    const inner = if (self.props(target).pointer) self.arg(target, 0) else target;
+    return if (self.kind(inner) == .type_array) Range.from_node(self, self.arg(inner, 0)).lo else 0;
 }

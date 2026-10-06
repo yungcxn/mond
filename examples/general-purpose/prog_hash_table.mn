@@ -4,7 +4,7 @@ variant Slot = +(Empty, Dead, Full(u32 key, i32 val));
 variant Got = +(Hit(i32), Miss);
 
 fun hash = (u32 k) -> u32 {
-    mut u32 h = k *% 2654435761;
+    mut u32 h = k * 2654435761;
     h = h ^ (h >> 15);
     ret h;
 }

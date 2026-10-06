@@ -87,8 +87,8 @@ fun fib_pair = (u64 n) -> Congruence {
     Congruence h = fib_pair(n / 2);
     i64 a = h.r;
     i64 b = h.m;
-    i64 c = a *% (2 *% b -% a);
-    i64 d = a *% a +% b *% b;
+    i64 c = a * (2 * b - a);
+    i64 d = a * a + b * b;
     ret if (n & 1) == 0: Congruence(c, d) else: Congruence(d, c + d);
 }
 

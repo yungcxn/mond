@@ -25,12 +25,17 @@ pub const Index = enum(u32) {
 };
 
 alloc: std.mem.Allocator,
+// the source the names are read from
+tree: *const ParseTree,
+src_bytes: []const u8,
 map: std.StringArrayHashMapUnmanaged(void),
 // names that are not in the source (`$64`, ...)
 owned: std.heap.ArenaAllocator,
 
-pub fn init(alloc: std.mem.Allocator) NamePool {
-    return .{ .alloc = alloc, .map = .{}, .owned = .init(alloc) };
+pub fn init(alloc: std.mem.Allocator, tree: *const ParseTree, src_bytes: []const u8) NamePool {
+    var self = NamePool{ .alloc = alloc, .tree = tree, .src_bytes = src_bytes, .map = .{}, .owned = .init(alloc) };
+    self.intern_predefineds();
+    return self;
 }
 
 pub fn deinit(self: *NamePool) void {
@@ -38,18 +43,18 @@ pub fn deinit(self: *NamePool) void {
     self.owned.deinit();
 }
 
-pub inline fn name_of(self: *NamePool, tree: *const ParseTree, src_bytes: []const u8, n: ParseTree.NodeId) Index {
-    switch (tree.kind(n)) {
+pub inline fn name_of(self: *NamePool, n: ParseTree.NodeId) Index {
+    switch (self.tree.kind(n)) {
         .identifier => {
-            const s = tree.span(n);
-            return self.intern_string(src_bytes[s[0]..s[1]]);
+            const s = self.tree.span(n);
+            return self.intern_string(self.src_bytes[s[0]..s[1]]);
         },
         .identifier_self => return .self,
         else => return .none,
     }
 }
 
-pub inline fn intern_predefineds(self: *NamePool) void {
+inline fn intern_predefineds(self: *NamePool) void {
     inline for (@typeInfo(Index).@"enum".fields) |f| {
         if (@field(Index, f.name) == Index.empty) {
             _ = self.intern_string("");
@@ -68,11 +73,21 @@ pub inline fn intern_string(self: *NamePool, str: []const u8) Index {
     return @enumFromInt(gop.index); // stable since we never remove entries
 }
 
-pub fn intern_owned(self: *NamePool, str: []const u8) Index {
-    if (self.map.getIndex(str)) |i| return @enumFromInt(i);
-    return self.intern_string(self.owned.allocator().dupe(u8, str) catch @panic("OOM"));
-}
-
 pub inline fn get(self: *const NamePool, name: Index) []const u8 {
     return self.map.keys()[@intFromEnum(name)];
+}
+
+// unnamed parameters and fields are `$0`, `$1`, ...
+pub fn indexed(self: *NamePool, i: usize) Index {
+    const dollars = comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var t: [64][]const u8 = undefined;
+        for (&t, 0..) |*s, j| s.* = std.fmt.comptimePrint("${d}", .{j});
+        break :blk t;
+    };
+    if (i < dollars.len) return self.intern_string(dollars[i]);
+    var buf: [24]u8 = undefined;
+    const str = std.fmt.bufPrint(&buf, "${d}", .{i}) catch unreachable;
+    if (self.map.getIndex(str)) |x| return @enumFromInt(x);
+    return self.intern_string(self.owned.allocator().dupe(u8, str) catch @panic("OOM"));
 }

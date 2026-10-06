@@ -35,16 +35,16 @@ fun run = (&[]Ins prog, u32 x, u32 y) -> u32 {
             Ins.Const(d, v) => r[d] = v,
             Ins.Copy(d, s) => r[d] = r[s],
             Ins.Input(d, idx) => r[d] = if idx == 0: x else: y,
-            Ins.Add(d, a, b) => r[d] = r[a] +% r[b],
-            Ins.Sub(d, a, b) => r[d] = r[a] -% r[b],
-            Ins.Mul(d, a, b) => r[d] = r[a] *% r[b],
+            Ins.Add(d, a, b) => r[d] = r[a] + r[b],
+            Ins.Sub(d, a, b) => r[d] = r[a] - r[b],
+            Ins.Mul(d, a, b) => r[d] = r[a] * r[b],
             Ins.Div(d, a, b) => r[d] = if r[b] == 0: 0 else: r[a] / r[b],
             Ins.Mod(d, a, b) => r[d] = if r[b] == 0: 0 else: r[a] % r[b],
             Ins.And(d, a, b) => r[d] = r[a] & r[b],
             Ins.Shl(d, a, k) => r[d] = r[a] << k,
             Ins.Shr(d, a, k) => r[d] = r[a] >> k,
             Ins.AndI(d, a, m) => r[d] = r[a] & m,
-            Ins.Out(a) => out = out *% 31 +% r[a],
+            Ins.Out(a) => out = out * 31 + r[a],
         }
     }
     ret out;
@@ -104,9 +104,9 @@ type Opt = *(
                 ret;
             }
             u32 v = match op {
-                0 => va +% vb,
-                1 => va -% vb,
-                2 => va *% vb,
+                0 => va + vb,
+                1 => va - vb,
+                2 => va * vb,
                 3 => va / vb,
                 4 => va % vb,
                 _ => va & vb,

@@ -18,9 +18,6 @@ fun f = (u8 a, u16 b, i8 c, i64 d, f32 x, f64 y, bool t, *u32 pm, &u32 pr, [4]u1
     s17 = a & 15; #: s17 u8
     s18 = a | b; #: s18 u16
     s19 = c ^ c; #: s19 i8
-    s21 = a +% 1; #: s21 u8
-    s22 = c -% d; #: s22 i64
-    s23 = b *% b; #: s23 u16
     c1 = a < b; #: c1 bool
     c2 = x == 1.0; #: c2 bool
     c3 = t != false; #: c3 bool

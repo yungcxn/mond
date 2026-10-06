@@ -26,14 +26,14 @@ stc i32 NEAR8 = I32MIN % -1; #= NEAR8 0
 stc i64 NEAR9 = I64MIN + I64MAX; #= NEAR9 -1
 
 # wrapping arithmetic at both ends
-stc i8 WR1 = I8MAX +% 1; #= WR1 -128
-stc i8 WR2 = I8MIN -% 1; #= WR2 127
-stc i8 WR3 = I8MIN *% -1; #= WR3 -128
-stc u16 WR4 = 0 -% U16MAX; #= WR4 1
-stc i16 WR5 = I16MAX *% 2; #= WR5 -2
-stc u64 WR6 = U64MAX *% U64MAX; #= WR6 1
-stc i64 WR7 = I64MIN *% -1; #= WR7 -9223372036854775808
-stc u32 WR8 = U32MAX +% U32MAX; #= WR8 4294967294
+stc i8 WR1 = I8MAX + 1; #= WR1 -128
+stc i8 WR2 = I8MIN - 1; #= WR2 127
+stc i8 WR3 = I8MIN * -1; #= WR3 -128
+stc u16 WR4 = 0 - U16MAX; #= WR4 1
+stc i16 WR5 = I16MAX * 2; #= WR5 -2
+stc u64 WR6 = U64MAX * U64MAX; #= WR6 1
+stc i64 WR7 = I64MIN * -1; #= WR7 -9223372036854775808
+stc u32 WR8 = U32MAX + U32MAX; #= WR8 4294967294
 
 # division and remainder truncate toward zero for every sign combination
 stc i32 D1 = 17 / 5; #= D1 3

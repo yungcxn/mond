@@ -109,7 +109,7 @@ fun fnv1a = (&[]u8 s) -> u32 {
     mut u32 h = 2166136261;
     for c in s.* {
         h = h ^ c as u32;
-        h = h *% 16777619;
+        h = h * 16777619;
     }
     ret h;
 }

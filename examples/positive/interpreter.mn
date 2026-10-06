@@ -100,7 +100,7 @@ stcfun until = (u32 n) -> []u32 {
 
 stcfun wraps = () -> i32 {
     i8 b = 127;
-    i8 c = b +% 1;
+    i8 c = b + 1;
     ret -7 / 2 + c;
 }
 
