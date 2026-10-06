@@ -1,9 +1,14 @@
 const ParseTree = @import("../../ParseTree.zig");
+const syntax = @import("../syntax.zig");
 const Resolver = @import("../../Resolver.zig");
 const StaticPool = @import("../StaticPool.zig");
 const Interpreter = @import("../Interpreter.zig");
 const places = @import("places.zig");
+const types = @import("../checker/types.zig");
 const Value = @import("Value.zig");
+const decls = @import("../checker/decls.zig");
+const exprs = @import("../checker/exprs.zig");
+const generics = @import("../checker/generics.zig");
 const Index = StaticPool.Index;
 const NodeId = ParseTree.NodeId;
 const Kind = ParseTree.Node.Kind;
@@ -56,7 +61,7 @@ pub fn elem_type(ip: *Interpreter, t0: Index) Index {
 
 pub fn static(ip: *Interpreter, n: NodeId, k: Kind) Value {
     const r = ip.res();
-    if (!ip.framed()) return .pooled(r.static_type(ip.ctx, n));
+    if (!ip.framed()) return .pooled(types.static_type(r, ip.ctx, n));
     return switch (k) {
         .def_fun => ip.closure(ip.info(.decl, n)),
         .type_array, .type_array_unlengthed, .type_ptr, .type_ptrmut, .unify_variants => build(ip, n),
@@ -92,8 +97,8 @@ fn build(ip: *Interpreter, n: NodeId) Value {
 fn define(ip: *Interpreter, n: NodeId) Index {
     const r = ip.res();
     var ctx = Resolver.FnCtx{ .decl = .none, .ret_type = .none, .self_type = .none, .loop_depth = 0, .in_static = true };
-    r.open_scope(true, .none, 0);
-    defer r.h04_pop_scope();
+    decls.open_scope(r, true, .none, 0);
+    defer r.scopes.h04_pop_scope();
     const s = r.tree.subtree(n);
     for (s[0]..s[1]) |i| {
         const id: NodeId = @intCast(i);
@@ -102,9 +107,9 @@ fn define(ip: *Interpreter, n: NodeId) Index {
         const v = places.peek(ip, d);
         if (v.is(.none)) continue;
         const x = ip.pool(v);
-        r.decl_pool.values()[@intFromEnum(r.h02_declare_local(r.decl_pool.names()[@intFromEnum(d)], id, .static_parameter, r.decl_pool.tys()[@intFromEnum(d)]))] = x;
+        r.decl_pool.values()[@intFromEnum(decls.h02_declare_local(r, r.decl_pool.names()[@intFromEnum(d)], id, .static_parameter, r.decl_pool.tys()[@intFromEnum(d)]))] = x;
     }
-    return r.static_type(&ctx, n);
+    return types.static_type(r, &ctx, n);
 }
 
 pub fn cast(ip: *Interpreter, n: NodeId) Value {
@@ -117,7 +122,7 @@ pub fn cast(ip: *Interpreter, n: NodeId) Value {
     if (!framed or ip.info(.ty, n) != .poison_type) {
         const c = @import("control.zig").case_of(ip, x);
         const from = if (framed) sp.apply_vars(&r.abstract_pool, ip.info(.ty, a0)) else if (c != .none) c else ip.vtype(x);
-        const t = if (framed) ip.info(.ty, n) else r.cast_target(ip.ctx, a1, from);
+        const t = if (framed) ip.info(.ty, n) else types.cast_target(r, ip.ctx, a1, from);
         const ck = sp.cast(from, t);
         if (ck == .bit_reinterpret and Value.is_int(t) and sp.get_tag_prop(from).is_variant) return tag(ip, n, x, t);
         if (ck == .variant_retag) return retag(ip, n, x, t);
@@ -164,7 +169,7 @@ fn shrink(ip: *Interpreter, n: NodeId, x: Value, t: Index) Value {
     const ptr = sp.is_ptr(t);
     const at = sp.pointee(t);
     if (sp.tag(sp.get(at).array_type.len) != .int_value) return if (ptr and x.is_ref()) .ref(t, x.at()) else x;
-    const g = r.narrowed(r.tree.arg(n, 1));
+    const g = syntax.narrowed(r.tree, r.tree.arg(n, 1));
     const lo: u32 = if (g != 0) @truncate(ip.eval(g).bits) else 0;
     const c0 = if (x.is_ref()) x.at() else ip.put(x);
     const c = if (ip.span(ip.mem.buf[c0]) != null) ip.thaw(c0).at() else c0;
@@ -176,7 +181,7 @@ pub fn asbits(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
     const x = Value.fit(ip.eval(r.tree.arg(n, 0)), ip.info(.ty, r.tree.arg(n, 0)));
     if (x.is(.poison_type)) return x;
-    return Value.reinterpret(x, if (ip.framed()) ip.info(.ty, n) else r.h07_lower_type(ip.ctx, r.tree.arg(n, 1))) orelse ip.fail(n, .not_static, ip.pool(x), 0);
+    return Value.reinterpret(x, if (ip.framed()) ip.info(.ty, n) else types.h07_lower_type(r, ip.ctx, r.tree.arg(n, 1))) orelse ip.fail(n, .not_static, ip.pool(x), 0);
 }
 
 pub fn oftype(ip: *Interpreter, n: NodeId) Value {
@@ -185,14 +190,14 @@ pub fn oftype(ip: *Interpreter, n: NodeId) Value {
     const a0 = r.tree.arg(n, 0);
     const a1 = r.tree.arg(n, 1);
     const framed = ip.framed();
-    const st = if (framed) Index.none else r.deref(r.h09_check_expr(ip.ctx, a0, .none));
-    const known = st != .none and st != .poison_type and sp.tag(st) != .meta_type and sp.tag(st) != .trait_type and r.templated(st) == .none;
+    const st = if (framed) Index.none else sp.deref(&r.abstract_pool, exprs.h09_check_expr(r, ip.ctx, a0, .none));
+    const known = st != .none and st != .poison_type and sp.tag(st) != .meta_type and sp.tag(st) != .trait_type and sp.templated(st) == .none;
     const x = if (known) st else ip.pool(ip.deref(ip.eval(a0)));
-    const c0 = if (framed) ip.info(.value, a1) else r.h07_lower_type(ip.ctx, a1);
+    const c0 = if (framed) ip.info(.value, a1) else types.h07_lower_type(r, ip.ctx, a1);
     const c = if (c0 != .none and sp.tag(c0) == .generic) sp.intern(.{ .template_type = sp.get(c0).static_fun.decl }) else c0;
     const t = if (c != .none) c else of(ip, a1) orelse return .poison;
     const vt = if (sp.get_tag_prop(x).is_type) x else sp.type_of(x);
-    if (sp.tag(t) == .template_type) return .boolean(r.realizes(vt, t));
+    if (sp.tag(t) == .template_type) return .boolean(generics.realizes(r, vt, t));
     return .boolean(vt == t or sp.type_of(x) == t or sp.implements(vt, t));
 }
 
@@ -202,6 +207,6 @@ pub fn sizeof(ip: *Interpreter, n: NodeId) Value {
     const a0 = r.tree.arg(n, 0);
     const t = ip.checked(a0);
     const ty = if (sp.tag(t) == .meta_type) ip.pool(ip.eval(a0)) else sp.apply_vars(&r.abstract_pool, t);
-    if (r.is_template(ip.info(.decl, a0)) or ty != .poison_type and r.holds_template(ty)) return ip.fail(a0, .unrealized_template, ty, 0);
-    return if (ty == .poison_type) .poison else .int(.u64_type, sp.layout(@import("../checker/types.zig").dynify(r, ty)).size);
+    if (generics.is_template(r, ip.info(.decl, a0)) or ty != .poison_type and sp.holds_template(ty)) return ip.fail(a0, .unrealized_template, ty, 0);
+    return if (ty == .poison_type) .poison else .int(.u64_type, sp.layout(types.dynify(r, ty)).size);
 }

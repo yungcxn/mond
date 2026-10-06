@@ -1,7 +1,5 @@
 const std = @import("std");
-const DynBuf = @import("../ds/dynbuf.zig").DynBuf;
 const SoD = @import("../ds/dynbuf.zig").SoD;
-const Resolver = @import("../Resolver.zig");
 const StaticPool = @import("StaticPool.zig");
 
 // a type var is a placeholder for a type the resolver does not know yet, for example:

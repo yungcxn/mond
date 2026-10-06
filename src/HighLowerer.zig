@@ -2,11 +2,18 @@ const std = @import("std");
 const SoD = @import("ds/dynbuf.zig").SoD;
 const DynBuf = @import("ds/dynbuf.zig").DynBuf;
 const ParseTree = @import("ParseTree.zig");
+const syntax = @import("resolver/syntax.zig");
 const Resolver = @import("Resolver.zig");
 const StaticPool = @import("resolver/StaticPool.zig");
 const NamePool = @import("resolver/NamePool.zig");
+const BodyPool = @import("resolver/BodyPool.zig");
 const DeclPool = @import("resolver/DeclPool.zig");
 const HighIr = @import("high_lowerer/HighIr.zig");
+const decls = @import("resolver/checker/decls.zig");
+const types = @import("resolver/checker/types.zig");
+const calls = @import("resolver/checker/calls.zig");
+const control = @import("resolver/checker/control.zig");
+const statics = @import("resolver/checker/statics.zig");
 const Ref = HighIr.Ref;
 const Op = HighIr.Op;
 const Index = StaticPool.Index;
@@ -30,7 +37,6 @@ sp: *StaticPool,
 ir: HighIr,
 base: u32,
 fn_of: std.AutoHashMapUnmanaged(DeclPool.Index, u32) = .empty,
-body_of: std.AutoHashMapUnmanaged(DeclPool.Index, u32) = .empty,
 head_of: std.AutoHashMapUnmanaged(DeclPool.Index, DeclPool.Index) = .empty,
 next_of: std.AutoHashMapUnmanaged(DeclPool.Index, DeclPool.Index) = .empty,
 global_of: std.AutoHashMapUnmanaged(DeclPool.Index, u32) = .empty,
@@ -56,7 +62,7 @@ taken: std.AutoHashMapUnmanaged(DeclPool.Index, void) = .empty,
 cur: u32 = 0,
 dead: bool = false,
 ret_ty: Index = .unit_type,
-body: Resolver.Body = .{},
+body: BodyPool.Body = .{},
 
 pub fn init(alloc: std.mem.Allocator, r: *Resolver) HighLowerer {
     return .{
@@ -84,7 +90,6 @@ pub fn init(alloc: std.mem.Allocator, r: *Resolver) HighLowerer {
 
 pub fn deinit(self: *HighLowerer) void {
     self.fn_of.deinit(self.alloc);
-    self.body_of.deinit(self.alloc);
     self.head_of.deinit(self.alloc);
     self.next_of.deinit(self.alloc);
     self.global_of.deinit(self.alloc);
@@ -113,9 +118,8 @@ pub fn deinit(self: *HighLowerer) void {
 }
 
 pub fn lower(self: *HighLowerer) void {
-    const bodies = self.r.bodies.sliced();
-    for (bodies.decl, 0..) |d, i| put(self.alloc, &self.body_of, d, @intCast(i));
-    var heads = self.r.global_decls.valueIterator();
+    const bodies = self.r.bodies.list.sliced();
+    var heads = self.r.scopes.globals.valueIterator();
     while (heads.next()) |h| self.group(h.*);
     const d = self.r.decl_pool.entries.sliced();
     for (0..d.name.len) |i| if (d.flags[i].is_global and d.kind[i] == .variable) {
@@ -139,12 +143,12 @@ fn put(alloc: std.mem.Allocator, m: anytype, k: @FieldType(@TypeOf(m.*).KV, "key
 fn group(self: *HighLowerer, first: DeclPool.Index) void {
     var c = first;
     while (c != .none) : (c = self.r.decl_pool.next_overloads()[@intFromEnum(c)]) {
-        const rc = self.r.real(c);
-        if (!self.body_of.contains(rc)) continue;
+        const rc = decls.real(self.r, c);
+        if (!self.r.bodies.of.contains(rc)) continue;
         var h = first;
         while (h != c) : (h = self.r.decl_pool.next_overloads()[@intFromEnum(h)]) {
-            const rh = self.r.real(h);
-            if (!self.body_of.contains(rh) or !self.r.same_params(rh, rc)) continue;
+            const rh = decls.real(self.r, h);
+            if (!self.r.bodies.of.contains(rh) or !calls.same_params(self.r, rh, rc)) continue;
             put(self.alloc, &self.head_of, rc, rh);
             var last = rh;
             while (self.next_of.get(last)) |n| last = n;
@@ -160,7 +164,7 @@ fn func(self: *HighLowerer, d0: DeclPool.Index) u32 {
     if (gop.found_existing) return gop.value_ptr.*;
     gop.value_ptr.* = self.ir.functions.len();
     self.ir.functions.push(.{ .decl = d, .ty = self.apply(self.r.decl_pool.tys()[@intFromEnum(d)]), .first_block = 0, .blocks = 0, .first_inst = 0, .insts = 0, .captures = @intCast(self.captures(d).len) });
-    if (self.body_of.contains(d)) self.queue.push(d);
+    if (self.r.bodies.of.contains(d)) self.queue.push(d);
     return gop.value_ptr.*;
 }
 
@@ -470,7 +474,7 @@ fn is_ssa(self: *HighLowerer, n: NodeId) bool {
 fn captures(self: *HighLowerer, d: DeclPool.Index) []const DeclPool.Index {
     if (self.caps_of.get(d)) |c| return self.cap_list.buf[c[0]..][0..c[1]];
     const start = self.cap_list.head;
-    self.r.captures(d, &self.cap_list);
+    self.r.bodies.captures(&self.r.decl_pool, d, &self.cap_list);
     put(self.alloc, &self.caps_of, d, [2]u32{ start, self.cap_list.head - start });
     return self.cap_list.buf[start..self.cap_list.head];
 }
@@ -480,7 +484,7 @@ fn by_ref(self: *HighLowerer, c: DeclPool.Index) bool {
 }
 
 fn fn_value(self: *HighLowerer, d0: DeclPool.Index) Ref {
-    const d = self.r.real(d0);
+    const d = decls.real(self.r, d0);
     const f = self.func(d);
     const head = self.ir.functions.pool.decl.buf[f];
     const caps = self.captures(head);
@@ -534,12 +538,12 @@ fn scan_taken(self: *HighLowerer) void {
         if (self.r.tree.kind(n) == .address_of) target = self.r.tree.arg(n, 0);
         if (self.r.tree.kind(n) == .fun_call and self.r.tree.kind(self.r.tree.arg(n, 0)) == .member) {
             const d = self.decl(n);
-            if (d != .none and self.r.self_off(d) == 1) target = self.r.tree.arg(self.r.tree.arg(n, 0), 0);
+            if (d != .none and self.r.decl_pool.self_off(d) == 1) target = self.r.tree.arg(self.r.tree.arg(n, 0), 0);
         }
         while (target != 0 and self.r.tree.kind(target) == .capture) target = self.r.tree.arg(target, 0);
         if (target != 0 and self.r.tree.kind(target) == .identifier and !self.is_ptr(self.ty(target))) put(self.alloc, &self.taken, self.decl(target), {});
         const d = self.decl(n);
-        if (d != .none and self.r.decl_pool.kinds()[@intFromEnum(d)].is_fn() and self.body_of.contains(d)) {
+        if (d != .none and self.r.decl_pool.kinds()[@intFromEnum(d)].is_fn() and self.r.bodies.of.contains(d)) {
             const node = self.r.decl_pool.nodes()[@intFromEnum(d)];
             if (node >= b.lo and node < b.lo + b.len) for (self.captures(d)) |c| if (self.by_ref(c)) put(self.alloc, &self.taken, c, {});
         }
@@ -566,20 +570,20 @@ fn lower_fn(self: *HighLowerer, d: DeclPool.Index) void {
 }
 
 fn candidate(self: *HighLowerer, m: DeclPool.Index) bool {
-    self.body = self.r.bodies.get(self.body_of.get(m).?).?;
+    self.body = self.r.bodies.get(m).?;
     self.scan_taken();
-    const v = self.r.value_node(m);
-    const off = self.r.self_off(m);
+    const v = decls.value_node(self.r, m);
+    const off = self.r.decl_pool.self_off(m);
     if (off == 1) for (self.body.lo..self.body.lo + self.body.len) |i| {
         const x = self.decl(@intCast(i));
         if (x != .none and self.r.decl_pool.kinds()[@intFromEnum(x)] == .self and self.r.decl_pool.nodes()[@intFromEnum(x)] == v) break self.declare_var(x, self.params.buf[0]);
     };
-    const pnodes = self.r.params_of(v);
+    const pnodes = syntax.params_of(self.r.tree, v);
     for (pnodes, 0..) |pn, i| self.declare_var(self.decl(pn), self.params.buf[i + off]);
     const fail = self.block();
     var tested = false;
     for (pnodes) |pn| {
-        const p = Resolver.Param.from_node(self.r, pn);
+        const p = syntax.Param.from_node(self.r.tree, pn);
         if (p.where == 0 or p.@"else" != 0 or p.stc) continue;
         tested = true;
         const ok = self.block();
@@ -587,7 +591,7 @@ fn candidate(self: *HighLowerer, m: DeclPool.Index) bool {
         self.goto(ok);
     }
     for (pnodes) |pn| {
-        const p = Resolver.Param.from_node(self.r, pn);
+        const p = syntax.Param.from_node(self.r.tree, pn);
         if (p.where == 0 or p.@"else" == 0 or p.stc) continue;
         const ok = self.block();
         const els = self.block();
@@ -834,8 +838,8 @@ fn expr(self: *HighLowerer, n: NodeId) Ref {
         else => return self.e2(op, t, self.expr_to(a0, t), self.expr_to(a1, t)),
     };
     return switch (k) {
-        .int, .char, .float, .string, .boolean_true, .boolean_false, .neg_num => if (self.r.is_literal(n) or k == .string or k == .boolean_true or k == .boolean_false)
-            self.constant(self.r.literal_value(n, false), t)
+        .int, .char, .float, .string, .boolean_true, .boolean_false, .neg_num => if (syntax.is_literal(self.r.tree, n) or k == .string or k == .boolean_true or k == .boolean_false)
+            self.constant(statics.literal_value(self.r, n, false), t)
         else
             self.e2(.neg, t, self.expr_to(a0, t), .none),
         .identifier, .identifier_self => self.ident(n),
@@ -1043,7 +1047,7 @@ fn cheap(self: *HighLowerer, n: NodeId, budget: *u8) bool {
         .identifier, .identifier_self => return self.is_ssa(n) and !self.r.decl_pool.kinds()[@intFromEnum(self.decl(n))].is_fn(),
         .capture => return self.cheap(self.r.tree.arg(n, 0), budget),
         .int, .char, .float, .string, .boolean_true, .boolean_false => return true,
-        .neg_num => if (self.r.is_literal(n)) return true,
+        .neg_num => if (syntax.is_literal(self.r.tree, n)) return true,
         .if_else => {
             if (budget.* == 0) return false;
             budget.* -= 1;
@@ -1108,7 +1112,7 @@ fn match(self: *HighLowerer, n: NodeId) Ref {
     if (self.r.tree.kind(n) == .stcmatch) for (arms) |a| if ((self.static_of(a) orelse .none) == .bool_true) return self.expr_to(self.r.tree.arg(a, 1), t);
     var st = self.ty(self.r.tree.arg(n, 0));
     var s = self.expr(self.r.tree.arg(n, 0));
-    if (self.is_ptr(st) and self.r.deref(st) != st) {
+    if (self.is_ptr(st) and self.sp.deref(&self.r.abstract_pool, st) != st) {
         s = self.e2(.load, self.child(st), s, .none);
         st = self.child(st);
     }
@@ -1172,10 +1176,10 @@ fn is_key(self: *HighLowerer, p: NodeId, st: Index, tagged: bool) ?bool {
         } else true,
         .labelarrow => if (self.is_key(self.r.tree.arg(p, 0), st, tagged) == true) true else null,
         .fun_call => if (!case or !tagged) null else for (self.r.tree.manychildren(self.r.tree.arg(p, 1))) |a| {
-            if (self.r.tree.kind(self.r.arg_value(a)) != .identifier) return null;
+            if (self.r.tree.kind(syntax.arg_value(self.r.tree, a)) != .identifier) return null;
         } else true,
         .partial__match_case_pattern_typecast, .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl, .string => null,
-        else => if (case == tagged and (case or self.r.is_literal(p) or self.static_of(p) != null)) true else null,
+        else => if (case == tagged and (case or syntax.is_literal(self.r.tree, p) or self.static_of(p) != null)) true else null,
     };
 }
 
@@ -1185,7 +1189,7 @@ fn keys(self: *HighLowerer, p: NodeId, st: Index, b: u32, mark: u32) void {
         .labelarrow => self.keys(self.r.tree.arg(p, 0), st, b, mark),
         else => {
             const pt = self.ty(p);
-            const v: u32 = @intFromEnum(if (self.sp.tag(pt) == .variant_case_type) self.tag_of(st, pt) else self.constant(self.static_of(p) orelse self.r.literal_value(p, false), st));
+            const v: u32 = @intFromEnum(if (self.sp.tag(pt) == .variant_case_type) self.tag_of(st, pt) else self.constant(self.static_of(p) orelse statics.literal_value(self.r, p, false), st));
             var i = mark + 1;
             while (i < self.tmp.head) : (i += 2) if (self.tmp.buf[i] == v) return;
             self.tmp.push(v);
@@ -1208,7 +1212,7 @@ fn bind(self: *HighLowerer, p: NodeId, v: Ref, vt: Index) void {
             for (self.r.tree.manychildren(self.r.tree.arg(p, 1)), 0..) |a, i| {
                 const fi = self.field_index(c.payload, a, i);
                 const ft = self.sp.get(c.payload).custom_type.field_types[fi];
-                self.bind(self.r.arg_value(a), self.emit(.extract, ft, @intFromEnum(container), fi), ft);
+                self.bind(syntax.arg_value(self.r.tree, a), self.emit(.extract, ft, @intFromEnum(container), fi), ft);
             }
         },
         else => {},
@@ -1272,7 +1276,7 @@ fn narrow(self: *HighLowerer, v: Ref, st: Index, into: Index) Ref {
 }
 
 fn field_index(self: *HighLowerer, rec: Index, a: NodeId, i: usize) u32 {
-    return self.r.field_of(rec, a, i) orelse @intCast(i);
+    return calls.field_of(self.r, rec, a, i) orelse @intCast(i);
 }
 
 fn pattern(self: *HighLowerer, p: NodeId, v: Ref, vt: Index, ok: u32, fail: u32) void {
@@ -1340,7 +1344,7 @@ fn pattern(self: *HighLowerer, p: NodeId, v: Ref, vt: Index, ok: u32, fail: u32)
                 const fi = self.field_index(rec, a, i);
                 const ft = self.sp.get(rec).custom_type.field_types[fi];
                 const next = self.block();
-                self.pattern(self.r.arg_value(a), self.emit(.extract, ft, @intFromEnum(container), fi), ft, next, fail);
+                self.pattern(syntax.arg_value(self.r.tree, a), self.emit(.extract, ft, @intFromEnum(container), fi), ft, next, fail);
                 self.goto(next);
             };
             self.br(ok);
@@ -1387,7 +1391,7 @@ fn unwrap(self: *HighLowerer, n: NodeId) Ref {
     const k = self.r.tree.kind(n);
     const t = self.ty(n);
     const v = self.expr(self.r.tree.arg(n, 0));
-    const vt = self.r.deref(self.ty(self.r.tree.arg(n, 0)));
+    const vt = self.sp.deref(&self.r.abstract_pool, self.ty(self.r.tree.arg(n, 0)));
     if (k == .labelarrow) {
         self.bind_label(self.r.tree.arg(n, 1), v);
         return v;
@@ -1411,7 +1415,7 @@ fn unwrap(self: *HighLowerer, n: NodeId) Ref {
     const res = self.temp(t);
     const m = self.block();
     self.goto(ok);
-    self.write(res, self.cur, self.coerce(self.payload(v, case), self.r.payload_of(vt), t));
+    self.write(res, self.cur, self.coerce(self.payload(v, case), control.payload_of(self.r, vt), t));
     self.br(m);
     self.goto(bad);
     self.arm(self.r.tree.arg(n, 1), t, res, m);
@@ -1501,7 +1505,7 @@ fn loop(self: *HighLowerer, n: NodeId) Ref {
                 step = .{ .v = i, .ty = .u64_type };
             } else {
                 const recv = if (self.is_ptr(st)) self.expr(seq) else self.place(seq);
-                const rt = self.r.deref(st);
+                const rt = self.sp.deref(&self.r.abstract_pool, st);
                 self.br(head);
                 self.enter(head);
                 self.cond(self.method_call(rt, .has_next, recv), body_b, exit);
@@ -1547,7 +1551,7 @@ fn shrink(self: *HighLowerer, n: NodeId) Ref {
     const t = self.ty(n);
     const a0 = self.r.tree.arg(n, 0);
     const at = self.sp.pointee(t);
-    const g = self.r.narrowed(self.r.tree.arg(n, 1));
+    const g = syntax.narrowed(self.r.tree, self.r.tree.arg(n, 1));
     const lo = if (g != 0) self.static_of(g) else null;
     const base = if (self.is_ptr(self.ty(a0))) self.expr(a0) else self.place(a0);
     const mutable = !self.is_ptr(self.ty(a0)) or self.sp.get(self.ty(a0)).ptr_type.mutable;
@@ -1569,7 +1573,7 @@ fn method_call(self: *HighLowerer, t: Index, name: NamePool.Index, recv: Ref) Re
 }
 
 fn fn_ret(self: *HighLowerer, d: DeclPool.Index) Index {
-    const ft = self.apply(self.r.decl_pool.tys()[@intFromEnum(self.r.real(d))]);
+    const ft = self.apply(self.r.decl_pool.tys()[@intFromEnum(decls.real(self.r, d))]);
     return if (ft != .none and self.sp.tag(ft) == .function_type) self.sp.get(ft).function_type.ret else .unit_type;
 }
 
@@ -1580,7 +1584,7 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
     if (self.realized(n)) |f| return self.fn_value(f);
     const d = self.decl(n);
     if (d != .none and self.r.decl_pool.kinds()[@intFromEnum(d)].is_fn()) return self.direct(d, callee, args, t);
-    if (d == .none and self.r.tree.kind(callee) == .member) switch (self.r.builtin_of(callee, self.ty(self.r.tree.arg(callee, 0)), t)) {
+    if (d == .none and self.r.tree.kind(callee) == .member) switch (calls.builtin_of(self.r, callee, self.ty(self.r.tree.arg(callee, 0)), t)) {
         .builtin_init => return self.default_value(t),
         .builtin_deinit => return unit(),
         else => {},
@@ -1591,7 +1595,7 @@ fn call(self: *HighLowerer, n: NodeId) Ref {
     const ft = self.sp.get(ct).function_type;
     const mark = self.tmp.head;
     for (args, 0..) |a, i| {
-        const x = self.expr_to(self.r.arg_value(a), self.sp.get(ct).function_type.params[i]);
+        const x = self.expr_to(syntax.arg_value(self.r.tree, a), self.sp.get(ct).function_type.params[i]);
         self.tmp.push(@intFromEnum(x));
     }
     _ = ft;
@@ -1608,12 +1612,12 @@ fn realized(self: *HighLowerer, n: NodeId) ?DeclPool.Index {
 }
 
 fn direct(self: *HighLowerer, d: DeclPool.Index, callee: NodeId, all: []const NodeId, t: Index) Ref {
-    const rd = self.r.real(d);
+    const rd = decls.real(self.r, d);
     const f = self.func(rd);
     const fv = Ref.of(self.sp.intern(.{ .function = self.ir.functions.pool.decl.buf[f] }));
     const ft = self.apply(self.r.decl_pool.tys()[@intFromEnum(rd)]);
-    const off = self.r.self_off(rd);
-    const pnodes = self.r.params_of(self.r.value_node(rd));
+    const off = self.r.decl_pool.self_off(rd);
+    const pnodes = syntax.params_of(self.r.tree, decls.value_node(self.r, rd));
     const mark = self.tmp.head;
     for (self.captures(self.ir.functions.pool.decl.buf[f])) |c| {
         const x = if (self.by_ref(c)) self.slots.get(c) orelse .none else self.load_var(c);
@@ -1623,11 +1627,11 @@ fn direct(self: *HighLowerer, d: DeclPool.Index, callee: NodeId, all: []const No
     var dynamic = false;
     if (off == 1) {
         const bound = self.r.tree.kind(callee) == .member and self.sp.tag(self.ty(self.r.tree.arg(callee, 0))) != .meta_type;
-        const recv = if (bound) self.r.tree.arg(callee, 0) else self.r.arg_value(args[0]);
+        const recv = if (bound) self.r.tree.arg(callee, 0) else syntax.arg_value(self.r.tree, args[0]);
         const x = if (!bound) self.expr_to(recv, self.sp.get(ft).function_type.params[0]) else if (self.is_ptr(self.ty(recv))) self.expr(recv) else self.place(recv);
         self.tmp.push(@intFromEnum(x));
         if (!bound) args = args[1..];
-        dynamic = self.r.decl_pool.kinds()[@intFromEnum(rd)] == .trait_member and self.sp.tag(self.r.deref(self.ty(recv))) == .trait_type;
+        dynamic = self.r.decl_pool.kinds()[@intFromEnum(rd)] == .trait_member and self.sp.tag(self.sp.deref(&self.r.abstract_pool, self.ty(recv))) == .trait_type;
     }
     const at = self.tmp.head;
     for (pnodes) |_| self.tmp.push(none);
@@ -1635,18 +1639,18 @@ fn direct(self: *HighLowerer, d: DeclPool.Index, callee: NodeId, all: []const No
         var j = i;
         if (self.r.tree.kind(a) == .partial__fun_call_assigned_param) {
             const name = self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, self.r.tree.arg(a, 0));
-            for (pnodes, 0..) |pn, q| if (self.r.param_name(pn, q) == name) {
+            for (pnodes, 0..) |pn, q| if (decls.param_name(self.r, pn, q) == name) {
                 j = q;
             };
         }
-        const x = self.expr_to(self.r.arg_value(a), self.sp.get(ft).function_type.params[j + off]);
+        const x = self.expr_to(syntax.arg_value(self.r.tree, a), self.sp.get(ft).function_type.params[j + off]);
         self.tmp.buf[at + j] = @intFromEnum(x);
     }
     const saved = self.body;
-    if (self.body_of.get(rd)) |bi| self.body = self.r.bodies.get(bi).?;
+    if (self.r.bodies.get(rd)) |b| self.body = b;
     for (pnodes, 0..) |pn, j| if (self.tmp.buf[at + j] != none) self.declare_var(self.decl(pn), @enumFromInt(self.tmp.buf[at + j]));
     for (pnodes, 0..) |pn, j| if (self.tmp.buf[at + j] == none) {
-        const dflt = Resolver.Param.from_node(self.r, pn).default;
+        const dflt = syntax.Param.from_node(self.r.tree, pn).default;
         const x = if (dflt != 0) self.expr_to(dflt, self.sp.get(ft).function_type.params[j + off]) else Ref.none;
         self.declare_var(self.decl(pn), x);
         self.tmp.buf[at + j] = @intFromEnum(x);
@@ -1664,12 +1668,12 @@ fn construct(self: *HighLowerer, target: Index, args: []const NodeId) Ref {
     const rec = if (is_c) sp.get(target).variant_case_type.payload else target;
     const case: u32 = if (is_c) sp.get(target).variant_case_type.case else 0;
     if (rec == .none) return self.emit(.variant_make, variant, case, @intFromEnum(Ref.none));
-    const fields = self.r.fields_of(rec);
+    const fields = types.fields_of(self.r, rec);
     const mark = self.tmp.head;
     for (fields) |_| self.tmp.push(none);
     for (args, 0..) |a, i| {
         const fi = self.field_index(rec, a, i);
-        const x = self.expr_to(self.r.arg_value(a), sp.get(rec).custom_type.field_types[fi]);
+        const x = self.expr_to(syntax.arg_value(self.r.tree, a), sp.get(rec).custom_type.field_types[fi]);
         self.tmp.buf[mark + fi] = @intFromEnum(x);
     }
     self.complete(rec, mark);
@@ -1686,15 +1690,15 @@ fn with(self: *HighLowerer, n: NodeId) Ref {
         base = self.e2(.load, self.child(bt), base, .none);
         bt = self.child(bt);
     }
-    const types = self.sp.get(bt).custom_type.field_types;
+    const ft = self.sp.get(bt).custom_type.field_types;
     const mark = self.tmp.head;
-    for (0..types.len) |i| {
+    for (0..ft.len) |i| {
         const x = self.emit(.extract, self.sp.get(bt).custom_type.field_types[i], @intFromEnum(base), @intCast(i));
         self.tmp.push(@intFromEnum(x));
     }
     for (self.r.tree.manychildren(self.r.tree.arg(n, 1)), 0..) |a, i| {
         const fi = self.field_index(bt, a, i);
-        const x = self.expr_to(self.r.arg_value(a), self.sp.get(bt).custom_type.field_types[fi]);
+        const x = self.expr_to(syntax.arg_value(self.r.tree, a), self.sp.get(bt).custom_type.field_types[fi]);
         self.tmp.buf[mark + fi] = @intFromEnum(x);
     }
     self.complete(bt, mark);
@@ -1705,16 +1709,16 @@ fn with(self: *HighLowerer, n: NodeId) Ref {
 
 // the defaults and `where .. else` of the fields in tmp[mark..], the fields are the locals of the type's body
 fn complete(self: *HighLowerer, rec: Index, mark: u32) void {
-    const fields = self.r.fields_of(rec);
+    const fields = types.fields_of(self.r, rec);
     const saved = self.body;
     defer self.body = saved;
-    const bi = self.body_of.get(self.sp.get(rec).custom_type.decl);
-    if (bi) |x| self.body = self.r.bodies.get(x).?;
+    const bi = self.r.bodies.get(self.sp.get(rec).custom_type.decl);
+    if (bi) |b| self.body = b;
     // only the fields a default or guard reads, or a guard repairs, become locals
     var locals: u64 = 0;
     var guarded: u64 = 0;
     if (bi != null) for (fields, 0..) |f, i| {
-        const p = Resolver.Param.from_node(self.r, f);
+        const p = syntax.Param.from_node(self.r.tree, f);
         if (p.@"else" != 0) guarded |= @as(u64, 1) << @intCast(i);
         for ([_]NodeId{ if (self.tmp.buf[mark + i] == none) p.default else 0, if (p.@"else" != 0) p.where else 0, p.@"else" }) |x| if (x != 0) {
             const sub = self.r.tree.subtree(x);
@@ -1728,12 +1732,12 @@ fn complete(self: *HighLowerer, rec: Index, mark: u32) void {
     for (0..fields.len) |i| if (locals >> @intCast(i) & 1 != 0 and self.tmp.buf[mark + i] != none) self.declare_var(@enumFromInt(self.body.first + i), @enumFromInt(self.tmp.buf[mark + i]));
     for (fields, 0..) |f, i| if (self.tmp.buf[mark + i] == none) {
         const t = self.sp.get(rec).custom_type.field_types[i];
-        const x = if (Resolver.Param.from_node(self.r, f).default != 0) self.expr_to(Resolver.Param.from_node(self.r, f).default, t) else self.emit(.zeroed, t, 0, 0);
+        const x = if (syntax.Param.from_node(self.r.tree, f).default != 0) self.expr_to(syntax.Param.from_node(self.r.tree, f).default, t) else self.emit(.zeroed, t, 0, 0);
         self.tmp.buf[mark + i] = @intFromEnum(x);
         if (locals >> @intCast(i) & 1 != 0) self.declare_var(@enumFromInt(self.body.first + i), x);
     };
     for (fields, 0..) |f, i| if (guarded >> @intCast(i) & 1 != 0) {
-        const p = Resolver.Param.from_node(self.r, f);
+        const p = syntax.Param.from_node(self.r.tree, f);
         if (p.where == 0) continue;
         const ok = self.block();
         const els = self.block();
@@ -1752,7 +1756,7 @@ fn member(self: *HighLowerer, n: NodeId) Ref {
     const parent = self.r.tree.arg(n, 0);
     const pt = self.ty(parent);
     const name = self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, self.r.tree.arg(n, 1));
-    const base_t = if (self.sp.tag(pt) == .meta_type) (self.static_of(parent) orelse return .none) else self.r.deref(pt);
+    const base_t = if (self.sp.tag(pt) == .meta_type) (self.static_of(parent) orelse return .none) else self.sp.deref(&self.r.abstract_pool, pt);
     return switch (self.sp.lookup_member(base_t, name)) {
         .field => |f| if (self.is_ptr(pt) or self.is_place(parent)) self.e2(.load, f.ty, self.place(n), .none) else self.emit(.extract, f.ty, @intFromEnum(self.expr(parent)), f.index),
         .case => |c| self.construct(c, &.{}),
@@ -1791,7 +1795,7 @@ fn place(self: *HighLowerer, n: NodeId) Ref {
             const parent = self.r.tree.arg(n, 0);
             const pt = self.ty(parent);
             const base = if (self.is_ptr(pt)) self.expr(parent) else self.place(parent);
-            switch (self.sp.lookup_member(self.r.deref(pt), self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, self.r.tree.arg(n, 1)))) {
+            switch (self.sp.lookup_member(self.sp.deref(&self.r.abstract_pool, pt), self.r.name_pool.name_of(self.r.tree, self.r.src_bytes, self.r.tree.arg(n, 1)))) {
                 .field => |f| return self.emit(.field_ptr, self.ptr(f.ty), @intFromEnum(base), f.index),
                 else => {},
             }

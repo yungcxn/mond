@@ -1,36 +1,56 @@
 const std = @import("std");
 const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
-const calls = @import("calls.zig");
-const statics = @import("statics.zig");
+const syntax = @import("../syntax.zig");
+const NamePool = @import("../NamePool.zig");
 const StaticPool = @import("../StaticPool.zig");
 const DeclPool = @import("../DeclPool.zig");
+const decls = @import("decls.zig");
+const exprs = @import("exprs.zig");
+const patterns = @import("patterns.zig");
+const generics = @import("generics.zig");
+const statics = @import("statics.zig");
 const FnCtx = Resolver.FnCtx;
 const NodeId = ParseTree.NodeId;
-const is_range_kind = Resolver.is_range_kind;
-const meta = Resolver.meta;
-const prim_types = Resolver.prim_types;
-const NamePool = @import("../NamePool.zig");
 
-pub fn meta_of(self: *Resolver, node: NodeId) StaticPool.Index {
-    return meta(self.type_kind(node), if (self.tree.kind(node) == .unify_variants) .variant_type else .type_type);
+// types: type expressions lowered to pool types, type definitions with their members, traits and conformance
+
+const prim_types = blk: {
+    var t: [256]StaticPool.Index = @splat(.none);
+    for (@typeInfo(StaticPool.Index).@"enum".fields) |f| if (std.mem.endsWith(u8, f.name, "_type") and @hasField(ParseTree.Node.Kind, "type_" ++ f.name[0 .. f.name.len - 5])) {
+        t[@intFromEnum(@field(ParseTree.Node.Kind, "type_" ++ f.name[0 .. f.name.len - 5]))] = @enumFromInt(f.value);
+    };
+    break :blk t;
+};
+
+pub fn meta(kind: DeclPool.Entry.Kind, other: StaticPool.Index) StaticPool.Index {
+    return switch (kind) {
+        .record => .type_type,
+        .variant => .variant_type,
+        .trait => .trait_type,
+        else => other,
+    };
 }
 
-pub fn h07_lower_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
+pub fn meta_of(self: *Resolver, node: NodeId) StaticPool.Index {
+    return meta(syntax.type_kind(self.tree, node), if (self.tree.kind(node) == .unify_variants) .variant_type else .type_type);
+}
+
+pub fn h07_lower_type(self: *Resolver, ctx: *FnCtx, node: NodeId) StaticPool.Index {
     const sp = &self.static_pool;
     const k = self.tree.kind(node);
     if (prim_types[@intFromEnum(k)] != .none) return prim_types[@intFromEnum(k)];
     return switch (k) {
         .capture => h07_lower_type(self, ctx, self.tree.arg(node, 0)),
         .typeof => blk: {
-            const t = self.h09_check_expr(ctx, self.tree.arg(node, 0), .none);
-            if (self.tree.kind(self.tree.arg(node, 0)) == .identifier and statics.is_template(self, self.node_decl[self.tree.arg(node, 0)])) break :blk self.report(.unrealized_template, self.tree.arg(node, 0), 0, 0);
+            const t = exprs.h09_check_expr(self, ctx, self.tree.arg(node, 0), .none);
+            if (self.tree.kind(self.tree.arg(node, 0)) == .identifier and generics.is_template(self, self.node_decl[self.tree.arg(node, 0)])) break :blk self.report(.unrealized_template, self.tree.arg(node, 0), 0, 0);
             break :blk if (self.tree.kind(self.tree.arg(node, 0)) == .identifier_self) sp.pointee(t) else t;
         },
         .type_ptr, .type_ptrmut => sp.intern(.{ .ptr_type = .{ .child = h07_lower_type(self, ctx, self.tree.arg(node, 0)), .mutable = k == .type_ptrmut } }),
         // an unlengthed array gets a var as its length: inferred from the value, or per call for parameters
         // record fields, `main` parameters and lengths nothing fixes become runtime-length arrays (dynify, s3)
-        .type_array_unlengthed => sp.intern(.{ .array_type = .{ .len = self.fresh_var(node), .elem = h07_lower_type(self, ctx, self.tree.arg(node, 0)) } }),
+        .type_array_unlengthed => sp.intern(.{ .array_type = .{ .len = sp.fresh_var(&self.abstract_pool, node), .elem = h07_lower_type(self, ctx, self.tree.arg(node, 0)) } }),
         .type_array => blk: {
             const len = statics.deferred(self, ctx, self.tree.arg(node, 0)) orelse .poison_type;
             const n = if (sp.tag(len) == .int_value) sp.intern(.{ .int = .{ .ty = .u64_type, .bits = sp.get(len).int.bits } }) else if (len == .poison_type) len else self.report(.not_static, self.tree.arg(node, 0), len, 0);
@@ -45,7 +65,7 @@ pub fn h07_lower_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) Stat
     };
 }
 
-pub fn static_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticPool.Index {
+pub fn static_type(self: *Resolver, ctx: *FnCtx, node: NodeId) StaticPool.Index {
     const sp = &self.static_pool;
     const k = self.tree.kind(node);
     return switch (k) {
@@ -63,21 +83,21 @@ pub fn static_type(self: *Resolver, ctx: *FnCtx, node: ParseTree.NodeId) StaticP
             break :blk sp.intern(.{ .variant_union_type = members.items });
         },
         .def_type, .def_type_packed, .def_type_assertsize, .def_type_implof, .def_variant, .def_variant_unionsized, .def_variant_tagof, .def_variant_assertsize, .def_variant_implof, .def_trait, .def_trait_implof => blk: {
-            const d = self.decl_pool.push_decl(.empty, node, self.type_kind(node), .none, .{});
+            const d = self.decl_pool.push_decl(.empty, node, syntax.type_kind(self.tree, node), .none, .{});
             self.node_decl[node] = d;
             break :blk h19_check_type_def(self, ctx, d, node);
         },
         .def_fun => blk: {
-            _ = self.h09_check_expr(ctx, node, .none);
+            _ = exprs.h09_check_expr(self, ctx, node, .none);
             break :blk self.decl_pool.values()[@intFromEnum(self.node_decl[node])];
         },
-        else => if (Resolver.node_props[@intFromEnum(k)].type_expr) h07_lower_type(self, ctx, node) else self.report(.not_static, node, 0, 0),
+        else => if (syntax.props(k).type_expr) h07_lower_type(self, ctx, node) else self.report(.not_static, node, 0, 0),
     };
 }
 
-pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, node: ParseTree.NodeId) StaticPool.Index {
+pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, node: NodeId) StaticPool.Index {
     const sp = &self.static_pool;
-    const w = self.definition(node);
+    const w = syntax.Def.from_node(self.tree, node);
     const c = w.core;
     const body = w.body;
     const tagof = w.tagof;
@@ -87,10 +107,10 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
     // reserved first (or already by h20), so fields can point back at the type (`*Tree`)
     if (self.decl_pool.values()[@intFromEnum(decl)] == .none) self.decl_pool.values()[@intFromEnum(decl)] = sp.reserve_nominal(decl);
     const ty = self.decl_pool.values()[@intFromEnum(decl)];
-    self.decl_pool.tys()[@intFromEnum(decl)] = meta(self.type_kind(c), .type_type);
+    self.decl_pool.tys()[@intFromEnum(decl)] = meta(syntax.type_kind(self.tree, c), .type_type);
     if (self.decl_pool.states()[@intFromEnum(decl)] == .resolving_signature) self.decl_pool.states()[@intFromEnum(decl)] = .signature_ready;
-    self.h03_push_scope();
-    defer self.h04_pop_scope();
+    self.scopes.h03_push_scope();
+    defer self.scopes.h04_pop_scope();
 
     var nt: usize = 0;
     // the anonymous `!{..}` body, completed after the type: member signatures may realize types that construct this one
@@ -168,13 +188,13 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
             sp.complete_nominal(ty, .{ .variant_type = .{ .decl = decl, .tag_mode = mode, .tag_type = tag_ty, .is_unionsized = ck == .def_variant_unionsized, .cases = cases[0..params.len], .traits = traits[0..nt] } });
         },
         else => { // records: `*(..)`, `**(..)` and payload tuples
-            const fields = self.fields_of_node(c);
+            const fields = syntax.fields_of(self.tree, c);
             const names = self.scratch(NamePool.Index, fields.len);
             const types = self.scratch(StaticPool.Index, fields.len);
             for (fields, 0..) |f, i| {
-                const p = Resolver.Param.from_node(self, f);
+                const p = syntax.Param.from_node(self.tree, f);
                 types[i] = dynify(self, realized_type(self, ctx, p.ty));
-                names[i] = self.name_at(p, i);
+                names[i] = decls.name_at(self, p, i);
                 if (std.mem.indexOfScalar(NamePool.Index, names[0..i], names[i]) != null) self.doc.h21_report(.duplicate_declaration, f, names[i], decl);
             }
             sp.complete_nominal(ty, .{ .custom_type = .{ .decl = decl, .is_packed = ck == .def_type_packed, .field_names = names[0..fields.len], .field_types = types[0..fields.len], .traits = traits[0..nt] } });
@@ -185,7 +205,7 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
     if (own != .none) {
         const b = sp.get(own).trait_type.decl;
         const n = sp.get(own).trait_type.member_names.len;
-        for (0..n) |i| self.h06_check_body(b.member(i));
+        for (0..n) |i| decls.h06_check_body(self, b.member(i));
         var grew = true;
         while (grew) {
             grew = false;
@@ -197,30 +217,30 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
     }
     if (sp.tag(ty) == .record_type) {
         // defaults and where-clauses see the fields by name, the snapshot's locals start at the first field
-        const fields = self.fields_of_node(c);
+        const fields = syntax.fields_of(self.tree, c);
         first = self.decl_pool.entries.len();
         for (fields, 0..) |f, i| {
             const t = sp.get(ty).custom_type.field_types[i];
-            const fd = self.h02_declare_local(sp.get(ty).custom_type.field_names[i], f, .field, t);
-            self.decl_pool.flags()[@intFromEnum(fd)].is_mut = Resolver.Param.from_node(self, f).is_mut;
-            calls.link(self, Resolver.Param.from_node(self, f).name, fd, t);
+            const fd = decls.h02_declare_local(self, sp.get(ty).custom_type.field_names[i], f, .field, t);
+            self.decl_pool.flags()[@intFromEnum(fd)].is_mut = syntax.Param.from_node(self.tree, f).is_mut;
+            decls.link(self, syntax.Param.from_node(self.tree, f).name, fd, t);
         }
         // a default sees the fields before its own, a where-clause all of them
-        const at = self.local_names.head - fields.len;
+        const at = self.scopes.names.head - fields.len;
         const names = self.scratch(NamePool.Index, fields.len);
-        @memcpy(names, self.local_names.buf[at..][0..fields.len]);
-        @memset(self.local_names.buf[at..][0..fields.len], .empty);
+        @memcpy(names, self.scopes.names.buf[at..][0..fields.len]);
+        @memset(self.scopes.names.buf[at..][0..fields.len], .empty);
         for (fields, 0..) |f, i| {
-            const p = Resolver.Param.from_node(self, f);
-            if (p.default != 0) _ = self.check(ctx, p.default, sp.get(ty).custom_type.field_types[i]);
-            self.local_names.buf[at + i] = names[i];
+            const p = syntax.Param.from_node(self.tree, f);
+            if (p.default != 0) _ = exprs.check(self, ctx, p.default, sp.get(ty).custom_type.field_types[i]);
+            self.scopes.names.buf[at + i] = names[i];
         }
-        for (fields, 0..) |f, i| self.check_guards(ctx, Resolver.Param.from_node(self, f), sp.get(ty).custom_type.field_types[i]);
+        for (fields, 0..) |f, i| decls.check_guards(self, ctx, syntax.Param.from_node(self.tree, f), sp.get(ty).custom_type.field_types[i]);
     }
     if (!is_trait) {
         for (traits[0..nt]) |t| if (t != own and sp.tag(t) == .trait_type) conform(self, ty, own, t, node);
         if (sp.layout(ty).state == .infinite) _ = self.report(.recursive_by_value_type, node, ty, .none);
-        statics.snapshot(self, decl, node, first);
+        self.bodies.put(self.capture(decl, node, first));
     }
     if (w.size != 0) {
         const v = statics.h08_eval_static(self, ctx, w.size);
@@ -231,11 +251,11 @@ pub fn h19_check_type_def(self: *Resolver, ctx: *FnCtx, decl: DeclPool.Index, no
 }
 
 fn calls_writer(self: *Resolver, m: DeclPool.Index) bool {
-    const s = self.tree.subtree(self.value_node(m));
+    const s = self.tree.subtree(decls.value_node(self, m));
     for (s[0]..s[1]) |x| {
         const d = self.node_decl[x];
         if (self.tree.kind(@intCast(x)) != .fun_call or d == .none or self.tree.kind(self.tree.arg(@intCast(x), 0)) != .member) continue;
-        if (self.tree.kind(self.tree.arg(self.tree.arg(@intCast(x), 0), 0)) == .identifier_self and self.decl_pool.flags()[@intFromEnum(self.real(d))].writes) return true;
+        if (self.tree.kind(self.tree.arg(self.tree.arg(@intCast(x), 0), 0)) == .identifier_self and self.decl_pool.flags()[@intFromEnum(decls.real(self, d))].writes) return true;
     }
     return false;
 }
@@ -245,8 +265,8 @@ fn calls_writer(self: *Resolver, m: DeclPool.Index) bool {
 fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.Index, self_ty: StaticPool.Index, supers: []const StaticPool.Index, of: DeclPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
     const b = self.decl_pool.push_decl(if (self_ty == .none) self.decl_pool.names()[@intFromEnum(of)] else .empty, body, .trait, .trait_type, .{});
-    if (self.realized_args.get(of)) |a| self.realized_args.put(self.alloc, b, a) catch @panic("OOM");
-    if (self.template_of.get(of)) |g| self.template_of.put(self.alloc, b, g) catch @panic("OOM");
+    if (self.decl_pool.realized_args.get(of)) |a| self.decl_pool.realized_args.put(self.alloc, b, a) catch @panic("OOM");
+    if (self.decl_pool.template_of.get(of)) |g| self.decl_pool.template_of.put(self.alloc, b, g) catch @panic("OOM");
     const tr = if (reserved != .none) reserved else sp.reserve_nominal(b);
     self.decl_pool.values()[@intFromEnum(b)] = if (self_ty != .none) self_ty else tr;
     const names = self.scratch(NamePool.Index, self.tree.manychildren(body).len);
@@ -260,7 +280,7 @@ fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.I
         n += 1;
     }
     for (self.tree.manychildren(body)) |s| if (!Resolver.Stmt.from_node(self, s).is_member()) {
-        _ = self.h11_check_assign(ctx, s);
+        _ = decls.h11_check_assign(self, ctx, s);
     };
     const types = self.scratch(StaticPool.Index, n);
     for (0..n) |i| types[i] = decl_type(self, b.member(i));
@@ -269,9 +289,22 @@ fn trait_body(self: *Resolver, ctx: *FnCtx, body: NodeId, reserved: StaticPool.I
 }
 
 pub fn decl_type(self: *Resolver, d: DeclPool.Index) StaticPool.Index {
-    self.h05_ensure_signature(d);
+    decls.h05_ensure_signature(self, d);
     const t = self.decl_pool.tys()[@intFromEnum(d)];
     return if (t == .none) .poison_type else t;
+}
+
+pub fn fields_of(self: *Resolver, rec: StaticPool.Index) []const NodeId {
+    return syntax.fields_of(self.tree, syntax.Def.from_node(self.tree, decls.value_node(self, self.static_pool.get(rec).custom_type.decl)).core);
+}
+
+pub fn sig(self: *Resolver, d: DeclPool.Index) StaticPool.FunType {
+    return self.static_pool.get(self.decl_pool.tys()[@intFromEnum(d)]).function_type;
+}
+
+pub fn fn_ret(self: *Resolver, d: DeclPool.Index) StaticPool.Index {
+    const t = decl_type(self, d);
+    return if (self.static_pool.tag(t) == .function_type) self.static_pool.get(t).function_type.ret else .poison_type;
 }
 
 // implof: every member of the trait and its supers exists with the same signature (`typeof self` read as the type),
@@ -285,7 +318,7 @@ fn conform(self: *Resolver, ty: StaticPool.Index, own: StaticPool.Index, trait: 
         const m = if (own == .none) StaticPool.Member.none else sp.lookup_member(own, name);
         // members with a default may be left out, an override keeps the signature
         if (m != .trait_method) {
-            if (self.tree.kind(self.value_node(tt.decl.member(i))) != .def_fun) self.doc.h21_report(.trait_member_missing, node, name, trait);
+            if (self.tree.kind(decls.value_node(self, tt.decl.member(i))) != .def_fun) self.doc.h21_report(.trait_member_missing, node, name, trait);
             continue;
         }
         const have = sp.apply_vars(&self.abstract_pool, sp.get(own).trait_type.member_types[m.trait_method.index]);
@@ -323,13 +356,13 @@ fn same_as(self: *Resolver, a: StaticPool.Index, b: StaticPool.Index, trait: Sta
 
 pub fn fun_type(self: *Resolver, ctx: *FnCtx, v: NodeId, category: StaticPool.FunType.Category, ret: StaticPool.Index, self_param: StaticPool.Index) StaticPool.Index {
     const header = self.tree.arg(v, 0);
-    const params = self.params_of(v);
+    const params = syntax.params_of(self.tree, v);
     const off = @intFromBool(self_param != .none);
     const buf = self.scratch(StaticPool.Index, params.len + off);
     if (off == 1) buf[0] = self_param;
     for (params, 0..) |p, i| {
-        buf[i + off] = h07_lower_type(self, ctx, Resolver.Param.from_node(self, p).ty);
-        if (statics.holds_template(self, buf[i + off]) and statics.templated(self, buf[i + off]) == .none) buf[i + off] = self.report(.unrealized_template, Resolver.Param.from_node(self, p).ty, buf[i + off], 0);
+        buf[i + off] = h07_lower_type(self, ctx, syntax.Param.from_node(self.tree, p).ty);
+        if (self.static_pool.holds_template(buf[i + off]) and self.static_pool.templated(buf[i + off]) == .none) buf[i + off] = self.report(.unrealized_template, syntax.Param.from_node(self.tree, p).ty, buf[i + off], 0);
     }
     const r = if (self.tree.kind(header) == .partial__fun_def_header_ret) realized_type(self, ctx, self.tree.arg(header, 1)) else ret;
     return self.static_pool.intern(.{ .function_type = .{ .category = category, .params = buf, .ret = r } });
@@ -353,16 +386,16 @@ pub fn dynify(self: *Resolver, t: StaticPool.Index) StaticPool.Index {
 
 pub fn realized_type(self: *Resolver, ctx: *FnCtx, n: NodeId) StaticPool.Index {
     const t = h07_lower_type(self, ctx, n);
-    return if (statics.holds_template(self, t)) self.report(.unrealized_template, n, t, 0) else t;
+    return if (self.static_pool.holds_template(t)) self.report(.unrealized_template, n, t, 0) else t;
 }
 
 pub fn cast_target(self: *Resolver, ctx: *FnCtx, a1: NodeId, from: StaticPool.Index) StaticPool.Index {
     const sp = &self.static_pool;
     const ptr = self.tree.kind(a1) == .type_ptr or self.tree.kind(a1) == .type_ptrmut;
     const inner = if (ptr) self.tree.arg(a1, 0) else a1;
-    if (self.tree.kind(inner) != .type_array or !is_range_kind(self.tree.kind(self.tree.arg(inner, 0)))) return h07_lower_type(self, ctx, a1);
+    if (self.tree.kind(inner) != .type_array or !syntax.props(self.tree.kind(self.tree.arg(inner, 0))).range) return h07_lower_type(self, ctx, a1);
     const g = self.tree.arg(inner, 0);
-    const rg = self.range(g);
+    const rg = syntax.Range.from_node(self.tree, g);
     var src = sp.pointee(from);
     if (src != .poison_type and sp.get(src) != .array_type) src = .none;
     const src_len: ?i128 = if (src != .none and src != .poison_type and sp.tag(sp.get(src).array_type.len) == .int_value) sp.get(sp.get(src).array_type.len).int.bits else null;

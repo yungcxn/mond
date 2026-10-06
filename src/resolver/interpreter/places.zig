@@ -5,6 +5,8 @@ const Interpreter = @import("../Interpreter.zig");
 const calls = @import("calls.zig");
 const types = @import("types.zig");
 const Value = @import("Value.zig");
+const decls = @import("../checker/decls.zig");
+const statics = @import("../checker/statics.zig");
 const NodeId = ParseTree.NodeId;
 const Kind = ParseTree.Node.Kind;
 
@@ -50,12 +52,12 @@ pub fn flush(self: *Interpreter, mark: u32) void {
     while (self.adopted.head > mark) {
         self.adopted.head -= 1;
         const a = self.adopted.buf[self.adopted.head];
-        r.decl_pool.values()[@intFromEnum(a.decl)] = r.retype(self.export_(r.decl_pool.nodes()[@intFromEnum(a.decl)], self.mem.buf[a.cell]), r.decl_pool.tys()[@intFromEnum(a.decl)]);
+        r.decl_pool.values()[@intFromEnum(a.decl)] = statics.retype(r, self.export_(r.decl_pool.nodes()[@intFromEnum(a.decl)], self.mem.buf[a.cell]), r.decl_pool.tys()[@intFromEnum(a.decl)]);
     }
 }
 
 fn decl_of(self: *Interpreter, n: NodeId) DeclPool.Index {
-    return if (self.framed()) self.info(.decl, n) else self.res().use(n);
+    return if (self.framed()) self.info(.decl, n) else decls.use(self.res(), n);
 }
 
 fn stored(self: *Interpreter, n: NodeId, d: DeclPool.Index) Value {
@@ -94,7 +96,7 @@ pub fn store(self: *Interpreter, n: NodeId, d: DeclPool.Index, v: Value) bool {
         return true;
     }
     if (impure(self, n)) return false;
-    r.decl_pool.values()[@intFromEnum(d)] = r.retype(self.export_(r.decl_pool.nodes()[@intFromEnum(d)], v), r.decl_pool.tys()[@intFromEnum(d)]);
+    r.decl_pool.values()[@intFromEnum(d)] = statics.retype(r, self.export_(r.decl_pool.nodes()[@intFromEnum(d)], v), r.decl_pool.tys()[@intFromEnum(d)]);
     return true;
 }
 
@@ -162,7 +164,7 @@ pub fn cell(self: *Interpreter, n: NodeId) ?u32 {
 pub fn declare(self: *Interpreter, n0: NodeId) Value {
     const r = self.res();
     if (!self.framed()) {
-        _ = r.h11_check_assign(self.ctx, n0);
+        _ = decls.h11_check_assign(r, self.ctx, n0);
         return .unit;
     }
     const s = Resolver.Stmt.from_node(r, n0);
@@ -227,7 +229,7 @@ pub fn update(self: *Interpreter, n: NodeId, k: Kind) Value {
 
 pub fn address(self: *Interpreter, n: NodeId) Value {
     const c = cell(self, self.res().tree.arg(n, 0)) orelse return .poison;
-    return .ref(if (self.framed()) self.info(.ty, n) else self.res().self_ptr(self.vtype(self.mem.buf[c])), c);
+    return .ref(if (self.framed()) self.info(.ty, n) else self.res().static_pool.ptr_mut(self.vtype(self.mem.buf[c])), c);
 }
 
 pub fn dereference(self: *Interpreter, n: NodeId) Value {

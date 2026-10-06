@@ -93,6 +93,11 @@ pub const Index = enum(u32) {
 
 alloc: std.mem.Allocator,
 entries: SoD(Entry),
+// realizations: the template a declaration was realized from and the static arguments it was realized with
+template_of: std.AutoHashMapUnmanaged(Index, Index) = .empty,
+realized_args: std.AutoHashMapUnmanaged(Index, StaticPool.Index) = .empty,
+// functions produced by a stcfun: the realization whose static parameters they see
+static_scope: std.AutoHashMapUnmanaged(Index, StaticPool.AbstractKey) = .empty,
 
 pub inline fn init(alloc: std.mem.Allocator, initial_cap: usize) DeclPool {
     return .{ .alloc = alloc, .entries = SoD(Entry).init(alloc, initial_cap) };
@@ -100,6 +105,9 @@ pub inline fn init(alloc: std.mem.Allocator, initial_cap: usize) DeclPool {
 
 pub inline fn deinit(self: *DeclPool) void {
     self.entries.deinit();
+    self.template_of.deinit(self.alloc);
+    self.realized_args.deinit(self.alloc);
+    self.static_scope.deinit(self.alloc);
 }
 
 pub fn push_decl(
@@ -127,7 +135,7 @@ pub fn push_decl(
     return d;
 }
 
-pub inline fn names(self: *DeclPool) []NamePool.Index {
+pub inline fn names(self: *const DeclPool) []NamePool.Index {
     return self.entries.pool.name.buf;
 }
 
@@ -157,4 +165,18 @@ pub inline fn values(self: *const DeclPool) []StaticPool.Index {
 
 pub inline fn next_overloads(self: *const DeclPool) []Index {
     return self.entries.pool.next_overload.buf;
+}
+
+// 1 when the declaration's function type starts with the induced `*Self` (methods except `init`)
+pub fn self_off(self: *const DeclPool, d: Index) usize {
+    return @intFromBool(self.kinds()[@intFromEnum(d)] == .trait_member and self.names()[@intFromEnum(d)] != .init);
+}
+
+// methods: the owning type is the value of the trait body row right before its members; realizations ask their template
+pub fn owner_of(self: *const DeclPool, decl: Index) StaticPool.Index {
+    if (self.template_of.get(decl)) |t| return self.owner_of(t);
+    if (self.kinds()[@intFromEnum(decl)] != .trait_member) return .none;
+    var d = @intFromEnum(decl);
+    while (self.kinds()[d] != .trait) d -= 1;
+    return self.values()[d];
 }

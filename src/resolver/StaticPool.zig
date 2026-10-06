@@ -1,5 +1,4 @@
 const std = @import("std");
-const Resolver = @import("../Resolver.zig");
 const AbstractPool = @import("AbstractPool.zig");
 const NamePool = @import("NamePool.zig");
 const DeclPool = @import("DeclPool.zig");
@@ -581,6 +580,14 @@ pub fn array_elem(self: *const StaticPool, t: Index) Index {
     return if (t != .none and self.tag(t) == .array_type) self.get(t).array_type.elem else .none;
 }
 
+pub fn ptr_mut(self: *StaticPool, t: Index) Index {
+    return self.intern(.{ .ptr_type = .{ .child = t, .mutable = true } });
+}
+
+pub fn fresh_var(self: *StaticPool, vars: *AbstractPool, origin: u32) Index {
+    return self.intern(.{ .abstract_type = vars.fresh(origin) });
+}
+
 pub fn method_decl(self: *const StaticPool, m: @FieldType(Member, "trait_method")) DeclPool.Index {
     return self.get(m.trait).trait_type.decl.member(m.index);
 }
@@ -633,6 +640,56 @@ const tag_props = blk: {
 
 pub inline fn get_tag_prop(self: *const StaticPool, index: Index) TagProperties {
     return tag_props[@intFromEnum(self.tag(index))];
+}
+
+pub fn is_numeric(self: *const StaticPool, t: Index) bool {
+    return t != .none and (self.get_tag_prop(t).is_integer or self.get_tag_prop(t).is_float);
+}
+
+pub fn concrete(self: *StaticPool, vars: *AbstractPool, t: Index) bool {
+    return t != .none and self.tag(self.apply_vars(vars, t)) != .type_var;
+}
+
+// a value's type looked through one pointer to a record or variant (`self`, `with` / `match` on such pointers)
+pub fn deref(self: *StaticPool, vars: *AbstractPool, t0: Index) Index {
+    const t = self.apply_vars(vars, t0);
+    if (!self.is_ptr(t)) return t;
+    const c = self.pointee(t);
+    return if (self.get_tag_prop(c).is_nominal or self.get_tag_prop(c).is_variant) c else t;
+}
+
+// the template a parameter of type `T`, `*T` or `&T` is realized for, or none
+pub fn templated(self: *const StaticPool, p: Index) Index {
+    if (p == .none or p == .poison_type) return .none;
+    const t = self.pointee(p);
+    return if (self.tag(t) == .template_type) t else .none;
+}
+
+pub fn holds_template(self: *const StaticPool, t: Index) bool {
+    if (t == .none or t == .poison_type) return false;
+    return switch (self.get(t)) {
+        .template_type => true,
+        .ptr_type => |x| self.holds_template(x.child),
+        .array_type => |x| self.holds_template(x.elem),
+        .function_type => |f| for (f.params) |x| {
+            if (self.holds_template(x)) break true;
+        } else self.holds_template(f.ret),
+        else => false,
+    };
+}
+
+// a type var left in the type, array lengths aside
+pub fn open_type_var(self: *const StaticPool, t: Index) bool {
+    if (t == .none or !self.has_vars(t)) return false;
+    return switch (self.get(t)) {
+        .abstract_type => true,
+        .array_type => |a| self.open_type_var(a.elem),
+        .ptr_type => |p| self.open_type_var(p.child),
+        .function_type => |f| for (f.params) |p| {
+            if (self.open_type_var(p)) break true;
+        } else self.open_type_var(f.ret),
+        else => false,
+    };
 }
 
 pub fn implements(self: *const StaticPool, ty: Index, trait: Index) bool {

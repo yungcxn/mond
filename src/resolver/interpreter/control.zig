@@ -1,5 +1,5 @@
 const ParseTree = @import("../../ParseTree.zig");
-const Resolver = @import("../../Resolver.zig");
+const syntax = @import("../syntax.zig");
 const StaticPool = @import("../StaticPool.zig");
 const DeclPool = @import("../DeclPool.zig");
 const Interpreter = @import("../Interpreter.zig");
@@ -7,10 +7,10 @@ const calls = @import("calls.zig");
 const places = @import("places.zig");
 const types = @import("types.zig");
 const Value = @import("Value.zig");
+const decls = @import("../checker/decls.zig");
 const Index = StaticPool.Index;
 const NodeId = ParseTree.NodeId;
 const Kind = ParseTree.Node.Kind;
-const Decl = Resolver.Decl;
 
 pub fn jump(ip: *Interpreter, n: NodeId, k: Kind) Value {
     const x: Value = if (k == .ret) ip.eval(ip.res().tree.arg(n, 0)) else .unit;
@@ -45,8 +45,8 @@ pub fn branch(ip: *Interpreter, n: NodeId, k: Kind) Value {
 pub fn block(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
     const scoped = !ip.framed();
-    if (scoped) r.h03_push_scope();
-    defer if (scoped) r.h04_pop_scope();
+    if (scoped) r.scopes.h03_push_scope();
+    defer if (scoped) r.scopes.h04_pop_scope();
     const mark = ip.defers.head;
     var v: Value = .unit;
     for (r.tree.manychildren(n)) |s| {
@@ -67,9 +67,9 @@ pub fn block(ip: *Interpreter, n: NodeId) Value {
 pub fn loop(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
     const framed = ip.framed();
-    if (!framed) r.h03_push_scope();
-    defer if (!framed) r.h04_pop_scope();
-    const l = r.loop_parts(n);
+    if (!framed) r.scopes.h03_push_scope();
+    defer if (!framed) r.scopes.h04_pop_scope();
+    const l = syntax.Loop.from_node(r.tree, n);
     const pre = l.repeat != 0 and l.cond == 0;
     var seq: Value = .empty;
     var lo: Value = .empty;
@@ -81,8 +81,8 @@ pub fn loop(ip: *Interpreter, n: NodeId) Value {
     if (l.seq != 0) {
         const s = l.seq;
         const sk = r.tree.kind(s);
-        if (Resolver.is_range_kind(sk)) {
-            const g = r.range(s);
+        if (syntax.props(sk).range) {
+            const g = syntax.Range.from_node(r.tree, s);
             lo = if (g.lo != 0) ip.eval(g.lo) else .int(.u64_type, 0);
             if (g.hi != 0) hi = ip.eval(g.hi);
             incl = g.incl;
@@ -102,12 +102,12 @@ pub fn loop(ip: *Interpreter, n: NodeId) Value {
             if (ip.count(seq) == null) {
                 const c = c0 orelse if (place) places.cell(ip, s) orelse return .poison else ip.put(sv);
                 const held = ip.mem.buf[c];
-                recv = if (held.is_ref()) held else .ref(r.self_ptr(ip.vtype(held)), c);
+                recv = if (held.is_ref()) held else .ref(sp.ptr_mut(ip.vtype(held)), c);
                 iter = ip.vtype(ip.deref(held));
                 seq = .empty;
             }
         }
-        it = if (framed) ip.info(.decl, l.head) else r.h02_declare_local(if (l.variable != 0) r.name_pool.name_of(r.tree, r.src_bytes, l.variable) else .it, n, .loop_variable, .none);
+        it = if (framed) ip.info(.decl, l.head) else decls.h02_declare_local(r, if (l.variable != 0) r.name_pool.name_of(r.tree, r.src_bytes, l.variable) else .it, n, .loop_variable, .none);
     }
     const want = !framed or r.static_pool.tag(r.static_pool.apply_vars(&r.abstract_pool, ip.info(.ty, n))) == .array_type;
     const mark = ip.list.head;
@@ -165,11 +165,11 @@ pub fn match(ip: *Interpreter, n: NodeId) Value {
     const r = ip.res();
     const x = ip.eval(r.tree.arg(n, 0));
     const t = if (ip.framed()) ip.info(.ty, r.tree.arg(n, 0)) else x.ty;
-    const v = if (x.is_ref() and r.deref(t) != t) ip.deref(x) else x;
+    const v = if (x.is_ref() and r.static_pool.deref(&r.abstract_pool, t) != t) ip.deref(x) else x;
     if (v.is(.poison_type) or ip.unwind != .none) return v;
     const scoped = !ip.framed();
-    if (scoped) r.h03_push_scope();
-    defer if (scoped) r.h04_pop_scope();
+    if (scoped) r.scopes.h03_push_scope();
+    defer if (scoped) r.scopes.h04_pop_scope();
     if (!scoped) for (r.tree.manychildren(r.tree.arg(n, 1))) |arm| if (ip.info(.value, arm) == .bool_true) return ip.eval(r.tree.arg(arm, 1));
     for (r.tree.manychildren(r.tree.arg(n, 1))) |arm| if (matches(ip, r.tree.arg(arm, 0), v)) return ip.eval(r.tree.arg(arm, 1));
     return ip.fail(n, .non_exhaustive_match, ip.pool(v), .none);
@@ -205,7 +205,7 @@ pub fn matches(ip: *Interpreter, p: NodeId, v: Value) bool {
             return false;
         },
         .partial__match_case_pattern_typecast => {
-            const t = if (framed) ip.info(.ty, r.tree.arg(p, 1)) else r.h07_lower_type(ip.ctx, r.tree.arg(p, 0));
+            const t = if (framed) ip.info(.ty, r.tree.arg(p, 1)) else @import("../checker/types.zig").h07_lower_type(r, ip.ctx, r.tree.arg(p, 0));
             const c = case_of(ip, v);
             const vt = ip.vtype(v);
             const ok = if (c != .none) sp.get(c).variant_case_type.variant == t or sp.tag(t) == .variant_union_type else vt == t or sp.implements(vt, t);
@@ -228,13 +228,13 @@ pub fn matches(ip: *Interpreter, p: NodeId, v: Value) bool {
                 fields = if (v.is_heap()) .block(rec, v.at(), v.len()) else if (sp.tag(v.index()) == .variant_value) .of(sp, sp.get(v.index()).variant_value.payload) else .empty;
             }
             for (r.tree.manychildren(r.tree.arg(p, 1)), 0..) |a, i| {
-                const fi = r.field_of(rec, a, i) orelse return false;
-                if (fi >= (ip.span(fields) orelse 0) or !matches(ip, r.arg_value(a), ip.elem(fields, @intCast(fi)))) return false;
+                const fi = @import("../checker/calls.zig").field_of(r, rec, a, i) orelse return false;
+                if (fi >= (ip.span(fields) orelse 0) or !matches(ip, syntax.arg_value(r.tree, a), ip.elem(fields, @intCast(fi)))) return false;
             }
             return true;
         },
         .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => {
-            const g = r.range(p);
+            const g = syntax.Range.from_node(r.tree, p);
             if (!Value.is_int(v.ty) or g.lo != 0 and Value.less(v, ip.eval(g.lo))) return false;
             if (g.hi == 0) return true;
             const hi = ip.eval(g.hi);
@@ -253,7 +253,7 @@ fn name(ip: *Interpreter, id: NodeId, v: Value) void {
     if (ip.framed()) return places.bind(ip, ip.info(.decl, id), v);
     const nm = r.name_pool.name_of(r.tree, r.src_bytes, id);
     if (nm == .underscore) return;
-    const d = r.h02_declare_local(nm, id, .pattern_binder, ip.vtype(v));
+    const d = decls.h02_declare_local(r, nm, id, .pattern_binder, ip.vtype(v));
     r.node_decl[id] = d;
     places.bind(ip, d, v);
 }

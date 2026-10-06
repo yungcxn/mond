@@ -1,6 +1,5 @@
 const std = @import("std");
 const StaticPool = @import("StaticPool.zig");
-const DynBuf = @import("../ds/dynbuf.zig").DynBuf;
 const SoD = @import("../ds/dynbuf.zig").SoD;
 const ParseTree = @import("../ParseTree.zig");
 
@@ -71,6 +70,17 @@ pub fn h21_report(doc: *Doctor, code: Disorder, node: ParseTree.NodeId, a: anyty
 
 pub fn has(doc: *const Doctor, n: ParseTree.NodeId) bool {
     return std.mem.indexOfScalar(ParseTree.NodeId, doc.diagnostics.sliced_field(.node), n) != null;
+}
+
+// whether an error was reported since `mark` inside the subtree of `v`
+pub fn errors_since(doc: *const Doctor, tree: *const ParseTree, mark: usize, v: ParseTree.NodeId) bool {
+    const d = doc.diagnostics.sliced();
+    var s: ?[2]ParseTree.NodeId = null;
+    for (d.severity[mark..], d.node[mark..]) |sev, n| if (sev == .@"error") {
+        if (s == null) s = tree.subtree(v);
+        if (n >= s.?[0] and n < s.?[1]) return true;
+    };
+    return false;
 }
 
 pub fn rewind(doc: *Doctor, mark: u32) void {

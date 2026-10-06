@@ -477,7 +477,7 @@ pub const HighLowerer = struct {
         const n = l.r.decl_pool.names()[@intFromEnum(d)];
         if (n == .empty or n == .none) return false;
         try w.writeAll(l.r.name_pool.get(n));
-        const args = l.r.realized_args.get(d) orelse return true;
+        const args = l.r.decl_pool.realized_args.get(d) orelse return true;
         try w.writeAll("(");
         for (0..l.sp.get(args).aggregate.elems.len) |i| {
             if (i > 0) try w.writeAll(type_col ++ ", ");
@@ -905,7 +905,7 @@ pub const Inspector = struct {
         const l = s.l.?;
         const h = l.head_of.get(d) orelse d;
         var count: usize = 0;
-        for (l.ir.functions.sliced_field(.decl), 0..) |fd, fi| if (fd == h or fd != .none and s.r.template_of.get(fd) == h) {
+        for (l.ir.functions.sliced_field(.decl), 0..) |fd, fi| if (fd == h or fd != .none and s.r.decl_pool.template_of.get(fd) == h) {
             try HighLowerer.func(s.w, l, fi);
             count += 1;
         };
@@ -916,7 +916,7 @@ pub const Inspector = struct {
         if (!is_type(s.r.decl_pool.kinds()[@intFromEnum(d)])) return false;
         for (s.r.decl_pool.entries.sliced_field(.value), 0..) |v, i| {
             const di: DeclPool.Index = @enumFromInt(i);
-            if (v != .none and (di == d or s.r.template_of.get(di) == d)) try HighLowerer.typedef(s.w, s.l.?, v);
+            if (v != .none and (di == d or s.r.decl_pool.template_of.get(di) == d)) try HighLowerer.typedef(s.w, s.l.?, v);
         }
         return true;
     }

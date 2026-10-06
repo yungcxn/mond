@@ -1,6 +1,5 @@
 const std = @import("std");
 const ParseTree = @import("../ParseTree.zig");
-const DynBuf = @import("../ds/dynbuf.zig").DynBuf;
 
 // views into source-file-strings -> mapped to identifier ids (`Index`)
 const NamePool = @This();

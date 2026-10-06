@@ -1,14 +1,18 @@
 const std = @import("std");
 const DynBuf = @import("../ds/dynbuf.zig").DynBuf;
 const ParseTree = @import("../ParseTree.zig");
+const syntax = @import("syntax.zig");
 const Resolver = @import("../Resolver.zig");
 const StaticPool = @import("StaticPool.zig");
+const BodyPool = @import("BodyPool.zig");
 const DeclPool = @import("DeclPool.zig");
 const Value = @import("interpreter/Value.zig");
 const places = @import("interpreter/places.zig");
 const control = @import("interpreter/control.zig");
 const calls = @import("interpreter/calls.zig");
 const types = @import("interpreter/types.zig");
+const exprs = @import("checker/exprs.zig");
+const statics = @import("checker/statics.zig");
 const Index = StaticPool.Index;
 const NodeId = ParseTree.NodeId;
 const Kind = ParseTree.Node.Kind;
@@ -20,7 +24,7 @@ pub const max_depth: u32 = 256;
 pub const no_cell = std.math.maxInt(u32);
 
 // env: the closure a frame was called through, its captures resolve to the closure's cells
-const Frame = struct { body: Resolver.Body, base: u32, env: Value = .empty };
+const Frame = struct { body: BodyPool.Body, base: u32, env: Value = .empty };
 const Session = struct { ctx: *Resolver.FnCtx, mem: u32, adopted: u32 };
 const Adopted = struct { decl: DeclPool.Index, cell: u32 };
 const Defer = struct { node: NodeId, cell: u32 };
@@ -61,7 +65,7 @@ pub fn res(self: *Interpreter) *Resolver {
     return @alignCast(@fieldParentPtr("interpreter", self));
 }
 
-fn open(self: *Interpreter, ctx: *Resolver.FnCtx, body: Resolver.Body) Session {
+fn open(self: *Interpreter, ctx: *Resolver.FnCtx, body: BodyPool.Body) Session {
     if (self.depth == 0) self.budget = step_budget;
     self.depth += 1;
     const s = Session{ .ctx = self.ctx, .mem = self.mem.head, .adopted = self.adopted.head };
@@ -98,13 +102,13 @@ pub fn static_match(self: *Interpreter, ctx: *Resolver.FnCtx, pat: NodeId, v: In
     return control.matches(self, pat, Value.of(&self.res().static_pool, v));
 }
 
-pub fn run(self: *Interpreter, ctx: *Resolver.FnCtx, root: NodeId, body: Resolver.Body) Index {
+pub fn run(self: *Interpreter, ctx: *Resolver.FnCtx, root: NodeId, body: BodyPool.Body) Index {
     const s = self.open(ctx, body);
     defer self.close(s);
     return self.export_(root, self.coerce(self.result(self.eval(root)), ctx.ret_type));
 }
 
-pub fn enter(self: *Interpreter, body: Resolver.Body) void {
+pub fn enter(self: *Interpreter, body: BodyPool.Body) void {
     self.frames.push(.{ .body = body, .base = self.alloc(body.locals) });
 }
 
@@ -155,7 +159,7 @@ pub fn origin(self: *const Interpreter, n: NodeId) NodeId {
 }
 
 pub fn fail(self: *Interpreter, n: NodeId, code: @import("Doctor.zig").Disorder, a: anytype, b: anytype) Value {
-    if (!self.res().errors_since(0, n)) _ = self.report(code, n, a, b);
+    if (!self.res().doc.errors_since(self.res().tree, 0, n)) _ = self.report(code, n, a, b);
     return .poison;
 }
 
@@ -174,10 +178,10 @@ pub fn hint(self: *Interpreter, n: NodeId) Index {
 }
 
 pub fn checked(self: *Interpreter, n: NodeId) Index {
-    return if (self.framed()) self.info(.ty, n) else self.res().h09_check_expr(self.ctx, n, .none);
+    return if (self.framed()) self.info(.ty, n) else exprs.h09_check_expr(self.res(), self.ctx, n, .none);
 }
 
-pub fn info(self: *Interpreter, comptime field: @EnumLiteral(), n: NodeId) @FieldType(Resolver.EphemeralNodeInfo, @tagName(field)) {
+pub fn info(self: *Interpreter, comptime field: @EnumLiteral(), n: NodeId) @FieldType(BodyPool.NodeInfo, @tagName(field)) {
     return self.res().node_info(self.top().body, field, n);
 }
 
@@ -319,9 +323,17 @@ fn zero_case(self: *Interpreter, v: StaticPool.VariantType) Value {
 pub fn captures(self: *Interpreter, d: DeclPool.Index) []const DeclPool.Index {
     if (self.caps.get(d)) |c| return self.cap_list.buf[c[0]..][0..c[1]];
     const start = self.cap_list.head;
-    self.res().captures(d, &self.cap_list);
+    self.res().bodies.captures(&self.res().decl_pool, d, &self.cap_list);
     self.caps.put(self.frames.alloc, d, .{ start, self.cap_list.head - start }) catch @panic("OOM");
     return self.cap_list.buf[start..self.cap_list.head];
+}
+
+// a closure holds a pointer to a mutable or aggregate local, a copy of anything else
+fn by_ref(self: *Interpreter, c: DeclPool.Index) bool {
+    const r = self.res();
+    const sp = &r.static_pool;
+    const t = sp.apply_vars(&r.abstract_pool, r.decl_pool.tys()[@intFromEnum(c)]);
+    return r.decl_pool.flags()[@intFromEnum(c)].is_mut or t != .none and (sp.tag(t) == .record_type or sp.tag(t) == .array_type and sp.get(t).array_type.len != StaticPool.dyn_len);
 }
 
 // a function as a value: with captures a block of the function and its environment, like the lowerer's closure
@@ -334,7 +346,7 @@ pub fn closure(self: *Interpreter, d: DeclPool.Index) Value {
     self.mem.buf[at] = f;
     for (caps, 1..) |c, i| {
         const s = places.slot(self, c);
-        const x: Value = if (s != null and r.by_ref(c)) .ref(r.self_ptr(r.decl_pool.tys()[@intFromEnum(c)]), s.?) else self.own(places.peek(self, c));
+        const x: Value = if (s != null and self.by_ref(c)) .ref(r.static_pool.ptr_mut(r.decl_pool.tys()[@intFromEnum(c)]), s.?) else self.own(places.peek(self, c));
         self.mem.buf[at + i] = x;
     }
     return .block(r.decl_pool.tys()[@intFromEnum(d)], at, @intCast(caps.len + 1));
@@ -345,7 +357,7 @@ pub fn captured(self: *Interpreter, f: Frame, d: DeclPool.Index) ?u32 {
     if (!f.env.is_heap() or f.body.decl == .none) return null;
     const k = std.mem.indexOfScalar(DeclPool.Index, self.captures(f.body.decl), d) orelse return null;
     const c = f.env.at() + 1 + @as(u32, @intCast(k));
-    return if (self.mem.buf[c].is_ref() and self.res().by_ref(d)) self.mem.buf[c].at() else c;
+    return if (self.mem.buf[c].is_ref() and self.by_ref(d)) self.mem.buf[c].at() else c;
 }
 
 pub fn eval(self: *Interpreter, n: NodeId) Value {
@@ -354,15 +366,15 @@ pub fn eval(self: *Interpreter, n: NodeId) Value {
     if (!self.charge(n, 1)) return .poison;
     const b = self.top().body;
     if (n -% b.lo < b.len) {
-        const c = r.body_nodes.pool.value.buf[b.start + n - b.lo];
+        const c = r.bodies.nodes.pool.value.buf[b.start + n - b.lo];
         if (c != .none) return .of(sp, c);
     }
     const k = r.tree.kind(n);
     const a0 = r.tree.arg(n, 0);
     const a1 = r.tree.arg(n, 1);
     return switch (k) {
-        .int, .char, .float, .string, .boolean_true, .boolean_false => .fit(.of(sp, r.literal_value(n, false)), self.hint(n)),
-        .neg_num => if (r.is_literal(n)) .fit(.of(sp, r.literal_value(a0, true)), self.hint(n)) else self.unary(n, k, self.eval(a0)),
+        .int, .char, .float, .string, .boolean_true, .boolean_false => .fit(.of(sp, statics.literal_value(r, n, false)), self.hint(n)),
+        .neg_num => if (syntax.is_literal(r.tree, n)) .fit(.of(sp, statics.literal_value(r, a0, true)), self.hint(n)) else self.unary(n, k, self.eval(a0)),
         .neg_logic => self.unary(n, k, self.eval(a0)),
         .capture, .do => self.eval(a0),
         .ret, .ret_void, .brk, .cont => control.jump(self, n, k),
