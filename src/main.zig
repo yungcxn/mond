@@ -32,9 +32,60 @@ pub const panic = std.debug.FullPanic(struct {
     }
 }.f);
 
+// command line flags, the field `dbg_less` is `--dbg-less`
+// bool: set when present, string: takes the next arg, slice: takes all following args
+const Flags = struct {
+    dbg_less: bool = false,
+    inspect: ?[]const [:0]const u8 = null,
+
+    const fields = @typeInfo(Flags).@"struct".fields;
+    const usage = blk: {
+        var u: []const u8 = "usage: mond";
+        for (fields) |f| u = u ++ " [" ++ flag(f.name) ++ switch (f.type) {
+            bool => "",
+            ?[:0]const u8 => " arg",
+            else => " args...",
+        } ++ "]";
+        break :blk u ++ "\n";
+    };
+
+    fn flag(comptime name: []const u8) []const u8 {
+        comptime var f = ("--" ++ name).*;
+        std.mem.replaceScalar(u8, &f, '_', '-');
+        const out = f;
+        return &out;
+    }
+
+    fn parse(args: []const [:0]const u8) ?Flags {
+        var flags: Flags = .{};
+        var i: usize = 1;
+        next: while (i < args.len) : (i += 1) {
+            inline for (fields) |f| if (std.mem.eql(u8, args[i], comptime flag(f.name))) {
+                switch (f.type) {
+                    bool => @field(flags, f.name) = true,
+                    ?[:0]const u8 => {
+                        i += 1;
+                        @field(flags, f.name) = if (i < args.len) args[i] else return null;
+                    },
+                    ?[]const [:0]const u8 => {
+                        @field(flags, f.name) = args[i + 1 ..];
+                        i = args.len;
+                    },
+                    else => @compileError("unsupported flag type " ++ @typeName(f.type)),
+                }
+                continue :next;
+            };
+            return null;
+        }
+        return flags;
+    }
+};
+
 pub fn main(init: std.process.Init) void {
     const io = init.io;
     const alloc = init.gpa;
+    const args = init.minimal.args.toSlice(init.arena.allocator()) catch |e| @panic(@errorName(e));
+    const flags = Flags.parse(args) orelse return std.debug.print(Flags.usage, .{});
 
     const in_f = std.Io.Dir.cwd().openFile(
         io,
@@ -43,14 +94,6 @@ pub fn main(init: std.process.Init) void {
     ) catch @panic("File not found");
     const in_bytes = alloc_file_bytes(alloc, io, in_f);
     defer alloc.free(in_bytes);
-
-    var dbg_less = false;
-    var inspect = false;
-    var args = init.minimal.args.iterate();
-    while (args.next()) |a| {
-        dbg_less = dbg_less or std.mem.eql(u8, a, "--dbg-less");
-        inspect = inspect or std.mem.eql(u8, a, "--dbg-inspect");
-    }
 
     var lexer = Lexer{ .src_bytes = in_bytes, .tokens = .init(alloc, 10000) };
     defer lexer.tokens.deinit();
@@ -68,14 +111,14 @@ pub fn main(init: std.process.Init) void {
 
     stage = .none;
 
-    if (inspect and !resolved) return dbg.Inspector.run(io, &resolver, null) catch |e| @panic(@errorName(e));
-    if (debug and !inspect) (if (dbg_less) dbg.Resolver.print(io, &resolver) else dbg.Resolver.print_tree(io, &resolver)) catch |e| @panic(@errorName(e));
+    if (flags.inspect) |q| if (!resolved) return dbg.Inspector.run(io, &resolver, null, q) catch |e| @panic(@errorName(e));
+    if (debug and flags.inspect == null) (if (flags.dbg_less) dbg.Resolver.print(io, &resolver) else dbg.Resolver.print_tree(io, &resolver)) catch |e| @panic(@errorName(e));
     if (!resolved) return;
 
     var lowerer = HighLowerer.init(alloc, &resolver);
     defer lowerer.deinit();
     lowerer.lower();
 
-    if (inspect) return dbg.Inspector.run(io, &resolver, &lowerer) catch |e| @panic(@errorName(e));
+    if (flags.inspect) |q| return dbg.Inspector.run(io, &resolver, &lowerer, q) catch |e| @panic(@errorName(e));
     if (debug) dbg.HighLowerer.print(io, &lowerer) catch |e| @panic(@errorName(e));
 }

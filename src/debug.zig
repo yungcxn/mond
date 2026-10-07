@@ -760,12 +760,10 @@ pub const Inspector = struct {
     parent: []NodeId,
     owner: []DeclPool.Index,
 
-    pub fn run(io: std.Io, r: *Res, l: ?*Low) !void {
+    pub fn run(io: std.Io, r: *Res, l: ?*Low, queries: []const [:0]const u8) !void {
         const a = std.heap.smp_allocator;
         var ob: [1 << 16]u8 = undefined;
         var fw = std.Io.File.stdout().writerStreaming(io, &ob);
-        var ib: [4096]u8 = undefined;
-        var fr = std.Io.File.stdin().readerStreaming(io, &ib);
         var line_starts = Resolver.lines(r);
         defer line_starts.deinit();
         const n = r.tree.ast_nodes.len();
@@ -785,15 +783,12 @@ pub const Inspector = struct {
             owner[dn] = @enumFromInt(i);
         };
         const s = Inspector{ .w = &fw.interface, .r = r, .l = l, .tree = .{ .w = &fw.interface, .t = r.tree, .src = r.src_bytes, .r = r, .marked = marked }, .starts = line_starts.sliced(), .parent = parent, .owner = owner };
-        try s.w.writeAll(dim ++ "[DEBUG INSPECTOR] name | #decl | :line\n" ++ reset);
-        try s.w.flush();
-        while (try fr.interface.takeDelimiter('\n')) |raw| {
-            const q = std.mem.trim(u8, raw, " \t\r");
-            if (q.len == 0) continue;
+        if (queries.len == 0) try s.w.writeAll(dim ++ "usage: mond --inspect (name | #decl | :line)...\n" ++ reset);
+        for (queries) |q| if (q.len > 0) {
             try s.w.print(bold ++ "\n▸ {s}\n" ++ reset, .{q});
             if (!(if (q[0] == ':') try s.line(q[1..]) else try s.decls(q))) try s.w.writeAll(err_col ++ "  no match\n" ++ reset);
-            try s.w.flush();
-        }
+        };
+        try s.w.flush();
     }
 
     fn children(t: *ParseTree, p: NodeId) []const NodeId {
