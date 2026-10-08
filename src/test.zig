@@ -52,7 +52,7 @@ fn run(a: std.mem.Allocator, src: []u8) !Result {
             const d = r.doc.diagnostics.sliced();
             for (d.code, d.node, d.a, d.b) |code, node, x, y| {
                 var msg: std.Io.Writer.Allocating = .init(a);
-                try debug.print_operands(&msg.writer, r, code, x, y);
+                try debug.print_operands(&msg.writer, r, code, x, y, true);
                 try out.append(a, .{ .line = if (debug.node_span(&parser.tree, src, node)) |s| line_at(src, s[0]) else 1, .code = @tagName(code), .msg = msg.written() });
             }
         } else |e| try out.append(a, .{ .line = line_at(src, lexer.tokens.pool.span.buf[parser.tok_cursor -| 1][0]), .code = @errorName(e) });

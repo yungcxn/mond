@@ -58,7 +58,7 @@ pub const Resolver = struct {
             const span = node_span(r.tree, r.src_bytes, node);
             const line = if (span) |s| line_of(starts, s[0]) else 0;
             if (span) |s| try w.print(dim ++ ", :{d}:{d}" ++ reset, .{ line + 1, s[0] - starts[line] + 1 });
-            try print_operands(w, r, code, a, b);
+            try print_operands(w, r, code, a, b, true);
             try w.writeAll("\n");
             if (span) |s| {
                 const end = if (line + 1 < starts.len) starts[line + 1] - 1 else @as(u32, @intCast(r.src_bytes.len));
@@ -190,7 +190,7 @@ const Tree = struct {
         const diags = r.doc.diagnostics.sliced();
         for (diags.node, diags.code, diags.severity, diags.a, diags.b) |n, code, sev, a, b| if (n == idx) {
             try s.w.print("{s}  ✗ {s}" ++ reset, .{ if (sev == .@"error") err_col else warn_col, @tagName(code) });
-            try print_operands(s.w, r, code, a, b);
+            try print_operands(s.w, r, code, a, b, true);
         };
     }
 };
@@ -201,8 +201,11 @@ fn decl_name(r: *Res, d: DeclPool.Index) []const u8 {
 }
 
 const Operand = enum { none, name, type, int, decl };
+const Ink = struct { dim: []const u8 = "", reset: []const u8 = "", bold: []const u8 = "", ty: []const u8 = "" };
 
-pub fn print_operands(w: *std.Io.Writer, r: *Res, code: Doctor.Disorder, a: u32, b: u32) !void {
+// `paint`: ansi colors for a terminal, plain text for editors
+pub fn print_operands(w: *std.Io.Writer, r: *Res, code: Doctor.Disorder, a: u32, b: u32, comptime paint: bool) !void {
+    const ink: Ink = if (paint) .{ .dim = dim, .reset = reset, .bold = bold, .ty = type_col } else .{};
     const f: struct { []const u8, Operand, []const u8, Operand } = switch (code) {
         .undefined_name, .declaration_cycle => .{ "name", .name, "", .none },
         .duplicate_declaration => .{ "name", .name, "first declared as", .decl },
@@ -226,16 +229,16 @@ pub fn print_operands(w: *std.Io.Writer, r: *Res, code: Doctor.Disorder, a: u32,
         f[3],
         b,
     } }) |op| if (op[1] != .none and (op[1] == .int or op[2] != std.math.maxInt(u32))) {
-        try w.print("  " ++ dim ++ "{s}" ++ reset ++ " ", .{op[0]});
+        try w.print("  " ++ ink.dim ++ "{s}" ++ ink.reset ++ " ", .{op[0]});
         switch (op[1]) {
-            .name => try w.print(bold ++ "`{s}`" ++ reset, .{if (op[2] < r.name_pool.map.count()) r.name_pool.get(@enumFromInt(op[2])) else "?"}),
+            .name => try w.print(ink.bold ++ "`{s}`" ++ ink.reset, .{if (op[2] < r.name_pool.map.count()) r.name_pool.get(@enumFromInt(op[2])) else "?"}),
             .type => {
-                try w.writeAll(type_col);
+                try w.writeAll(ink.ty);
                 if (op[2] < r.static_pool.items.len()) try r.static_pool.format(&r.name_pool, &r.abstract_pool, @enumFromInt(op[2]), w) else try w.writeAll("?");
-                try w.writeAll(reset);
+                try w.writeAll(ink.reset);
             },
-            .int => try w.print(bold ++ "{d}" ++ reset, .{op[2]}),
-            .decl => try w.print(bold ++ "#{d}" ++ reset, .{op[2]}),
+            .int => try w.print(ink.bold ++ "{d}" ++ ink.reset, .{op[2]}),
+            .decl => try w.print(ink.bold ++ "#{d}" ++ ink.reset, .{op[2]}),
             .none => {},
         }
     };

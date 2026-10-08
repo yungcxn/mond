@@ -2,11 +2,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
     const exe = b.addExecutable(.{
         .name = "mond",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
-            .target = b.standardTargetOptions(.{}),
+            .target = target,
             .optimize = .ReleaseFast,
         }),
     });
@@ -34,5 +35,20 @@ pub fn build(b: *std.Build) void {
         });
         const check = b.step("check", "Check if mond compiles.");
         check.dependOn(&exe_check.step);
+    }
+
+    { // the language server, every editor plugin in lsp/ gets its own copy
+        const lsp = b.addExecutable(.{
+            .name = "mond-lsp",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("lsp/main.zig"),
+                .target = target,
+                .optimize = .ReleaseFast,
+            }),
+        });
+        const step = b.step("lsp", "Build the language server into the editor plugins in lsp/.");
+        for ([_][]const u8{ "../lsp/vscode", "../lsp/vim" }) |dir| {
+            step.dependOn(&b.addInstallArtifact(lsp, .{ .dest_dir = .{ .override = .{ .custom = dir } } }).step);
+        }
     }
 }
