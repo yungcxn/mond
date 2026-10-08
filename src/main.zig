@@ -32,38 +32,53 @@ pub const panic = std.debug.FullPanic(struct {
     }
 }.f);
 
-// command line flags, the field `dbg_less` is `--dbg-less`
+// command line flags,
+// - example: the field `dbg_less` is `--dbg-less`
+// - just a number: positional arg after execname
 // bool: set when present, string: takes the next arg, slice: takes all following args
-const Flags = struct {
+const Args = struct {
+    build: [:0]const u8,
     dbg_less: bool = false,
     inspect: ?[]const [:0]const u8 = null,
 
-    const fields = @typeInfo(Flags).@"struct".fields;
+    const fields = @typeInfo(Args).@"struct".fields;
     const usage = blk: {
         var u: []const u8 = "usage: mond";
-        for (fields) |f| u = u ++ " [" ++ flag(f.name) ++ switch (f.type) {
-            bool => "",
-            ?[:0]const u8 => " arg",
-            else => " args...",
-        } ++ "]";
+        for (fields) |f| u = u ++ switch (f.type) {
+            bool => " [" ++ Args.arg(f.name) ++ "/" ++ Args.short_arg(f.name) ++ "]",
+            [:0]const u8 => " " ++ Args.arg(f.name) ++ "/" ++ Args.short_arg(f.name) ++ " <arg>",
+            ?[:0]const u8 => " [" ++ Args.arg(f.name) ++ "/" ++ Args.short_arg(f.name) ++ " <arg>]",
+            ?[]const [:0]const u8 => " [" ++ Args.arg(f.name) ++ "/" ++ Args.short_arg(f.name) ++ " <args...>]",
+            else => @compileError("unsupported flag type " ++ @typeName(f.type)),
+        };
         break :blk u ++ "\n";
     };
 
-    fn flag(comptime name: []const u8) []const u8 {
+    fn arg(comptime name: []const u8) []const u8 {
         comptime var f = ("--" ++ name).*;
         std.mem.replaceScalar(u8, &f, '_', '-');
         const out = f;
         return &out;
     }
 
-    fn parse(args: []const [:0]const u8) ?Flags {
-        var flags: Flags = .{};
+    fn short_arg(comptime name: []const u8) []const u8 {
+        return ("-" ++ name[0..1]);
+    }
+
+    fn parse(args: []const [:0]const u8) ?Args {
+        var flags: Args = undefined;
         var i: usize = 1;
         next: while (i < args.len) : (i += 1) {
-            inline for (fields) |f| if (std.mem.eql(u8, args[i], comptime flag(f.name))) {
+            inline for (fields) |f| if (std.mem.eql(u8, args[i], comptime arg(f.name)) or
+                std.mem.eql(u8, args[i], comptime short_arg(f.name)))
+            {
                 switch (f.type) {
                     bool => @field(flags, f.name) = true,
                     ?[:0]const u8 => {
+                        i += 1;
+                        @field(flags, f.name) = if (i < args.len) args[i] else null;
+                    },
+                    [:0]const u8 => {
                         i += 1;
                         @field(flags, f.name) = if (i < args.len) args[i] else return null;
                     },
@@ -84,14 +99,14 @@ const Flags = struct {
 pub fn main(init: std.process.Init) void {
     const io = init.io;
     const alloc = init.gpa;
-    const args = init.minimal.args.toSlice(init.arena.allocator()) catch |e| @panic(@errorName(e));
-    const flags = Flags.parse(args) orelse return std.debug.print(Flags.usage, .{});
+    const initargs = init.minimal.args.toSlice(init.arena.allocator()) catch |e| @panic(@errorName(e));
+    const args = Args.parse(initargs) orelse return std.debug.print(Args.usage, .{});
 
-    const in_f = std.Io.Dir.cwd().openFile(
-        io,
-        "./examples/huge.mn",
-        .{},
-    ) catch @panic("File not found");
+    const in_f = std.Io.Dir.cwd().openFile(io, args.build, .{}) catch {
+        std.debug.print("Error opening file: {s}\n", .{args.build});
+        return;
+    };
+
     const in_bytes = alloc_file_bytes(alloc, io, in_f);
     defer alloc.free(in_bytes);
 
@@ -111,14 +126,29 @@ pub fn main(init: std.process.Init) void {
 
     stage = .none;
 
-    if (flags.inspect) |q| if (!resolved) return dbg.Inspector.run(io, &resolver, null, q) catch |e| @panic(@errorName(e));
-    if (debug and flags.inspect == null) (if (flags.dbg_less) dbg.Resolver.print(io, &resolver) else dbg.Resolver.print_tree(io, &resolver)) catch |e| @panic(@errorName(e));
+    if (args.inspect) |q| if (!resolved) {
+        return dbg.Inspector.run(io, &resolver, null, q) catch |e| {
+            @panic(@errorName(e));
+        };
+    };
+
+    if (debug and args.inspect == null) {
+        if (args.dbg_less) {
+            dbg.Resolver.print(io, &resolver) catch |e| @panic(@errorName(e));
+        } else {
+            dbg.Resolver.print_tree(io, &resolver) catch |e| @panic(@errorName(e));
+        }
+    }
+
     if (!resolved) return;
 
     var lowerer = HighLowerer.init(alloc, &resolver);
     defer lowerer.deinit();
     lowerer.lower();
 
-    if (flags.inspect) |q| return dbg.Inspector.run(io, &resolver, &lowerer, q) catch |e| @panic(@errorName(e));
+    if (args.inspect) |q| {
+        return dbg.Inspector.run(io, &resolver, &lowerer, q) catch |e| @panic(@errorName(e));
+    }
+
     if (debug) dbg.HighLowerer.print(io, &lowerer) catch |e| @panic(@errorName(e));
 }
