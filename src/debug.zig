@@ -778,7 +778,7 @@ pub const Inspector = struct {
         defer a.free(owner);
         @memset(parent, none);
         @memset(owner, .none);
-        for (0..n) |p| for (children(r.tree, @intCast(p))) |c| if (c < n) {
+        for (0..n) |p| for (r.tree.children(@intCast(p))) |c| if (c < n) {
             parent[c] = @intCast(p);
         };
         const d = r.decl_pool.entries.sliced();
@@ -792,16 +792,6 @@ pub const Inspector = struct {
             if (!(if (q[0] == ':') try s.line(q[1..]) else try s.decls(q))) try s.w.writeAll(err_col ++ "  no match\n" ++ reset);
         };
         try s.w.flush();
-    }
-
-    fn children(t: *ParseTree, p: NodeId) []const NodeId {
-        const args: *const [2]NodeId = @ptrCast(&t.ast_nodes.pool.args.buf[p]);
-        return switch (Node.nk_childc[@intFromEnum(t.ast_nodes.pool.nk.buf[p])]) {
-            .many => t.extra_childrefs.buf[args[0]..][0..args[1]],
-            .one => args[0..1],
-            .two => args[0..2],
-            else => &.{},
-        };
     }
 
     fn line_at(s: Inspector, n: NodeId) ?usize {
@@ -876,8 +866,8 @@ pub const Inspector = struct {
     fn open(s: Inspector, n0: NodeId, want: usize) bool {
         if (Node.nk_childc[@intFromEnum(s.r.tree.ast_nodes.pool.nk.buf[n0])] != .many) return false;
         var n = n0;
-        while (children(s.r.tree, n).len > 0) {
-            const k = children(s.r.tree, n);
+        while (s.r.tree.children(n).len > 0) {
+            const k = s.r.tree.children(n);
             if (k[k.len - 1] == 0 or k[k.len - 1] >= s.parent.len) break;
             n = k[k.len - 1];
         }

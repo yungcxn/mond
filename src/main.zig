@@ -1,9 +1,15 @@
 const std = @import("std");
-const Lexer = @import("Lexer.zig");
-const Parser = @import("Parser.zig");
-const Resolver = @import("Resolver.zig");
 const HighLowerer = @import("HighLowerer.zig");
-const dbg = @import("debug.zig");
+
+// the compiler is also the module `mond` for the tools in lsp/
+pub const Lexer = @import("Lexer.zig");
+pub const Parser = @import("Parser.zig");
+pub const ParseTree = @import("ParseTree.zig");
+pub const Resolver = @import("Resolver.zig");
+pub const DeclPool = @import("resolver/DeclPool.zig");
+pub const Doctor = @import("resolver/Doctor.zig");
+pub const DynBuf = @import("ds/dynbuf.zig").DynBuf;
+pub const dbg = @import("debug.zig");
 
 inline fn alloc_file_bytes(alloc: std.mem.Allocator, io: std.Io, file: std.Io.File) []u8 {
     const max_file_size = 50 * 1024 * 1024;
@@ -32,9 +38,7 @@ pub const panic = std.debug.FullPanic(struct {
     }
 }.f);
 
-// command line flags,
-// - example: the field `dbg_less` is `--dbg-less`
-// - just a number: positional arg after execname
+// command line flags: the field `dbg_less` is `--dbg-less` or `-d`, a field without default is required
 // bool: set when present, string: takes the next arg, slice: takes all following args
 const Args = struct {
     build: [:0]const u8,
@@ -44,13 +48,16 @@ const Args = struct {
     const fields = @typeInfo(Args).@"struct".fields;
     const usage = blk: {
         var u: []const u8 = "usage: mond";
-        for (fields) |f| u = u ++ switch (f.type) {
-            bool => " [" ++ Args.arg(f.name) ++ "/" ++ Args.short_arg(f.name) ++ "]",
-            [:0]const u8 => " " ++ Args.arg(f.name) ++ "/" ++ Args.short_arg(f.name) ++ " <arg>",
-            ?[:0]const u8 => " [" ++ Args.arg(f.name) ++ "/" ++ Args.short_arg(f.name) ++ " <arg>]",
-            ?[]const [:0]const u8 => " [" ++ Args.arg(f.name) ++ "/" ++ Args.short_arg(f.name) ++ " <args...>]",
-            else => @compileError("unsupported flag type " ++ @typeName(f.type)),
-        };
+        for (fields, 0..) |f, i| {
+            for (fields[0..i]) |g| if (g.name[0] == f.name[0]) @compileError(short_arg(f.name) ++ " is taken by " ++ arg(g.name));
+            const flag = arg(f.name) ++ "/" ++ short_arg(f.name) ++ switch (f.type) {
+                bool => "",
+                [:0]const u8, ?[:0]const u8 => " <arg>",
+                ?[]const [:0]const u8 => " <args...>",
+                else => @compileError("unsupported flag type " ++ @typeName(f.type)),
+            };
+            u = u ++ if (f.default_value_ptr == null) " " ++ flag else " [" ++ flag ++ "]";
+        }
         break :blk u ++ "\n";
     };
 
@@ -66,7 +73,7 @@ const Args = struct {
     }
 
     fn parse(args: []const [:0]const u8) ?Args {
-        var flags: Args = undefined;
+        var flags = std.mem.zeroInit(Args, .{});
         var i: usize = 1;
         next: while (i < args.len) : (i += 1) {
             inline for (fields) |f| if (std.mem.eql(u8, args[i], comptime arg(f.name)) or
@@ -92,6 +99,8 @@ const Args = struct {
             };
             return null;
         }
+        // an arg without a default is required
+        inline for (fields) |f| if (f.default_value_ptr == null and @field(flags, f.name).len == 0) return null;
         return flags;
     }
 };

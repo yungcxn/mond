@@ -17,3 +17,6 @@ autocmd User LspSetup call LspOptionsSet(#{semanticHighlight: v:true})
 ```
 
 Neovim: `:checkhealth vim.lsp` shows the server, `:LspRestart` after changing `lsp/` itself.
+Its defaults do the rest: `<C-]>` and ctrl-click go to the definition, `grr` lists references, `gO` the outline, `K` hovers.
+
+Vim: `:LspGotoDefinition`, `:LspShowReferences`, `:LspDocumentSymbol`, `:LspHover`, ctrl-click with `setlocal tagfunc=lsp#lsp#TagFunc`.

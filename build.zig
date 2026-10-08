@@ -26,7 +26,8 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     run_tests.setCwd(b.path("."));
     if (b.args) |args| run_tests.addArgs(args);
-    b.step("test", "Run the positive and negative example tests.").dependOn(&run_tests.step);
+    const test_step = b.step("test", "Run the positive and negative example tests and the lsp tests.");
+    test_step.dependOn(&run_tests.step);
 
     { // https://zigtools.org/zls/guides/build-on-save/
         const exe_check = b.addExecutable(.{
@@ -44,8 +45,15 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("lsp/main.zig"),
                 .target = target,
                 .optimize = .ReleaseFast,
+                .imports = &.{.{ .name = "mond", .module = exe.root_module }},
             }),
         });
+        const lsp_tests = b.addTest(.{ .root_module = b.createModule(.{
+            .root_source_file = b.path("lsp/Analysis.zig"),
+            .target = target,
+            .imports = &.{.{ .name = "mond", .module = exe.root_module }},
+        }) });
+        test_step.dependOn(&b.addRunArtifact(lsp_tests).step);
         const step = b.step("lsp", "Build the language server into the editor plugins in lsp/.");
         for ([_][]const u8{ "../lsp/vscode", "../lsp/vim" }) |dir| {
             step.dependOn(&b.addInstallArtifact(lsp, .{ .dest_dir = .{ .override = .{ .custom = dir } } }).step);

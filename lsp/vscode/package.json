@@ -1,15 +1,39 @@
 {
-  "name": "mond",
-  "displayName": "mond",
-  "description": "mond language support: highlighting and diagnostics from the mond compiler",
-  "publisher": "mond",
-  "version": "0.0.1",
-  "engines": { "vscode": "^1.75.0" },
-  "main": "./extension.js",
-  "extensionKind": ["workspace"],
-  "activationEvents": ["onLanguage:mond"],
-  "contributes": {
-    "languages": [{ "id": "mond", "aliases": ["mond"], "extensions": [".mn"], "configuration": "./language-configuration.json" }],
-    "configurationDefaults": { "[mond]": { "editor.semanticHighlighting.enabled": true } }
-  }
+	"name": "mond",
+	"displayName": "mond",
+	"description": "mond language support: highlighting, diagnostics, go to definition, references, outline and hover from the mond compiler",
+	"publisher": "mond",
+	"version": "0.0.1",
+	"engines": {
+		"vscode": "^1.75.0"
+	},
+	"main": "./extension.js",
+	"extensionKind": [
+		"workspace"
+	],
+	"activationEvents": [
+		"onLanguage:mond"
+	],
+	"contributes": {
+		"languages": [
+			{
+				"id": "mond",
+				"aliases": [
+					"mond"
+				],
+				"extensions": [
+					".mn"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"configurationDefaults": {
+			"[mond]": {
+				"editor.semanticHighlighting.enabled": true
+			}
+		}
+	},
+	"__metadata": {
+		"size": 7649558
+	}
 }

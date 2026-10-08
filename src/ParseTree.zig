@@ -565,22 +565,38 @@ pub inline fn span(self: *const @This(), n: NodeId) Lexer.TextSpan {
     return self.span_store[self.arg(n, 0)];
 }
 
-pub fn subtree(self: *const @This(), n: NodeId) [2]NodeId {
-    var s: [2]NodeId = .{ n, n + 1 };
-
+pub fn children(self: *const @This(), n: NodeId) []const NodeId {
     const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.pool.args.buf[n]);
-    const children = switch (Node.nk_childc[@intFromEnum(self.kind(n))]) {
+    return switch (Node.nk_childc[@intFromEnum(self.kind(n))]) {
         .one => slots[0..1],
         .two => slots,
         .many => self.manychildren(n),
         else => &.{},
     };
+}
 
-    for (children) |c| {
+pub fn subtree(self: *const @This(), n: NodeId) [2]NodeId {
+    var s: [2]NodeId = .{ n, n + 1 };
+    for (self.children(n)) |c| {
         const x = self.subtree(c);
         s = .{ @min(s[0], x[0]), @max(s[1], x[1]) };
     }
     return s;
+}
+
+// the token of a leaf, null for the other nodes
+pub fn token(self: *const @This(), n: NodeId) ?u32 {
+    return if (Node.nk_childc[@intFromEnum(self.kind(n))] == .data) self.arg(n, 0) else null;
+}
+
+// the source of a subtree from its first to its last token, null when it holds none (`brk`, `true`)
+pub fn extent(self: *const @This(), n: NodeId) ?Lexer.TextSpan {
+    const s = self.subtree(n);
+    var e: Lexer.TextSpan = .{ std.math.maxInt(u32), 0 };
+    for (s[0]..s[1]) |i| if (self.token(@intCast(i))) |tk| {
+        e = .{ @min(e[0], self.span_store[tk][0]), @max(e[1], self.span_store[tk][1]) };
+    };
+    return if (e[1] == 0) null else e;
 }
 
 // questions about nodes, nothing here looks further than the tree
