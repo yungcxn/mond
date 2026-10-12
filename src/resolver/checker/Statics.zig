@@ -73,18 +73,14 @@ pub fn literal_value(self: *Statics, node: NodeId, negated: bool) StaticPool.Ind
     switch (r.tree.kind(n)) {
         .boolean_true => return .bool_true,
         .boolean_false => return .bool_false,
-        .string => {
-            const s = r.tree.span(n);
-            return sp.intern(.{ .string = unescape(r.src_bytes[s[0]..s[1]], &buf) });
-        },
+        .string => return sp.intern(.{ .string = unescape(r.tree.text(n, r.src_bytes), &buf) }),
         .float => {
-            const s = r.tree.span(n);
-            const f = std.fmt.parseFloat(f64, r.src_bytes[s[0]..s[1]]) catch return if (r.doc.has(n)) .poison_type else r.report(.type_mismatch, n, .none, .none);
+            const f = std.fmt.parseFloat(f64, r.tree.text(n, r.src_bytes)) catch return if (r.doc.has(n)) .poison_type else r.report(.type_mismatch, n, .none, .none);
             return sp.intern(.{ .float = .{ .ty = .f64_type, .value = if (neg) -f else f } });
         },
         else => {
-            const s = r.tree.span(n);
-            const bits: u64 = if (r.tree.kind(n) == .char) unescape(r.src_bytes[s[0]..s[1]], &buf)[0] else std.fmt.parseInt(u64, r.src_bytes[s[0]..s[1]], 0) catch return if (r.doc.has(n)) .poison_type else r.report(.type_mismatch, n, .none, .u64_type);
+            const t = r.tree.text(n, r.src_bytes);
+            const bits: u64 = if (r.tree.kind(n) == .char) unescape(t, &buf)[0] else std.fmt.parseInt(u64, t, 0) catch return if (r.doc.has(n)) .poison_type else r.report(.type_mismatch, n, .none, .u64_type);
             return sp.intern(.{ .int = if (neg) .{ .ty = .i64_type, .bits = 0 -% bits } else .{ .ty = .u64_type, .bits = bits } });
         },
     }

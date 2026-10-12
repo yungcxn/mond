@@ -50,6 +50,7 @@ pub fn matches(self: *Patterns, p: NodeId, v: Value) bool {
     const r = ip.res();
     const sp = &r.static_pool;
     const framed = ip.framed();
+    if (r.tree.macros and ip.trees.node_of(v) != null) return ip.trees.matches(p, v);
     switch (r.tree.kind(p)) {
         .identifier => {
             self.name(p, v);
@@ -103,7 +104,7 @@ pub fn matches(self: *Patterns, p: NodeId, v: Value) bool {
     }
 }
 
-fn name(self: *Patterns, id: NodeId, v: Value) void {
+pub fn name(self: *Patterns, id: NodeId, v: Value) void {
     const ip = self.interp();
     const r = ip.res();
     if (ip.framed()) return ip.variables.bind(ip.info(.decl, id), v);

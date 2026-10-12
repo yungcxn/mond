@@ -147,6 +147,11 @@ fn pattern(self: *Patterns, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) bool {
                 return false;
             }
             if (target != st and sp.coerce(&r.abstract_pool, target, st) == .incompatible and !r.generics.sibling(ctx, target, st)) _ = r.report(.type_mismatch, p, target, st);
+            // `ast.BinaryAdd(lhs, rhs)`: the children of a root of that kind, by their fields
+            if (sp.tag(target) == .ast_type) {
+                for (r.tree.manychildren(r.tree.arg(p, 1))) |a| _ = self.pattern(ctx, r.tree.arg_value(a), .ast_type);
+                return false;
+            }
             const is_case = sp.tag(target) == .variant_case_type;
             const rec = if (is_case) sp.get(target).variant_case_type.payload else target;
             const args = r.tree.manychildren(r.tree.arg(p, 1));
@@ -158,6 +163,10 @@ fn pattern(self: *Patterns, ctx: *FnCtx, p: NodeId, st: StaticPool.Index) bool {
             var all = true;
             for (args, 0..) |a, i| all = self.pattern(ctx, r.tree.arg_value(a), r.calls.named(a, sp.field_type(rec, map[i]))) and all;
             return !is_case and all;
+        },
+        .quote => {
+            r.macros.quote_pattern(r.tree.arg(p, 0));
+            return false;
         },
         else => { // literals, ranges and constant paths (`Toggle.On`)
             const t = r.exprs.infer(ctx, p, st);

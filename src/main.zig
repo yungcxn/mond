@@ -131,6 +131,7 @@ pub fn main(init: std.process.Init) void {
 
     var resolver = Resolver.init(alloc, &parser.tree, in_bytes, parser.global_store.sliced());
     defer resolver.deinit();
+    resolver.io, resolver.path = .{ io, args.build };
     const resolved = resolver.resolve() != error.ResolveFailed;
 
     stage = .none;

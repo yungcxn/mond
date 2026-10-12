@@ -17,6 +17,26 @@ pub const Index = enum(u32) {
     has_next,
     next,
     tag,
+    // what macros ask of trees and the compiler: `$fresh(..)`, `$error(..)`, `refl $file`, `x.$src`, ..
+    fresh,
+    @"error",
+    file,
+    src,
+    children,
+    name,
+    params,
+    ret,
+    body,
+    fields,
+    cases,
+    implof,
+    methods,
+    type,
+    default,
+    where,
+    mut,
+    decls,
+    value,
     wall,
     none = std.math.maxInt(u32),
     _,
@@ -46,6 +66,7 @@ pub fn deinit(self: *NamePool) void {
 pub inline fn name_of(self: *NamePool, n: ParseTree.NodeId) Index {
     switch (self.tree.kind(n)) {
         .identifier => {
+            if (self.tree.arg(n, 1) != 0) return self.intern_owned(self.tree.text(n, self.src_bytes));
             const s = self.tree.span(n);
             return self.intern_string(self.src_bytes[s[0]..s[1]]);
         },
@@ -87,7 +108,11 @@ pub fn indexed(self: *NamePool, i: usize) Index {
     };
     if (i < dollars.len) return self.intern_string(dollars[i]);
     var buf: [24]u8 = undefined;
-    const str = std.fmt.bufPrint(&buf, "${d}", .{i}) catch unreachable;
+    return self.intern_owned(std.fmt.bufPrint(&buf, "${d}", .{i}) catch unreachable);
+}
+
+// a name from a buffer that does not live as long as the pool, copied when it is new
+pub fn intern_owned(self: *NamePool, str: []const u8) Index {
     if (self.map.getIndex(str)) |x| return @enumFromInt(x);
     return self.intern_string(self.owned.allocator().dupe(u8, str) catch @panic("OOM"));
 }

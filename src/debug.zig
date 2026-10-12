@@ -155,8 +155,8 @@ const Tree = struct {
             if (label.len > 0) try s.w.print(field_col ++ "{s}" ++ dim ++ ":" ++ reset ++ "{s}", .{ label, spaces[0 .. @min(spaces.len - 1, lw -| label.len) + 1] });
             try s.w.print("{s}{s}" ++ reset, .{ if (leaf) leaf_col else kind_col, @tagName(nk) });
             if (cc == .data) {
-                const sp = s.t.span_store[args[0]];
-                if (sp[1] > sp[0]) try s.w.print(dim ++ "  \"{s}\"" ++ reset, .{s.src[sp[0]..sp[1]]});
+                const text = s.t.text(idx, s.src);
+                if (text.len > 0) try s.w.print(dim ++ "  \"{s}\"" ++ reset, .{text});
             }
             try s.annotate(idx);
             try s.w.writeAll("\n");
@@ -221,6 +221,8 @@ pub fn print_operands(w: *std.Io.Writer, r: *Res, code: Doctor.Disorder, a: u32,
         .self_tag_without_niche => .{ "payload cases", .int, "", .none },
         .trait_member_missing, .trait_signature_mismatch => .{ "member", .name, "of trait", .type },
         .stcwhere_violated => .{ "in", .decl, "arguments", .type },
+        .macro_error, .include_failed => .{ "", .name, "", .none },
+        .frozen_declaration => .{ "of", .decl, "", .none },
         else => .{ "", .none, "", .none },
     };
 

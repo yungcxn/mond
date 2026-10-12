@@ -3,3 +3,4 @@ mond
 .claude/
 .claude/*
 mond-lsp
+mond-lsp-*

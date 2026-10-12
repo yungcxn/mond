@@ -27,6 +27,8 @@ pub fn member(self: *Calls, n: NodeId) Value {
     }
     const pv = ip.deref(ip.eval(parent));
     if (pv.is(.poison_type)) return pv;
+    if (r.tree.macros and ip.trees.node_of(pv) != null) return ip.trees.member(n, pv);
+    if (r.tree.macros and pv.is(.ast_type)) return ip.trees.case(n);
     if (name == .len) if (ip.count(pv)) |c| return .int(.u64_type, c);
     if (name == .tag) {
         const c = ip.patterns.case_of(pv);
@@ -58,6 +60,10 @@ pub fn call(self: *Calls, n: NodeId) Value {
     const sp = &r.static_pool;
     const callee = r.tree.arg(n, 0);
     const args = r.tree.manychildren(r.tree.arg(n, 1));
+    if (r.tree.macros and r.tree.kind(callee) == .identifier and r.tree.text(callee, r.src_bytes)[0] == '$') switch (r.name_pool.name_of(callee)) {
+        .fresh, .@"error" => return ip.trees.builtin(n, r.name_pool.name_of(callee), args),
+        else => {},
+    };
     const d = ip.info(.decl, n);
     const cd = ip.info(.decl, callee);
     if (d != .none and r.decl_pool.get_kind(d).is_fn() and (cd == .none or r.decl_pool.get_kind(cd) != .static_function)) {
@@ -77,6 +83,7 @@ pub fn call(self: *Calls, n: NodeId) Value {
     if (!ip.framed() and ip.ctx.interpreted and sp.tag(c) == .generic and sp.get(c).static_fun.decl == ip.ctx.decl) return .poison;
     return switch (sp.tag(c)) {
         .record_type, .variant_case_type => self.construct(c, args),
+        .ast_type => ip.trees.call(n, c, args),
         .function_value => self.invoke(n, sp.get(c).function, args, .empty, .empty),
         .generic => blk: {
             const g = sp.get(c).static_fun.decl;
@@ -89,8 +96,8 @@ pub fn call(self: *Calls, n: NodeId) Value {
                 if (x.is(.poison_type)) break :blk x;
                 if (ip.escapes(x)) break :blk ip.fail(r.tree.arg_value(a), .not_static, 0, 0);
                 const i = ip.pool(x);
-                const ok = if (sp.tag(p) == .meta_type) p == .type_type and sp.get_tag_prop(i).is_type or sp.type_of(i) == p else if (sp.get_tag_prop(p).is_integer or sp.get_tag_prop(p).is_float) sp.fits(i, p) else p != .bool_type and sp.tag(p) != .record_type or sp.type_of(i) == p;
-                if (!ok) break :blk ip.fail(r.tree.arg_value(a), .type_mismatch, sp.type_of(i), p);
+                const ok = if (sp.tag(p) == .meta_type) p == .type_type and sp.get_tag_prop(i).is_type or sp.type_of(i) == p else if (sp.get_tag_prop(p).is_integer or sp.get_tag_prop(p).is_float) sp.fits(i, p) else (p != .bool_type and sp.tag(p) != .record_type or sp.type_of(i) == p) and (!r.tree.macros or ip.trees.admits(.of(sp, i), p));
+                if (!ok) break :blk ip.fail(r.tree.arg_value(a), .type_mismatch, if (r.tree.macros) ip.trees.kind_of(i) else sp.type_of(i), p);
                 ip.ids.push(r.statics.retype(i, p));
             }
             const tuple = sp.intern(.{ .aggregate = .{ .ty = .none, .elems = ip.ids.buf[mark..ip.ids.head] } });
@@ -198,7 +205,10 @@ fn attempt(self: *Calls, n: NodeId, d: DeclPool.Index, args: []const NodeId, bas
     var keep = false;
     defer ip.leave(keep);
     if (r.decl_pool.self_off(d) == 1) ip.variables.bind(@enumFromInt(body.first), valueself);
+    const ft = r.types.sig(d);
     for (0..args.len) |i| {
+        const pt = ft.params[map[i] + r.decl_pool.self_off(d)];
+        if (r.tree.macros and !ip.trees.admits(ip.list.buf[base + i], pt)) return ip.fail(r.tree.arg_value(args[i]), .type_mismatch, ip.trees.kind_of(ip.pool(ip.list.buf[base + i])), pt);
         _ = ip.variables.store(pnodes[map[i]], ip.info(.decl, pnodes[map[i]]), ip.list.buf[base + i]);
     }
     for (pnodes, 0..) |pn, j| if (std.mem.indexOfScalar(u32, map, @intCast(j)) == null) {
@@ -216,7 +226,7 @@ fn attempt(self: *Calls, n: NodeId, d: DeclPool.Index, args: []const NodeId, bas
         if (ip.unwind == .ret) return ip.result(e);
         if (r.tree.kind(p.@"else") != .assign) _ = ip.variables.store(pn, ip.info(.decl, pn), e);
     }
-    const out = ip.coerce(ip.result(ip.eval(r.tree.arg(v, 1))), r.types.sig(d).ret);
+    const out = ip.coerce(ip.result(ip.eval(r.tree.arg(v, 1))), ft.ret);
     keep = out.is_boxed();
     return out;
 }
@@ -245,6 +255,7 @@ pub fn with(self: *Calls, n: NodeId) Value {
     const sp = &r.static_pool;
     const base = ip.deref(ip.eval(r.tree.arg(n, 0)));
     if (base.is(.poison_type)) return base;
+    if (r.tree.macros and ip.trees.node_of(base) != null) return ip.trees.with(n, base);
     const t = ip.vtype(base);
     const len = ip.span(base) orelse return ip.fail(n, .not_static, 0, 0);
     if (sp.tag(t) != .record_type) return ip.fail(n, .not_static, 0, 0);

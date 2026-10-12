@@ -1,0 +1,9 @@
+# a library for `include` (see small.mn): only what is `pub` is included
+
+pub fun count_char = ([]u8 s, u8 c) -> u32 {
+    mut u32 n = 0;
+    for x in s: if x == c: n += 1;
+    ret n;
+}
+
+pub fun first_char = ([]u8 s) -> u8: ret s[0];

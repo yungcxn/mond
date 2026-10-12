@@ -103,7 +103,10 @@ pub fn match_body(p: *Parser) anyerror!NodeId {
     try p.eat_assert_tok(.@"pct_{");
     const match_cases = p.scratch.head;
     while (true) {
-        p.scratch.push(try match_case(p));
+        // `@..arms` spreads arms a macro made
+        const spread = try p.peek_eq_tok(.@"xpct_@") and (p.tokens.get_field(.tk, p.tok_cursor + 1) orelse .none) == .@"xpct_..";
+        if (spread) p.tok_cursor += 1;
+        p.scratch.push(if (spread) try eval.unquote(p) else try match_case(p));
         switch (try p.peek_tok()) {
             .@"pct_," => {
                 p.tok_cursor += 1;
@@ -125,7 +128,10 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__match_case);
     var def: Node.LayoutStruct(.partial__match_case) = undefined;
 
+    const outer = p.pattern;
+    p.pattern = true;
     def.pattern = try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|"));
+    p.pattern = outer;
     switch (try p.peek_tok()) {
         .identifier => {
             p.tok_cursor += 1;

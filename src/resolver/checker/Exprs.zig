@@ -58,6 +58,7 @@ pub fn infer(self: *Exprs, ctx: *FnCtx, node: NodeId, expected: StaticPool.Index
         .def_var, .assign, .assign_typed, .mod_pub, .mod_mut, .mod_stc => r.decls.check_stmt(ctx, node),
         .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => blk: {
             const lt = r.mutability.check_assignable(ctx, a0);
+            if (k == .assign_add and r.tree.macros and r.macros.grows(ctx, lt, a1)) break :blk .unit_type;
             if ((k == .assign_add or k == .assign_sub) and sp.elem_ptr(ap, lt)) break :blk if (self.integer(ctx, a1)) .unit_type else .poison_type;
             _ = self.check(ctx, a1, lt);
             break :blk self.numeric(node, lt, .unit_type);
@@ -177,6 +178,11 @@ pub fn infer(self: *Exprs, ctx: *FnCtx, node: NodeId, expected: StaticPool.Index
         },
         .oftype => blk: {
             const vt = sp.deref(ap, self.infer(ctx, a0, .none));
+            // the root of a tree is known once it is evaluated
+            if (r.tree.macros and sp.is_tree(vt)) {
+                r.node_value[a1] = r.types.lower(ctx, a1);
+                break :blk .bool_type;
+            }
             const ot0 = if (ctx.interpreted) r.statics.deferred(ctx, a1) orelse .none else r.types.lower(ctx, a1);
             const ot = if (ot0 != .none and sp.tag(ot0) == .generic) r.types.lower(ctx, a1) else ot0;
             r.node_value[a1] = ot;
@@ -226,6 +232,7 @@ pub fn infer(self: *Exprs, ctx: *FnCtx, node: NodeId, expected: StaticPool.Index
             break :blk if (k == .deinit) .unit_type else st;
         },
         .selftag_unwrap, .selftag_unwrap_fallback, .selftag_arrow, .labelarrow => r.flow.check_unwrap(ctx, node, expected),
+        .quote, .splice, .refl, .include, .unquote, .unquote_list, .paste => r.macros.infer(ctx, node, expected),
         .def_fun => blk: { // lambdas and local functions are checked on the spot and see the enclosing locals
             const d = r.decl_pool.push_decl(.empty, node, .function, .none, .{});
             r.node_decl[node] = d;
@@ -273,6 +280,8 @@ fn check_member(self: *Exprs, ctx: *FnCtx, node: NodeId) StaticPool.Index {
     const on_type = sp.tag(pt) == .meta_type;
     const base = if (!on_type) sp.apply_vars(&r.abstract_pool, pt) else r.statics.deferred(ctx, parent) orelse return .poison_type;
     if (base == .poison_type) return base;
+    // of a tree: a view or child, of the type `ast`: a kind
+    if (r.tree.macros and sp.is_tree(base)) return if (on_type) r.macros.case(node, name) else r.macros.member(base, name);
     if (sp.tag(base) == .type_var) return r.report(.uninferable_type, parent, base, .none);
     if (sp.templated(base) != .none) return r.generics.template_member(node, sp.templated(base), name);
     const view = if (r.tree.kind(parent) == .identifier and r.node_decl[parent] != .none) r.decl_pool.get_flags(r.node_decl[parent]).is_view else false;

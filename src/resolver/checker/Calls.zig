@@ -19,6 +19,11 @@ pub fn check_call(self: *Calls, ctx: *FnCtx, node: NodeId) StaticPool.Index {
     const args = r.tree.manychildren(r.tree.arg(node, 1));
     if (r.tree.kind(node) == .with) { // a copy of a record, the named arguments must be its fields
         const t = sp.deref(&r.abstract_pool, r.exprs.infer(ctx, r.tree.arg(node, 0), .none));
+        // of a tree: its children by their field names, known once it is evaluated
+        if (r.tree.macros and sp.is_tree(t)) {
+            for (args) |a| _ = r.exprs.check(ctx, r.tree.arg_value(a), .ast_type);
+            return sp.pointee(t);
+        }
         for (args) |a| {
             const name = r.name_pool.name_of(r.tree.arg_name(a));
             const m = if (r.tree.arg_name(a) != 0 and t != .poison_type) sp.lookup_member(t, name) else StaticPool.Member.none;
@@ -27,6 +32,10 @@ pub fn check_call(self: *Calls, ctx: *FnCtx, node: NodeId) StaticPool.Index {
         return t;
     }
     const callee = r.tree.arg(node, 0);
+    if (r.tree.macros and r.tree.kind(callee) == .identifier and r.tree.text(callee, r.src_bytes)[0] == '$') switch (r.name_pool.name_of(callee)) {
+        .fresh, .@"error" => return r.macros.builtin(ctx, node, r.name_pool.name_of(callee), args),
+        else => {},
+    };
     const ct = r.exprs.infer(ctx, callee, .none);
     // a stcfun call producing a function is called like that function
     const d = if (r.tree.kind(callee) != .fun_call) r.node_decl[callee] else if (r.node_decl[r.tree.arg(callee, 0)] != .none and r.decl_pool.get_kind(r.node_decl[r.tree.arg(callee, 0)]) == .static_function) r.node_decl[callee] else .none;
@@ -48,6 +57,7 @@ pub fn check_call(self: *Calls, ctx: *FnCtx, node: NodeId) StaticPool.Index {
             for (args, 0..) |a, i| _ = r.exprs.check(ctx, r.tree.arg_value(a), self.named(a, sp.field_type(rec, map[i])));
             return target;
         },
+        .ast_type => return r.macros.call(ctx, node, target, args),
         // a value of function type (`op(a, b)`, `make_adder(1)(2)`, a lambda called directly)
         .function_type => {
             if (sp.get(target).function_type.params.len != args.len) return r.report(.wrong_arity, node, args.len, sp.get(target).function_type.params.len);
@@ -97,6 +107,8 @@ fn call_decl(self: *Calls, ctx: *FnCtx, node: NodeId, first: DeclPool.Index, all
         for (all_args, 0..) |a, i| {
             vals[i] = r.statics.retype(r.interpreter.eval_static(ctx, r.tree.arg_value(a)), r.types.sig(first).params[i]);
             if (sp.holds_template(vals[i])) return .poison_type;
+            // a tree for `ast.Kind` has a root of that kind, known now that it is evaluated
+            if (r.tree.macros and vals[i] != .poison_type and !r.interpreter.trees.admits(.of(sp, vals[i]), r.types.sig(first).params[i])) return r.report(.type_mismatch, r.tree.arg_value(a), r.interpreter.trees.kind_of(vals[i]), r.types.sig(first).params[i]);
         }
         if (r.interpreter.depth == 0) r.interpreter.root = node;
         const got = r.generics.instantiate(first, sp.intern(.{ .aggregate = .{ .ty = .none, .elems = vals } }));

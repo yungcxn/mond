@@ -338,10 +338,10 @@ fun test2 = () {
     mut [4]u8 arr = [1, 2, 3, 4];
     arr[0] = 42;
 
-    []u8 induced_len = [5, 6, 7, 8, 9];                                       # induced_len.$len == 5
+    []u8 induced_len = [5, 6, 7, 8, 9];                                      # induced_len.$len == 5
 
-    []u8 str = "Hello, world!";                                                      # str.$len == 13
-    &u8 str2 = "Hello, world!";                                                      # with \0
+    []u8 str = "Hello, world!";                                                     # str.$len == 13
+    &u8 str2 = "Hello, world!";                                                            # with \0
     # *u8 str3 = "Hello, world!"; is illegal, as string literals are immutable
 }
 
@@ -555,6 +555,239 @@ $main = () {
 
 ### METAPROGRAMMING ###
 # quote {}, refl, include, <> and manipulation of `ast` type
+# - `ast` is a builtin variant like `Opt`, its cases are the ParseTree nodes with their beautiful names:
+#   ast.BinaryAdd(lhs, rhs), ast.IfThen(cond, then), ast.Identifier, ... (PartialExpression_ dropped)
+#   -> match, with, oftype and case types work on trees as on any other variant
+# - it is a template: ast(i32) is a tree giving an i32, also ast(bool), ast(type), ast(fun) and ast(())
+#   for statements. plain `ast` is the abstract over all of them, like `Box` for `Box(T)`
+# - trees only exist at compile-time, so every ast variable is implicitly stc
 fun meta_test = () {
+    # will be lazily evaluated: `quote:` takes an expression -> ast(i32), `quote {}` a block -> ast(())
+    ast(i32) my_macro = quote: 1 + 2 + 3 + 4;
 
+    # - the vars in it are hygienic; x in quote is not the same as x outside
+    # - but types, functions etc. are global
+    # - @ is the only way out of a quote, lexical first:
+    #   - x is a compile-time binding where the quote is written (stc, ast, a macro's param):
+    #     @x unquotes it, a tree is inserted, a value becomes a literal
+    #   - otherwise: @x is the x where the tree lands (an expansion or a refl-write), found or bound there
+    #   it takes the name with its .member and [index] chain, @(...) always unquotes
+    ast(i32) more_complex = quote: 42 + add_i32(1, 2) + @my_macro;
+
+    # <> expands macro, what comes out is code again and no tree
+    i32 lazily_realized = <more_complex>;                                                       # 55
+
+    # macro interacting with outside scope: realvar1 is no compile-time binding here, so @realvar1 is the
+    #   one where it gets expanded. temp stays hygienic -> a fresh temp per expansion
+    exchanger = quote {
+        temp = @realvar1;
+        @realvar1 = @realvar2;
+        @realvar2 = temp;
+    }
+
+    mut i32 realvar1 = 42;
+    mut i32 realvar2 = 43;
+    <exchanger>;
+    exchanger_alias = exchanger;
+    <exchanger_alias>; # now back to original
+
+    # parametrized quote/macro, compile time error if the trees are not bare identifiers (case types).
+    #   value is no tree, @value lifts it into a literal
+    param_macro_add = (ast.Identifier identifierx, ast.Identifier identifiery, i32 value): quote:
+        @identifierx + @identifiery + @value;
+
+    # nothing is quoted automatically, the caller decides what stays code. `quote: realvar1` is written
+    #   here, so it means this realvar1 wherever it ends up
+    i32 sum = <param_macro_add(quote: realvar1, quote: realvar2, 10)>;                          # 95
+
+    # trees are variants: match them, copy them with `with`
+    ast(i32) mirrored = match my_macro {
+        ast.BinaryAdd(lhs, rhs) => my_macro with (lhs = rhs, rhs = lhs),           # 4 + (1 + 2 + 3)
+        _ => my_macro,
+    }
+
+    # the macros from below
+    <assert(quote: realvar1 + realvar2 == 85)>;
+    mut i32 realvar3 = 44;
+    <rotate([quote: realvar1, quote: realvar2, quote: realvar3])>;                       # 43, 44, 42
+    i32 folded = <simplify(quote: (realvar1 * 1 + 0) * (realvar2 + 0))>;         # realvar1 * realvar2
+
+    # @ can also bind: aif puts `it` into this scope. the quoted then-branch can't know `it` yet,
+    #   so it stays a plain `ast` and gets typed when expanded
+    Opt8 maybe = 42;
+    <aif(quote: maybe, quote: print("got %d", it), quote: print("nothing"))>;
+
+    # refl gives a *ast to the live declaration of whatever it names
+    stc []u8 decl_text = (refl realvar1).$src;                                         # "realvar1 = 42"
+    # (refl realvar1).$value = quote: 0; is illegal: a declaration freezes as soon as it is resolved
 }
+
+# a) control flow: c's assert, but the condition comes as a tree so its source comes along (#cond in c).
+#   trees and not text -> `!@cond` needs no parentheses. $error reports at the user's code, not here
+stcfun assert = (ast(bool) cond) -> ast(()): ret match cond {
+    ast.BooleanTrue | ast.BooleanFalse => $error(cond, "assertion on a constant"),
+    _ => quote { if !@cond: print("assertion failed: %s", @cond.$src); },
+}
+
+# b) anaphoric: @value is a param -> unquoted, `it` exists nowhere here -> bound where aif lands
+stcfun aif = (ast(Opt8) value, ast then, ast otherwise) -> ast(()): ret quote {
+    if @value ?<- @it { @then; } else { @otherwise; }
+}
+
+# c) gensym: all quotes of one expansion share their names, $fresh gives distinct ones (one per var)
+stcfun rotate = ([]ast.Identifier vars) -> ast(()) {
+    []ast.Identifier temps = for vars: $fresh("temp");
+    mut []ast moves = [];                                            # []ast grows with += at compile-time
+    for i in 0..<vars.$len: moves += quote: @temps[i] = @vars[i];
+    for i in 0..<vars.$len: moves += quote: @vars[i] = @temps[(i + 1) % vars.$len];
+    ret quote { @..moves; };                                         # @.. splices a list in place
+}
+
+# d) quote-patterns: a quote in a match arm matches by shape, its @x bind subtrees (@_ ignores)
+stcfun simplify = (ast(i32) e) -> ast(i32): ret match e {
+    quote: @x + 0 => simplify(x),
+    quote: 0 + @x => simplify(x),
+    quote: @x * 1 => simplify(x),
+    quote: 1 * @x => simplify(x),
+    quote: @_ * 0 => quote: 0,
+    quote: 0 * @_ => quote: 0,
+    ast.BinaryAdd(lhs, rhs) | ast.BinaryMultiply(lhs, rhs) => e with (lhs = simplify(lhs), rhs = simplify(rhs)),
+    _ => e,
+}
+
+# views on trees are $-members (like ParseTree's Param/Def/Loop/Branch), written through a *ast like
+#   fields through a *T, the elements of a list view of a *ast are *ast:
+#   any:              $src, $children
+#   fun:              $name, $params, $ret, $body
+#   type, variant:    $name, $fields / $cases, $implof, $methods
+#   field, param:     $name, $type, $default, $where, $mut
+#   variable:         $name, $type, $value
+#   file, include:    $decls
+
+# e) generating match arms: one arm per case, the variant is only read -> &ast
+stcfun gen_name_of = (&ast(variant) v) -> ast(fun) {
+    mut []ast arms = [];
+    for c in v.$cases: arms += quote: @(v.$name).@(c.$name) => @c.$name.$src;
+    ret quote: (@v.$name value) -> &u8: ret match value { @..arms };
+}
+
+fun direction_name = <gen_name_of(refl Direction)>;                              # like realizing a template
+
+# f) refl edits the program: everything resolving Person sees the getters (the !{} is created if missing).
+#   top-level <> run in source order before anything is resolved, a unit result expands to nothing
+stcfun gen_getters = (*ast(type) t) {
+    for field in t.$fields: t.$methods += quote:
+        pub fun get_@(field.$name) = () -> @field.$type: ret self.@(field.$name);    # get_ ## name in c
+}
+<gen_getters(refl Person)>;
+
+fun person_age = (Person p) -> i32: ret p.get_age();
+
+# g) deriving a trait: other in the folded condition and in the method is the same name, as both quotes
+#   are built in the same expansion
+trait Equatable = !{
+    fun eq = ((typeof self) other) -> bool;
+}
+
+stcfun derive_eq = (*ast(type) t) {
+    mut ast(bool) all = quote: true;
+    for field in t.$fields: all = quote: @all and self.@(field.$name) == other.@(field.$name);
+    t.$implof += quote: Equatable;
+    t.$methods += quote: fun eq = ((typeof self) other) -> bool: ret @all;
+}
+<derive_eq(refl AddablePointI32)>;
+
+# h) rewriting functions in place: every call of add_i32 traces now, also the ones above
+stcfun trace = (*ast(fun) f) {
+    f.$body = quote {                                    # the quote is built before the assignment
+        print("-> %s", @f.$name.$src);
+        defer print("<- %s", @f.$name.$src);
+        @f.$body;
+    };
+}
+<trace(refl add_i32)>;
+
+# i) the file itself: $file is this file, the runner is generated from every `test_` function in it
+fun test_add = () -> bool: ret add_i32(1, 2) == 3;
+fun test_templ = () -> bool: ret sub_from_templ(3, 2) == 1;
+
+fun starts_with = ([]u8 s, []u8 prefix) -> bool {
+    if s.$len < prefix.$len: ret false;
+    for i in 0..<prefix.$len: if s[i] != prefix[i]: ret false;
+    ret true;
+}
+
+stcfun gen_test_runner = (&ast file) -> ast(fun) {
+    mut []ast checks = [];
+    for d in file.$decls {
+        if d oftype ast(fun) and starts_with(d.$name.$src, "test_") {
+            checks += quote: if !@(d.$name)(): print("FAILED: %s", @d.$name.$src);
+        }
+    }
+    ret quote: () { @..checks; };
+}
+
+fun run_tests = <gen_test_runner(refl $file)>;
+
+# and new top-level declarations, they are as global as the written ones
+stcfun add_version = (*ast file, u32 v) {
+    file.$decls += quote: pub fun version = () -> u32: ret @v;
+}
+<add_version(refl $file, 3)>;
+
+# j) include gets the public declarations of another file as an own tree (a copy, no refl).
+#   <include "x.mn"> is an import, but the tree can be changed before
+<include "lib/math.mn">;
+
+stcfun traced_all = (ast lib) -> ast {
+    mut ast out = lib;
+    for i in 0..<out.$decls.$len: if out.$decls[i] oftype ast(fun): trace(out.$decls[i].&);
+    ret out;
+}
+<traced_all(include "lib/strings.mn")>;
+
+# k) nothing is read-only: every case carries its DefTable fields (IfThen: cond, then; VariableDefinition:
+#   type, identifier; FunctionCall: callable, fun_param_tuple; ...), the list views grow with +=. raw fields
+#   are plain `ast` so any tree fits, it is checked once the declaration gets resolved. $children reaches
+#   all of them generically
+stcfun walk = (*ast t, (*ast) -> () visit) {
+    visit(t);
+    for c in t.$children: walk(c, visit);                               # into what is there after visit
+}
+
+fun same = ([]u8 a, []u8 b) -> bool: ret a.$len == b.$len and starts_with(a, b);
+
+fun legacy_min = (i16 a, i16 b) -> i16 {
+    mut i16 acc = a;
+    if acc > b: acc = b;
+    ret acc;
+}
+
+stcfun modernize = (*ast(fun) f) {
+    f.$name = ast.Identifier("modern_min");                                    # identifiers are cases too
+    walk(f, (*ast n): match n.* {
+        ast.TypeSignedInteger16 => n.* = quote: i32,                           # params, return and local
+        ast.Identifier => if same(n.$src, "acc"): n.* = ast.Identifier("result"),       # a var, everywhere
+        ast.BinaryGreater(lhs, rhs) => n.* = ast.BinaryGreaterOrEqual(lhs, rhs),             # an operator
+        ast.IfThen(cond, then) => n.cond = quote: @cond and @b != 0,     # @cond: the binder, @b: lands
+        _ => {},
+    });
+    f.$body = quote {                                                              # and the body itself
+        print("min of %d and %d", @a, @b);
+        @..f.$body;                                                # @.. flattens a block, @ would nest it
+    };
+}
+<modernize(refl legacy_min)>;
+# legacy_min is now:
+#   fun modern_min = (i32 a, i32 b) -> i32 {
+#       print("min of %d and %d", a, b);
+#       mut i32 result = a;
+#       if result >= b and b != 0: result = b;
+#       ret result;
+#   }
+
+# same for types: fields, their types, defaults, wheres
+stcfun widen = (*ast(type) t) {
+    for field in t.$fields: field.$type = quote: u32;
+}
+<widen(refl Packed)>;                                                             # **(u32 a, u32 b, u32 c)

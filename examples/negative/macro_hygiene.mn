@@ -1,0 +1,11 @@
+# a name a quote declares is its own: the code around neither sees it nor is captured by it
+fun hidden = () -> u32 {
+    <quote { secret = 1; }>;
+    ret secret; #! undefined_name
+}
+
+# `$error` reports at the code it is given
+stcfun picky = (ast e) -> ast: ret $error(e, "not this");
+fun reported = () -> u32: ret <picky(quote: 1)>; #! macro_error
+
+$main = () {}

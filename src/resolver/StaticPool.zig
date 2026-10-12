@@ -2,6 +2,7 @@ const std = @import("std");
 const AbstractPool = @import("AbstractPool.zig");
 const NamePool = @import("NamePool.zig");
 const DeclPool = @import("DeclPool.zig");
+const ParseTree = @import("../ParseTree.zig");
 const target = @import("../main.zig").target;
 const SoD = @import("../ds/dynbuf.zig").SoD;
 const DynBuf = @import("../ds/dynbuf.zig").DynBuf;
@@ -72,6 +73,11 @@ pub const TraitType = struct {
     member_types: []const Index,
     supers: []const Index,
 };
+
+// a tree producing `of` (`ast(i32)`, none for any: `ast`), `case` the kind of its root + 1 (`ast.Identifier`, 0 for any)
+pub const AstType = struct { of: Index, case: u16 };
+// a tree of the program or of a macro: its root, typed `ast(..)` or `*ast(..)` when it is to be written into
+pub const TreeValue = struct { ty: Index, node: ParseTree.NodeId };
 
 pub const StaticFun = struct {
     decl: DeclPool.Index,
@@ -188,10 +194,11 @@ pub const Index = enum(u32) {
     bool_true,
     bool_false,
     unit_value,
+    ast_type,
     none = std.math.maxInt(u32),
     _,
 
-    pub const first_dynamic: u32 = @intFromEnum(Index.unit_value) + 1;
+    pub const first_dynamic: u32 = @intFromEnum(Index.ast_type) + 1;
 };
 
 // one stored entry is only 5 bytes: a tag and one u32.
@@ -220,6 +227,7 @@ pub const Item = struct {
         generic,
         template_type,
         type_var,
+        ast_type,
         int_value,
         float_value,
         simple_value,
@@ -227,6 +235,7 @@ pub const Item = struct {
         aggregate_value,
         variant_value,
         function_value,
+        tree_value,
     };
 };
 
@@ -247,6 +256,7 @@ pub const Key = union(enum) {
     static_fun: StaticFun,
     template_type: DeclPool.Index,
     abstract_type: AbstractPool.Index,
+    ast: AstType,
     int: IntValue,
     float: FloatValue,
     simple_value: SimpleValue,
@@ -254,6 +264,7 @@ pub const Key = union(enum) {
     aggregate: Aggregate,
     variant_value: VariantValue,
     function: DeclPool.Index,
+    tree: TreeValue,
 };
 
 pub const TagProperties = packed struct(u16) {
@@ -368,7 +379,8 @@ fn word64(v: anytype) u64 {
 const tag_pairs = .{
     .{ "custom_type", "record_type" },   .{ "static_fun", "generic" },      .{ "abstract_type", "type_var" },
     .{ "int", "int_value" },             .{ "float", "float_value" },       .{ "string", "string_value" },
-    .{ "aggregate", "aggregate_value" }, .{ "function", "function_value" },
+    .{ "aggregate", "aggregate_value" }, .{ "function", "function_value" }, .{ "ast", "ast_type" },
+    .{ "tree", "tree_value" },
 };
 
 fn item_tag(comptime k: std.meta.Tag(Key)) Item.Tag {
@@ -495,6 +507,7 @@ pub fn init(alloc: std.mem.Allocator) StaticPool {
     inline for (@typeInfo(SimpleType).@"enum".fields) |f| _ = self.intern(.{ .simple_type = @enumFromInt(f.value) });
     inline for (@typeInfo(TypeType).@"enum".fields) |f| _ = self.intern(.{ .meta_type = @enumFromInt(f.value) });
     inline for (@typeInfo(SimpleValue).@"enum".fields) |f| _ = self.intern(.{ .simple_value = @enumFromInt(f.value) });
+    _ = self.intern(.{ .ast = .{ .of = .none, .case = 0 } });
     std.debug.assert(self.items.len() == Index.first_dynamic);
     return self;
 }
@@ -600,7 +613,7 @@ pub fn has_vars(self: *const StaticPool, index: Index) bool {
 pub fn type_of(self: *const StaticPool, value: Index) Index {
     const data = self.items.pool.data.buf[@intFromEnum(value)];
     return switch (self.tag(value)) {
-        .int_value, .float_value, .aggregate_value, .variant_value => @enumFromInt(self.extra.buf[data]),
+        .int_value, .float_value, .aggregate_value, .variant_value, .tree_value => @enumFromInt(self.extra.buf[data]),
         .string_value => @enumFromInt(self.extra.buf[data + 2]),
         .simple_value => if (data == @intFromEnum(SimpleValue.unit)) .unit_type else .bool_type,
         .function_value => .fun_type,
@@ -632,6 +645,7 @@ const tag_props = blk: {
         .generic => .{ .is_value = true, .is_callable = true, .is_static_only = true },
         .template_type => .{ .is_type = true, .is_static_only = true },
         .type_var => .{ .is_type = true },
+        .ast_type => .{ .is_type = true, .is_static_only = true },
         .function_value => .{ .is_value = true, .is_callable = true },
         else => .{ .is_value = true },
     };
@@ -1106,6 +1120,16 @@ fn fmt(self: *const StaticPool, names: *const NamePool, vars: *const AbstractPoo
             if (v.payload != .none) try self.fmt(names, vars, v.payload, w, depth);
         },
         .function => |d| try w.print("fun#{d}", .{@intFromEnum(d)}),
+        .ast => |a| {
+            try w.writeAll("ast");
+            if (a.of != .none) {
+                try w.writeAll("(");
+                try self.fmt(names, vars, a.of, w, depth);
+                try w.writeAll(")");
+            }
+            if (a.case != 0) try w.print(".{s}", .{ParseTree.Node.case_names[a.case - 1]});
+        },
+        .tree => |t| try w.print("tree#{d}", .{t.node}),
     }
 }
 
@@ -1192,6 +1216,13 @@ pub fn coerce(self: *StaticPool, vars: *AbstractPool, from0: Index, to0: Index) 
     if (from == .never_type) return .never_to_any;
     if (from == .unit_type and to == .runit_type) return .unit_to_runit;
     if (to == .fun_type and self.tag(from) == .function_type) return .identity;
+    // trees, their pointers and lists: what they produce is checked as far as known, their root when evaluated
+    if (self.tag(from) == .ast_type and self.tag(to) == .ast_type) return if (self.trees_fit(vars, from, to)) .identity else .incompatible;
+    if (self.is_ptr(from) and self.is_ptr(to) and self.is_tree(from) and self.is_tree(to)) return if ((self.tag(from) == .ptr_mut_type or self.tag(to) == .ptr_type) and self.trees_fit(vars, self.pointee(from), self.pointee(to))) .identity else .incompatible;
+    if (self.tag(from) == .array_type and self.tag(to) == .array_type and self.is_tree(self.get(from).array_type.elem) and self.is_tree(self.get(to).array_type.elem)) {
+        const l = self.get(to).array_type.len;
+        return if ((l == dyn_len or l == self.get(from).array_type.len) and self.coerce(vars, self.get(from).array_type.elem, self.get(to).array_type.elem) != .incompatible) .identity else .incompatible;
+    }
     if (self.has_vars(from) or self.has_vars(to)) {
         const ptrs = self.is_ptr(from) and self.is_ptr(to) and (self.tag(from) == .ptr_mut_type or self.tag(to) == .ptr_type);
         return if (self.unify(vars, if (ptrs) self.pointee(from) else from, if (ptrs) self.pointee(to) else to) == .ok) .unified else .incompatible;
@@ -1304,8 +1335,41 @@ pub fn apply_vars(self: *StaticPool, vars: *AbstractPool, index: Index) Index {
             }
             break :blk self.intern(.{ .variant_union_type = self.scratch.buf[mark..self.scratch.head] });
         },
+        .ast => |a| self.intern(.{ .ast = .{ .of = self.apply_vars(vars, a.of), .case = a.case } }),
         else => index,
     };
+}
+
+// trees: types of code as a value, which only exists at compile-time
+
+pub fn ast_of(self: *StaticPool, of: Index, case: u16) Index {
+    return self.intern(.{ .ast = .{ .of = of, .case = case } });
+}
+
+// `ast(..)`, also behind a pointer
+pub fn is_tree(self: *const StaticPool, t: Index) bool {
+    return t != .none and self.tag(self.pointee(t)) == .ast_type;
+}
+
+// a type only static code can have: trees and what holds them (`[]ast`, `*ast`, functions taking or making them)
+pub fn holds_trees(self: *const StaticPool, t: Index) bool {
+    if (t == .none) return false;
+    return switch (self.tag(t)) {
+        .ast_type => true,
+        .ptr_type, .ptr_mut_type => self.holds_trees(self.pointee(t)),
+        .array_type => self.holds_trees(self.get(t).array_type.elem),
+        .function_type => for (self.get(t).function_type.params) |p| {
+            if (self.holds_trees(p)) break true;
+        } else self.holds_trees(self.get(t).function_type.ret),
+        else => false,
+    };
+}
+
+// a tree of one type is one of another unless both say what they produce or what their root is, and it differs
+fn trees_fit(self: *StaticPool, vars: *AbstractPool, from: Index, to: Index) bool {
+    const f = self.get(from).ast;
+    const t = self.get(to).ast;
+    return (f.of == .none or t.of == .none or self.coerce(vars, f.of, t.of) != .incompatible) and (f.case == 0 or t.case == 0 or f.case == t.case);
 }
 
 pub fn occurs(self: *const StaticPool, vars: *AbstractPool, v: AbstractPool.Index, index: Index) bool {

@@ -1,0 +1,45 @@
+# a splice takes a tree, a quote has the type of its code
+stc u32 not_tree = <5>; #! type_mismatch
+stc ast(i32) wrong_kind = quote: true; #! type_mismatch
+stcfun unit_macro = () {}
+stc u32 no_value = <unit_macro()>; #! type_mismatch
+
+# `ast.Kind` parameters take trees of that root only, made nodes their children
+stcfun only_names = (ast.Identifier x) -> ast: ret x;
+stc u32 not_name = <only_names(quote: 1 + 2)>; #! type_mismatch
+stc ast too_few = ast.BinaryAdd(quote: 1); #! wrong_arity
+stc ast no_case = ast.NoSuchKind; #! unknown_member
+stc ast no_name = $fresh(); #! wrong_arity
+
+# views a tree has not, values that are no code
+stcfun bad_view = (ast e) -> ast: ret e.$nope; #! unknown_member
+stc ast viewed = bad_view(quote: x);
+type Pair = *(u32 a, u32 b);
+stc Pair lifted = <quote: @(Pair(a = 1, b = 2))>; #! not_static
+
+# a tree is a value: written only where it is held mut or through a `*ast`
+stcfun write_param = (ast e) -> ast {
+    e.rhs = quote: 1; #! assign_to_immutable
+    ret e;
+}
+stc ast written = write_param(quote: 1 + 2);
+stcfun write_ref = (&ast e) {
+    e.rhs = quote: 1; #! write_through_immutable_pointer
+}
+stcfun use_ref = () -> u32 {
+    ast e = quote: 1 + 2;
+    write_ref(e.&);
+    ret 0;
+}
+stc u32 used = use_ref();
+
+# `refl` names declarations, `include` files
+stc ast unknown = refl nowhere; #! undefined_name
+<include "missing.mn">; #! include_failed
+
+$main = () {}
+
+# a tree made with `@` outside a quote is stray where it lands
+stc u32 a = 1;
+stcfun made = () -> ast: ret ast.Unquote(ast.Identifier("a"));
+stc u32 landed = <made()>; #! stray_unquote

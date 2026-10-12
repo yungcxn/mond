@@ -1,7 +1,7 @@
 {
 	"name": "mond",
 	"displayName": "mond",
-	"description": "mond language support: highlighting, diagnostics, go to definition, references, outline and hover from the mond compiler",
+	"description": "mond language support: highlighting, diagnostics, go to definition, references, outline, hover and completion from the mond compiler",
 	"publisher": "mond",
 	"version": "0.0.1",
 	"engines": {
@@ -9,6 +9,7 @@
 	},
 	"main": "./extension.js",
 	"extensionKind": [
+		"ui",
 		"workspace"
 	],
 	"activationEvents": [

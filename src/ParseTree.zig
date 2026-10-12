@@ -81,6 +81,7 @@ pub const Node = struct {
         .{ "TypeFloat32", "type_f32", .leaf },
         .{ "TypeFloat64", "type_f64", .leaf },
         .{ "TypeBool", "type_bool", .leaf },
+        .{ "TypeAst", "type_ast", .leaf },
         .{ "TypeType", "type_type", .leaf },
         .{ "TypeTrait", "type_trait", .leaf },
         .{ "TypeVariant", "type_variant", .leaf },
@@ -92,13 +93,13 @@ pub const Node = struct {
         .{ "TypeDefinitionPacked", "def_type_packed", struct { param_tuple: NodeId } },
         .{ "TypeDefinitionWithAssertedSize", "def_type_assertsize", struct { def_type: NodeId, assertsize: NodeId } },
         .{ "TypeDefinitionWithTrait", "def_type_implof", struct { def_type: NodeId, def_trait: NodeId } },
-        .{ "TypeVariant", "def_variant", struct { param_tuple: NodeId } },
-        .{ "TypeVariantUnionsized", "def_variant_unionsized", struct { param_tuple: NodeId } },
-        .{ "TypeVariantWithTag", "def_variant_tagof", struct { def_variant: NodeId, tagof: NodeId } },
-        .{ "TypeVariantWithAssertedSize", "def_variant_assertsize", struct { def_variant: NodeId, assertsize: NodeId } },
-        .{ "TypeVariantWithTrait", "def_variant_implof", struct { def_variant: NodeId, def_trait: NodeId } },
-        .{ "TypeTrait", "def_trait", struct { body: NodeId } },
-        .{ "TypeTraitWithImplementations", "def_trait_implof", struct { implof_tuple: NodeId, body: NodeId } },
+        .{ "VariantDefinition", "def_variant", struct { param_tuple: NodeId } },
+        .{ "VariantDefinitionUnionsized", "def_variant_unionsized", struct { param_tuple: NodeId } },
+        .{ "VariantDefinitionWithTag", "def_variant_tagof", struct { def_variant: NodeId, tagof: NodeId } },
+        .{ "VariantDefinitionWithAssertedSize", "def_variant_assertsize", struct { def_variant: NodeId, assertsize: NodeId } },
+        .{ "VariantDefinitionWithTrait", "def_variant_implof", struct { def_variant: NodeId, def_trait: NodeId } },
+        .{ "TraitDefinition", "def_trait", struct { body: NodeId } },
+        .{ "TraitDefinitionWithImplementations", "def_trait_implof", struct { implof_tuple: NodeId, body: NodeId } },
         .{ "PartialExpression_TypeDefinitionParameterTuple", "partial__type_def_param_tuple", []const NodeId },
         .{ "PartialExpression_TypeDefinitionParameter", "partial__type_def_param", struct { type: NodeId } },
         .{ "PartialExpression_TypeDefinitionParameterMutable", "partial__type_def_param_mut", struct { param: NodeId } },
@@ -163,6 +164,14 @@ pub const Node = struct {
         .{ "CharacterValue", "char", .references_token },
         .{ "BooleanTrue", "boolean_true", .leaf },
         .{ "BooleanFalse", "boolean_false", .leaf },
+        .{ "Quote", "quote", struct { body: NodeId } },
+        .{ "Unquote", "unquote", struct { subnode: NodeId } },
+        .{ "UnquoteList", "unquote_list", struct { subnode: NodeId } },
+        .{ "Paste", "paste", struct { prefix: NodeId, hole: NodeId } },
+        // the second slot, free in the layout, holds the expansion + 1 once evaluated
+        .{ "Splice", "splice", struct { subnode: NodeId } },
+        .{ "Reflect", "refl", struct { subnode: NodeId } },
+        .{ "Include", "include", struct { subnode: NodeId } },
         .{ "VariableDefinition", "def_var", struct { type: NodeId, identifier: NodeId } },
         .{ "Assignment", "assign", struct { assignee: NodeId, assigned: NodeId } },
         .{ "AssignmentTyped", "assign_typed", struct { def_var: NodeId, assigned: NodeId } },
@@ -219,6 +228,20 @@ pub const Node = struct {
             }
         }
         break :blk t;
+    };
+
+    // the names of the kinds in a program (`ast.BinaryAdd`), `PartialExpression_` left out
+    pub const case_names = blk: {
+        var t: [DefTable.len][]const u8 = undefined;
+        for (DefTable, 0..) |def, i| t[i] = if (std.mem.startsWith(u8, def[0], "PartialExpression_")) def[0]["PartialExpression_".len..] else def[0];
+        break :blk t;
+    };
+
+    pub const named = blk: {
+        @setEvalBranchQuota(100_000);
+        var list: [DefTable.len]struct { []const u8, Kind } = undefined;
+        for (case_names, 0..) |n, i| list[i] = .{ n, @enumFromInt(i) };
+        break :blk std.StaticStringMap(Kind).initComptime(list);
     };
 
     // field names of struct layouts, used to label children in the debug print
@@ -448,21 +471,38 @@ pub const Range = struct {
     }
 };
 
+// a name a macro made or a text an included file brought, held by the data node in args[1] as word + 1
+// `owner`: the function its quote was written in + 1 (0 for none), `binds`: it declares the name (`x = ..`, a parameter)
+pub const Word = struct { at: u32, len: u32, owner: u32, binds: bool };
+
 ast_nodes: SoD(Node),
 extra_childrefs: DynBuf(NodeId), // children of node i must be contiguous here
 span_store: []const Lexer.TextSpan,
+// the texts that are in no source, a data node made from one keeps its token of origin in args[0] for positions
+text_bytes: DynBuf(u8),
+words: SoD(Word),
+// children of the lists being copied, nested lists stack above their parents
+scratch: DynBuf(NodeId),
+// the program has macros (a quote, splice, `refl`, `include` or `ast`): without, nothing of them is looked for
+macros: bool = false,
 
 pub fn init(alloc: std.mem.Allocator, span_store: []const Lexer.TextSpan) @This() {
     return @This(){
         .ast_nodes = .init(alloc, 10000),
         .extra_childrefs = .init(alloc, 10000),
         .span_store = span_store,
+        .text_bytes = .init(alloc, 256),
+        .words = .init(alloc, 64),
+        .scratch = .init(alloc, 64),
     };
 }
 
 pub fn deinit(self: *@This()) void {
     self.ast_nodes.deinit();
     self.extra_childrefs.deinit();
+    self.text_bytes.deinit();
+    self.words.deinit();
+    self.scratch.deinit();
 }
 
 // a node holds at most 2 direct children, a `[]const NodeId` is copied into `extra_childrefs` (which is contiguous)
@@ -589,6 +629,13 @@ pub fn token(self: *const @This(), n: NodeId) ?u32 {
     return if (Node.nk_childc[@intFromEnum(self.kind(n))] == .data) self.arg(n, 0) else null;
 }
 
+// the token of the first data node of a subtree, 0 when it holds none
+pub fn first_token(self: *const @This(), n: NodeId) u32 {
+    const s = self.subtree(n);
+    for (s[0]..s[1]) |i| if (self.token(@intCast(i))) |tk| return tk;
+    return 0;
+}
+
 // the source of a subtree from its first to its last token, null when it holds none (`brk`, `true`)
 pub fn extent(self: *const @This(), n: NodeId) ?Lexer.TextSpan {
     const s = self.subtree(n);
@@ -597,6 +644,154 @@ pub fn extent(self: *const @This(), n: NodeId) ?Lexer.TextSpan {
         e = .{ @min(e[0], self.span_store[tk][0]), @max(e[1], self.span_store[tk][1]) };
     };
     return if (e[1] == 0) null else e;
+}
+
+// the text of a data node: its own word, else the source of its token
+pub fn text(self: *const @This(), n: NodeId, src: []const u8) []const u8 {
+    const w = self.arg(n, 1);
+    if (w == 0) {
+        const s = self.span(n);
+        return src[s[0]..s[1]];
+    }
+    return self.text_bytes.buf[self.words.pool.at.buf[w - 1]..][0..self.words.pool.len.buf[w - 1]];
+}
+
+// a data node of a text of its own, written where the token `origin` is. `str` must not point into `text_bytes`
+pub fn push_word(self: *@This(), nk: Node.Kind, origin: u32, str: []const u8, owner: u32, binds: bool) NodeId {
+    self.words.push(.{ .at = self.text_bytes.head, .len = @intCast(str.len), .owner = owner, .binds = binds });
+    self.text_bytes.append(str);
+    const n = self.push_data_node(nk, origin);
+    self.ast_nodes.pool.args.buf[n][1] = self.words.len();
+    return n;
+}
+
+// trees as values of macros: copied, overwritten in place, grown and landed where they are spliced or written to
+
+// a deep copy of `n` from `src` into `self` (which may be `src`), every node of it pushed in one run so its subtree is
+// contiguous. parentheses are dropped (a tree has its grouping in its shape), words get rows of their own
+// `expand`: a splice evaluated in this pass is replaced by its expansion, a block expanded into a list of statements spreads into it
+// `at`: the token every data node is written at from now on (where a tree lands, a file is included), null: where it is
+pub fn copy(self: *@This(), src: *const ParseTree, n0: NodeId, src_bytes: []const u8, expand: bool, at: ?u32) NodeId {
+    if (n0 == 0) return 0;
+    var n = n0;
+    while (src.kind(n) == .capture) n = src.arg(n, 0);
+    if (expand and src.kind(n) == .splice and src.arg(n, 1) != 0) return self.copy(src, src.arg(n, 1) - 1, src_bytes, expand, at);
+    const nk = src.kind(n);
+    switch (Node.nk_childc[@intFromEnum(nk)]) {
+        .none => return self.push_node(nk),
+        .data => {
+            const w = src.arg(n, 1);
+            const tok = at orelse src.arg(n, 0);
+            if (w == 0 and at == null) return self.push_data_node(nk, tok);
+            if (w == 0 or self != src) return self.push_word(nk, tok, src.text(n, src_bytes), 0, false);
+            self.words.push(self.words.get(w - 1).?);
+            const c = self.push_data_node(nk, tok);
+            self.ast_nodes.pool.args.buf[c][1] = self.words.len();
+            return c;
+        },
+        .one, .two => {
+            const a = self.copy(src, src.arg(n, 0), src_bytes, expand, at);
+            const b = if (Node.nk_childc[@intFromEnum(nk)] == .two) self.copy(src, src.arg(n, 1), src_bytes, expand, at) else 0;
+            const c = self.push_node(nk);
+            self.ast_nodes.pool.args.buf[c] = .{ a, b };
+            return c;
+        },
+        .many => {
+            const mark = self.scratch.head;
+            const a = src.ast_nodes.pool.args.buf[n];
+            const statements = nk == .block or nk == .partial__trait_def_body;
+            for (0..a[1]) |i| {
+                const k = src.extra_childrefs.buf[a[0] + i];
+                const e = if (expand and statements and src.kind(k) == .splice and src.arg(k, 1) != 0) src.arg(k, 1) - 1 else 0;
+                if (e != 0 and src.kind(e) == .block) {
+                    const ea = src.ast_nodes.pool.args.buf[e];
+                    for (0..ea[1]) |j| self.scratch.push(self.copy(src, src.extra_childrefs.buf[ea[0] + j], src_bytes, expand, at));
+                } else self.scratch.push(self.copy(src, k, src_bytes, expand, at));
+            }
+            const c = self.push_node(nk);
+            self.set_children(c, self.scratch.buf[mark..self.scratch.head]);
+            self.scratch.head = mark;
+            return c;
+        },
+    }
+}
+
+// `dst` becomes what `src` is, its children shared. a written data node keeps the position of the one it replaces
+pub fn overwrite(self: *@This(), dst: NodeId, src: NodeId) void {
+    var a = self.ast_nodes.pool.args.buf[src];
+    if (Node.nk_childc[@intFromEnum(self.kind(src))] == .data and a[1] != 0 and Node.nk_childc[@intFromEnum(self.kind(dst))] == .data) a[0] = self.arg(dst, 0);
+    self.ast_nodes.pool.nk.buf[dst] = self.kind(src);
+    self.ast_nodes.pool.args.buf[dst] = a;
+}
+
+// `items` after the children of the list `n`, which move to the end of `extra_childrefs` for that
+pub fn grow_list(self: *@This(), n: NodeId, items: []const NodeId) void {
+    const a = self.ast_nodes.pool.args.buf[n];
+    const at = self.extra_childrefs.head;
+    for (0..a[1]) |i| self.extra_childrefs.push(self.extra_childrefs.buf[a[0] + i]);
+    for (items) |x| self.extra_childrefs.push(x);
+    self.ast_nodes.pool.args.buf[n] = .{ at, a[1] + @as(u32, @intCast(items.len)) };
+}
+
+// hygiene of a tree landing in a program (spliced or written into it): each name a quote declares (`temp = ..`, parameters,
+// loop and pattern variables) gets a name of its own, together with every name of the same quote owner meaning it
+// it neither captures nor is captured, names free in the quote stay what they mean where it lands. `fresh` counts names made
+pub fn land(self: *@This(), n: NodeId, fresh: *u32) void {
+    const s = self.subtree(n);
+    const mark = self.scratch.head;
+    defer self.scratch.head = mark;
+    for (s[0]..s[1]) |i| {
+        const x = self.binder(@intCast(i)) orelse continue;
+        if (!self.words.pool.binds.buf[x]) continue;
+        for (self.scratch.buf[mark..self.scratch.head]) |y| {
+            if (self.same_word(x, y)) break;
+        } else self.scratch.push(x);
+    }
+    const binders = self.scratch.buf[mark..self.scratch.head];
+    var buf: [256]u8 = undefined;
+    for (s[0]..s[1]) |i| {
+        const x = self.binder(@intCast(i)) orelse continue;
+        const k = for (binders, 0..) |y, j| {
+            if (self.same_word(x, y)) break j;
+        } else continue;
+        const str = std.fmt.bufPrint(&buf, "{s}`{d}", .{ self.text_bytes.buf[self.words.pool.at.buf[x]..][0..self.words.pool.len.buf[x]], fresh.* + k }) catch continue;
+        self.words.push(.{ .at = self.text_bytes.head, .len = @intCast(str.len), .owner = 0, .binds = false });
+        self.text_bytes.append(str);
+        self.ast_nodes.pool.args.buf[i][1] = self.words.len();
+    }
+    fresh.* += @intCast(binders.len);
+}
+
+// the word of an identifier a quote wrote
+fn binder(self: *const @This(), n: NodeId) ?u32 {
+    if (self.kind(n) != .identifier or self.arg(n, 1) == 0) return null;
+    const x = self.arg(n, 1) - 1;
+    return if (self.words.pool.owner.buf[x] == 0) null else x;
+}
+
+fn same_word(self: *const @This(), x: u32, y: u32) bool {
+    const w = self.words.sliced();
+    return w.owner[x] == w.owner[y] and std.mem.eql(u8, self.text_bytes.buf[w.at[x]..][0..w.len[x]], self.text_bytes.buf[w.at[y]..][0..w.len[y]]);
+}
+
+// the tree once more from `roots` (which are rewritten), every node in order and every expanded splice replaced:
+// subtrees are contiguous again and what nothing reaches is gone. a root expanded to a block spreads into the roots
+pub fn rebuild(self: *@This(), alloc: std.mem.Allocator, roots: *DynBuf(NodeId), src_bytes: []const u8) void {
+    var t = ParseTree.init(alloc, self.span_store);
+    t.macros = self.macros;
+    _ = t.push_node(.none);
+    const old = roots.head;
+    for (0..old) |i| {
+        const r = roots.buf[i];
+        const e = if (self.kind(r) == .splice and self.arg(r, 1) != 0) self.arg(r, 1) - 1 else 0;
+        if (e != 0 and self.kind(e) == .block) {
+            for (self.manychildren(e)) |c| roots.push(c);
+        } else roots.push(r);
+    }
+    for (roots.buf[old..roots.head], 0..) |r, i| roots.buf[i] = t.copy(self, r, src_bytes, true, null);
+    roots.head -= old;
+    self.deinit();
+    self.* = t;
 }
 
 // questions about nodes, nothing here looks further than the tree

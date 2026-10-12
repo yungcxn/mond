@@ -1,12 +1,17 @@
 // a language client without dependencies: runs mond-lsp and speaks the language server protocol with it
 const vscode = require('vscode')
 const path = require('path')
+const fs = require('fs')
 const { spawn } = require('child_process')
 
 let stop = () => {}
 
 exports.activate = (context) => {
-  const server = spawn(path.join(context.extensionPath, 'mond-lsp'))
+  // the server of the machine the extension runs on (`zig build lsp` builds one per platform), else the one built here
+  const os = { darwin: 'macos', win32: 'windows' }[process.platform] ?? process.platform
+  const arch = { arm64: 'aarch64', x64: 'x86_64' }[process.arch] ?? process.arch
+  const exe = [`mond-lsp-${os}-${arch}`, 'mond-lsp'].map((n) => path.join(context.extensionPath, n)).find((p) => fs.existsSync(p))
+  const server = spawn(exe ?? path.join(context.extensionPath, 'mond-lsp'))
   const log = vscode.window.createOutputChannel('mond')
   const diagnostics = vscode.languages.createDiagnosticCollection('mond')
   const pending = new Map()
@@ -32,6 +37,8 @@ exports.activate = (context) => {
   const symbol = (s) => Object.assign(new vscode.DocumentSymbol(s.name, s.detail, s.kind - 1, range(s.range), range(s.selectionRange)), { children: s.children.map(symbol) })
   // lsp severities count from error = 1, vscode ones from error = 0
   const diagnostic = (d) => Object.assign(new vscode.Diagnostic(range(d.range), d.message, d.severity - 1), { source: d.source })
+  // lsp completion kinds count from text = 1, vscode ones from text = 0
+  const completion = (c) => Object.assign(new vscode.CompletionItem(c.label, c.kind - 1), { detail: c.detail, documentation: c.documentation, range: range(c.textEdit.range), insertText: c.textEdit.newText })
 
   const receive = (msg) => {
     if (pending.has(msg.id)) {
@@ -88,6 +95,7 @@ exports.activate = (context) => {
       vscode.languages.registerReferenceProvider(mn, { provideReferences: (doc, p, { includeDeclaration }) => request('textDocument/references', { ...at(doc, p), context: { includeDeclaration } }).then((ls) => ls && ls.map(location)) }),
       vscode.languages.registerDocumentSymbolProvider(mn, { provideDocumentSymbols: (doc) => request('textDocument/documentSymbol', { textDocument: uri(doc) }).then((ss) => ss && ss.map(symbol)) }),
       vscode.languages.registerHoverProvider(mn, { provideHover: (doc, p) => request('textDocument/hover', at(doc, p)).then((h) => h && new vscode.Hover(new vscode.MarkdownString(h.contents.value), range(h.range))) }),
+      vscode.languages.registerCompletionItemProvider(mn, { provideCompletionItems: (doc, p) => request('textDocument/completion', at(doc, p)).then((cs) => cs && cs.map(completion)) }, ...r.capabilities.completionProvider.triggerCharacters),
       vscode.workspace.onDidOpenTextDocument(open),
       // the server asks for full sync: every change sends the whole text
       vscode.workspace.onDidChangeTextDocument(({ document: doc, contentChanges }) => mond(doc) && contentChanges.length && notify('textDocument/didChange', { textDocument: { ...uri(doc), version: doc.version }, contentChanges: [{ text: doc.getText() }] })),

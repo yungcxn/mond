@@ -1,0 +1,86 @@
+# `refl x` reads a declaration without resolving it
+fun scale = (u32 v, u32 by = 2 where by > 0) -> u32: ret v * by;
+type Pair = *(mut u32 a, u32 b = 7);
+variant Light = +(Red, Yellow, Green);
+
+stc []u8 fname = (refl scale).$name.$src; #= fname "scale"
+stc u64 nparams = (refl scale).$params.$len; #= nparams 2
+stc []u8 ret_t = (refl scale).$ret.$src; #= ret_t "u32"
+stc []u8 body = (refl scale).$body.$src; #= body "v * by"
+stcfun param_view = (&ast(fun) f) -> u64 {
+    ast p = f.$params[1];
+    ret p.$name.$src.$len * 100 + p.$default.$src.$len * 10 + p.$where.$src.$len;
+}
+stc u64 pv = param_view(refl scale); #= pv 216
+stcfun field_view = (&ast(type) t) -> u64: ret if t.$fields[0].$mut and !t.$fields[1].$mut: t.$fields.$len else: 0;
+stc u64 fv = field_view(refl Pair); #= fv 2
+stc u64 cases = (refl Light).$cases.$len; #= cases 3
+stc []u8 case_name = (refl Light).$cases[2].$name.$src; #= case_name "Green"
+
+# writing a declaration before it is resolved: its name, types, body, fields and members
+fun legacy = (i16 x) -> i16: ret x + 1;
+stcfun upgrade = (*ast(fun) f) {
+    f.$name = ast.Identifier("upgraded");
+    f.$params[0].$type = quote: u32;
+    f.$ret = quote: u32;
+    f.$body = quote: ret @(f.$body.subnode) * 10;
+}
+<upgrade(refl legacy)>;
+stc u32 up = upgraded(4); #= up 50
+
+type Point = *(i32 x, i32 y);
+trait Shown = !{
+    fun shown = () -> i32;
+}
+stcfun derive = (*ast(type) t) {
+    t.$implof += quote: Shown;
+    t.$methods += quote: fun shown = () -> i32: ret self.x * 10 + self.y;
+    t.$methods += quote: fun sum = () -> i32: ret self.x + self.y;
+}
+<derive(refl Point)>;
+fun use_point = () -> i32 {
+    Point p = Point(x = 4, y = 2);
+    ret p.shown() + p.sum();
+}
+stc i32 pt = use_point(); #= pt 48
+fun as_trait = (*Shown s) -> i32: ret s.shown();
+
+# lists of the program by index, and the file itself: its declarations to read and to append to
+stcfun widen_first = (*ast(type) t) {
+    t.$fields[0] = quote: u64 wide;
+}
+type Narrow = *(u8 small, u8 other);
+<widen_first(refl Narrow)>;
+stc u64 nw = sizeof Narrow; #= nw 16
+
+stcfun add_answer = (*ast file) {
+    file.$decls += quote: fun answer = () -> u32: ret 42;
+}
+<add_answer(refl $file)>;
+stc u32 a = answer(); #= a 42
+
+stcfun counted = (&ast file) -> u64 {
+    mut u64 n = 0;
+    for d in file.$decls: if d oftype ast(type): n += 1;
+    ret n;
+}
+stc u64 types = counted(refl $file); #= types 3
+
+# a whole function from parts, by a splice in its declaration
+stcfun getter = (&ast(type) t, u64 i) -> ast(fun): ret quote: (@(t.$name) v) -> @(t.$fields[i].$type): ret v.@(t.$fields[i].$name);
+fun pair_b = <getter(refl Pair, 1)>;
+stc u32 pb = pair_b(Pair(a = 1)); #= pb 7
+
+# `include` takes the public declarations of a file, an edited copy of them as well
+<include "../lib/math.mn">;
+stc u32 g = gcd(12, 18); #= g 6
+stcfun renamed = (ast lib) -> ast {
+    mut ast out = lib;
+    for i in 0..<out.$decls.$len: out.$decls[i].$name = ast.Identifier("lib_fn");
+    ret quote { @(out.$decls[0]); @(lib.$decls[0]); };
+}
+<renamed(include "../lib/strings.mn")>;
+stc u32 c = lib_fn("banana", 'a'); #= c 3
+stc u32 c2 = count_char("banana", 'n'); #= c2 2
+
+$main = () {}

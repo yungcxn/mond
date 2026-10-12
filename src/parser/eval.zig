@@ -6,7 +6,6 @@ const partial = @import("partial.zig");
 const NodeId = ParseTree.NodeId;
 const Node = ParseTree.Node;
 
-// TODO FEATURE: quote { }, <>, refl, include, code
 // might seem repetitive for now, but makes extensions easy (FOR NOW)
 
 // *** rule templates *** //
@@ -79,7 +78,7 @@ fn rest(p: *Parser, first: NodeId, prec: u8) anyerror!NodeId {
 
     while (p.tok_cursor < p.tokens.len()) {
         const precd_bin = lookahead.binary_compute[@intFromEnum(try p.peek_tok())] orelse break;
-        if (precd_bin.prec < prec) break;
+        if (precd_bin.prec < prec or p.angle and try p.peek_eq_tok(.@"xpct_>")) break;
 
         p.tok_cursor += 1;
         parent = try precd_bin.f(p, parent);
@@ -89,10 +88,11 @@ fn rest(p: *Parser, first: NodeId, prec: u8) anyerror!NodeId {
 }
 
 pub fn block(p: *Parser) anyerror!NodeId {
-    const outer = .{ p.head, p.list };
+    const outer = .{ p.head, p.list, p.angle };
     p.head = false;
     p.list = false;
-    defer p.head, p.list = outer;
+    p.angle = false;
+    defer p.head, p.list, p.angle = outer;
     const parent = p.tree.push_node(.block);
     const children = p.scratch.head;
     while (!try p.peek_eq_tok(.@"pct_}")) {
@@ -112,9 +112,12 @@ pub fn paren(p: *Parser) anyerror!NodeId {
     }
 
     const in_head = p.head;
+    const in_angle = p.angle;
     p.head = false;
+    p.angle = false;
     const parent = try any(p, .forbid_assign, 0);
     p.head = in_head;
+    p.angle = in_angle;
 
     switch (try p.peek_tok()) {
         .@"pct_,", .@"xpct_=", .kw_where, .identifier, .kw_self => {
@@ -161,6 +164,9 @@ fn ee_def_fun(p: *Parser, early_function_header: NodeId) anyerror!NodeId {
 // array with "[<expr>,]" or "[]", type with "[<expr>]<expr>" or "[]<expr>"
 // already consumed "["
 pub fn bracket(p: *Parser) anyerror!NodeId {
+    const outer = p.angle;
+    p.angle = false;
+    defer p.angle = outer;
     var parent: NodeId = undefined;
     if (!try p.peek_eq_tok(.@"pct_]")) {
         parent = try any(p, .forbid_assign, 0);
@@ -593,9 +599,10 @@ pub fn unify_variants(p: *Parser, lhs: NodeId) anyerror!NodeId {
 }
 
 pub fn fun_call(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    const outer = p.head;
+    const outer = .{ p.head, p.angle };
     p.head = false;
-    defer p.head = outer;
+    p.angle = false;
+    defer p.head, p.angle = outer;
     return p.tree.push_node_with(.fun_call, .{
         .callable = lhs,
         .fun_param_tuple = try partial.fun_call_param_tuple(p),
@@ -612,6 +619,7 @@ pub fn member(p: *Parser, lhs: NodeId) anyerror!NodeId {
     const name = switch (try p.pop_tok()) {
         .identifier => try identifier(p),
         .kw_self => p.tree.push_node(.identifier_self),
+        .@"xpct_@" => try unquote(p),
         else => return error.IllegalMemberName,
     };
     return p.tree.push_node_with(.member, .{ .parent = lhs, .member = name });
@@ -681,8 +689,7 @@ pub fn labelarrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
     var def: Node.LayoutStruct(.labelarrow) = undefined;
     def.value = lhs;
 
-    try p.eat_assert_tok(.identifier);
-    def.label = try identifier(p);
+    def.label = try label(p);
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         // cursor should be right at first comma
@@ -698,8 +705,7 @@ pub fn selftag_arrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
     var def: Node.LayoutStruct(.selftag_arrow) = undefined;
     def.value = lhs;
 
-    try p.eat_assert_tok(.identifier);
-    def.label = try identifier(p);
+    def.label = try label(p);
 
     if (try p.peek_eq_tok(.@"pct_,")) {
         // cursor should be right at first comma
@@ -745,7 +751,98 @@ pub fn identifier_self(p: *Parser) anyerror!NodeId {
 }
 
 pub fn identifier(p: *Parser) anyerror!NodeId {
-    return p.tree.push_data_node(.identifier, p.tok_cursor - 1);
+    const n = p.tree.push_data_node(.identifier, p.tok_cursor - 1);
+    // `get_@(x)`: the name pasted with the one `x` is, as `##` in c
+    const spans = p.tokens.pool.span.buf;
+    if (p.tok_cursor >= p.tokens.len() or p.tokens.pool.tk.buf[p.tok_cursor] != .@"xpct_@" or spans[p.tok_cursor][0] != spans[p.tok_cursor - 1][1]) return n;
+    p.tok_cursor += 1;
+    return p.tree.push_node_with(.paste, .{ .prefix = n, .hole = try unquote(p) });
+}
+
+// the name an arrow binds, in a quote also `@x`
+fn label(p: *Parser) anyerror!NodeId {
+    if ((try p.pop_tok()) == .@"xpct_@") return unquote(p);
+    p.tok_cursor -= 1;
+    try p.eat_assert_tok(.identifier);
+    return identifier(p);
+}
+
+pub fn type_ast(p: *Parser) anyerror!NodeId {
+    p.tree.macros = true;
+    return p.tree.push_node(.type_ast);
+}
+
+// code from elsewhere: a declaration (`refl x`), a file (`include "f.mn"`)
+pub fn source(comptime kind: Node.Kind) fn (parser: *Parser) anyerror!NodeId {
+    return struct {
+        pub fn eval(p: *Parser) anyerror!NodeId {
+            p.tree.macros = true;
+            return templ_prefix(kind, lookahead.prec_unary + 1)(p);
+        }
+    }.eval;
+}
+
+// `quote: <expr or statement>` and `quote { .. }`: the code itself as a value. outside of a pattern `quote: <pattern> => <body>` is an arm
+pub fn quote(p: *Parser) anyerror!NodeId {
+    p.tree.macros = true;
+    const body = if (try p.peek_eq_tok(.@"pct_{")) blk: {
+        p.tok_cursor += 1;
+        break :blk try block(p);
+    } else blk: {
+        try p.eat_assert_tok(.@"pct_:");
+        const e = try any(p, .allow_assign, 0);
+        if (p.pattern or p.tok_cursor >= p.tokens.len() or !try p.peek_eq_tok(.@"xpct_=>")) break :blk e;
+        p.tok_cursor += 1;
+        break :blk p.tree.push_node_with(.partial__match_case, .{ .pattern = e, .body = try any(p, .allow_assign, 0) });
+    };
+    return p.tree.push_node_with(.quote, .{ .body = body });
+}
+
+// in a quote `@x`, `@x.y[i]` and `@(..)`: what the quote is made with, or the name where it lands. `@..xs` spreads a list
+pub fn unquote(p: *Parser) anyerror!NodeId {
+    p.tree.macros = true;
+    const spread = try p.peek_eq_tok(.@"xpct_..");
+    if (spread) p.tok_cursor += 1;
+    // its parentheses only group, `@(x): ..` starts no lambda
+    const x = if (try p.peek_eq_tok(.@"pct_(")) blk: {
+        p.tok_cursor += 1;
+        const outer = .{ p.head, p.angle };
+        p.head = false;
+        p.angle = false;
+        defer p.head, p.angle = outer;
+        const e = try any(p, .forbid_assign, 0);
+        try p.eat_assert_tok(.@"pct_)");
+        break :blk e;
+    } else blk: {
+        try p.eat_assert_tok(.identifier);
+        var x = try identifier(p);
+        while (p.tok_cursor < p.tokens.len()) switch (try p.peek_tok()) {
+            .@"xpct_." => {
+                p.tok_cursor += 1;
+                x = try member(p, x);
+            },
+            .@"pct_[" => {
+                p.tok_cursor += 1;
+                x = try array_index(p, x);
+            },
+            else => break,
+        };
+        break :blk x;
+    };
+    const n = p.tree.push_node(if (spread) .unquote_list else .unquote);
+    p.tree.set_children(n, x);
+    return n;
+}
+
+// `<x>`: the tree `x` is, expanded where it stands. comparisons inside need parentheses
+pub fn splice(p: *Parser) anyerror!NodeId {
+    p.tree.macros = true;
+    const outer = p.angle;
+    p.angle = true;
+    const x = try any(p, .forbid_assign, 0);
+    p.angle = outer;
+    if ((try p.pop_tok()) != .@"xpct_>") return error.ExpectedSpliceEnd;
+    return p.tree.push_node_with(.splice, .{ .subnode = x });
 }
 
 pub fn int(p: *Parser) anyerror!NodeId {

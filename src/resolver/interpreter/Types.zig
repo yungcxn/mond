@@ -181,6 +181,10 @@ pub fn oftype(self: *Types, n: NodeId) Value {
     const a1 = r.tree.arg(n, 1);
     const framed = ip.framed();
     const st = if (framed) Index.none else sp.deref(&r.abstract_pool, r.exprs.infer(ip.ctx, a0, .none));
+    if (r.tree.macros and sp.is_tree(if (framed) ip.info(.ty, a0) else st)) {
+        const x = ip.trees.node_of(ip.eval(a0)) orelse return .poison;
+        return .boolean(ip.trees.oftype(x, if (framed) ip.info(.value, a1) else r.types.lower(ip.ctx, a1)));
+    }
     const known = st != .none and st != .poison_type and sp.tag(st) != .meta_type and sp.tag(st) != .trait_type and sp.templated(st) == .none;
     const x = if (known) st else ip.pool(ip.deref(ip.eval(a0)));
     const c0 = if (framed) ip.info(.value, a1) else r.types.lower(ip.ctx, a1);

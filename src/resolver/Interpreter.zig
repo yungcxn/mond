@@ -10,6 +10,7 @@ const Flow = @import("interpreter/Flow.zig");
 const Patterns = @import("interpreter/Patterns.zig");
 const Calls = @import("interpreter/Calls.zig");
 const Types = @import("interpreter/Types.zig");
+const Trees = @import("interpreter/Trees.zig");
 const Index = StaticPool.Index;
 const NodeId = ParseTree.NodeId;
 const Kind = ParseTree.Node.Kind;
@@ -43,6 +44,7 @@ flow: Flow,
 patterns: Patterns = .{},
 calls: Calls = .{},
 types: Types = .{},
+trees: Trees = .{},
 
 pub fn init(a: std.mem.Allocator) Interpreter {
     return .{ .frames = .init(a, 64), .mem = .init(a, 1024), .list = .init(a, 256), .ids = .init(a, 256), .variables = .init(a), .flow = .init(a) };
@@ -248,7 +250,7 @@ pub fn pool(self: *Interpreter, v: Value) Index {
 }
 
 pub fn own(self: *Interpreter, v: Value) Value {
-    if (!v.is_heap()) return v;
+    if (!v.is_heap()) return if (self.res().tree.macros) self.trees.kept(v) else v;
     const at = self.alloc(v.len());
     for (0..v.len()) |i| {
         const x = self.own(self.mem.buf[v.at() + i]);
@@ -356,6 +358,7 @@ pub fn eval(self: *Interpreter, n: NodeId) Value {
         .asbits => self.types.asbits(n),
         .oftype => self.types.oftype(n),
         .sizeof => self.types.sizeof(n),
+        .quote, .splice, .refl, .include, .unquote, .unquote_list, .paste => self.trees.eval(n),
         else => self.types.static(n, k),
     };
 }

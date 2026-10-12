@@ -2,7 +2,7 @@
 
 This folder is a plugin for neovim (0.11+, its own client) and vim (9, through [yegappan/lsp](https://github.com/yegappan/lsp)).
 
-1. `zig build lsp` (puts `mond-lsp` here)
+1. `zig build lsp` (puts `mond-lsp` here, and one per platform)
 2. load the folder as a package:
 
 ```sh
@@ -17,6 +17,6 @@ autocmd User LspSetup call LspOptionsSet(#{semanticHighlight: v:true})
 ```
 
 Neovim: `:checkhealth vim.lsp` shows the server, `:LspRestart` after changing `lsp/` itself.
-Its defaults do the rest: `<C-]>` and ctrl-click go to the definition, `grr` lists references, `gO` the outline, `K` hovers.
+Its defaults do the rest: `<C-]>` and ctrl-click go to the definition, `grr` lists references, `gO` the outline, `K` hovers, `<C-x><C-o>` completes.
 
-Vim: `:LspGotoDefinition`, `:LspShowReferences`, `:LspDocumentSymbol`, `:LspHover`, ctrl-click with `setlocal tagfunc=lsp#lsp#TagFunc`.
+Vim: `:LspGotoDefinition`, `:LspShowReferences`, `:LspDocumentSymbol`, `:LspHover`, ctrl-click with `setlocal tagfunc=lsp#lsp#TagFunc`, completion as you type.

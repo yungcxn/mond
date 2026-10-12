@@ -1,0 +1,5 @@
+# a macro making a splice making the same splice never ends
+stcfun forever = () -> ast: ret quote: <forever()>;
+stc u32 never = <forever()>; #! endless_expansion
+
+$main = () {}

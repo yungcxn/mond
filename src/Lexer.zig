@@ -45,6 +45,7 @@ pub const Token = struct {
         kw_f16,
         kw_f32,
         kw_f64,
+        kw_ast,
         kw_bool,
         kw_mut,
         kw_true,
@@ -69,6 +70,9 @@ pub const Token = struct {
         kw_stcfor,
         kw_stcloop,
         kw_stcwhere,
+        kw_quote,
+        kw_refl,
+        kw_include,
 
         // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
         @"pct_(",
@@ -94,6 +98,7 @@ pub const Token = struct {
         @"xpct_^",
         @"xpct_<",
         @"xpct_>",
+        @"xpct_@",
 
         @"xpct_==",
         @"xpct_++",
@@ -150,11 +155,12 @@ pub const Token = struct {
             };
         }
 
-        fn keywords() []const struct { []const u8, Token.Kind } {
+        // the keywords of length `len`, a name is compared with the ones of its length only
+        fn keywords(comptime len: u32) []const struct { []const u8, Token.Kind } {
             return comptime blk: {
                 var list: []const struct { []const u8, Token.Kind } = &.{};
                 for (@typeInfo(@This()).@"enum".fields) |field| {
-                    if (!std.mem.startsWith(u8, field.name, "kw_")) continue;
+                    if (!std.mem.startsWith(u8, field.name, "kw_") or field.name.len != 3 + len) continue;
                     list = list ++ .{.{ field.name[3..field.name.len], @field(@This(), field.name) }};
                 }
                 break :blk list;
@@ -167,7 +173,12 @@ pub const Token = struct {
             xpcts(3),
         };
 
-        const kw_tbl: []const struct { []const u8, Token.Kind } = keywords();
+        const kw_tbl = blk: {
+            @setEvalBranchQuota(100_000);
+            var t: [16][]const struct { []const u8, Token.Kind } = undefined;
+            for (&t, 0..) |*l, i| l.* = keywords(i);
+            break :blk t;
+        };
 
         pub inline fn xpct_from_str(xpct_str: []const u8) ?Token.Kind {
             for (xpct_tbl[xpct_str.len - 1]) |xpct_pair| {
@@ -177,7 +188,8 @@ pub const Token = struct {
         }
 
         pub inline fn kw_from_str(kw_str: []const u8) ?Token.Kind {
-            for (kw_tbl) |kw_pair| {
+            if (kw_str.len >= kw_tbl.len) return null;
+            for (kw_tbl[kw_str.len]) |kw_pair| {
                 if (std.mem.eql(u8, kw_str, kw_pair[0])) return kw_pair[1];
             }
             return null;

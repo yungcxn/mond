@@ -1,0 +1,106 @@
+# a tree is a variant of the parse tree's kinds: matched by case, its children by field (positional or named)
+stcfun op = (ast e) -> u64: ret match e {
+    ast.BinaryAdd(lhs, rhs) => 1,
+    ast.BinaryMultiply(rhs = r) => r.$src.$len,
+    ast.IntegerValue | ast.FloatingPointValue => 7,
+    ast.Identifier => e.$src.$len * 10,
+    _ => 0,
+}
+stc u64 o1 = op(quote: a + b); #= o1 1
+stc u64 o2 = op(quote: a * bee); #= o2 3
+stc u64 o3 = op(quote: 2.5); #= o3 7
+stc u64 o4 = op(quote: name); #= o4 40
+stc u64 o5 = op(quote: !x); #= o5 0
+
+# nested case patterns, binders inside
+stcfun nested = (ast e) -> u32: ret match e {
+    ast.BinaryAdd(ast.IntegerValue, ast.BinaryAdd(_, x)) => 1,
+    ast.BinaryAdd(_, _) => 2,
+    _ => 3,
+}
+stc u32 n1 = nested(quote: 1 + (2 + 3)); #= n1 1
+stc u32 n2 = nested(quote: x + (2 + 3)); #= n2 2
+stc u32 n3 = nested(quote: x); #= n3 3
+
+# quote patterns: shape against shape, `@x` takes a subtree, `@_` any, `@..xs` the rest of a list
+stcfun shape = (ast e) -> []u8: ret match e {
+    quote: @x + 0 => x.$src,
+    quote: @_ * @_ => "product",
+    quote: f(@first, @..rest) => first.$src,
+    quote: g() => "g",
+    _ => "none",
+}
+stc []u8 s1 = shape(quote: (a * b) + 0); #= s1 "a * b"
+stc []u8 s2 = shape(quote: 1 * 2); #= s2 "product"
+stc []u8 s3 = shape(quote: f(y, 2, 3)); #= s3 "y"
+stc []u8 s4 = shape(quote: g()); #= s4 "g"
+stc []u8 s5 = shape(quote: g(1)); #= s5 "none"
+stc []u8 s6 = shape(quote: x + 1); #= s6 "none"
+
+stcfun rest_len = (ast e) -> u64: ret match e {
+    quote: f(@_, @..rest) => rest.$len,
+    _ => 99,
+}
+stc u64 r1 = rest_len(quote: f(1, 2, 3, 4)); #= r1 3
+stc u64 r2 = rest_len(quote: f(1)); #= r2 0
+
+# children by field name, `with` a copy with some of them changed, nodes made by their kind
+stcfun parts = (ast e) -> []u8: ret e.rhs.$src;
+stc []u8 p1 = parts(quote: x - yy); #= p1 "yy"
+stc i32 swapped = <(quote: 10 - 4) with (lhs = quote: 4, rhs = quote: 10)>; #= swapped -6
+stc i32 made = <ast.BinaryMultiply(quote: 6, ast.IntegerValue("7"))>; #= made 42
+stc bool made_true = <ast.BooleanTrue()>; #= made_true true
+stc u64 count = <quote: [1, 2, 3]>.$len; #= count 3
+stcfun kids = (ast e) -> u64: ret e.$children.$len;
+stc u64 k2 = kids(quote: a + b); #= k2 2
+stc u64 k3 = kids(quote: f(a, b, c)); #= k3 2
+stc u64 k0 = kids(quote: x); #= k0 0
+
+# `oftype`: `ast(fun)` and friends by what the root makes, `ast.Kind` by its kind
+stcfun what = (ast e) -> u32: ret if e oftype ast(fun): 1 else: if e oftype ast(type): 2 else: if e oftype ast.Identifier: 3 else: 0;
+stc u32 w1 = what(quote: fun f = (): ret 1); #= w1 1
+stc u32 w2 = what(quote: (u32 x): x); #= w2 1
+stc u32 w3 = what(quote: *(u32 a)); #= w3 2
+stc u32 w4 = what(quote: name); #= w4 3
+stc u32 w5 = what(quote: 1 + 1); #= w5 0
+
+# `ast.Kind` parameters take trees of that root only, `[]ast.Kind` lists of them
+stcfun named = (ast.Identifier x) -> []u8: ret x.$src;
+stc []u8 nm = named(quote: abc); #= nm "abc"
+stcfun all_names = ([]ast.Identifier xs) -> u64: ret xs.$len;
+stc u64 an = all_names([quote: a, quote: b]); #= an 2
+
+# trees made by macros are values: lists of them grow, pointers into them write them
+stcfun grown = () -> u64 {
+    mut []ast xs = [];
+    xs += quote: 1;
+    xs += [quote: 2, quote: 3];
+    ret xs.$len;
+}
+stc u64 g = grown(); #= g 3
+stcfun rewritten = () -> ast(u32) {
+    mut ast(u32) e = quote: 1 + 2;
+    *ast p = e.&;
+    p.rhs = quote: 40;
+    *ast l = p.lhs.&;
+    l.* = ast.IntegerValue("2");
+    ret e;
+}
+stc u32 rw = <rewritten()>; #= rw 42
+
+# trees are values: a variable, an element holds a copy of its own, a `*ast` shares the tree it points to
+stcfun copies = () -> ast {
+    ast a = quote: 1 + 2;
+    mut ast b = a;
+    b.rhs = quote: 40;
+    mut []ast xs = [a, b];
+    xs[0].lhs = quote: 100;
+    xs += a;
+    xs[2].lhs = quote: 5;
+    *ast p = b.&;
+    p.lhs = quote: 2;
+    ret quote: @a * 10000 + @b * 100 + @(xs[0]) + @(xs[1]) + @(xs[2]);
+}
+stc u32 cp = <copies()>; #= cp 34350
+
+$main = () {}

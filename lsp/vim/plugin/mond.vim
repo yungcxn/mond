@@ -3,5 +3,11 @@ if has('nvim')
   finish
 endif
 
-let s:server = expand('<sfile>:p:h:h') .. '/mond-lsp'
+" the server of the machine vim runs on (`zig build lsp` builds one per platform), else the one built here
+let s:dir = expand('<sfile>:p:h:h')
+let s:os = get({'Darwin': 'macos', 'Linux': 'linux'}, trim(system('uname -s')), '')
+let s:server = s:dir .. '/mond-lsp-' .. s:os .. '-' .. substitute(trim(system('uname -m')), '^arm64$', 'aarch64', '')
+if !executable(s:server)
+  let s:server = s:dir .. '/mond-lsp'
+endif
 autocmd User LspSetup call LspAddServer([#{name: 'mond', filetype: ['mond'], path: s:server, args: []}])

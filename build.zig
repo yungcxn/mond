@@ -55,8 +55,26 @@ pub fn build(b: *std.Build) void {
         }) });
         test_step.dependOn(&b.addRunArtifact(lsp_tests).step);
         const step = b.step("lsp", "Build the language server into the editor plugins in lsp/.");
+        // `mond-lsp` for this machine, and one per platform (`mond-lsp-linux-aarch64`) for an editor reaching the plugins
+        // from another one (a remote host sharing the folder): the plugins take the one of the machine they run on
+        const host = b.graph.host.result;
         for ([_][]const u8{ "../lsp/vscode", "../lsp/vim" }) |dir| {
             step.dependOn(&b.addInstallArtifact(lsp, .{ .dest_dir = .{ .override = .{ .custom = dir } } }).step);
         }
+        for ([_]std.Target.Os.Tag{ .linux, .macos }) |os| for ([_]std.Target.Cpu.Arch{ .aarch64, .x86_64 }) |arch| {
+            const name = b.fmt("mond-lsp-{t}-{t}", .{ os, arch });
+            const native = os == host.os.tag and arch == host.cpu.arch;
+            const t = if (native) target else b.resolveTargetQuery(.{ .os_tag = os, .cpu_arch = arch });
+            const mond = if (native) exe.root_module else b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = t, .optimize = .ReleaseFast });
+            const built = if (native) lsp else b.addExecutable(.{ .name = name, .root_module = b.createModule(.{
+                .root_source_file = b.path("lsp/main.zig"),
+                .target = t,
+                .optimize = .ReleaseFast,
+                .imports = &.{.{ .name = "mond", .module = mond }},
+            }) });
+            for ([_][]const u8{ "../lsp/vscode", "../lsp/vim" }) |dir| {
+                step.dependOn(&b.addInstallArtifact(built, .{ .dest_dir = .{ .override = .{ .custom = dir } }, .dest_sub_path = name }).step);
+            }
+        };
     }
 }

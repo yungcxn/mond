@@ -133,7 +133,9 @@ pub fn instantiate(self: *Generics, generic: DeclPool.Index, args: StaticPool.In
         .@"while", .while_with_repeat_stmt, .loop, .loop_with_repeat_stmt => if (r.abstract_pool.binding(@enumFromInt(i)) == .none) r.abstract_pool.bind(@enumFromInt(i), StaticPool.dyn_len),
         else => {},
     };
-    const got = r.interpreter.run(&ctx, unit, r.capture(generic, v, first));
+    // a body that gives nothing failed on the way (it called a function with errors)
+    const ran = r.interpreter.run(&ctx, unit, r.capture(generic, v, first));
+    const got = if (ran == .none) .poison_type else ran;
     const made = if (sp.tag(ctx.ret_type) == .meta_type and sp.get_tag_prop(got).is_type) sp.nominal_decl(&r.abstract_pool, got) else .none;
     if (made != .none and @intFromEnum(made) >= first) self.template_of.put(r.alloc, made, generic) catch @panic("OOM");
     self.memo(key, got);

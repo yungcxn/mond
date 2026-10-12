@@ -91,6 +91,7 @@ fn field_mut(self: *Mutability, pt: StaticPool.Index, name: NamePool.Index) bool
     if (pt == .none or pt == .poison_type) return true;
     var t = sp.apply_vars(&r.abstract_pool, pt);
     t = sp.pointee(t);
+    if (r.tree.macros and sp.tag(t) == .ast_type) return true;
     if (sp.tag(t) == .variant_case_type) t = sp.get(t).variant_case_type.payload;
     if (t != .none and sp.tag(t) == .template_type) if (r.generics.template_field(sp.get(t).template_type, name)) |f| return ParseTree.Param.from_node(r.tree, f).is_mut;
     if (t == .none or sp.tag(t) != .record_type) return false;

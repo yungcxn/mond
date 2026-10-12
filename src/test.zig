@@ -31,7 +31,7 @@ fn line_at(src: []const u8, at: usize) usize {
     return std.mem.count(u8, src[0..@min(at, src.len)], "\n") + 1;
 }
 
-fn run(a: std.mem.Allocator, src: []u8) !Result {
+fn run(a: std.mem.Allocator, io: std.Io, path: []const u8, src: []u8) !Result {
     var out: std.ArrayList(Finding) = .empty;
     var res: ?*Resolver = null;
     var lexer = Lexer{ .src_bytes = src, .tokens = .init(a, 1024) };
@@ -41,6 +41,7 @@ fn run(a: std.mem.Allocator, src: []u8) !Result {
         if (parser.build_ast()) |_| {
             const r = try a.create(Resolver);
             r.* = Resolver.init(a, &parser.tree, src, parser.global_store.sliced());
+            r.io, r.path = .{ io, path };
             const resolved = if (r.resolve()) |_| true else |_| false;
             res = r;
             if (resolved) {
@@ -242,7 +243,7 @@ fn check(w: *std.Io.Writer, io: std.Io, path: []const u8, negative: bool, filter
         const a = arena.allocator();
         const src = try dir.readFileAlloc(io, name, a, .limited(50 << 20));
         const want = try expectations(a, src);
-        const got = try run(a, src);
+        const got = try run(a, io, try std.fs.path.join(a, &.{ path, name }), src);
         var lines: std.Io.Writer.Allocating = .init(a);
         var i: usize = 0;
         var j: usize = 0;

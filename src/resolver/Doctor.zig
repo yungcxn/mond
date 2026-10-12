@@ -47,6 +47,12 @@ pub const Disorder = enum(u16) {
     use_before_initialization,
     destructure_type_conflict,
     missing_main,
+    // macros: `@` outside of a quote, a write into a declaration already resolved, `$error`, an include, expansions that never end
+    stray_unquote,
+    frozen_declaration,
+    macro_error,
+    include_failed,
+    endless_expansion,
 
     pub const Severity = enum(u8) { note, warning, @"error" };
 };

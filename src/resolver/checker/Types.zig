@@ -43,7 +43,11 @@ pub fn lower(self: *Types, ctx: *FnCtx, node: NodeId) StaticPool.Index {
         .type_ptr, .type_ptrmut => sp.ptr_of(self.lower(ctx, r.tree.arg(node, 0)), k == .type_ptrmut),
         // an unlengthed array gets a var as its length: inferred from the value, or per call for parameters
         // record fields, `main` parameters and lengths nothing fixes become runtime-length arrays (dynify, `apply_inferred`)
-        .type_array_unlengthed => sp.intern(.{ .array_type = .{ .len = sp.fresh_var(&r.abstract_pool, node), .elem = self.lower(ctx, r.tree.arg(node, 0)) } }),
+        // trees are listed by macros as they come, `[]ast` has no length to infer
+        .type_array_unlengthed => blk: {
+            const e = self.lower(ctx, r.tree.arg(node, 0));
+            break :blk sp.intern(.{ .array_type = .{ .len = if (r.tree.macros and sp.is_tree(e)) StaticPool.dyn_len else sp.fresh_var(&r.abstract_pool, node), .elem = e } });
+        },
         .type_array => blk: {
             const len = r.statics.deferred(ctx, r.tree.arg(node, 0)) orelse .poison_type;
             const n = if (sp.tag(len) == .int_value) sp.intern(.{ .int = .{ .ty = .u64_type, .bits = sp.get(len).int.bits } }) else if (len == .poison_type) len else r.report(.not_static, r.tree.arg(node, 0), len, 0);
@@ -51,6 +55,8 @@ pub fn lower(self: *Types, ctx: *FnCtx, node: NodeId) StaticPool.Index {
         },
         .def_fun_declaration => self.fun_type(ctx, node, .default, .unit_type, .none),
         else => blk: {
+            // a loop makes an array and never a type, an interpreted body would leave it unchecked to the interpreter
+            if (ctx.interpreted and r.tree.props(node).loop) break :blk r.report(.not_a_type, node, r.exprs.infer(ctx, node, .none), .none);
             const v = r.statics.deferred(ctx, node) orelse .poison_type;
             if (sp.tag(v) == .generic and sp.tag(sp.get(r.decl_pool.get_ty(sp.get(v).static_fun.decl)).function_type.ret) == .meta_type) break :blk sp.intern(.{ .template_type = sp.get(v).static_fun.decl });
             break :blk if (v == .poison_type or sp.get_tag_prop(v).is_type) v else r.report(.not_a_type, node, v, .none);

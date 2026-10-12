@@ -297,7 +297,8 @@ pub fn check_stmt(self: *Decls, ctx: *FnCtx, node: NodeId) StaticPool.Index {
     // a write into an assignable (`p.x = v`, `a[i] = v`, `ptr.* = v`)
     if (parts.assignees.len == 1 and r.name_pool.name_of(parts.assignees[0]) == .none) {
         const pt = r.mutability.check_assignable(ctx, parts.assignees[0]);
-        for (values) |v| _ = r.exprs.check(ctx, v, pt);
+        const want = if (r.tree.macros) r.macros.place(parts.assignees[0], pt) else pt;
+        for (values) |v| _ = r.exprs.check(ctx, v, want);
         return .unit_type;
     }
     const declaring = parts.type != 0 or @as(u8, @bitCast(flags)) != 0;
@@ -351,8 +352,11 @@ pub fn check_stmt(self: *Decls, ctx: *FnCtx, node: NodeId) StaticPool.Index {
         if (ty != .none and sp.tag(ty) == .function_type and sp.holds_template(ty)) ty = r.report(.unrealized_template, values[0], ty, 0);
     }
     r.scopes.pop();
+    // trees and what holds them exist at compile-time only, their variables are static (in an interpreted body they are anyway)
+    var kept = flags;
+    kept.is_stc = flags.is_stc or r.tree.macros and !ctx.interpreted and sp.holds_trees(sp.apply_vars(&r.abstract_pool, ty));
     for (parts.assignees, 0..) |id, i| {
-        const d = if (existing[i] != .none) existing[i] else self.declare(id, n, .variable, if (ty == .none) .poison_type else ty, flags);
+        const d = if (existing[i] != .none) existing[i] else self.declare(id, n, .variable, if (ty == .none) .poison_type else ty, kept);
         const dt = r.decl_pool.get_ty(d);
         // scalars declared without a value must be written before they are read
         const scalar = dt != .none and dt != .poison_type and sp.tag(dt) != .record_type and sp.tag(dt) != .array_type;

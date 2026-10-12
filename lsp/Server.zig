@@ -1,5 +1,6 @@
 const std = @import("std");
 const Analysis = @import("Analysis.zig");
+const Completion = @import("Completion.zig");
 
 // the language server: json-rpc on stdin and stdout. documents are analyzed by a worker, a child process
 // running the compiler, so a compiler crash costs that analysis but never the server
@@ -16,8 +17,16 @@ docs: std.StringHashMapUnmanaged(Doc) = .empty,
 // the lifecycle: requests come after `initialize`, after `shutdown` only `exit`
 phase: enum { new, running, shut } = .new,
 
-// `text` waits for its analysis, `result` is the last one and lives in `arena`
-const Doc = struct { text: ?[]u8 = null, result: Analysis.Result = .{}, arena: std.heap.ArenaAllocator.State = .{} };
+// `text` waits for its analysis, `result` is the last one of `src` and lives in `arena`. completion goes by `known`, the
+// last result that knew the names (the text being typed rarely parses), in `result`'s arena or, when older, in its own
+const Doc = struct {
+    text: ?[]u8 = null,
+    src: []const u8 = "",
+    result: Analysis.Result = .{},
+    arena: std.heap.ArenaAllocator.State = .{},
+    known: []const Analysis.Symbol = &.{},
+    known_arena: ?std.heap.ArenaAllocator.State = null,
+};
 
 const Method = enum {
     initialize,
@@ -31,6 +40,7 @@ const Method = enum {
     @"textDocument/references",
     @"textDocument/documentSymbol",
     @"textDocument/hover",
+    @"textDocument/completion",
 };
 
 const Message = struct {
@@ -109,6 +119,7 @@ fn handle(s: *Server, a: std.mem.Allocator, m: Message) !void {
                     .referencesProvider = true,
                     .documentSymbolProvider = true,
                     .hoverProvider = true,
+                    .completionProvider = .{ .triggerCharacters = &[_][]const u8{ ".", "$" } },
                 },
                 .serverInfo = .{ .name = "mond-lsp" },
             });
@@ -125,6 +136,7 @@ fn handle(s: *Server, a: std.mem.Allocator, m: Message) !void {
                 s.gpa.free(d.key);
                 if (d.value.text) |text| s.gpa.free(text);
                 d.value.arena.promote(s.gpa).deinit();
+                if (d.value.known_arena) |k| k.promote(s.gpa).deinit();
             }
             try s.notify(a, "textDocument/publishDiagnostics", .{ .uri = uri, .diagnostics = &[_]Analysis.Diagnostic{} });
         },
@@ -142,6 +154,7 @@ fn handle(s: *Server, a: std.mem.Allocator, m: Message) !void {
                     .contents = .{ .kind = "markdown", .value = try hover(a, r.decls[l[3]]) },
                     .range = range(l),
                 } else null),
+                .@"textDocument/completion" => try s.respond(a, m.id, try Completion.offer(a, d.src, p.position, d.known)),
                 .@"textDocument/references" => {
                     var refs: std.ArrayList(Location) = .empty;
                     if (link) |l| for (r.links) |x| if (x[3] == l[3] and (p.context.includeDeclaration or !std.meta.eql(@as(?Analysis.Range, range(x)), r.decls[l[3]].selectionRange))) {
@@ -203,19 +216,31 @@ fn analyze(s: *Server, a: std.mem.Allocator, uri: []const u8, d: *Doc) !void {
         d.text = null;
     }
     var arena = std.heap.ArenaAllocator.init(s.gpa);
-    const r = s.work(arena.allocator(), text) orelse {
+    const r = s.work(arena.allocator(), uri, text) orelse {
         arena.deinit();
         return s.notify(a, "textDocument/publishDiagnostics", .{ .uri = uri, .diagnostics = &[_]Analysis.Diagnostic{crashed} });
     };
-    d.arena.promote(s.gpa).deinit();
-    d.* = .{ .result = r, .arena = arena.state };
+    const src = try arena.allocator().dupe(u8, text);
+    if (r.decls.len > 0) {
+        if (d.known_arena) |k| k.promote(s.gpa).deinit();
+        d.arena.promote(s.gpa).deinit();
+        d.* = .{ .src = src, .result = r, .arena = arena.state, .known = r.decls };
+    } else {
+        // the names known stay, with the arena they are in
+        if (d.known_arena == null) d.known_arena = d.arena else d.arena.promote(s.gpa).deinit();
+        d.src, d.result, d.arena = .{ src, r, arena.state };
+    }
     try s.notify(a, "textDocument/publishDiagnostics", .{ .uri = uri, .diagnostics = r.diagnostics });
 }
 
 // the worker reads the source on stdin and answers on stdout, its panics go to stderr (the editor's log),
-// a worker that hangs is killed after `timeout`
-fn work(s: *Server, a: std.mem.Allocator, text: []const u8) ?Analysis.Result {
-    var child = std.process.spawn(s.io, .{ .argv = &.{ s.exe, "analyze" }, .stdin = .pipe, .stdout = .pipe }) catch return null;
+// a worker that hangs is killed after `timeout`. it gets the document's file for `include`
+fn work(s: *Server, a: std.mem.Allocator, uri: []const u8, text: []const u8) ?Analysis.Result {
+    // the path of the uri, also of a remote one (`vscode-remote://ssh-remote+host/..`): a folder shared under the same path
+    const scheme = std.mem.indexOf(u8, uri, "://");
+    const slash = if (scheme) |i| std.mem.indexOfScalarPos(u8, uri, i + 3, '/') else null;
+    const path = if (slash) |i| std.Uri.percentDecodeInPlace(a.dupe(u8, uri[i..]) catch return null) else "";
+    var child = std.process.spawn(s.io, .{ .argv = &.{ s.exe, "analyze", path }, .stdin = .pipe, .stdout = .pipe }) catch return null;
     defer child.kill(s.io);
     child.stdin.?.writeStreamingAll(s.io, text) catch return null;
     child.stdin.?.close(s.io);

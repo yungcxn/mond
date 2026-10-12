@@ -112,11 +112,12 @@ pub fn lower(self: *HighLowerer) void {
     var heads = self.r.scopes.globals.valueIterator();
     while (heads.next()) |h| self.group(h.*);
     const d = self.r.decl_pool.entries.sliced();
-    for (0..d.name.len) |i| if (d.flags[i].is_global and d.kind[i] == .variable) {
+    // trees and what holds them are compile-time only, nothing of them is lowered
+    for (0..d.name.len) |i| if (d.flags[i].is_global and d.kind[i] == .variable and !(self.r.tree.macros and self.sp.holds_trees(d.ty[i]))) {
         put(self.alloc, &self.global_of, @enumFromInt(i), self.ir.globals.len());
         self.ir.globals.push(.{ .decl = @enumFromInt(i), .ty = self.apply(d.ty[i]), .init = if (d.flags[i].is_stc) d.value[i] else .none });
     };
-    for (bodies.decl) |bd| if (self.r.decl_pool.get_kind(bd).is_fn() and !self.head_of.contains(bd)) {
+    for (bodies.decl) |bd| if (self.r.decl_pool.get_kind(bd).is_fn() and !self.head_of.contains(bd) and !(self.r.tree.macros and self.sp.holds_trees(self.r.decl_pool.get_ty(bd)))) {
         _ = self.func(bd);
     };
     self.ir.init_fn = self.ir.functions.len();

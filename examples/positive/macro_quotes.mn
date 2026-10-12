@@ -1,0 +1,109 @@
+# quotes are typed by what their code produces, `ast` is any tree
+stc ast(i32) one = quote: 1;
+stc q_add = quote: 1 + 2; #: q_add ast(u32)
+stc q_bool = quote: 1 < 2; #: q_bool ast(bool)
+stc q_block = quote { x = 1; }; #: q_block ast(())
+stc q_fun = quote: (i32 x): x + 1; #: q_fun ast(fun)
+stc q_type = quote: *(i32 a); #: q_type ast(type)
+stc q_variant = quote: +(A, B); #: q_variant ast(variant)
+stc q_decl = quote: fun f = (): ret 1; #: q_decl ast(fun)
+stc q_free = quote: unknown_here + 1; #: q_free ast
+stc q_kind = ast.BinaryAdd; #: q_kind ast.BinaryAdd
+stc ast any = q_add;
+
+# a splice is the code its tree is, where it stands
+stc i32 three = <quote: 1 + 2>; #= three 3
+stc i32 nested = <quote: <quote: 2> * 5>; #= nested 10
+stc i32 again = <one> + <one>; #= again 2
+
+# `@` takes a tree or lifts a static value into code
+stcfun add = (ast(i32) a, ast(i32) b) -> ast(i32): ret quote: @a + @b;
+stcfun lifted = (u32 n) -> ast(u32): ret quote: @n * 2;
+stc i32 sum = <add(quote: 20, quote: 22)>; #= sum 42
+stc u32 dbl = <lifted(21)>; #= dbl 42
+stc i32 neg = <quote: @(-5) + 1>; #= neg -4
+stc bool flag = <quote: @(2 > 1) and true>; #= flag true
+stc f32 half = <quote: @(0.25) * 2.0>; #= half 0.5
+stc []u8 text = <quote: @("a\\b\"")>; #= text "a\b""
+stc u64 size = <quote: sizeof @(u32)>; #= size 4
+stc u64 arr = <quote: sizeof @([3]u16)>; #= arr 6
+
+# `@..` spreads a list into the list around it: arguments, array elements, statements
+stcfun all = ([]ast parts) -> ast: ret quote: [@..parts];
+stc []u32 spread = <all([quote: 1, quote: 2, quote: 3])>; #= spread [1, 2, 3]
+stcfun sum3 = (ast(u32) x) -> ast: ret quote { mut u32 s = 0; @..([quote: s += @x, quote: s += @x, quote: s += @x]); ret s; };
+stcfun tripled = () -> u32: <sum3(quote: 7)>;
+stc u32 tri = tripled(); #= tri 21
+
+# a block spliced as a statement spreads into the block around, a unit is no code at all
+stcfun nothing = () {}
+fun spliced = () -> u32 {
+    <quote { mut @a = 4; }>;
+    <nothing()>;
+    a += 1;
+    ret a;
+}
+stc u32 five = spliced(); #= five 5
+
+# names a quote declares are its own (hygiene), free names and `@x` are where it lands
+stcfun twice = (ast(u32) e) -> ast: ret quote { tmp = @e; ret tmp + tmp; };
+fun hygienic = () -> u32 {
+    u32 tmp = 100;
+    f = (): <twice(quote: tmp)>;
+    ret f();
+}
+stc u32 h = hygienic(); #= h 200
+
+stcfun bind_it = (ast v) -> ast: ret quote { @it = @v; };
+fun anaphoric = () -> u32 {
+    <bind_it(quote: 9)>;
+    ret it;
+}
+stc u32 an = anaphoric(); #= an 9
+
+# every expansion has its own names, `$fresh` makes names like no other
+stcfun swap = () -> ast: ret quote { t = @a; @a = @b; @b = t; };
+fun swapped = () -> u32 {
+    mut u32 a = 1;
+    mut u32 b = 2;
+    <swap()>;
+    <swap()>;
+    <swap()>;
+    ret a * 10 + b;
+}
+stc u32 sw = swapped(); #= sw 21
+stcfun fresh_pair = () -> ast {
+    ast.Identifier x = $fresh("v");
+    ast.Identifier y = $fresh("v");
+    ret quote { @x = 3; @y = 4; ret @x * @y; };
+}
+fun freshes = () -> u32: <fresh_pair()>;
+stc u32 fr = freshes(); #= fr 12
+
+# a quote within a quote keeps its holes for where it is evaluated: `@k` is the k where the outer one lands
+stc ast(u32) k = quote: 40;
+stcfun outer = (ast(u32) v) -> ast: ret quote: <quote: @k + 1> + @v;
+stc u32 inner = <outer(quote: 1)>; #= inner 42
+
+# a declaration from a splice, like a realized template
+stcfun maker = (u32 k) -> ast(fun): ret quote: (u32 x) -> u32: ret x * @k;
+fun times3 = <maker(3)>;
+stc u32 nine = times3(3); #= nine 9
+
+# a splice takes any expression making a tree: `if`, `match`, `stcif` choose the code, a comparison in parentheses
+stc bool fast = true;
+stc u32 by_if = <if fast: quote: 1 else: quote: 2>; #= by_if 1
+stc u32 by_match = <match 2 { 1 => quote: 10, _ => quote: 20 }>; #= by_match 20
+stc u32 by_stcif = <stcif fast: quote: 3 else: quote: 4>; #= by_stcif 3
+stc u32 by_cmp = <if (1 > 0): quote: 8 else: quote: 9>; #= by_cmp 8
+stcfun pick = (u32 n) -> ast(u32): ret if n > 1: quote: @n * 100 else: quote: 5;
+stc u32 picked = <pick(3)>; #= picked 300
+fun chosen = () -> u32 {
+    mut u32 x = 1;
+    <if fast: quote { x += 10; } else: quote { x += 20; }>;
+    <match fast { true => quote { x *= 2; }, false => quote {} }>;
+    ret x;
+}
+stc u32 ch = chosen(); #= ch 22
+
+$main = () {}

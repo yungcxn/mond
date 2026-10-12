@@ -1,0 +1,15 @@
+# `@` means something in a quote only: anywhere else it is reported before anything is resolved
+stc u32 a = 1;
+stc u32 stray = @a; #! stray_unquote
+stc []u32 spread = [@..a]; #! stray_unquote
+fun pas@ted = () -> u32: ret 1; #! stray_unquote
+type P = *(u32 x);
+stc u32 member = P(x = 1).@x; #! stray_unquote
+stc P named = P(@x = 1); #! stray_unquote
+stcfun target = () -> u32 {
+    mut u32 n = 0;
+    @n += 1; #! stray_unquote
+    ret n;
+}
+stc ast inner = quote: 1 + @(P(x = 1).@x); #! stray_unquote
+stc ast fine = quote: @a + 1;

@@ -213,7 +213,7 @@ pub fn check_unwrap(self: *Flow, ctx: *FnCtx, node: NodeId, expected: StaticPool
 // a branch of if / match: unit blocks and nested ifs / matches are runit, a plain unit value is not
 pub fn branch(self: *Flow, ctx: *FnCtx, node: NodeId, expected: StaticPool.Index) StaticPool.Index {
     const r = self.res();
-    return self.settle(node, r.static_pool.apply_vars(&r.abstract_pool, r.exprs.infer(ctx, node, expected)), expected);
+    return self.settle(node, r.static_pool.apply_vars(&r.abstract_pool, r.exprs.infer(ctx, node, expected)), r.static_pool.apply_vars(&r.abstract_pool, expected));
 }
 
 pub fn settle(self: *Flow, node: NodeId, t0: StaticPool.Index, expected: StaticPool.Index) StaticPool.Index {

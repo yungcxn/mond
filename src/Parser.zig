@@ -15,6 +15,10 @@ tok_cursor: u32 = 0,
 head: bool = false,
 // in the arguments of a call a comma ends the value, it starts no destructuring assignment
 list: bool = false,
+// in the pattern of a match arm a quote is no arm itself (`quote: @x + 0 => x`)
+pattern: bool = false,
+// in a splice `<..>` a `>` closes it, a comparison needs parentheses
+angle: bool = false,
 global_store: DynBuf(NodeId),
 // children of the lists being parsed, nested lists stack above their parents
 scratch: DynBuf(NodeId),

@@ -126,6 +126,7 @@ pub fn store(self: *Variables, n: NodeId, d: DeclPool.Index, v: Value) bool {
 fn write(self: *Variables, n: NodeId, v: Value) void {
     const ip = self.interp();
     const r = ip.res();
+    if (r.tree.macros and ip.trees.write(n, v)) return;
     if (r.tree.kind(n) == .capture) return self.write(r.tree.arg(n, 0), v);
     if (r.tree.props(n).name) {
         _ = self.store(n, self.decl_of(n), v);
@@ -231,6 +232,7 @@ pub fn update(self: *Variables, n: NodeId, k: Kind) Value {
     const ip = self.interp();
     const r = ip.res();
     const target = r.tree.arg(n, 0);
+    if (k == .assign_add and r.tree.macros) if (ip.trees.append(n)) |x| return x;
     const compound = @intFromEnum(k) >= @intFromEnum(Kind.assign_add);
     const operand: Value = if (compound) ip.eval(r.tree.arg(n, 1)) else .empty;
     if (operand.is(.poison_type) or ip.unwind != .none) return operand;
@@ -256,6 +258,7 @@ pub fn update(self: *Variables, n: NodeId, k: Kind) Value {
 
 pub fn address(self: *Variables, n: NodeId) Value {
     const ip = self.interp();
+    if (ip.res().tree.macros) if (ip.trees.address(n)) |x| return x;
     const c = self.cell(ip.res().tree.arg(n, 0)) orelse return .poison;
     return .ref(if (ip.framed()) ip.info(.ty, n) else ip.res().static_pool.ptr_of(ip.vtype(ip.mem.buf[c]), true), c);
 }
@@ -263,6 +266,7 @@ pub fn address(self: *Variables, n: NodeId) Value {
 pub fn dereference(self: *Variables, n: NodeId) Value {
     const ip = self.interp();
     const p = ip.eval(ip.res().tree.arg(n, 0));
+    if (ip.res().tree.macros) if (ip.trees.node_of(p)) |x| return ip.trees.value(ip.res().static_pool.pointee(ip.vtype(p)), x);
     return if (p.is_ref()) ip.mem.buf[p.at()] else if (p.is(.poison_type)) p else ip.fail(n, .not_static, ip.pool(p), 0);
 }
 
