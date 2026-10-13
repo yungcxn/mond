@@ -70,7 +70,20 @@ pub fn classify_lexically(analysis: *Analysis, lexer: *Lexer) void {
     for (tokens.tk, tokens.span, analysis.token_class, 0..) |kind, span, *class, i| {
         class.* = class_of_token_kind[@intFromEnum(kind)];
         if (kind == .identifier) {
-            class.* = identifier_class(tokens.tk, i, analysis.source[span[0]..span[1]]);
+            const name = analysis.source[span[0]..span[1]];
+            class.* = blk: {
+                if (Completion.described(name)) |entry| {
+                    if (entry.class == .function) break :blk .function;
+                    if (Completion.of_trees(name)) break :blk .macro;
+                    break :blk .property;
+                }
+                if (i > 0) {
+                    const after_keyword = class_after_keyword[@intFromEnum(tokens.tk[i - 1])];
+                    if (after_keyword) |declared| break :blk declared;
+                }
+                if (std.mem.eql(u8, name, "_")) break :blk .keyword;
+                break :blk .variable;
+            };
         }
 
         if (opens_bracket[@intFromEnum(kind)]) depth += 1;
@@ -92,21 +105,6 @@ pub fn classify_lexically(analysis: *Analysis, lexer: *Lexer) void {
             else => {},
         }
     }
-}
-
-fn identifier_class(kinds: []const Kind, index: usize, name: []const u8) Type {
-    if (Completion.described(name)) |entry| return builtin_class(entry, name);
-    if (index > 0) {
-        if (class_after_keyword[@intFromEnum(kinds[index - 1])]) |declared| return declared;
-    }
-    if (std.mem.eql(u8, name, "_")) return .keyword;
-    return .variable;
-}
-
-fn builtin_class(entry: Completion.Entry, name: []const u8) Type {
-    if (entry.class == .function) return .function;
-    if (Completion.of_trees(name)) return .macro;
-    return .property;
 }
 
 // a token an operand ends with, a `<` after it compares
@@ -137,8 +135,18 @@ pub fn classify_resolved(resolver: *Resolver, token_class: []?Type, token_modifi
         const identifier, const undeclared_class: ?Type = switch (tree.kind(node)) {
             .identifier => .{ node, null },
             .member => .{ tree.arg(node, 1), member_class(resolver, tree.arg(node, 0)) },
+            // the names in `tree with (lhs = x)` are children of the tree
             .with => {
-                classify_tree_children(resolver, node, token_class);
+                const copied = tree.arg(node, 0);
+                const arguments = tree.arg(node, 1);
+                if (!resolver.static_pool.is_tree(resolver.node_types[copied])) continue;
+                if (tree.kind(arguments) != .partial__fun_call_param_tuple) continue;
+
+                for (tree.manychildren(arguments)) |argument| {
+                    const token = linking.name_token(resolver, tree.arg_name(argument)) orelse
+                        continue;
+                    token_class[token] = .macro;
+                }
                 continue;
             },
             .partial__variant_def_param => .{
@@ -175,24 +183,29 @@ fn member_class(resolver: *Resolver, base: u32) Type {
     return .property;
 }
 
-// the names in `tree with (lhs = x)` are children of the tree
-fn classify_tree_children(resolver: *Resolver, with: u32, token_class: []?Type) void {
-    const tree = resolver.tree;
-    const copied = tree.arg(with, 0);
-    const arguments = tree.arg(with, 1);
-    if (!resolver.static_pool.is_tree(resolver.node_types[copied])) return;
-    if (tree.kind(arguments) != .partial__fun_call_param_tuple) return;
-
-    for (tree.manychildren(arguments)) |argument| {
-        const token = linking.name_token(resolver, tree.arg_name(argument)) orelse continue;
-        token_class[token] = .macro;
-    }
-}
-
 // encodes every token by its class, lsp wants each relative to the one before
 pub fn encode(analysis: *Analysis, lexer: *Lexer) void {
     const tokens = lexer.tokens.columns();
-    if (analysis.token_meaning.len > 0) adopt_linked_classes(analysis, tokens.tk, tokens.span);
+    // a name no pass resolved (in a stcfun no pass ran, in a quote) is classed by what it links to
+    if (analysis.token_meaning.len > 0) {
+        for (
+            tokens.tk,
+            tokens.span,
+            analysis.token_class,
+            analysis.token_modifiers,
+            analysis.token_meaning,
+        ) |kind, span, *class, *modifiers, meaning| {
+            if (kind != .identifier or class.* != .variable or modifiers.* != 0) continue;
+            if (meaning == none or meaning == undefined_name) continue;
+
+            const declaration_name = analysis.declarations.items()[meaning].name;
+            if (!std.mem.eql(u8, declaration_name, analysis.source[span[0]..span[1]])) continue;
+
+            const site = analysis.declaration_sites.items()[meaning];
+            class.* = site.class;
+            modifiers.* = site.modifiers;
+        }
+    }
 
     var previous_end: u32 = 0;
     for (
@@ -204,42 +217,21 @@ pub fn encode(analysis: *Analysis, lexer: *Lexer) void {
         // the span of a string or char leaves its quotes out
         const quote_width: u32 = @intFromBool(kind == .val_string or kind == .val_char);
         const start = span[0] - quote_width;
-        push_comments(analysis, previous_end, start);
+        // only whitespace and comments are between tokens, a comment runs from `#` to its line end
+        const up_to_gap_end = analysis.source[0..start];
+        var cursor = previous_end;
+        while (std.mem.indexOfScalarPos(u8, up_to_gap_end, cursor, '#')) |comment_start| {
+            const line_end = std.mem.indexOfScalarPos(u8, up_to_gap_end, comment_start, '\n');
+            cursor = @intCast(line_end orelse start);
+            push_token(analysis, @intCast(comment_start), cursor, .comment, 0);
+        }
         previous_end = span[1] + quote_width;
         if (class) |token_class| push_token(analysis, start, previous_end, token_class, modifiers);
     }
-    push_comments(analysis, previous_end, @intCast(analysis.source.len));
-}
-
-// a name no pass resolved (in a stcfun no pass ran, in a quote) is classed by what it links to
-fn adopt_linked_classes(
-    analysis: *Analysis,
-    kinds: []const Kind,
-    spans: []const Lexer.TextSpan,
-) void {
-    for (
-        kinds,
-        spans,
-        analysis.token_class,
-        analysis.token_modifiers,
-        analysis.token_meaning,
-    ) |kind, span, *class, *modifiers, meaning| {
-        if (kind != .identifier or class.* != .variable or modifiers.* != 0) continue;
-        if (meaning == none or meaning == undefined_name) continue;
-
-        const declaration_name = analysis.declarations.items()[meaning].name;
-        if (!std.mem.eql(u8, declaration_name, analysis.source[span[0]..span[1]])) continue;
-
-        const site = analysis.declaration_sites.items()[meaning];
-        class.* = site.class;
-        modifiers.* = site.modifiers;
-    }
-}
-
-// only whitespace and comments are between tokens, a comment runs from `#` to the end of its line
-fn push_comments(analysis: *Analysis, gap_start: u32, gap_end: u32) void {
+    // and the comments after the last token
+    const gap_end: u32 = @intCast(analysis.source.len);
     const up_to_gap_end = analysis.source[0..gap_end];
-    var cursor = gap_start;
+    var cursor = previous_end;
     while (std.mem.indexOfScalarPos(u8, up_to_gap_end, cursor, '#')) |comment_start| {
         const line_end = std.mem.indexOfScalarPos(u8, up_to_gap_end, comment_start, '\n');
         cursor = @intCast(line_end orelse gap_end);

@@ -80,7 +80,3 @@ pub fn binding_of(self: *TypeVariables, variable: Index) StaticPool.Index {
 pub fn binding_of_const(self: *const TypeVariables, variable: Index) StaticPool.Index {
     return self.variables.column(.binding)[@intFromEnum(self.root_of_const(variable))];
 }
-
-pub fn origin_of(self: *const TypeVariables, variable: Index) u32 {
-    return self.variables.column(.origin)[@intFromEnum(variable)];
-}

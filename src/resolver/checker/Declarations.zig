@@ -24,8 +24,15 @@ pub const Stmt = struct {
     pub fn from_node(resolver: *Resolver, node: NodeId) Stmt {
         const tree = resolver.tree;
 
+        // modifiers wrap the statement, each one becomes a flag
         var flags = DeclPool.Entry.Flags{};
-        const root = unwrap_modifiers(tree, node, &flags);
+        var root = node;
+        while (true) : (root = tree.arg(root, 0)) switch (tree.kind(root)) {
+            .mod_pub => flags.is_pub = true,
+            .mod_mut => flags.is_mut = true,
+            .mod_stc => flags.is_stc = true,
+            else => break,
+        };
 
         var type_node: NodeId = 0;
         var value: NodeId = 0;
@@ -74,24 +81,20 @@ pub const Stmt = struct {
         return .{
             .node = root,
             .flags = flags,
-            .kind = if (assigns)
-                .variable
-            else
-                resolver.declarations.declaration_kind(type_node, value),
+            // the kind a statement declares, read from its type and value
+            .kind = if (assigns) .variable else switch (tree.kind(type_node)) {
+                .type_fun => .function,
+                .type_stcfun => .static_function,
+                .type_inlfun => .inlined_function,
+                .type_type => resolver.declarations.type_declaration_kind(value, .record),
+                .type_variant => resolver.declarations.type_declaration_kind(value, .variant),
+                .type_trait => resolver.declarations.type_declaration_kind(value, .trait),
+                .none => if (value != 0 and tree.props(value).function) .function else .variable,
+                else => .variable,
+            },
             .type = type_node,
             .assignees = assignees,
             .values = values,
-        };
-    }
-
-    // modifiers wrap the statement, each one becomes a flag
-    fn unwrap_modifiers(tree: *ParseTree, node: NodeId, flags: *DeclPool.Entry.Flags) NodeId {
-        var current = node;
-        while (true) : (current = tree.arg(current, 0)) switch (tree.kind(current)) {
-            .mod_pub => flags.is_pub = true,
-            .mod_mut => flags.is_mut = true,
-            .mod_stc => flags.is_stc = true,
-            else => return current,
         };
     }
 
@@ -102,10 +105,6 @@ pub const Stmt = struct {
 
     pub fn is_member(statement: Stmt) bool {
         return statement.assignees.len == 1 and statement.kind.is_function();
-    }
-
-    pub fn declares(statement: Stmt) bool {
-        return statement.type != 0 or statement.flags.any() or statement.kind != .variable;
     }
 };
 
@@ -165,6 +164,8 @@ pub fn ensure_signature(self: *Declarations, declaration: DeclPool.Index) void {
     const resolver = self.owning_resolver();
     const decl_pool = &resolver.decl_pool;
 
+    const diagnostics_mark = resolver.doctor.diagnostics.len();
+    defer resolver.doctor.settle(diagnostics_mark);
     const state = decl_pool.pointer(declaration, .state);
     switch (state.*) {
         .unresolved => {},
@@ -180,7 +181,14 @@ pub fn ensure_signature(self: *Declarations, declaration: DeclPool.Index) void {
 
     const kind = decl_pool.get(declaration, .kind);
     const statement = Stmt.from_node(resolver, decl_pool.get(declaration, .node));
-    self.report_redundant_fun(declaration, statement.type);
+    // these names are functions by their role already, a `fun` type on them is redundant
+    if (statement.type != 0 and resolver.tree.kind(statement.type) == .type_fun) {
+        const implied = switch (decl_pool.get(declaration, .name)) {
+            .init, .deinit, .main, .has_next, .next => true,
+            else => false,
+        };
+        if (implied) _ = resolver.report(.redundant_fun, statement.type, 0, 0);
+    }
 
     const flags = decl_pool.get(declaration, .flags);
     var context = FunctionContext{
@@ -228,18 +236,6 @@ pub fn ensure_signature(self: *Declarations, declaration: DeclPool.Index) void {
     }
 }
 
-// these names are functions by their role already, a `fun` type on them is redundant
-fn report_redundant_fun(self: *Declarations, declaration: DeclPool.Index, type_node: NodeId) void {
-    const resolver = self.owning_resolver();
-    if (type_node == 0 or resolver.tree.kind(type_node) != .type_fun) return;
-
-    const implied = switch (resolver.decl_pool.get(declaration, .name)) {
-        .init, .deinit, .main, .has_next, .next => true,
-        else => false,
-    };
-    if (implied) _ = resolver.report(.redundant_fun, type_node, 0, 0);
-}
-
 fn resolve_function_signature(
     self: *Declarations,
     context: *FunctionContext,
@@ -260,7 +256,22 @@ fn resolve_function_signature(
         _ = resolver.report(.missing_ret, result, 0, 0);
     }
 
-    const return_type = self.declared_return_type(kind, value, result);
+    const return_type: StaticPool.Index = blk: {
+        const tree = resolver.tree;
+        if (kind == .static_function) {
+            const produced = if (tree.kind(result) == .ret) tree.arg(result, 0) else result;
+            const otherwise: StaticPool.Index = if (tree.props(produced).function)
+                .fun_type
+            else
+                .poison_type;
+            break :blk self.declared_type_kind(produced).meta_type(otherwise);
+        }
+
+        const without_result = tree.kind(value) == .def_fun_declaration or
+            tree.kind(tree.arg(value, 0)) == .partial__fun_def_header_ret;
+        if (without_result) break :blk .unit_type;
+        break :blk static_pool.fresh_type_variable(value);
+    };
     if (produced_kind != .variable and result_kind == .variable) {
         _ = resolver.report(.redundant_ret, result, 0, 0);
     } else if (produced_kind != .variable and result_kind != produced_kind) {
@@ -269,70 +280,7 @@ fn resolve_function_signature(
     }
 
     // a method's first parameter is the induced `*Self`, `init` constructs and has none
-    const category = function_category(kind);
-    const induced_self = if (decl_pool.implicit_self_count(declaration) == 1)
-        static_pool.pointer_to(context.self_type, true)
-    else
-        .none;
-    const function_type = resolver.types.function_type_of(
-        context,
-        value,
-        category,
-        return_type,
-        induced_self,
-    );
-    decl_pool.set(declaration, .value_type, function_type);
-
-    if (!resolver.generics.template_of.contains(declaration)) {
-        self.report_duplicate_parameters(declaration, value);
-    }
-
-    const flags = decl_pool.get(declaration, .flags);
-    if (flags.is_global and decl_pool.get(declaration, .name) == .main) {
-        const declared_type = decl_pool.get(declaration, .value_type);
-        const runtime_type = resolver.types.with_runtime_lengths(declared_type);
-        decl_pool.set(declaration, .value_type, runtime_type);
-    }
-
-    const static_value = if (kind == .static_function)
-        static_pool.intern(.{ .static_function = .{
-            .declaration = declaration,
-            .result_kind = if (static_pool.tag(return_type) == .meta_type)
-                static_pool.get(return_type).meta_type
-            else
-                .stcfun,
-        } })
-    else
-        static_pool.intern(.{ .function_value = declaration });
-    decl_pool.set(declaration, .static_value, static_value);
-}
-
-fn declared_return_type(
-    self: *Declarations,
-    kind: DeclPool.Entry.Kind,
-    value: NodeId,
-    result: NodeId,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const tree = resolver.tree;
-
-    if (kind == .static_function) {
-        const produced = if (tree.kind(result) == .ret) tree.arg(result, 0) else result;
-        const otherwise: StaticPool.Index = if (tree.props(produced).function)
-            .fun_type
-        else
-            .poison_type;
-        return self.declared_type_kind(produced).meta_type(otherwise);
-    }
-
-    const without_result = tree.kind(value) == .def_fun_declaration or
-        tree.kind(tree.arg(value, 0)) == .partial__fun_def_header_ret;
-    if (without_result) return .unit_type;
-    return resolver.static_pool.fresh_type_variable(value);
-}
-
-fn function_category(kind: DeclPool.Entry.Kind) StaticPool.FunctionType.Category {
-    return switch (kind) {
+    const category: StaticPool.FunctionType.Category = switch (kind) {
         .static_function => .static,
         .inlined_function => .inlined,
         .function,
@@ -354,24 +302,49 @@ fn function_category(kind: DeclPool.Entry.Kind) StaticPool.FunctionType.Category
         .autoins_it,
         => .default,
     };
-}
+    const induced_self = if (decl_pool.implicit_self_count(declaration) == 1)
+        static_pool.pointer_to(context.self_type, true)
+    else
+        .none;
+    const function_type = resolver.types.function_type_of(
+        context,
+        value,
+        category,
+        return_type,
+        induced_self,
+    );
+    decl_pool.set(declaration, .value_type, function_type);
 
-fn report_duplicate_parameters(
-    self: *Declarations,
-    declaration: DeclPool.Index,
-    value: NodeId,
-) void {
-    const resolver = self.owning_resolver();
-    const parameters = resolver.tree.params_of(value);
-
-    for (parameters, 0..) |parameter, i| {
-        for (parameters[0..i], 0..) |earlier, j| {
-            const earlier_name = self.parameter_name(earlier, j);
-            const name = self.parameter_name(parameter, i);
-            if (earlier_name != name) continue;
-            resolver.doctor.report(.duplicate_declaration, parameter, name, declaration);
+    if (!resolver.generics.template_of.contains(declaration)) {
+        const parameters = resolver.tree.params_of(value);
+        for (parameters, 0..) |parameter, i| {
+            for (parameters[0..i], 0..) |earlier, j| {
+                const earlier_name = self.parameter_name(earlier, j);
+                const name = self.parameter_name(parameter, i);
+                if (earlier_name != name) continue;
+                resolver.doctor.report(.duplicate_declaration, parameter, name, declaration);
+            }
         }
     }
+
+    const flags = decl_pool.get(declaration, .flags);
+    if (flags.is_global and decl_pool.get(declaration, .name) == .main) {
+        const declared_type = decl_pool.get(declaration, .value_type);
+        const runtime_type = resolver.types.with_runtime_lengths(declared_type);
+        decl_pool.set(declaration, .value_type, runtime_type);
+    }
+
+    const static_value = if (kind == .static_function)
+        static_pool.intern(.{ .static_function = .{
+            .declaration = declaration,
+            .result_kind = if (static_pool.tag(return_type) == .meta_type)
+                static_pool.get(return_type).meta_type
+            else
+                .stcfun,
+        } })
+    else
+        static_pool.intern(.{ .function_value = declaration });
+    decl_pool.set(declaration, .static_value, static_value);
 }
 
 // a function produced by a static expression (`fun sub_from_templ = my_templ(i32, false)`)
@@ -456,34 +429,8 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
     const self_type = if (self_count == 1) context.self_type else .none;
     self.open_declaration_scope(decl_pool.get(declaration, .flags).is_global, self_type, value);
 
-    self.declare_parameters(&context, declaration, value, function_type, self_count);
-    self.check_function_result(&context, resolver.tree.arg(value, 1));
-    resolver.scopes.close();
-
-    // the first row of a method body is its `self`, a write to it makes the method a writing one
-    if (self_count == 1 and decl_pool.get(@enumFromInt(first_row), .flags).writes) {
-        decl_pool.pointer(declaration, .flags).writes = true;
-    }
-
-    const failed = resolver.doctor.errors_since(resolver.tree, diagnostics_mark, value);
-    decl_pool.set(declaration, .state, if (failed) .failed else .done);
-    if (!abstract) resolver.bodies.register(resolver.capture_body(declaration, value, first_row));
-}
-
-// a where clause sees its own parameter and the ones before it
-// realized `type` parameters are static values
-fn declare_parameters(
-    self: *Declarations,
-    context: *FunctionContext,
-    declaration: DeclPool.Index,
-    value: NodeId,
-    function_type: StaticPool.Index,
-    self_count: usize,
-) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const decl_pool = &resolver.decl_pool;
-
+    // a where clause sees its own parameter and the ones before it
+    // realized `type` parameters are static values
     const template = resolver.generics.template_of.get(declaration);
     const realized_arguments = resolver.generics.realization_arguments.get(declaration);
     const realizes_view = if (template) |template_declaration|
@@ -497,7 +444,7 @@ fn declare_parameters(
         const parameter_types = static_pool.get(function_type).function_type.parameters;
         const parameter_type = parameter_types[i + self_count];
         if (parameter.default != 0) {
-            _ = resolver.expressions.check(context, parameter.default, parameter_type);
+            _ = resolver.expressions.check(&context, parameter.default, parameter_type);
         }
 
         const parameter_declaration = self.declare_local(
@@ -526,8 +473,20 @@ fn declare_parameters(
         }
 
         self.link_identifier(parameter.name, parameter_declaration, parameter_type);
-        self.check_parameter_guards(context, parameter, parameter_type);
+        self.check_parameter_guards(&context, parameter, parameter_type);
     }
+    self.check_function_result(&context, resolver.tree.arg(value, 1));
+    resolver.scopes.close();
+
+    // the first row of a method body is its `self`, a write to it makes the method a writing one
+    if (self_count == 1 and decl_pool.get(@enumFromInt(first_row), .flags).writes) {
+        decl_pool.pointer(declaration, .flags).writes = true;
+    }
+
+    const failed = resolver.doctor.errors_since(resolver.tree, diagnostics_mark, value);
+    resolver.doctor.settle(diagnostics_mark);
+    decl_pool.set(declaration, .state, if (failed) .failed else .done);
+    if (!abstract) resolver.bodies.register(resolver.capture_body(declaration, value, first_row));
 }
 
 pub fn check_function_result(self: *Declarations, context: *FunctionContext, body: NodeId) void {
@@ -549,23 +508,16 @@ pub fn check_function_result(self: *Declarations, context: *FunctionContext, bod
         _ = static_pool.unify(context.return_type, .unit_type);
         return;
     }
-    if (self.may_fall_off(context, return_type)) return;
+    const is_main = context.declaration != .none and
+        resolver.decl_pool.get(context.declaration, .name) == .main;
+    const may_fall_off = is_main or
+        return_type == .unit_type or
+        return_type == .runit_type or
+        return_type == .poison_type;
+    if (may_fall_off) return;
     if (body_type == .never_type or body_type == .poison_type) return;
     if (resolver.doctor.has_report_at(body)) return;
     _ = resolver.report(.missing_ret, body, 0, 0);
-}
-
-fn may_fall_off(
-    self: *Declarations,
-    context: *FunctionContext,
-    return_type: StaticPool.Index,
-) bool {
-    const resolver = self.owning_resolver();
-
-    const is_main = context.declaration != .none and
-        resolver.decl_pool.get(context.declaration, .name) == .main;
-    if (is_main) return true;
-    return return_type == .unit_type or return_type == .runit_type or return_type == .poison_type;
 }
 
 pub fn check_statement(
@@ -574,119 +526,87 @@ pub fn check_statement(
     node: NodeId,
 ) StaticPool.Index {
     const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const decl_pool = &resolver.decl_pool;
     const statement = Stmt.from_node(resolver, node);
 
+    // in an interpreted body a type declaration is evaluated right away
     if (context.is_interpreted and statement.kind.is_type_declaration()) {
-        return self.declare_interpreted_types(context, statement);
+        const value = statement.values[0];
+
+        _ = resolver.expressions.infer(context, value, .none);
+        const declared_type = resolver.static_values.evaluate_or_defer(context, value);
+
+        for (statement.assignees) |assignee| {
+            const meta_type = if (declared_type) |known|
+                static_pool.type_of(known)
+            else
+                resolver.types.meta_type_of_node(value);
+            const declaration = self.declare(
+                assignee,
+                statement.node,
+                statement.kind,
+                meta_type,
+                statement.flags,
+            );
+            decl_pool.set(declaration, .state, .done);
+            decl_pool.set(declaration, .static_value, declared_type orelse .none);
+        }
+        return .unit_type;
     }
 
     // a name holding a function value is assigned, not declared as a function again
-    const function_variable = self.function_variable_assigned_by(statement);
+    const function_variable: DeclPool.Index = blk: {
+        if (statement.kind != .function or statement.type != 0) break :blk .none;
+        if (statement.assignees.len != 1) break :blk .none;
+
+        const name = resolver.name_pool.name_of_node(statement.assignees[0]);
+        const visible = resolver.scopes.lookup(decl_pool, name);
+        if (visible == .none) break :blk .none;
+        if (decl_pool.get(visible, .kind).is_function()) break :blk .none;
+
+        const visible_type = decl_pool.get(visible, .value_type);
+        if (visible_type == .none) break :blk .none;
+        const is_function_type =
+            static_pool.tag(static_pool.substitute_type_variables(visible_type)) == .function_type;
+        if (!is_function_type) break :blk .none;
+        break :blk visible;
+    };
     if (function_variable != .none) {
         resolver.node_declarations[statement.assignees[0]] = function_variable;
         return self.check_statement(context, node);
     }
 
-    if (statement.kind != .variable) return self.declare_local_definitions(statement);
+    // a local function, type or trait
+    if (statement.kind != .variable) {
+        for (statement.assignees) |assignee| {
+            const declaration = self.declare(
+                assignee,
+                statement.node,
+                statement.kind,
+                .none,
+                statement.flags,
+            );
+            self.ensure_signature(declaration);
+            self.check_body(declaration);
+        }
+        return .unit_type;
+    }
 
     // a write into an assignable (`p.x = v`, `a[i] = v`, `ptr.* = v`)
     const writes_place = statement.assignees.len == 1 and
         resolver.name_pool.name_of_node(statement.assignees[0]) == .none;
-    if (writes_place) return self.check_place_write(context, statement);
+    if (writes_place) {
+        const place = statement.assignees[0];
 
-    return self.check_variables(context, statement);
-}
-
-// in an interpreted body a type declaration is evaluated right away
-fn declare_interpreted_types(
-    self: *Declarations,
-    context: *FunctionContext,
-    statement: Stmt,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const value = statement.values[0];
-
-    _ = resolver.expressions.infer(context, value, .none);
-    const declared_type = resolver.static_values.evaluate_or_defer(context, value);
-
-    for (statement.assignees) |assignee| {
-        const meta_type = if (declared_type) |known|
-            resolver.static_pool.type_of(known)
+        const place_type = resolver.mutability.check_assignable(context, place);
+        const expected = if (resolver.tree.macros)
+            resolver.macros.tree_place_type(place, place_type)
         else
-            resolver.types.meta_type_of_node(value);
-        const declaration = self.declare(
-            assignee,
-            statement.node,
-            statement.kind,
-            meta_type,
-            statement.flags,
-        );
-        resolver.decl_pool.set(declaration, .state, .done);
-        resolver.decl_pool.set(declaration, .static_value, declared_type orelse .none);
+            place_type;
+        for (statement.values) |value| _ = resolver.expressions.check(context, value, expected);
+        return .unit_type;
     }
-    return .unit_type;
-}
-
-fn function_variable_assigned_by(self: *Declarations, statement: Stmt) DeclPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    if (statement.kind != .function or statement.type != 0) return .none;
-    if (statement.assignees.len != 1) return .none;
-
-    const name = resolver.name_pool.name_of_node(statement.assignees[0]);
-    const visible = resolver.scopes.lookup(&resolver.decl_pool, name);
-    if (visible == .none) return .none;
-    if (resolver.decl_pool.get(visible, .kind).is_function()) return .none;
-
-    const visible_type = resolver.decl_pool.get(visible, .value_type);
-    if (visible_type == .none) return .none;
-    if (static_pool.tag(static_pool.substitute_type_variables(visible_type)) != .function_type) {
-        return .none;
-    }
-    return visible;
-}
-
-// a local function, type or trait
-fn declare_local_definitions(self: *Declarations, statement: Stmt) StaticPool.Index {
-    for (statement.assignees) |assignee| {
-        const declaration = self.declare(
-            assignee,
-            statement.node,
-            statement.kind,
-            .none,
-            statement.flags,
-        );
-        self.ensure_signature(declaration);
-        self.check_body(declaration);
-    }
-    return .unit_type;
-}
-
-fn check_place_write(
-    self: *Declarations,
-    context: *FunctionContext,
-    statement: Stmt,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const place = statement.assignees[0];
-
-    const place_type = resolver.mutability.check_assignable(context, place);
-    const expected = if (resolver.tree.macros)
-        resolver.macros.tree_place_type(place, place_type)
-    else
-        place_type;
-    for (statement.values) |value| _ = resolver.expressions.check(context, value, expected);
-    return .unit_type;
-}
-
-fn check_variables(
-    self: *Declarations,
-    context: *FunctionContext,
-    statement: Stmt,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
 
     const declaring = statement.type != 0 or statement.flags.any();
     var declared_type: StaticPool.Index = if (statement.type != 0)
@@ -694,14 +614,112 @@ fn check_variables(
     else
         .none;
 
+    // untyped: visible names are assigned, their type is shared by the new ones
     const existing = resolver.temporary_slice(DeclPool.Index, statement.assignees.len);
-    declared_type = self.find_assigned(context, statement, declaring, existing, declared_type);
+    for (statement.assignees, 0..) |assignee, i| {
+        // global rows and hoisted local functions of this very statement are reused, not redeclared
+        const known = resolver.node_declarations[assignee];
+        const fresh = declaring or known != .none and
+            decl_pool.get(known, .node) == statement.node and
+            (decl_pool.get(known, .flags).is_global or
+                resolver.scopes.lookup(decl_pool, decl_pool.get(known, .name)) == known);
+        existing[i] = if (fresh)
+            .none
+        else
+            resolver.scopes.lookup(decl_pool, resolver.name_pool.name_of_node(assignee));
+        if (existing[i] == .none) continue;
+
+        // an assigned name is not read, so it must not count as a use before its initialization
+        const initialization = &resolver.initialization;
+        const outer = initialization.save(0);
+        initialization.clear(0);
+        const assigned_type = resolver.mutability.check_assignable(context, assignee);
+        initialization.copy(0, outer);
+        initialization.release(outer);
+
+        if (declared_type == .none) {
+            declared_type = assigned_type;
+        } else if (assigned_type != declared_type and assigned_type != .poison_type) {
+            _ = resolver.report(.destructure_type_conflict, assignee, assigned_type, declared_type);
+        }
+    }
 
     resolver.scopes.open();
     if (statement.values.len > 1) {
-        declared_type = self.join_values(context, statement, existing, declared_type);
+        // `a, b = x, y`: without a declared type the values join, literals last
+        const values = statement.values;
+        var shared_type = declared_type;
+        const is_deferred_literal = resolver.temporary_slice(bool, values.len);
+        for (values, 0..) |value, i| {
+            const assigns_existing = i < statement.assignees.len and existing[i] != .none;
+            const expected = if (assigns_existing)
+                decl_pool.get(existing[i], .value_type)
+            else
+                declared_type;
+            is_deferred_literal[i] = expected == .none and resolver.tree.is_literal(value);
+            if (is_deferred_literal[i]) continue;
+
+            const value_type = resolver.expressions.check(context, value, expected);
+            if (shared_type == .none) {
+                shared_type = value_type;
+            } else if (declared_type == .none) {
+                const joined = static_pool.join(shared_type, value_type).joined_type;
+                shared_type = if (joined == .none)
+                    resolver.report(.destructure_type_conflict, value, shared_type, value_type)
+                else
+                    joined;
+            }
+        }
+
+        if (declared_type == .none) {
+            for (values, 0..) |value, i| {
+                if (is_deferred_literal[i]) _ = resolver.expressions.infer(context, value, .none);
+            }
+
+            if (shared_type == .none) shared_type = resolver.flow.common_literal_type(values);
+            if (shared_type == .none) shared_type = resolver.node_types[values[0]];
+
+            for (values, 0..) |value, i| {
+                if (!is_deferred_literal[i] or shared_type == .poison_type) continue;
+
+                const literal_type = resolver.static_values.literal_type(value, shared_type);
+                const joined = static_pool.join(shared_type, literal_type).joined_type;
+                shared_type = if (joined == .none)
+                    resolver.report(.destructure_type_conflict, value, shared_type, literal_type)
+                else
+                    joined;
+            }
+
+            for (values, 0..) |value, i| {
+                if (!is_deferred_literal[i] or shared_type == .poison_type) continue;
+                _ = resolver.expressions.expect_type(
+                    value,
+                    resolver.node_types[value],
+                    shared_type,
+                );
+            }
+        }
+        declared_type = shared_type;
     } else if (statement.values.len == 1) {
-        declared_type = self.infer_single_value(context, statement, declared_type);
+        const value = statement.values[0];
+
+        // a fresh var as expectation wants a value (loops, ifs as values) without fixing its type
+        const expected = if (declared_type != .none)
+            declared_type
+        else
+            static_pool.fresh_type_variable(statement.node);
+        const value_type = resolver.expressions.check(context, value, expected);
+
+        if (declared_type == .none) {
+            declared_type = static_pool.substitute_type_variables(value_type);
+        }
+
+        const unrealized = declared_type != .none and
+            static_pool.tag(declared_type) == .function_type and
+            static_pool.contains_template(declared_type);
+        if (unrealized) {
+            declared_type = resolver.report(.unrealized_template, value, declared_type, 0);
+        }
     }
     resolver.scopes.close();
 
@@ -724,225 +742,53 @@ fn check_variables(
                 if (declared_type == .none) .poison_type else declared_type,
                 kept_flags,
             );
-        self.bind_assignee(context, statement, declaration, existing[i] != .none, i);
+        const assigns_existing = existing[i] != .none;
+        const values = statement.values;
+
+        const value_type = decl_pool.get(declaration, .value_type);
+
+        // scalars declared without a value must be written before they are read
+        const flags = decl_pool.get(declaration, .flags);
+        const scalar = value_type != .none and
+            value_type != .poison_type and
+            static_pool.tag(value_type) != .record_type and
+            static_pool.tag(value_type) != .array_type;
+        if (assigns_existing) {
+            resolver.initialization.mark_written(declaration);
+        } else if (values.len == 0 and !flags.is_global and scalar) {
+            resolver.initialization.track(declaration);
+        }
+
+        if (values.len == 0) continue;
+        const inside_evaluation = resolver.interpreter.depth > 0 and !context.is_interpreted;
+        if (assigns_existing and !inside_evaluation) continue;
+        const is_static = decl_pool.get(declaration, .flags).is_stc or
+            context.is_static_context;
+        if (!is_static) continue;
+
+        const value = values[@min(i, values.len - 1)];
+        const static_value = if (resolver.node_types[value] == .poison_type)
+            .poison_type
+        else
+            resolver.static_values.retyped(
+                resolver.static_values.value_of(context, value),
+                value_type,
+            );
+        decl_pool.set(declaration, .static_value, static_value);
+
+        // an unlengthed static takes the length of its value
+        const stored = decl_pool.get(declaration, .static_value);
+        if (stored == .none or static_pool.tag(stored) != .aggregate_value) continue;
+        if (static_pool.has_type_variables(value_type)) {
+            _ = static_pool.unify(value_type, static_pool.type_of(stored));
+        }
+
+        const length = static_pool.static_length(value_type) orelse continue;
+        if (length != static_pool.get(stored).aggregate_value.elements.len) {
+            _ = resolver.report(.type_mismatch, value, static_pool.type_of(stored), value_type);
+        }
     }
     return .unit_type;
-}
-
-// untyped: visible names are assigned, their type is shared by the new ones
-fn find_assigned(
-    self: *Declarations,
-    context: *FunctionContext,
-    statement: Stmt,
-    declaring: bool,
-    existing: []DeclPool.Index,
-    declared_type: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-
-    var shared_type = declared_type;
-    for (statement.assignees, 0..) |assignee, i| {
-        const known = resolver.node_declarations[assignee];
-        const fresh = declaring or self.pre_declared(known, statement.node);
-        existing[i] = if (fresh)
-            .none
-        else
-            resolver.scopes.lookup(&resolver.decl_pool, resolver.name_pool.name_of_node(assignee));
-        if (existing[i] == .none) continue;
-
-        const assigned_type = self.assigned_type_of(context, assignee);
-        if (shared_type == .none) {
-            shared_type = assigned_type;
-        } else if (assigned_type != shared_type and assigned_type != .poison_type) {
-            _ = resolver.report(.destructure_type_conflict, assignee, assigned_type, shared_type);
-        }
-    }
-    return shared_type;
-}
-
-// an assigned name is not read, so it must not count as a use before its initialization
-fn assigned_type_of(
-    self: *Declarations,
-    context: *FunctionContext,
-    assignee: NodeId,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const initialization = &resolver.initialization;
-
-    const outer = initialization.save(0);
-    initialization.clear(0);
-    const assigned_type = resolver.mutability.check_assignable(context, assignee);
-    initialization.copy(0, outer);
-    initialization.release(outer);
-    return assigned_type;
-}
-
-// `a, b = x, y`: without a declared type the values join, literals last
-fn join_values(
-    self: *Declarations,
-    context: *FunctionContext,
-    statement: Stmt,
-    existing: []const DeclPool.Index,
-    declared_type: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const values = statement.values;
-
-    var shared_type = declared_type;
-    const is_deferred_literal = resolver.temporary_slice(bool, values.len);
-    for (values, 0..) |value, i| {
-        const assigns_existing = i < statement.assignees.len and existing[i] != .none;
-        const expected = if (assigns_existing)
-            resolver.decl_pool.get(existing[i], .value_type)
-        else
-            declared_type;
-        is_deferred_literal[i] = expected == .none and resolver.tree.is_literal(value);
-        if (is_deferred_literal[i]) continue;
-
-        const value_type = resolver.expressions.check(context, value, expected);
-        if (shared_type == .none) {
-            shared_type = value_type;
-        } else if (declared_type == .none) {
-            const joined = static_pool.join(shared_type, value_type).joined_type;
-            shared_type = if (joined == .none)
-                resolver.report(.destructure_type_conflict, value, shared_type, value_type)
-            else
-                joined;
-        }
-    }
-
-    if (declared_type != .none) return shared_type;
-    return self.join_literal_values(context, values, is_deferred_literal, shared_type);
-}
-
-fn join_literal_values(
-    self: *Declarations,
-    context: *FunctionContext,
-    values: []const NodeId,
-    is_deferred_literal: []const bool,
-    non_literal_type: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    for (values, 0..) |value, i| {
-        if (is_deferred_literal[i]) _ = resolver.expressions.infer(context, value, .none);
-    }
-
-    var shared_type = non_literal_type;
-    if (shared_type == .none) shared_type = resolver.flow.common_literal_type(values);
-    if (shared_type == .none) shared_type = resolver.node_types[values[0]];
-
-    for (values, 0..) |value, i| {
-        if (!is_deferred_literal[i] or shared_type == .poison_type) continue;
-
-        const literal_type = resolver.static_values.literal_type(value, shared_type);
-        const joined = static_pool.join(shared_type, literal_type).joined_type;
-        shared_type = if (joined == .none)
-            resolver.report(.destructure_type_conflict, value, shared_type, literal_type)
-        else
-            joined;
-    }
-
-    for (values, 0..) |value, i| {
-        if (!is_deferred_literal[i] or shared_type == .poison_type) continue;
-        _ = resolver.expressions.expect_type(value, resolver.node_types[value], shared_type);
-    }
-    return shared_type;
-}
-
-fn infer_single_value(
-    self: *Declarations,
-    context: *FunctionContext,
-    statement: Stmt,
-    declared_type: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const value = statement.values[0];
-
-    // a fresh var as expectation wants a value (loops, ifs as values) without fixing its type
-    const expected = if (declared_type != .none)
-        declared_type
-    else
-        static_pool.fresh_type_variable(statement.node);
-    const value_type = resolver.expressions.check(context, value, expected);
-
-    var single_type = declared_type;
-    if (single_type == .none) single_type = static_pool.substitute_type_variables(value_type);
-
-    const unrealized = single_type != .none and
-        static_pool.tag(single_type) == .function_type and
-        static_pool.contains_template(single_type);
-    if (unrealized) return resolver.report(.unrealized_template, value, single_type, 0);
-    return single_type;
-}
-
-fn bind_assignee(
-    self: *Declarations,
-    context: *FunctionContext,
-    statement: Stmt,
-    declaration: DeclPool.Index,
-    assigns_existing: bool,
-    i: usize,
-) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const values = statement.values;
-
-    const value_type = resolver.decl_pool.get(declaration, .value_type);
-
-    // scalars declared without a value must be written before they are read
-    const flags = resolver.decl_pool.get(declaration, .flags);
-    const scalar = value_type != .none and
-        value_type != .poison_type and
-        static_pool.tag(value_type) != .record_type and
-        static_pool.tag(value_type) != .array_type;
-    if (assigns_existing) {
-        resolver.initialization.mark_written(declaration);
-    } else if (values.len == 0 and !flags.is_global and scalar) {
-        resolver.initialization.track(declaration);
-    }
-
-    if (values.len == 0) return;
-    const inside_evaluation = resolver.interpreter.depth > 0 and !context.is_interpreted;
-    if (assigns_existing and !inside_evaluation) return;
-    const is_static = resolver.decl_pool.get(declaration, .flags).is_stc or
-        context.is_static_context;
-    if (!is_static) return;
-
-    const value = values[@min(i, values.len - 1)];
-    self.record_static_value(context, declaration, value, value_type);
-}
-
-fn record_static_value(
-    self: *Declarations,
-    context: *FunctionContext,
-    declaration: DeclPool.Index,
-    value: NodeId,
-    value_type: StaticPool.Index,
-) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    const static_value = if (resolver.node_types[value] == .poison_type)
-        .poison_type
-    else
-        resolver.static_values.retyped(resolver.static_values.value_of(context, value), value_type);
-    resolver.decl_pool.set(declaration, .static_value, static_value);
-
-    // an unlengthed static takes the length of its value
-    const stored = resolver.decl_pool.get(declaration, .static_value);
-    if (stored == .none or static_pool.tag(stored) != .aggregate_value) return;
-    if (static_pool.has_type_variables(value_type)) {
-        _ = static_pool.unify(value_type, static_pool.type_of(stored));
-    }
-
-    const length = static_pool.static_length(value_type) orelse return;
-    if (length != static_pool.get(stored).aggregate_value.elements.len) {
-        _ = resolver.report(.type_mismatch, value, static_pool.type_of(stored), value_type);
-    }
 }
 
 pub fn check_parameter_guards(
@@ -973,9 +819,15 @@ fn declare(
     flags: DeclPool.Entry.Flags,
 ) DeclPool.Index {
     const resolver = self.owning_resolver();
+    const decl_pool = &resolver.decl_pool;
 
     var declaration = resolver.node_declarations[identifier];
-    if (!self.pre_declared(declaration, statement_node)) {
+    // global rows and hoisted local functions of this very statement are reused, not redeclared
+    const pre_declared = declaration != .none and
+        decl_pool.get(declaration, .node) == statement_node and
+        (decl_pool.get(declaration, .flags).is_global or
+            resolver.scopes.lookup(decl_pool, decl_pool.get(declaration, .name)) == declaration);
+    if (!pre_declared) {
         self.report_redeclaration(resolver.name_pool.name_of_node(identifier), identifier);
         const name = resolver.name_pool.name_of_node(identifier);
         declaration = self.declare_local(name, statement_node, kind, value_type);
@@ -987,17 +839,6 @@ fn declare(
 
     _ = resolver.set_node_type(identifier, if (value_type == .none) .unit_type else value_type);
     return declaration;
-}
-
-// global rows and hoisted local functions of this very statement are reused, not redeclared
-fn pre_declared(self: *Declarations, declaration: DeclPool.Index, statement_node: NodeId) bool {
-    const resolver = self.owning_resolver();
-    const decl_pool = &resolver.decl_pool;
-
-    if (declaration == .none) return false;
-    if (decl_pool.get(declaration, .node) != statement_node) return false;
-    if (decl_pool.get(declaration, .flags).is_global) return true;
-    return resolver.scopes.lookup(decl_pool, decl_pool.get(declaration, .name)) == declaration;
 }
 
 // a scope for a declaration: globals get a barrier so they never see their user's locals
@@ -1043,21 +884,6 @@ pub fn declared_type_kind(self: *Declarations, node: NodeId) DeclPool.Entry.Kind
         .def_type, .def_type_packed => .record,
         .def_variant, .def_variant_unionsized => .variant,
         .def_trait, .def_trait_implof => .trait,
-        else => .variable,
-    };
-}
-
-// the kind a statement declares, read from its type and value
-pub fn declaration_kind(self: *Declarations, type_node: NodeId, value: NodeId) DeclPool.Entry.Kind {
-    const tree = self.owning_resolver().tree;
-    return switch (tree.kind(type_node)) {
-        .type_fun => .function,
-        .type_stcfun => .static_function,
-        .type_inlfun => .inlined_function,
-        .type_type => self.type_declaration_kind(value, .record),
-        .type_variant => self.type_declaration_kind(value, .variant),
-        .type_trait => self.type_declaration_kind(value, .trait),
-        .none => if (value != 0 and tree.props(value).function) .function else .variable,
         else => .variable,
     };
 }
@@ -1161,7 +987,9 @@ pub fn collect_globals(self: *Declarations) void {
         const statement = Stmt.from_node(resolver, root);
         var flags = statement.flags;
         flags.is_global = true;
-        const declares = statement.declares();
+        const declares = statement.type != 0 or
+            statement.flags.any() or
+            statement.kind != .variable;
 
         for (statement.assignees) |assignee| {
             const name = resolver.name_pool.name_of_node(assignee);
@@ -1169,7 +997,11 @@ pub fn collect_globals(self: *Declarations) void {
 
             const globals = &resolver.scopes.globals;
             const entry = globals.getOrPut(resolver.allocator, name) catch @panic("OOM");
-            if (entry.found_existing and !self.overloads(statement.kind, entry.value_ptr.*)) {
+            // functions overload each other, any other repeated global name is a duplicate
+            const overloads = entry.found_existing and
+                statement.kind.is_function() and
+                resolver.decl_pool.get(entry.value_ptr.*, .kind).is_function();
+            if (entry.found_existing and !overloads) {
                 if (declares) {
                     _ = resolver.report(.duplicate_declaration, assignee, name, entry.value_ptr.*);
                     if (resolver.node_declarations[root] == .none) {
@@ -1187,7 +1019,16 @@ pub fn collect_globals(self: *Declarations) void {
                 flags,
             );
             if (entry.found_existing) {
-                self.insert_overload(entry.value_ptr, declaration);
+                // where-clause overloads go first: a group dispatches its clauses in order
+                // the where-less overload of a group comes last as its runtime fallback
+                var at = entry.value_ptr;
+                while (at.* != .none) : (at = resolver.decl_pool.pointer(at.*, .next_overload)) {
+                    const goes_before = resolver.calls.has_where(declaration) and
+                        !resolver.calls.has_where(at.*);
+                    if (goes_before) break;
+                }
+                resolver.decl_pool.set(declaration, .next_overload, at.*);
+                at.* = declaration;
             } else {
                 entry.value_ptr.* = declaration;
             }
@@ -1200,29 +1041,10 @@ pub fn collect_globals(self: *Declarations) void {
     }
 }
 
-// functions overload each other, any other repeated global name is a duplicate
-fn overloads(self: *Declarations, kind: DeclPool.Entry.Kind, existing: DeclPool.Index) bool {
-    const resolver = self.owning_resolver();
-    return kind.is_function() and resolver.decl_pool.get(existing, .kind).is_function();
-}
-
-// where-clause overloads go first: a same-typed group dispatches its clauses in order
-// the where-less overload of a group comes last as its runtime fallback
-fn insert_overload(self: *Declarations, head: *DeclPool.Index, overload: DeclPool.Index) void {
-    const resolver = self.owning_resolver();
-
-    var at = head;
-    while (at.* != .none) : (at = resolver.decl_pool.pointer(at.*, .next_overload)) {
-        const goes_before = resolver.calls.has_where(overload) and !resolver.calls.has_where(at.*);
-        if (goes_before) break;
-    }
-    resolver.decl_pool.set(overload, .next_overload, at.*);
-    at.* = overload;
-}
-
 // `main` is declared once with a signature the runtime can call
 pub fn check_main(self: *Declarations) void {
     const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
     const decl_pool = &resolver.decl_pool;
 
     const main = resolver.scopes.globals.get(.main) orelse
@@ -1237,25 +1059,20 @@ pub fn check_main(self: *Declarations) void {
     }
 
     const main_type = decl_pool.get(main, .value_type);
-    if (self.is_runnable_main_type(main_type)) return;
+    // no parameters or `(count, arguments)`, a unit, never or integer result
+    if (main_type != .none and static_pool.tag(main_type) == .function_type) {
+        const function = static_pool.get(main_type).function_type;
+        const parameters = function.parameters;
+        const parameters_fit = parameters.len == 0 or (parameters.len == 2 and
+            static_pool.properties(parameters[0]).is_integer and
+            static_pool.properties(parameters[1]).is_pointer);
+
+        const return_type = function.return_type;
+        const runnable = parameters_fit and (return_type == .unit_type or
+            return_type == .runit_type or
+            return_type == .never_type or
+            static_pool.properties(return_type).is_integer);
+        if (runnable) return;
+    }
     _ = resolver.report(.type_mismatch, node, main_type, .none);
-}
-
-// no parameters or `(count, arguments)`, a unit, never or integer result
-fn is_runnable_main_type(self: *Declarations, main_type: StaticPool.Index) bool {
-    const static_pool = &self.owning_resolver().static_pool;
-    if (main_type == .none or static_pool.tag(main_type) != .function_type) return false;
-
-    const function = static_pool.get(main_type).function_type;
-    const parameters = function.parameters;
-    const parameters_fit = parameters.len == 0 or (parameters.len == 2 and
-        static_pool.properties(parameters[0]).is_integer and
-        static_pool.properties(parameters[1]).is_pointer);
-    if (!parameters_fit) return false;
-
-    const return_type = function.return_type;
-    return return_type == .unit_type or
-        return_type == .runit_type or
-        return_type == .never_type or
-        static_pool.properties(return_type).is_integer;
 }

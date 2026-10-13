@@ -27,7 +27,17 @@ pub fn boolean(truth: bool) Value {
 }
 
 pub fn int(int_type: Index, bits: u64) Value {
-    return .{ .value_type = int_type, .bits = normalized(bits, int_type) };
+    // integer bits are kept sign- or zero-extended to 64 bits, so equal values have equal bits
+    const normalized: u64 = blk: {
+        if (!is_int(int_type)) break :blk bits;
+        const bit_width = integer_widths[@intFromEnum(int_type)];
+        if (bit_width == 64) break :blk bits;
+
+        const shift: u6 = @intCast(64 - bit_width);
+        if (is_signed(int_type)) break :blk @bitCast(@as(i64, @bitCast(bits << shift)) >> shift);
+        break :blk bits << shift >> shift;
+    };
+    return .{ .value_type = int_type, .bits = normalized };
 }
 
 pub fn float(float_type: Index, number: f64) Value {
@@ -92,17 +102,6 @@ pub fn is_float(value_type: Index) bool {
 
 fn is_signed(value_type: Index) bool {
     return @intFromEnum(value_type) >= @intFromEnum(Index.i8_type) and is_int(value_type);
-}
-
-// integer bits are kept sign- or zero-extended to 64 bits, so equal values have equal bits
-fn normalized(bits: u64, int_type: Index) u64 {
-    if (!is_int(int_type)) return bits;
-    const bit_width = integer_widths[@intFromEnum(int_type)];
-    if (bit_width == 64) return bits;
-
-    const shift: u6 = @intCast(64 - bit_width);
-    if (is_signed(int_type)) return @bitCast(@as(i64, @bitCast(bits << shift)) >> shift);
-    return bits << shift >> shift;
 }
 
 pub fn as_float(self: Value) f64 {
@@ -184,30 +183,25 @@ pub fn reinterpret(self: Value, target_type: Index) ?Value {
     const target_is_scalar = is_number(target_type) or target_type == .bool_type;
     if (self.value_type == .none or self.is_boxed() or !target_is_scalar) return null;
 
-    const raw = self.raw_bits();
+    // the bits of a scalar as its type lays them out in memory
+    const raw: u64 = blk: {
+        const bit_width = width(self.value_type);
+        if (is_float(self.value_type)) break :blk switch (bit_width) {
+            16 => @as(u16, @bitCast(@as(f16, @floatCast(self.as_float())))),
+            32 => @as(u32, @bitCast(@as(f32, @floatCast(self.as_float())))),
+            else => self.bits,
+        };
+        if (bit_width == 64) break :blk self.bits;
+        break :blk self.bits & ((@as(u64, 1) << @intCast(bit_width)) - 1);
+    };
     if (target_type == .bool_type) return boolean(raw != 0);
     if (is_int(target_type)) return int(target_type, raw);
-    return float(target_type, float_of_raw_bits(raw, width(target_type)));
-}
-
-// the bits of a scalar as its type lays them out in memory
-inline fn raw_bits(self: Value) u64 {
-    const bit_width = width(self.value_type);
-    if (is_float(self.value_type)) return switch (bit_width) {
-        16 => @as(u16, @bitCast(@as(f16, @floatCast(self.as_float())))),
-        32 => @as(u32, @bitCast(@as(f32, @floatCast(self.as_float())))),
-        else => self.bits,
-    };
-    if (bit_width == 64) return self.bits;
-    return self.bits & ((@as(u64, 1) << @intCast(bit_width)) - 1);
-}
-
-inline fn float_of_raw_bits(raw: u64, bit_width: u7) f64 {
-    return switch (bit_width) {
+    const number: f64 = switch (width(target_type)) {
         16 => @as(f16, @bitCast(@as(u16, @truncate(raw)))),
         32 => @as(f32, @bitCast(@as(u32, @truncate(raw)))),
         else => @bitCast(raw),
     };
+    return float(target_type, number);
 }
 
 pub fn eql(left: Value, right: Value) bool {
@@ -246,16 +240,16 @@ pub fn unary(operator: UnaryOperator, operand: Value, result_type: Index) Evalua
         .negate => {
             if (is_float(operand.value_type)) return float(operand.value_type, -operand.as_float());
             if (!is_int(operand.value_type)) return error.NotStatic;
-            return wrapped(negation_type(operand.value_type, result_type), -operand.widened());
+            // without an integer result type a negated unsigned integer becomes an `i64`
+            const negation_type: Index = if (is_int(result_type))
+                result_type
+            else if (is_signed(operand.value_type))
+                operand.value_type
+            else
+                .i64_type;
+            return wrapped(negation_type, -operand.widened());
         },
     }
-}
-
-// without an integer result type a negated unsigned integer becomes an `i64`
-inline fn negation_type(operand_type: Index, result_type: Index) Index {
-    if (is_int(result_type)) return result_type;
-    if (is_signed(operand_type)) return operand_type;
-    return .i64_type;
 }
 
 pub fn binary(
@@ -265,13 +259,63 @@ pub fn binary(
     result_type: Index,
 ) EvaluationError!Value {
     if (is_int(left.value_type) and is_int(right.value_type)) {
-        return binary_integers(operator, left, right, result_type);
+        // integers wrap around the result type, dividing by zero or shifting too far is invalid
+        const left_exact = left.widened();
+        const right_exact = right.widened();
+        const int_type = if (is_int(result_type)) result_type else left.value_type;
+
+        return switch (operator) {
+            .add => int(int_type, left.bits +% right.bits),
+            .subtract => int(int_type, left.bits -% right.bits),
+            .multiply => int(int_type, left.bits *% right.bits),
+            .divide => if (right_exact == 0)
+                error.Invalid
+            else
+                wrapped(int_type, @divTrunc(left_exact, right_exact)),
+            .remainder => if (right_exact == 0)
+                error.Invalid
+            else
+                wrapped(int_type, @rem(left_exact, right_exact)),
+            .shift_left => int(int_type, left.bits << try shift_amount(right_exact, int_type)),
+            .shift_right => shift_right(left, try shift_amount(right_exact, int_type), int_type),
+            .bit_or => int(int_type, left.bits | right.bits),
+            .bit_xor => int(int_type, left.bits ^ right.bits),
+            .bit_and => int(int_type, left.bits & right.bits),
+            .equal, .not_equal, .less, .greater => compare(operator, left, right),
+            .less_equal, .greater_equal => compare(operator, left, right),
+            .logic_and, .logic_or, .logic_xor => error.NotStatic,
+        };
     }
     if (is_number(left.value_type) and is_number(right.value_type)) {
-        return binary_numbers(operator, left, right, result_type);
+        // a float with an integer or a float, computed in f64 and rounded to the result type
+        const float_type = if (is_float(result_type))
+            result_type
+        else if (is_float(left.value_type))
+            left.value_type
+        else
+            right.value_type;
+        return switch (operator) {
+            .add => float(float_type, left.as_float() + right.as_float()),
+            .subtract => float(float_type, left.as_float() - right.as_float()),
+            .multiply => float(float_type, left.as_float() * right.as_float()),
+            .divide => float(float_type, left.as_float() / right.as_float()),
+            .remainder => float(float_type, @rem(left.as_float(), right.as_float())),
+            .equal, .not_equal, .less, .greater => compare(operator, left, right),
+            .less_equal, .greater_equal => compare(operator, left, right),
+            .shift_left, .shift_right, .bit_or, .bit_xor, .bit_and => error.NotStatic,
+            .logic_and, .logic_or, .logic_xor => error.NotStatic,
+        };
     }
     if (left.value_type == .bool_type and right.value_type == .bool_type) {
-        return binary_booleans(operator, left, right);
+        return switch (operator) {
+            .logic_and, .bit_and => boolean(left.bits & right.bits != 0),
+            .logic_or, .bit_or => boolean(left.bits | right.bits != 0),
+            .logic_xor, .bit_xor, .not_equal => boolean(left.bits != right.bits),
+            .equal => boolean(left.bits == right.bits),
+            .add, .subtract, .multiply, .divide, .remainder => error.NotStatic,
+            .shift_left, .shift_right => error.NotStatic,
+            .less, .greater, .less_equal, .greater_equal => error.NotStatic,
+        };
     }
     return switch (operator) {
         .equal => boolean(eql(left, right)),
@@ -287,40 +331,6 @@ fn is_number(value_type: Index) bool {
     return is_int(value_type) or is_float(value_type);
 }
 
-// integers wrap around the result type, dividing by zero or shifting too far is invalid
-inline fn binary_integers(
-    operator: BinaryOperator,
-    left: Value,
-    right: Value,
-    result_type: Index,
-) EvaluationError!Value {
-    const left_exact = left.widened();
-    const right_exact = right.widened();
-    const int_type = if (is_int(result_type)) result_type else left.value_type;
-
-    return switch (operator) {
-        .add => int(int_type, left.bits +% right.bits),
-        .subtract => int(int_type, left.bits -% right.bits),
-        .multiply => int(int_type, left.bits *% right.bits),
-        .divide => if (right_exact == 0)
-            error.Invalid
-        else
-            wrapped(int_type, @divTrunc(left_exact, right_exact)),
-        .remainder => if (right_exact == 0)
-            error.Invalid
-        else
-            wrapped(int_type, @rem(left_exact, right_exact)),
-        .shift_left => int(int_type, left.bits << try shift_amount(right_exact, int_type)),
-        .shift_right => shift_right(left, try shift_amount(right_exact, int_type), int_type),
-        .bit_or => int(int_type, left.bits | right.bits),
-        .bit_xor => int(int_type, left.bits ^ right.bits),
-        .bit_and => int(int_type, left.bits & right.bits),
-        .equal, .not_equal, .less, .greater => compare(operator, left, right),
-        .less_equal, .greater_equal => compare(operator, left, right),
-        .logic_and, .logic_or, .logic_xor => error.NotStatic,
-    };
-}
-
 inline fn shift_amount(exact_amount: i128, int_type: Index) EvaluationError!u6 {
     const bit_width = integer_widths[@intFromEnum(int_type)];
     if (exact_amount < 0 or exact_amount >= bit_width) return error.Invalid;
@@ -332,49 +342,6 @@ inline fn shift_right(left: Value, amount: u6, int_type: Index) Value {
     if (!is_signed(left.value_type)) return int(int_type, left.bits >> amount);
     const shifted: i64 = @as(i64, @bitCast(left.bits)) >> amount;
     return int(int_type, @bitCast(shifted));
-}
-
-// a float with an integer or a float, computed in f64 and rounded to the result type
-inline fn binary_numbers(
-    operator: BinaryOperator,
-    left: Value,
-    right: Value,
-    result_type: Index,
-) EvaluationError!Value {
-    const float_type = float_result_type(left.value_type, right.value_type, result_type);
-    return switch (operator) {
-        .add => float(float_type, left.as_float() + right.as_float()),
-        .subtract => float(float_type, left.as_float() - right.as_float()),
-        .multiply => float(float_type, left.as_float() * right.as_float()),
-        .divide => float(float_type, left.as_float() / right.as_float()),
-        .remainder => float(float_type, @rem(left.as_float(), right.as_float())),
-        .equal, .not_equal, .less, .greater => compare(operator, left, right),
-        .less_equal, .greater_equal => compare(operator, left, right),
-        .shift_left, .shift_right, .bit_or, .bit_xor, .bit_and => error.NotStatic,
-        .logic_and, .logic_or, .logic_xor => error.NotStatic,
-    };
-}
-
-inline fn float_result_type(left_type: Index, right_type: Index, result_type: Index) Index {
-    if (is_float(result_type)) return result_type;
-    if (is_float(left_type)) return left_type;
-    return right_type;
-}
-
-inline fn binary_booleans(
-    operator: BinaryOperator,
-    left: Value,
-    right: Value,
-) EvaluationError!Value {
-    return switch (operator) {
-        .logic_and, .bit_and => boolean(left.bits & right.bits != 0),
-        .logic_or, .bit_or => boolean(left.bits | right.bits != 0),
-        .logic_xor, .bit_xor, .not_equal => boolean(left.bits != right.bits),
-        .equal => boolean(left.bits == right.bits),
-        .add, .subtract, .multiply, .divide, .remainder => error.NotStatic,
-        .shift_left, .shift_right => error.NotStatic,
-        .less, .greater, .less_equal, .greater_equal => error.NotStatic,
-    };
 }
 
 inline fn compare(operator: BinaryOperator, left: Value, right: Value) EvaluationError!Value {

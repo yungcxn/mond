@@ -176,7 +176,28 @@ pub fn resolve(self: *Resolver) !void {
         const will_rebuild = has_top_splices and
             self.macros.expanded != 0 and
             !self.macros.failed;
-        if (!will_rebuild) self.check_globals();
+        if (!will_rebuild) {
+            const declaration_count = self.decl_pool.entries.len();
+            for (0..declaration_count) |i| {
+                const declaration: DeclPool.Index = @enumFromInt(i);
+                self.declarations.ensure_signature(declaration);
+                self.declarations.check_body(declaration);
+                _ = self.temporary_arena.reset(.retain_capacity);
+            }
+
+            var context = FunctionContext{};
+            for (self.roots) |root| {
+                const declares_nothing = self.node_declarations[root] == .none;
+                if (declares_nothing and self.tree.kind(root) != .splice) {
+                    // a top-level expression is a scope, what it binds (`x <- y`) ends with it
+                    self.scopes.open();
+                    _ = self.expressions.infer(&context, root, .none);
+                    self.scopes.close();
+                }
+            }
+
+            self.calls.check_dispatch_groups();
+        }
 
         const nothing_changed = self.macros.expanded == 0 and !self.macros.edited;
         if (self.macros.failed or nothing_changed) break;
@@ -185,7 +206,37 @@ pub fn resolve(self: *Resolver) !void {
             _ = self.report(.endless_expansion, self.macros.last, 0, 0);
             return error.ResolveFailed;
         }
-        self.restart();
+
+        // the next pass resolves everything anew on the tree rebuilt with what this one expanded
+        if (self.session.watch) |watch| {
+            self.grow_node_tables();
+            watch.pass(watch.observer, self);
+        }
+
+        // the buffer of the last rebuild is reused, the first rebuild makes one
+        const capacity = @max(16, @as(u32, @intCast(self.roots.len)));
+        var roots = self.rebuilt orelse
+            DynamicBuffer(ParseTree.NodeId).init(self.allocator, capacity);
+        self.rebuilt = null;
+        // a pass ends with the roots of `refl $file` when a macro read or wrote them
+        const final_roots = if (self.macros.file != 0)
+            self.tree.manychildren(self.macros.file)
+        else
+            self.roots;
+        // the roots of the last rebuild already live in the buffer, copying would alias
+        if (final_roots.ptr != roots.buffer.ptr) {
+            roots.len = 0;
+            roots.append(final_roots);
+        }
+        self.tree.rebuild(self.allocator, &roots, self.src_bytes);
+
+        // the session and the fresh name counter outlive the pass, everything else starts anew
+        const session = self.session;
+        const alloc, const tree, const src_bytes = .{ self.allocator, self.tree, self.src_bytes };
+        self.deinit();
+        self.* = init(alloc, tree, src_bytes, roots.items());
+        self.rebuilt = roots;
+        self.session = session;
     }
     try self.fail_on_errors();
 
@@ -198,65 +249,6 @@ pub fn resolve(self: *Resolver) !void {
 
 inline fn fail_on_errors(self: *const Resolver) error{ResolveFailed}!void {
     if (self.doctor.has_errors()) return error.ResolveFailed;
-}
-
-fn check_globals(self: *Resolver) void {
-    const declaration_count = self.decl_pool.entries.len();
-    for (0..declaration_count) |i| {
-        const declaration: DeclPool.Index = @enumFromInt(i);
-        self.declarations.ensure_signature(declaration);
-        self.declarations.check_body(declaration);
-        _ = self.temporary_arena.reset(.retain_capacity);
-    }
-
-    var context = FunctionContext{};
-    for (self.roots) |root| {
-        const declares_nothing = self.node_declarations[root] == .none;
-        if (declares_nothing and self.tree.kind(root) != .splice) {
-            _ = self.expressions.infer(&context, root, .none);
-        }
-    }
-
-    self.calls.check_dispatch_groups();
-}
-
-// the next pass: the tree rebuilt with what this one expanded, everything resolved anew on it
-fn restart(self: *Resolver) void {
-    if (self.session.watch) |watch| {
-        self.grow_node_tables();
-        watch.pass(watch.observer, self);
-    }
-
-    var roots = self.take_root_buffer();
-    // a pass ends with the roots of `refl $file` when a macro read or wrote them
-    const final_roots = if (self.macros.file != 0)
-        self.tree.manychildren(self.macros.file)
-    else
-        self.roots;
-    // the roots of the last rebuild already live in the buffer, copying would alias
-    if (final_roots.ptr != roots.buffer.ptr) {
-        roots.len = 0;
-        roots.append(final_roots);
-    }
-    self.tree.rebuild(self.allocator, &roots, self.src_bytes);
-
-    // the session and the fresh name counter outlive the pass, everything else starts anew
-    const session = self.session;
-    const alloc, const tree, const src_bytes = .{ self.allocator, self.tree, self.src_bytes };
-    self.deinit();
-    self.* = init(alloc, tree, src_bytes, roots.items());
-    self.rebuilt = roots;
-    self.session = session;
-}
-
-// the buffer of the last rebuild is reused, the first rebuild makes one
-fn take_root_buffer(self: *Resolver) DynamicBuffer(ParseTree.NodeId) {
-    const reused = self.rebuilt;
-    self.rebuilt = null;
-    if (reused) |buffer| return buffer;
-
-    const capacity = @max(16, @as(u32, @intCast(self.roots.len)));
-    return .init(self.allocator, capacity);
 }
 
 // macros add nodes to the tree, they need rows in the node tables too

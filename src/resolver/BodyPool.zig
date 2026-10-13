@@ -100,23 +100,19 @@ pub fn captures_of(
         const seen = std.mem.indexOfScalar(DeclPool.Index, captured_so_far, declaration) != null;
         if (seen) continue;
 
-        if (is_captured(decl_pool, body, declaration)) self.captured_declarations.push(declaration);
+        if (!decl_pool.get(declaration, .kind).is_runtime_local()) continue;
+        const flags = decl_pool.get(declaration, .flags);
+        if (flags.is_global) continue;
+        // a static local whose value is known is read as that value, not from the environment
+        if (flags.is_stc and decl_pool.get(declaration, .static_value) != .none) continue;
+
+        const node = decl_pool.get(declaration, .node);
+        const body_end = body.first_node + body.node_count;
+        const declared_inside = node >= body.first_node and node < body_end;
+        if (!declared_inside) self.captured_declarations.push(declaration);
     }
 
     const count = self.captured_declarations.len - start;
     self.capture_ranges.put(self.allocator, function, .{ start, count }) catch @panic("OOM");
     return self.captured_declarations.buffer[start..self.captured_declarations.len];
-}
-
-fn is_captured(decl_pool: *const DeclPool, body: Body, declaration: DeclPool.Index) bool {
-    if (!decl_pool.get(declaration, .kind).is_runtime_local()) return false;
-
-    const flags = decl_pool.get(declaration, .flags);
-    if (flags.is_global) return false;
-    // a static local whose value is known is read as that value, not from the environment
-    if (flags.is_stc and decl_pool.get(declaration, .static_value) != .none) return false;
-
-    const node = decl_pool.get(declaration, .node);
-    const declared_inside = node >= body.first_node and node < body.first_node + body.node_count;
-    return !declared_inside;
 }

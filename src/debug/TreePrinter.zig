@@ -103,11 +103,32 @@ pub fn print_node(
     const child_count = Node.nk_childc[@intFromEnum(kind)];
     const is_leaf = child_count == .none or child_count == .data;
 
-    if (!is_root) try printer.print_node_line(node, prefix, is_last, label, label_width);
+    if (!is_root) {
+        const writer = printer.writer;
+        const branch = if (is_last) "└── " else "├── ";
+        try writer.print("{s}{s}", .{ prefix, branch });
+
+        if (label.len > 0) {
+            const padding_length = @min(style.spaces.len - 1, label_width -| label.len) + 1;
+            const label_format = style.field_color ++ "{s}" ++ dim ++ ":" ++ reset ++ "{s}";
+            try writer.print(label_format, .{ label, style.spaces[0..padding_length] });
+        }
+
+        const kind_color = if (is_leaf) style.leaf_color else style.kind_color;
+        try writer.print("{s}{s}" ++ reset, .{ kind_color, @tagName(kind) });
+
+        if (child_count == .data) {
+            const text = printer.tree.text(node, printer.source);
+            if (text.len > 0) try writer.print(dim ++ "  \"{s}\"" ++ reset, .{text});
+        }
+
+        try printer.annotate(node);
+        try writer.writeAll("\n");
+    }
     if (is_leaf) return;
 
     var prefix_buffer: [1024]u8 = undefined;
-    const continuation = prefix_continuation(is_root, is_last);
+    const continuation = if (is_root) "" else if (is_last) "    " else "│   ";
     const child_prefix = std.fmt.bufPrint(
         &prefix_buffer,
         "{s}{s}",
@@ -133,46 +154,6 @@ pub fn print_node(
     }
 }
 
-fn print_node_line(
-    printer: TreePrinter,
-    node: NodeId,
-    prefix: []const u8,
-    is_last: bool,
-    label: []const u8,
-    label_width: usize,
-) !void {
-    const writer = printer.writer;
-    const kind = printer.tree.ast_nodes.column(.nk)[node];
-    const child_count = Node.nk_childc[@intFromEnum(kind)];
-    const is_leaf = child_count == .none or child_count == .data;
-
-    const branch = if (is_last) "└── " else "├── ";
-    try writer.print("{s}{s}", .{ prefix, branch });
-
-    if (label.len > 0) {
-        const padding_length = @min(style.spaces.len - 1, label_width -| label.len) + 1;
-        const label_format = style.field_color ++ "{s}" ++ dim ++ ":" ++ reset ++ "{s}";
-        try writer.print(label_format, .{ label, style.spaces[0..padding_length] });
-    }
-
-    const kind_color = if (is_leaf) style.leaf_color else style.kind_color;
-    try writer.print("{s}{s}" ++ reset, .{ kind_color, @tagName(kind) });
-
-    if (child_count == .data) {
-        const text = printer.tree.text(node, printer.source);
-        if (text.len > 0) try writer.print(dim ++ "  \"{s}\"" ++ reset, .{text});
-    }
-
-    try printer.annotate(node);
-    try writer.writeAll("\n");
-}
-
-fn prefix_continuation(is_root: bool, is_last: bool) []const u8 {
-    if (is_root) return "";
-    if (is_last) return "    ";
-    return "│   ";
-}
-
 fn print_list_children(
     printer: TreePrinter,
     slots: [2]NodeId,
@@ -196,38 +177,27 @@ fn print_list_children(
 pub fn annotate(printer: TreePrinter, node: NodeId) !void {
     const resolver = printer.resolver orelse return;
 
-    try printer.annotate_type(resolver, node);
-    try printer.annotate_declaration(resolver, node);
+    const node_type = resolver.node_types[node];
+    if (node_type != .none) {
+        const poison_prefix = style.error_color ++ "  : ";
+        const type_prefix = style.type_color ++ "  : ";
+        try printer.writer.writeAll(if (node_type == .poison_type) poison_prefix else type_prefix);
+        try resolver.static_pool.format(&resolver.name_pool, node_type, printer.writer);
+        try printer.writer.writeAll(reset);
+    }
+
+    const declaration = resolver.node_declarations[node];
+    if (declaration != .none) {
+        const declaration_format = dim ++ "  → " ++ reset ++ bold ++ "#{d} {s}" ++ reset ++
+            dim ++ " {s}" ++ reset;
+        try printer.writer.print(declaration_format, .{
+            @intFromEnum(declaration),
+            source_positions.declaration_name(resolver, declaration),
+            @tagName(resolver.decl_pool.get(declaration, .kind)),
+        });
+    }
 
     if (!printer.diagnosed[node]) return;
-    try printer.annotate_diagnostics(resolver, node);
-}
-
-fn annotate_type(printer: TreePrinter, resolver: *Resolver, node: NodeId) !void {
-    const node_type = resolver.node_types[node];
-    if (node_type == .none) return;
-
-    const poison_prefix = style.error_color ++ "  : ";
-    const type_prefix = style.type_color ++ "  : ";
-    try printer.writer.writeAll(if (node_type == .poison_type) poison_prefix else type_prefix);
-    try resolver.static_pool.format(&resolver.name_pool, node_type, printer.writer);
-    try printer.writer.writeAll(reset);
-}
-
-fn annotate_declaration(printer: TreePrinter, resolver: *Resolver, node: NodeId) !void {
-    const declaration = resolver.node_declarations[node];
-    if (declaration == .none) return;
-
-    const declaration_format = dim ++ "  → " ++ reset ++ bold ++ "#{d} {s}" ++ reset ++
-        dim ++ " {s}" ++ reset;
-    try printer.writer.print(declaration_format, .{
-        @intFromEnum(declaration),
-        source_positions.declaration_name(resolver, declaration),
-        @tagName(resolver.decl_pool.get(declaration, .kind)),
-    });
-}
-
-fn annotate_diagnostics(printer: TreePrinter, resolver: *Resolver, node: NodeId) !void {
     const diagnostics = resolver.doctor.diagnostics.columns();
     for (
         diagnostics.node,

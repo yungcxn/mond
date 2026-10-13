@@ -48,7 +48,15 @@ pub fn node_span(tree: *const ParseTree, source: []const u8, node: NodeId) ?Lexe
 
     var current = node;
     while (child_count_of(kinds[current]) != .data) {
-        const child = first_child(tree, current);
+        // 0 when the node has no children
+        const child: NodeId = blk: {
+            const slots: [2]NodeId = arguments[current];
+            if (child_count_of(kinds[current]) != .many) break :blk slots[0];
+
+            const child_count = slots[1];
+            if (child_count == 0) break :blk 0;
+            break :blk tree.extra_childrefs.buffer[slots[0]];
+        };
         if (child == 0 or child >= tree.ast_nodes.len()) break;
         current = child;
     } else return spans[arguments[current][0]];
@@ -64,7 +72,21 @@ pub fn node_span(tree: *const ParseTree, source: []const u8, node: NodeId) ?Lexe
     }
 
     const kind = kinds[current];
-    const keyword = keyword_of(kind) orelse return token_span(spans, token);
+    // the source text of a childless node, null when it is not written as one word
+    const keyword = switch (kind) {
+        .brk => "brk",
+        .cont => "cont",
+        .ret_void => "ret",
+        .boolean_true => "true",
+        .boolean_false => "false",
+        .identifier_self => @tagName(kind)["identifier_".len..],
+        else => blk: {
+            const is_builtin_type = @intFromEnum(kind) >= @intFromEnum(Node.Kind.type_u8) and
+                @intFromEnum(kind) <= @intFromEnum(Node.Kind.type_stcfun);
+            if (is_builtin_type) break :blk @tagName(kind)["type_".len..];
+            break :blk null;
+        },
+    } orelse return if (spans.len == 0) null else spans[token];
 
     // the node is the rank-th of its kind after that token, so it is the rank-th such keyword
     var rank: usize = 0;
@@ -76,43 +98,10 @@ pub fn node_span(tree: *const ParseTree, source: []const u8, node: NodeId) ?Lexe
         rank -= 1;
         if (rank == 0) return span;
     }
-    return token_span(spans, token);
-}
-
-fn child_count_of(kind: Node.Kind) @TypeOf(Node.nk_childc[0]) {
-    return Node.nk_childc[@intFromEnum(kind)];
-}
-
-// 0 when the node has no children
-fn first_child(tree: *const ParseTree, node: NodeId) NodeId {
-    const kind = tree.ast_nodes.column(.nk)[node];
-    const slots: [2]NodeId = tree.ast_nodes.column(.args)[node];
-    if (child_count_of(kind) != .many) return slots[0];
-
-    const child_count = slots[1];
-    if (child_count == 0) return 0;
-    return tree.extra_childrefs.buffer[slots[0]];
-}
-
-fn token_span(spans: []const Lexer.TextSpan, token: u32) ?Lexer.TextSpan {
     if (spans.len == 0) return null;
     return spans[token];
 }
 
-// the source text of a childless node, null when it is not written as one word
-fn keyword_of(kind: Node.Kind) ?[]const u8 {
-    return switch (kind) {
-        .brk => "brk",
-        .cont => "cont",
-        .ret_void => "ret",
-        .boolean_true => "true",
-        .boolean_false => "false",
-        .identifier_self => @tagName(kind)["identifier_".len..],
-        else => {
-            const is_builtin_type = @intFromEnum(kind) >= @intFromEnum(Node.Kind.type_u8) and
-                @intFromEnum(kind) <= @intFromEnum(Node.Kind.type_stcfun);
-            if (is_builtin_type) return @tagName(kind)["type_".len..];
-            return null;
-        },
-    };
+fn child_count_of(kind: Node.Kind) @TypeOf(Node.nk_childc[0]) {
+    return Node.nk_childc[@intFromEnum(kind)];
 }

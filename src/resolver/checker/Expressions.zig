@@ -106,24 +106,7 @@ fn infer_block(
     defer resolver.scopes.close();
 
     const statements = resolver.tree.manychildren(node);
-    self.hoist_local_functions(statements);
-
-    var last_type: StaticPool.Index = .unit_type;
-    for (statements, 0..) |statement, i| {
-        const is_last = i + 1 == statements.len;
-        const declares = resolver.tree.props(statement).declares;
-
-        if (!declares) resolver.scopes.open();
-        last_type = self.infer(context, statement, if (is_last) expected else .none);
-        if (!declares) resolver.scopes.close();
-    }
-    return last_type;
-}
-
-// local functions are visible in their whole block
-fn hoist_local_functions(self: *Expressions, statements: []const NodeId) void {
-    const resolver = self.owning_resolver();
-
+    // local functions are visible in their whole block
     for (statements) |statement_node| {
         const statement = Declarations.Stmt.from_node(resolver, statement_node);
         const is_typed_function = statement.kind == .function and
@@ -145,6 +128,17 @@ fn hoist_local_functions(self: *Expressions, statements: []const NodeId) void {
         resolver.decl_pool.set(declaration, .flags, statement.flags);
         resolver.node_declarations[name_node] = declaration;
     }
+
+    var last_type: StaticPool.Index = .unit_type;
+    for (statements, 0..) |statement, i| {
+        const is_last = i + 1 == statements.len;
+        const declares = resolver.tree.props(statement).declares;
+
+        if (!declares) resolver.scopes.open();
+        last_type = self.infer(context, statement, if (is_last) expected else .none);
+        if (!declares) resolver.scopes.close();
+    }
+    return last_type;
 }
 
 fn infer_compound_assignment(
@@ -168,7 +162,13 @@ fn infer_compound_assignment(
     const moves_pointer = (kind == .assign_add or kind == .assign_sub) and
         static_pool.is_element_pointer(target_type);
     if (moves_pointer) {
-        if (self.check_integer_operand(context, value)) return .unit_type;
+        const negative = resolver.tree.kind(value) == .neg_num;
+        const integer_hint: StaticPool.Index = if (negative) .i64_type else .u64_type;
+        const operand_type = self.infer_operand(context, value, integer_hint);
+        if (operand_type == .poison_type) return .unit_type;
+        if (static_pool.properties(operand_type).is_integer) return .unit_type;
+
+        _ = resolver.report(.type_mismatch, value, operand_type, .u64_type);
         return .poison_type;
     }
 
@@ -199,40 +199,36 @@ fn infer_arithmetic(
     else
         .none;
     const operand_type = self.join_operands(context, node, left, right, hint);
-    const result_type = self.arithmetic_result_type(node, operand_type);
+    const result_type = blk: {
+        const static_pool = &resolver.static_pool;
+        const kind = resolver.tree.kind(node);
+
+        const offsets_pointer = (kind == .binary_add or kind == .binary_sub) and
+            static_pool.is_element_pointer(operand_type);
+        if (offsets_pointer) break :blk operand_type;
+
+        const integral = operators.operands_of(kind) == .integers;
+        const integral_mismatch = integral and
+            !static_pool.properties(operand_type).is_integer and
+            static_pool.tag(operand_type) != .type_variable;
+        if (integral_mismatch) break :blk resolver.report_mismatch(node, operand_type, .none);
+
+        break :blk self.numeric_result(node, operand_type, operand_type);
+    };
 
     // arithmetic on constants is folded, a division by zero is an error as soon as it can be seen
+    const tree = resolver.tree;
     const foldable = result_type != .poison_type and
         !context.is_abstract and
-        self.is_folded(left) and
-        self.is_folded(right);
+        (tree.is_literal(left) or resolver.node_static_values[left] != .none and
+            constructs.construct_of(tree.kind(left)) == .arithmetic) and
+        (tree.is_literal(right) or resolver.node_static_values[right] != .none and
+            constructs.construct_of(tree.kind(right)) == .arithmetic);
     if (foldable) {
         _ = resolver.set_node_type(node, result_type);
         _ = resolver.interpreter.evaluate_static(context, node);
     }
     return result_type;
-}
-
-fn arithmetic_result_type(
-    self: *Expressions,
-    node: NodeId,
-    operand_type: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const kind = resolver.tree.kind(node);
-
-    const offsets_pointer = (kind == .binary_add or kind == .binary_sub) and
-        static_pool.is_element_pointer(operand_type);
-    if (offsets_pointer) return operand_type;
-
-    const integral = operators.operands_of(kind) == .integers;
-    const integral_mismatch = integral and
-        !static_pool.properties(operand_type).is_integer and
-        static_pool.tag(operand_type) != .type_variable;
-    if (integral_mismatch) return resolver.report_mismatch(node, operand_type, .none);
-
-    return self.numeric_result(node, operand_type, operand_type);
 }
 
 fn infer_comparison(self: *Expressions, context: *FunctionContext, node: NodeId) StaticPool.Index {
@@ -329,7 +325,18 @@ fn infer_index(self: *Expressions, context: *FunctionContext, node: NodeId) Stat
     else
         container_type;
 
-    if (self.checks_static_bounds(context, container_type, index)) {
+    // realizations and stcfun bodies leave lengths to the interpreter, their indices may be guarded
+    const checks_static_bounds = blk: {
+        if (context.is_interpreted) break :blk false;
+
+        const in_realization = context.declaration != .none and
+            resolver.generics.template_of.contains(context.declaration);
+        if (in_realization) break :blk false;
+
+        const has_static_length = static_pool.static_length(container_type) != null;
+        break :blk has_static_length and resolver.tree.is_literal(index);
+    };
+    if (checks_static_bounds) {
         const static_index = resolver.static_values.static_integer(context, index) orelse
             return element_type;
         const length = static_pool.static_length(container_type).?;
@@ -338,24 +345,6 @@ fn infer_index(self: *Expressions, context: *FunctionContext, node: NodeId) Stat
         }
     }
     return element_type;
-}
-
-// realizations and stcfun bodies leave lengths to the interpreter, their indices may be guarded
-fn checks_static_bounds(
-    self: *Expressions,
-    context: *FunctionContext,
-    container_type: StaticPool.Index,
-    index: NodeId,
-) bool {
-    const resolver = self.owning_resolver();
-    if (context.is_interpreted) return false;
-
-    const in_realization = context.declaration != .none and
-        resolver.generics.template_of.contains(context.declaration);
-    if (in_realization) return false;
-
-    const has_static_length = resolver.static_pool.static_length(container_type) != null;
-    return has_static_length and resolver.tree.is_literal(index);
 }
 
 fn infer_dereference(self: *Expressions, context: *FunctionContext, node: NodeId) StaticPool.Index {
@@ -437,43 +426,31 @@ fn infer_array_literal(
     }
 
     if (!element_type_given) {
-        element_type = self.join_literal_elements(context, elements, element_type);
+        const tree = resolver.tree;
+        for (elements) |element| {
+            if (tree.is_literal(element)) _ = self.infer(context, element, .none);
+        }
+
+        if (element_type == .none) element_type = resolver.flow.common_literal_type(elements);
+        if (element_type == .none and elements.len > 0) {
+            element_type = resolver.node_types[elements[0]];
+        }
+
+        for (elements) |element| {
+            if (!tree.is_literal(element) or element_type == .none) continue;
+
+            const literal_type = resolver.static_values.literal_type(element, element_type);
+            const joined = static_pool.join(element_type, literal_type).joined_type;
+            if (joined != .none) element_type = joined;
+        }
+
+        for (elements) |element| {
+            if (!tree.is_literal(element)) continue;
+            _ = self.expect_type(element, resolver.node_types[element], element_type);
+        }
     }
     if (element_type == .none) element_type = static_pool.fresh_type_variable(node);
     return static_pool.array_of(elements.len, element_type);
-}
-
-fn join_literal_elements(
-    self: *Expressions,
-    context: *FunctionContext,
-    elements: []const NodeId,
-    non_literal_type: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const tree = resolver.tree;
-
-    for (elements) |element| {
-        if (tree.is_literal(element)) _ = self.infer(context, element, .none);
-    }
-
-    var element_type = non_literal_type;
-    if (element_type == .none) element_type = resolver.flow.common_literal_type(elements);
-    if (element_type == .none and elements.len > 0) element_type = resolver.node_types[elements[0]];
-
-    for (elements) |element| {
-        if (!tree.is_literal(element) or element_type == .none) continue;
-
-        const literal_type = resolver.static_values.literal_type(element, element_type);
-        const joined = static_pool.join(element_type, literal_type).joined_type;
-        if (joined != .none) element_type = joined;
-    }
-
-    for (elements) |element| {
-        if (!tree.is_literal(element)) continue;
-        _ = self.expect_type(element, resolver.node_types[element], element_type);
-    }
-    return element_type;
 }
 
 fn infer_cast(self: *Expressions, context: *FunctionContext, node: NodeId) StaticPool.Index {
@@ -485,27 +462,22 @@ fn infer_cast(self: *Expressions, context: *FunctionContext, node: NodeId) Stati
     const target_node = resolver.tree.arg(node, 1);
     const target_type = resolver.types.cast_target(context, target_node, source_type);
 
-    const poisoned = target_type == .poison_type or
-        source_type == .poison_type or
-        self.has_poisoned_length(target_type);
-    if (poisoned) return .poison_type;
+    if (target_type == .poison_type or source_type == .poison_type) return .poison_type;
+    // `[n]T` or `*[n]T` whose length failed, that failure is reported already
+    const has_poisoned_length = blk: {
+        const key = static_pool.get(target_type);
+        if (key == .array_type) break :blk key.array_type.length == .poison_type;
+        if (key != .pointer_type) break :blk false;
+
+        const pointee = static_pool.get(key.pointer_type.pointee);
+        break :blk pointee == .array_type and pointee.array_type.length == .poison_type;
+    };
+    if (has_poisoned_length) return .poison_type;
 
     if (static_pool.cast_kind(source_type, target_type) == .invalid) {
         return resolver.report(.invalid_cast, node, source_type, target_type);
     }
     return target_type;
-}
-
-// `[n]T` or `*[n]T` whose length failed, that failure is reported already
-fn has_poisoned_length(self: *Expressions, cast_type: StaticPool.Index) bool {
-    const static_pool = &self.owning_resolver().static_pool;
-
-    const key = static_pool.get(cast_type);
-    if (key == .array_type) return key.array_type.length == .poison_type;
-    if (key != .pointer_type) return false;
-
-    const pointee = static_pool.get(key.pointer_type.pointee);
-    return pointee == .array_type and pointee.array_type.length == .poison_type;
 }
 
 fn infer_bit_cast(self: *Expressions, context: *FunctionContext, node: NodeId) StaticPool.Index {
@@ -541,53 +513,35 @@ fn infer_type_test(self: *Expressions, context: *FunctionContext, node: NodeId) 
         return .bool_type;
     }
 
-    const tested_type = self.type_test_operand(context, type_node);
-    resolver.node_static_values[type_node] = tested_type;
-    resolver.node_static_values[node] = self.type_test_outcome(context, value_type, tested_type);
-    return .bool_type;
-}
-
-fn type_test_operand(
-    self: *Expressions,
-    context: *FunctionContext,
-    type_node: NodeId,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-
     const evaluated = if (context.is_interpreted)
         resolver.static_values.evaluate_or_defer(context, type_node) orelse .none
     else
         resolver.types.type_from_node(context, type_node);
+    const names_stcfun = evaluated != .none and static_pool.tag(evaluated) == .static_function;
+    const tested_type = if (names_stcfun)
+        resolver.types.type_from_node(context, type_node)
+    else
+        evaluated;
+    resolver.node_static_values[type_node] = tested_type;
 
-    const names_stcfun = evaluated != .none and
-        resolver.static_pool.tag(evaluated) == .static_function;
-    if (names_stcfun) return resolver.types.type_from_node(context, type_node);
-    return evaluated;
-}
+    // the static answer of a type test, `.none` when only the runtime knows it
+    resolver.node_static_values[node] = blk: {
+        if (tested_type == .none) break :blk .none;
+        if (context.is_interpreted and static_pool.tag(value_type) == .meta_type) break :blk .none;
 
-// the static answer of a type test, `.none` when only the runtime knows it
-fn type_test_outcome(
-    self: *Expressions,
-    context: *FunctionContext,
-    value_type: StaticPool.Index,
-    tested_type: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
+        if (static_pool.template_of(tested_type) != .none) {
+            if (resolver.generics.realizes(value_type, tested_type)) break :blk .bool_true;
+            break :blk .bool_false;
+        }
+        if (static_pool.template_of(value_type) != .none) break :blk .none;
 
-    if (tested_type == .none) return .none;
-    if (context.is_interpreted and static_pool.tag(value_type) == .meta_type) return .none;
-
-    if (static_pool.template_of(tested_type) != .none) {
-        if (resolver.generics.realizes(value_type, tested_type)) return .bool_true;
-        return .bool_false;
-    }
-    if (static_pool.template_of(value_type) != .none) return .none;
-
-    const matches = value_type == tested_type or static_pool.implements(value_type, tested_type);
-    if (matches) return .bool_true;
-    if (static_pool.tag(value_type) == .trait_type) return .none;
-    return .bool_false;
+        const matches = value_type == tested_type or
+            static_pool.implements(value_type, tested_type);
+        if (matches) break :blk .bool_true;
+        if (static_pool.tag(value_type) == .trait_type) break :blk .none;
+        break :blk .bool_false;
+    };
+    return .bool_type;
 }
 
 // `typeof` and `sizeof`: questions about the operand answered at compile time
@@ -624,7 +578,23 @@ fn infer_range(
 
     const expected_type = static_pool.substitute_type_variables(expected);
     const range = ParseTree.Range.from_node(resolver.tree, node);
-    const hint = self.range_bound_hint(range, expected_type);
+    const hint = blk: {
+        const expected_element = static_pool.array_element(expected_type);
+        const expected_bound_type: StaticPool.Index = if (expected_element != .none)
+            expected_element
+        else if (static_pool.is_numeric(expected_type))
+            expected_type
+        else
+            .none;
+        if (expected_bound_type == .none) break :blk .none;
+
+        for ([_]NodeId{ range.lo, range.hi }) |bound| {
+            if (bound == 0 or !resolver.tree.is_literal(bound)) continue;
+            const literal_type = resolver.static_values.literal_type(bound, expected_bound_type);
+            if (literal_type != expected_bound_type) break :blk .none;
+        }
+        break :blk expected_bound_type;
+    };
 
     const bound_type = if (range.lo != 0 and range.hi != 0)
         self.join_operands(context, node, first_bound, second_bound, hint)
@@ -636,32 +606,6 @@ fn infer_range(
 
     const length = static_pool.fresh_type_variable(node);
     return static_pool.intern(.{ .array_type = .{ .length = length, .element = bound_type } });
-}
-
-fn range_bound_hint(
-    self: *Expressions,
-    range: ParseTree.Range,
-    expected_type: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-
-    const hint = self.expected_bound_type(expected_type);
-    if (hint == .none) return .none;
-
-    for ([_]NodeId{ range.lo, range.hi }) |bound| {
-        if (bound == 0 or !resolver.tree.is_literal(bound)) continue;
-        if (resolver.static_values.literal_type(bound, hint) != hint) return .none;
-    }
-    return hint;
-}
-
-fn expected_bound_type(self: *Expressions, expected_type: StaticPool.Index) StaticPool.Index {
-    const static_pool = &self.owning_resolver().static_pool;
-
-    const expected_element = static_pool.array_element(expected_type);
-    if (expected_element != .none) return expected_element;
-    if (static_pool.is_numeric(expected_type)) return expected_type;
-    return .none;
 }
 
 fn infer_return_value(
@@ -748,7 +692,28 @@ fn infer_lambda(self: *Expressions, node: NodeId, expected: StaticPool.Index) St
 
     const expected_type = static_pool.substitute_type_variables(expected);
     const lambda_type = resolver.decl_pool.get(declaration, .value_type);
-    if (self.takes_expected_return_type(lambda_type, expected_type)) {
+    // an expected function type with equal parameters settles a return type the lambda leaves open
+    const takes_expected_return_type = blk: {
+        if (expected_type == .none or static_pool.tag(expected_type) != .function_type) {
+            break :blk false;
+        }
+        if (lambda_type == .none or static_pool.tag(lambda_type) != .function_type) {
+            break :blk false;
+        }
+
+        const lambda_function = static_pool.get(lambda_type).function_type;
+        const expected_function = static_pool.get(expected_type).function_type;
+        const same_parameters = std.mem.eql(
+            StaticPool.Index,
+            lambda_function.parameters,
+            expected_function.parameters,
+        );
+        if (!same_parameters) break :blk false;
+
+        const lambda_return = static_pool.substitute_type_variables(lambda_function.return_type);
+        break :blk static_pool.tag(lambda_return) == .type_variable;
+    };
+    if (takes_expected_return_type) {
         _ = static_pool.unify(
             static_pool.get(lambda_type).function_type.return_type,
             static_pool.get(expected_type).function_type.return_type,
@@ -757,30 +722,6 @@ fn infer_lambda(self: *Expressions, node: NodeId, expected: StaticPool.Index) St
 
     resolver.declarations.check_body(declaration);
     return resolver.decl_pool.get(declaration, .value_type);
-}
-
-// an expected function type with the same parameters settles a return type the lambda leaves open
-fn takes_expected_return_type(
-    self: *Expressions,
-    lambda_type: StaticPool.Index,
-    expected_type: StaticPool.Index,
-) bool {
-    const static_pool = &self.owning_resolver().static_pool;
-
-    if (expected_type == .none or static_pool.tag(expected_type) != .function_type) return false;
-    if (lambda_type == .none or static_pool.tag(lambda_type) != .function_type) return false;
-
-    const lambda_function = static_pool.get(lambda_type).function_type;
-    const expected_function = static_pool.get(expected_type).function_type;
-    const same_parameters = std.mem.eql(
-        StaticPool.Index,
-        lambda_function.parameters,
-        expected_function.parameters,
-    );
-    if (!same_parameters) return false;
-
-    const lambda_return = static_pool.substitute_type_variables(lambda_function.return_type);
-    return static_pool.tag(lambda_return) == .type_variable;
 }
 
 // type expressions in value position: the value is a type
@@ -877,7 +818,21 @@ fn infer_member_access(
 
     const template = static_pool.template_of(base_type);
     if (template != .none) return resolver.generics.template_member(node, template, name);
-    if (self.view_template_lacks_member(node, parent, base_type, name)) return .poison_type;
+    // a view parameter only has the members its template promises
+    const view_template_lacks_member = blk: {
+        if (resolver.tree.kind(parent) != .identifier) break :blk false;
+
+        const parent_declaration = resolver.node_declarations[parent];
+        if (parent_declaration == .none) break :blk false;
+        if (!resolver.decl_pool.get(parent_declaration, .flags).is_view) break :blk false;
+
+        const template_source = resolver.generics.template_source_of(base_type);
+        if (template_source == .none) break :blk false;
+
+        const template_type = static_pool.intern(.{ .template_type = template_source });
+        break :blk resolver.generics.template_member(node, template_type, name) == .poison_type;
+    };
+    if (view_template_lacks_member) return .poison_type;
 
     return switch (static_pool.lookup_member(base_type, name)) {
         .field => |field| if (on_type)
@@ -900,28 +855,6 @@ fn infer_member_access(
     };
 }
 
-// a view parameter only has the members its template promises
-fn view_template_lacks_member(
-    self: *Expressions,
-    node: NodeId,
-    parent: NodeId,
-    base_type: StaticPool.Index,
-    name: NamePool.Index,
-) bool {
-    const resolver = self.owning_resolver();
-    if (resolver.tree.kind(parent) != .identifier) return false;
-
-    const parent_declaration = resolver.node_declarations[parent];
-    if (parent_declaration == .none) return false;
-    if (!resolver.decl_pool.get(parent_declaration, .flags).is_view) return false;
-
-    const template_source = resolver.generics.template_source_of(base_type);
-    if (template_source == .none) return false;
-
-    const template_type = resolver.static_pool.intern(.{ .template_type = template_source });
-    return resolver.generics.template_member(node, template_type, name) == .poison_type;
-}
-
 fn builtin_lifecycle_type(
     self: *Expressions,
     base_type: StaticPool.Index,
@@ -939,27 +872,6 @@ fn use_method(self: *Expressions, node: NodeId, method: DeclPool.Index) StaticPo
     const resolver = self.owning_resolver();
     resolver.node_declarations[node] = method;
     return resolver.types.declaration_type(method);
-}
-
-fn check_integer_operand(self: *Expressions, context: *FunctionContext, node: NodeId) bool {
-    const resolver = self.owning_resolver();
-
-    const negative = resolver.tree.kind(node) == .neg_num;
-    const hint: StaticPool.Index = if (negative) .i64_type else .u64_type;
-    const operand_type = self.infer_operand(context, node, hint);
-    if (operand_type == .poison_type) return true;
-    if (resolver.static_pool.properties(operand_type).is_integer) return true;
-
-    _ = resolver.report(.type_mismatch, node, operand_type, .u64_type);
-    return false;
-}
-
-fn is_folded(self: *Expressions, node: NodeId) bool {
-    const resolver = self.owning_resolver();
-    if (resolver.tree.is_literal(node)) return true;
-
-    const arithmetic = constructs.construct_of(resolver.tree.kind(node)) == .arithmetic;
-    return resolver.node_static_values[node] != .none and arithmetic;
 }
 
 // `result` when the operand is numeric, the operand type itself for a `.none` result
@@ -1002,7 +914,15 @@ fn join_operands(
     const static_pool = &resolver.static_pool;
     const kind = resolver.tree.kind(node);
 
-    const swapped = self.right_goes_first(left, right);
+    // a literal on the left waits for a right side that is no literal or a float literal
+    const swapped = blk: {
+        const tree = resolver.tree;
+        if (!tree.is_literal(left)) break :blk false;
+        if (!tree.is_literal(right)) break :blk true;
+
+        var negated = false;
+        break :blk tree.kind(tree.literal_core(right, &negated)) == .float;
+    };
     const first = if (swapped) right else left;
     const second = if (swapped) left else right;
 
@@ -1011,7 +931,13 @@ fn join_operands(
     const is_add = kind == .binary_add;
     const may_offset_pointer = is_add or !swapped and kind == .binary_sub;
     if (may_offset_pointer and static_pool.is_element_pointer(first_type)) {
-        if (self.check_integer_operand(context, second)) return first_type;
+        const negative = resolver.tree.kind(second) == .neg_num;
+        const integer_hint: StaticPool.Index = if (negative) .i64_type else .u64_type;
+        const operand_type = self.infer_operand(context, second, integer_hint);
+        if (operand_type == .poison_type) return first_type;
+        if (static_pool.properties(operand_type).is_integer) return first_type;
+
+        _ = resolver.report(.type_mismatch, second, operand_type, .u64_type);
         return .poison_type;
     }
 
@@ -1037,15 +963,4 @@ fn join_operands(
     }
     if (joined == .none) return resolver.report(.type_mismatch, node, first_type, second_type);
     return joined;
-}
-
-// a literal on the left waits for a right side that is no literal or a float literal
-fn right_goes_first(self: *Expressions, left: NodeId, right: NodeId) bool {
-    const tree = self.owning_resolver().tree;
-
-    if (!tree.is_literal(left)) return false;
-    if (!tree.is_literal(right)) return true;
-
-    var negated = false;
-    return tree.kind(tree.literal_core(right, &negated)) == .float;
 }

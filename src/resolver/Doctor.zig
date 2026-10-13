@@ -122,6 +122,8 @@ pub const Diagnosis = struct {
     node: ParseTree.NodeId,
     first_operand: u32,
     second_operand: u32,
+    // made by a check that runs once (a signature, a body), a rewind keeps it
+    is_settled: bool = false,
 };
 
 diagnostics: StructOfArrays(Diagnosis),
@@ -171,8 +173,24 @@ pub fn errors_since(
     return false;
 }
 
+// takes back the reports since `mark`, but not the settled ones: the check that made them,
+// first run inside an attempt that is taken back, is not run again
 pub fn rewind(doctor: *Doctor, mark: u32) void {
-    doctor.diagnostics.truncate(mark);
+    const reports = doctor.diagnostics.columns();
+    var kept = mark;
+    for (mark..reports.code.len) |i| {
+        if (!reports.is_settled[i]) continue;
+        inline for (@typeInfo(Diagnosis).@"struct".fields) |field| {
+            @field(reports, field.name)[kept] = @field(reports, field.name)[i];
+        }
+        kept += 1;
+    }
+    doctor.diagnostics.truncate(kept);
+}
+
+// the reports since `mark` come from a check that runs once
+pub fn settle(doctor: *Doctor, mark: u32) void {
+    for (doctor.diagnostics.column(.is_settled)[mark..]) |*is_settled| is_settled.* = true;
 }
 
 fn operand_word(value: anytype) u32 {

@@ -130,7 +130,10 @@ fn handle(server: *Server, allocator: std.mem.Allocator, message: Message) !void
     const method = std.meta.stringToEnum(Method, message.method) orelse {
         return server.fail(allocator, message.id, -32601, "unknown method");
     };
-    if (method != .exit and !server.accepts(method)) {
+    // only `initialize` before it, nothing after `shutdown`
+    const accepts = server.phase != .shut and
+        (server.phase == .new) == (method == .initialize);
+    if (method != .exit and !accepts) {
         if (server.phase == .new) {
             return server.fail(allocator, message.id, -32002, "not initialized");
         }
@@ -166,12 +169,6 @@ fn handle(server: *Server, allocator: std.mem.Allocator, message: Message) !void
         .@"textDocument/references",
         => try server.answer(allocator, message, method, params),
     }
-}
-
-// only `initialize` before it, nothing after `shutdown`
-fn accepts(server: *Server, method: Method) bool {
-    if (server.phase == .shut) return false;
-    return (server.phase == .new) == (method == .initialize);
 }
 
 const capabilities = .{
@@ -216,7 +213,15 @@ fn answer(
     try server.analyze(allocator, uri, document);
 
     const result = document.result;
-    const link = link_at(result.links, params.position);
+    // the name at `position`, a cursor right behind a name is on it too
+    const link: ?Analysis.Link = blk: {
+        const links = result.links;
+        const position = params.position;
+        const index = std.sort.partitionPoint(Analysis.Link, links, position, ends_before);
+        if (index >= links.len) break :blk null;
+        if (Analysis.before(position, link_range(links[index]).start)) break :blk null;
+        break :blk links[index];
+    };
     switch (method) {
         .@"textDocument/semanticTokens/full" => {
             try server.respond(allocator, id, .{ .data = result.data });
@@ -230,7 +235,10 @@ fn answer(
         },
         .@"textDocument/hover" => {
             const found = link orelse return server.respond(allocator, id, null);
-            const text = try hover_text(allocator, result.decls[found[3]]);
+            const declaration = result.decls[found[3]];
+            const separator = if (declaration.detail.len > 0) ": " else "";
+            const parts = .{ declaration.name, separator, declaration.detail };
+            const text = try std.fmt.allocPrint(allocator, "```mond\n{s}{s}{s}\n```", parts);
             const hover = .{
                 .contents = .{ .kind = "markdown", .value = text },
                 .range = link_range(found),
@@ -255,14 +263,6 @@ fn answer(
         .@"textDocument/didClose",
         => unreachable,
     }
-}
-
-// the name at `position`, a cursor right behind a name is on it too
-fn link_at(links: []const Analysis.Link, position: Analysis.Position) ?Analysis.Link {
-    const index = std.sort.partitionPoint(Analysis.Link, links, position, ends_before);
-    if (index >= links.len) return null;
-    if (Analysis.before(position, link_range(links[index]).start)) return null;
-    return links[index];
 }
 
 fn ends_before(position: Analysis.Position, link: Analysis.Link) bool {
@@ -316,12 +316,6 @@ fn outline_symbols(
     return symbols;
 }
 
-fn hover_text(allocator: std.mem.Allocator, declaration: Analysis.Symbol) ![]const u8 {
-    const separator = if (declaration.detail.len > 0) ": " else "";
-    const parts = .{ declaration.name, separator, declaration.detail };
-    return std.fmt.allocPrint(allocator, "```mond\n{s}{s}{s}\n```", parts);
-}
-
 // a change only keeps the text, typing does not wait for analyses
 fn change(server: *Server, uri: []const u8, text: []const u8) !void {
     const entry = try server.documents.getOrPut(server.gpa, uri);
@@ -347,7 +341,45 @@ fn analyze(
     }
 
     var arena = std.heap.ArenaAllocator.init(server.gpa);
-    const result = server.run_worker(arena.allocator(), uri, text) orelse {
+    // the worker reads the source on stdin and answers on stdout, its panics go to the editor's log
+    const result = worker: {
+        const io = server.io;
+        // it gets the document's file for `include`
+        // a remote uri too (`vscode-remote://ssh-remote+host/..`): a folder shared under one path
+        const path: []const u8 = path: {
+            const scheme_end = std.mem.indexOf(u8, uri, "://") orelse break :path "";
+            const path_start = std.mem.indexOfScalarPos(u8, uri, scheme_end + 3, '/') orelse
+                break :path "";
+            const encoded = arena.allocator().dupe(u8, uri[path_start..]) catch break :worker null;
+            break :path std.Uri.percentDecodeInPlace(encoded);
+        };
+        const argv: []const []const u8 = &.{ server.executable_path, "analyze", path };
+        var child = std.process.spawn(io, .{
+            .argv = argv,
+            .stdin = .pipe,
+            .stdout = .pipe,
+        }) catch break :worker null;
+        defer child.kill(io);
+
+        child.stdin.?.writeStreamingAll(io, text) catch break :worker null;
+        child.stdin.?.close(io);
+        child.stdin = null;
+
+        var streams: std.Io.File.MultiReader.Buffer(1) = undefined;
+        var output: std.Io.File.MultiReader = undefined;
+        output.init(arena.allocator(), io, streams.toStreams(), &.{child.stdout.?});
+        defer output.deinit();
+        // a worker that hangs is killed after `worker_timeout`
+        output.fillRemaining(worker_timeout.toDeadline(io)) catch break :worker null;
+
+        const termination = child.wait(io) catch break :worker null;
+        if (termination != .exited or termination.exited != 0) break :worker null;
+        const answer_text = output.reader(0).buffered();
+        const options: std.json.ParseOptions = .{ .allocate = .alloc_always };
+        const parsed =
+            std.json.parseFromSliceLeaky(Analysis.Result, arena.allocator(), answer_text, options);
+        break :worker parsed catch null;
+    } orelse {
         arena.deinit();
         const crashed = .{ .uri = uri, .diagnostics = &[_]Analysis.Diagnostic{crash_diagnostic} };
         return server.notify(allocator, "textDocument/publishDiagnostics", crashed);
@@ -377,48 +409,6 @@ fn analyze(
 
     const analyzed = .{ .uri = uri, .diagnostics = result.diagnostics };
     try server.notify(allocator, "textDocument/publishDiagnostics", analyzed);
-}
-
-// the worker reads the source on stdin and answers on stdout, its panics go to the editor's log
-// a worker that hangs is killed after `worker_timeout`
-fn run_worker(
-    server: *Server,
-    allocator: std.mem.Allocator,
-    uri: []const u8,
-    text: []const u8,
-) ?Analysis.Result {
-    const io = server.io;
-    // it gets the document's file for `include`
-    const path = path_of_uri(allocator, uri) catch return null;
-    const argv: []const []const u8 = &.{ server.executable_path, "analyze", path };
-    var child = std.process.spawn(io, .{ .argv = argv, .stdin = .pipe, .stdout = .pipe }) catch {
-        return null;
-    };
-    defer child.kill(io);
-
-    child.stdin.?.writeStreamingAll(io, text) catch return null;
-    child.stdin.?.close(io);
-    child.stdin = null;
-
-    var streams: std.Io.File.MultiReader.Buffer(1) = undefined;
-    var output: std.Io.File.MultiReader = undefined;
-    output.init(allocator, io, streams.toStreams(), &.{child.stdout.?});
-    defer output.deinit();
-    output.fillRemaining(worker_timeout.toDeadline(io)) catch return null;
-
-    const termination = child.wait(io) catch return null;
-    if (termination != .exited or termination.exited != 0) return null;
-    const answer_text = output.reader(0).buffered();
-    const options: std.json.ParseOptions = .{ .allocate = .alloc_always };
-    const parsed = std.json.parseFromSliceLeaky(Analysis.Result, allocator, answer_text, options);
-    return parsed catch null;
-}
-
-// also of a remote uri (`vscode-remote://ssh-remote+host/..`): a folder shared under one path
-fn path_of_uri(allocator: std.mem.Allocator, uri: []const u8) ![]const u8 {
-    const scheme_end = std.mem.indexOf(u8, uri, "://") orelse return "";
-    const path_start = std.mem.indexOfScalarPos(u8, uri, scheme_end + 3, '/') orelse return "";
-    return std.Uri.percentDecodeInPlace(try allocator.dupe(u8, uri[path_start..]));
 }
 
 fn respond(

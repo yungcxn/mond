@@ -18,15 +18,13 @@ const Partial = struct {
     niche: Layout.Niche = std.mem.zeroes(Layout.Niche),
     infinite: bool = false,
     incomplete: bool = false,
-
-    fn absorb_state(partial: *Partial, state: Layout.State) void {
-        partial.infinite = partial.infinite or state == .infinite;
-        partial.incomplete = partial.incomplete or state == .unknown;
-    }
 };
 
 pub fn layout(pool: *StaticPool, type_index: Index) Layout {
-    if (is_reserved(pool, type_index)) return std.mem.zeroes(Layout);
+    // a nominal type reserved but not completed yet reads as poison
+    const reserved = type_index != .poison_type and pool.tag(type_index) == .simple_type and
+        pool.items.column(.data)[@intFromEnum(type_index)] == @intFromEnum(SimpleType.poison);
+    if (reserved) return std.mem.zeroes(Layout);
     const i = @intFromEnum(type_index);
     const state = &pool.layouts.column(.state)[i];
     switch (state.*) {
@@ -42,10 +40,14 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
     const partial = switch (pool.get(type_index)) {
         .int_type => |int_type| primitive(int_type.bits),
         .float_type => |float_type| primitive(float_type.bits),
-        .simple_type => |simple| if (simple == .bool) bool_layout() else Partial{},
+        // a bool is one byte whose values 2..255 are free for a self-tagged variant's other cases
+        .simple_type => |simple| if (simple == .bool) Partial{
+            .size = 1,
+            .niche = .{ .offset = 0, .bits = 8, .start = 2, .count = 254 },
+        } else Partial{},
         .pointer_type, .function_type => pointer_layout(pool, type_index),
         .array_type => |array| array_layout(pool, array),
-        .record_type => |record| record_layout(pool, type_index, record),
+        .record_type => |record| record_layout(pool, record),
         .variant_type => |variant| variant_layout(pool, type_index, variant),
         .variant_case_type => |case| return pool.layout(case.variant),
         .variant_union_type => |members| union_layout(pool, type_index, members),
@@ -76,21 +78,9 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
     return result;
 }
 
-// a nominal type reserved but not completed yet reads as poison
-fn is_reserved(pool: *const StaticPool, type_index: Index) bool {
-    if (type_index == .poison_type or pool.tag(type_index) != .simple_type) return false;
-    return pool.items.column(.data)[@intFromEnum(type_index)] == @intFromEnum(SimpleType.poison);
-}
-
 fn primitive(bits: u16) Partial {
     const size = bits / 8;
     return .{ .size = size, .align_log2 = std.math.log2_int(u64, size) };
-}
-
-// a bool is one byte whose values 2..255 are free for a self-tagged variant
-// to encode its other cases
-fn bool_layout() Partial {
-    return .{ .size = 1, .niche = .{ .offset = 0, .bits = 8, .start = 2, .count = 254 } };
 }
 
 // a pointer to a runtime-length array carries its length too, the null address is the niche
@@ -122,14 +112,23 @@ fn array_layout(pool: *StaticPool, array: StaticPool.ArrayType) Partial {
     return partial;
 }
 
-fn record_layout(pool: *StaticPool, type_index: Index, record: StaticPool.RecordType) Partial {
+fn record_layout(pool: *StaticPool, record: StaticPool.RecordType) Partial {
     var partial = Partial{};
     for (record.field_types) |field_type| {
         const field = pool.layout(field_type);
-        partial.absorb_state(field.state);
+        partial.infinite = partial.infinite or field.state == .infinite;
+        partial.incomplete = partial.incomplete or field.state == .unknown;
         if (!record.is_packed) partial.align_log2 = @max(partial.align_log2, field.align_log2);
     }
-    partial.size = pool.field_offset(type_index, @intCast(record.field_types.len));
+    // the unpadded end of the last field, a field still unknown above is laid out anew
+    for (record.field_types) |field_type| {
+        const field = pool.layout(field_type);
+        if (!record.is_packed) {
+            const field_alignment = @as(u64, 1) << @intCast(field.align_log2);
+            partial.size = std.mem.alignForward(u64, partial.size, field_alignment);
+        }
+        partial.size += field.size;
+    }
     return partial;
 }
 
@@ -161,7 +160,9 @@ fn union_layout(pool: *StaticPool, type_index: Index, members: []const Index) Pa
     var payload_size: u64 = 0;
     var payload_align_log2: u8 = 0;
     for (members) |member| {
-        partial.absorb_state(widest_payload(pool, member, &payload_size, &payload_align_log2));
+        const state = widest_payload(pool, member, &payload_size, &payload_align_log2);
+        partial.infinite = partial.infinite or state == .infinite;
+        partial.incomplete = partial.incomplete or state == .unknown;
     }
     const tag = pool.layout(pool.union_tag_type(type_index));
     partial.align_log2 = @max(payload_align_log2, tag.align_log2);
@@ -183,24 +184,6 @@ fn widest_payload(pool: *StaticPool, variant: Index, size: *u64, align_log2: *u8
         align_log2.* = @max(align_log2.*, payload_layout.align_log2);
     }
     return state;
-}
-
-// the byte offset of field `field` in the record, `field` == the field count gives the unpadded end
-pub fn field_offset(pool: *StaticPool, record: Index, field: u32) u64 {
-    const record_type = pool.get(record).record_type;
-    var offset: u64 = 0;
-    for (record_type.field_types[0..field]) |field_type| {
-        const field_layout = pool.layout(field_type);
-        if (!record_type.is_packed) {
-            const field_alignment = @as(u64, 1) << @intCast(field_layout.align_log2);
-            offset = std.mem.alignForward(u64, offset, field_alignment);
-        }
-        offset += field_layout.size;
-    }
-    if (field == record_type.field_types.len or record_type.is_packed) return offset;
-    const field_layout = pool.layout(record_type.field_types[field]);
-    const alignment = @as(u64, 1) << @intCast(field_layout.align_log2);
-    return std.mem.alignForward(u64, offset, alignment);
 }
 
 // one more than the highest tag of the variant, at least its case count

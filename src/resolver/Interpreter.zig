@@ -365,28 +365,21 @@ pub fn coerce(self: *Interpreter, value: Value, target_type: Index) Value {
     const static_pool = &self.owning_resolver().static_pool;
     const untyped_target = target_type == .none or target_type == .poison_type;
     if (untyped_target or value.is_pooled() or value.is_heap()) return .fit(value, target_type);
-    if (value.is_ref()) return self.coerce_reference(value, target_type);
-    if (static_pool.single_payload(target_type) == .none) return .fit(value, target_type);
-    return self.wrapped_in_payload_case(value, target_type);
-}
+    if (value.is_ref()) {
+        if (!static_pool.is_pointer(target_type)) return value;
 
-inline fn coerce_reference(self: *Interpreter, reference: Value, target_type: Index) Value {
-    const static_pool = &self.owning_resolver().static_pool;
-    if (!static_pool.is_pointer(target_type)) return reference;
-
-    const cell = reference.cell();
-    if (static_pool.tag(static_pool.pointee(target_type)) == .array_type) {
-        return .ref(target_type, cell);
+        const cell = value.cell();
+        if (static_pool.tag(static_pool.pointee(target_type)) == .array_type) {
+            return .ref(target_type, cell);
+        }
+        if (self.element_count(self.memory.buffer[cell]) == null) return .ref(target_type, cell);
+        // any other pointer is to the aggregate's elements, so it points at the first one
+        return .ref(target_type, self.thaw_cell(cell).cell());
     }
-    if (self.element_count(self.memory.buffer[cell]) == null) return .ref(target_type, cell);
-    // any other pointer is to the aggregate's elements, so it points at the first one
-    return .ref(target_type, self.thaw_cell(cell).cell());
-}
+    if (static_pool.single_payload(target_type) == .none) return .fit(value, target_type);
 
-// a scalar given for a variant with a single payload case becomes that case
-inline fn wrapped_in_payload_case(self: *Interpreter, value: Value, variant_type: Index) Value {
-    const static_pool = &self.owning_resolver().static_pool;
-    const payload_case = static_pool.first_payload_case(variant_type);
+    // a scalar given for a variant with a single payload case becomes that case
+    const payload_case = static_pool.first_payload_case(target_type);
     const payload_record = static_pool.get(payload_case).variant_case_type.payload;
     const payload_field = self.interned(.fit(value, static_pool.field_type(payload_record, 0)));
     const payload = static_pool.intern(.{ .aggregate_value = .{
@@ -409,7 +402,22 @@ pub fn zero_value(self: *Interpreter, zeroed_type: Index) Value {
         return self.calls.construct(zeroed_type, &.{});
     }
     if (static_pool.tag(zeroed_type) == .variant_type) {
-        return self.zero_case(static_pool.get(zeroed_type).variant_type);
+        // all-zero bytes: the case tagged 0, or for `tagof self` the payload holding 0
+        const variant = static_pool.get(zeroed_type).variant_type;
+        var payload_case: Index = .none;
+        for (variant.cases) |case| {
+            const case_type = static_pool.get(case).variant_case_type;
+            if (variant.tag_mode == .self and case_type.payload != .none) {
+                payload_case = case;
+                continue;
+            }
+            const tag_is_zero = static_pool.tag(case_type.tag) == .int_value and
+                static_pool.get(case_type.tag).int_value.bits == 0;
+            if (tag_is_zero) return self.calls.construct(case, &.{});
+        }
+
+        if (payload_case != .none) return self.calls.construct(payload_case, &.{});
+        return .empty;
     }
     if (static_pool.tag(zeroed_type) != .array_type) return .empty;
 
@@ -422,25 +430,6 @@ pub fn zero_value(self: *Interpreter, zeroed_type: Index) Value {
         self.memory.buffer[first_cell + i] = zero_element;
     }
     return .block(zeroed_type, first_cell, length);
-}
-
-// all-zero bytes: the case tagged 0, or for `tagof self` the payload holding 0
-fn zero_case(self: *Interpreter, variant: StaticPool.VariantType) Value {
-    const static_pool = &self.owning_resolver().static_pool;
-    var payload_case: Index = .none;
-    for (variant.cases) |case| {
-        const case_type = static_pool.get(case).variant_case_type;
-        if (variant.tag_mode == .self and case_type.payload != .none) {
-            payload_case = case;
-            continue;
-        }
-        const tag_is_zero = static_pool.tag(case_type.tag) == .int_value and
-            static_pool.get(case_type.tag).int_value.bits == 0;
-        if (tag_is_zero) return self.calls.construct(case, &.{});
-    }
-
-    if (payload_case != .none) return self.calls.construct(payload_case, &.{});
-    return .empty;
 }
 
 pub fn evaluate(self: *Interpreter, node: NodeId) Value {
@@ -536,8 +525,12 @@ fn unary(
 ) Value {
     if (operand.is(.poison_type)) return operand;
     const result_type = self.node_info(.node_type, node);
-    return Value.unary(operator, operand, result_type) catch |err|
-        self.fail(node, disorder_of(err), self.interned(operand), 0);
+    return Value.unary(operator, operand, result_type) catch |err| self.fail(
+        node,
+        if (err == error.Invalid) .static_eval_failed else .not_static,
+        self.interned(operand),
+        0,
+    );
 }
 
 pub fn evaluate_binary(
@@ -578,15 +571,11 @@ pub fn evaluate_binary(
     const result_type = self.node_info(.node_type, node);
     return Value.binary(operator, left_operand, right_operand, result_type) catch |err| self.fail(
         node,
-        disorder_of(err),
+        // a division by zero or an oversized shift is invalid, any other failure is not static
+        if (err == error.Invalid) .static_eval_failed else .not_static,
         self.interned(left_operand),
         self.interned(right_operand),
     );
-}
-
-// a division by zero or an oversized shift is invalid, any other failure is not static
-fn disorder_of(err: Value.EvaluationError) Disorder {
-    return if (err == error.Invalid) .static_eval_failed else .not_static;
 }
 
 fn array(self: *Interpreter, node: NodeId) Value {

@@ -97,15 +97,8 @@ pub fn block(self: *Flow, node: NodeId) Value {
     }
 
     const unwind = interpreter.unwind;
-    self.run_defers_down_to(defers_mark);
-    interpreter.unwind = unwind;
-    return result;
-}
-
-// latest first; each defer runs as if no jump were under way
-inline fn run_defers_down_to(self: *Flow, mark: u32) void {
-    const interpreter = self.owning_interpreter();
-    while (self.defers.len > mark) {
+    // latest first; each defer runs as if no jump were under way
+    while (self.defers.len > defers_mark) {
         self.defers.len -= 1;
         const pending = self.defers.buffer[self.defers.len];
         interpreter.unwind = .none;
@@ -116,6 +109,8 @@ inline fn run_defers_down_to(self: *Flow, mark: u32) void {
             interpreter.calls.deinit_cell(pending.node, pending.cell);
         }
     }
+    interpreter.unwind = unwind;
+    return result;
 }
 
 // what a `for` runs over: the integers of a range, the elements of a sequence or an iterator
@@ -137,11 +132,10 @@ const LoopSource = struct {
     variable: DeclPool.Index = .none,
 };
 
-const Step = union(enum) { proceed, finished, failed: Value };
-
 pub fn loop(self: *Flow, node: NodeId) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
 
     const framed = interpreter.has_body_frame();
     if (!framed) resolver.scopes.open();
@@ -153,11 +147,82 @@ pub fn loop(self: *Flow, node: NodeId) Value {
 
     var source: LoopSource = .{};
     if (parts.seq != 0) {
-        if (self.open_source(&source, parts.seq, framed)) |failure| return failure;
-        source.variable = self.loop_variable(node, parts, framed);
+        const sequence = parts.seq;
+        if (resolver.tree.props(sequence).range) {
+            const range = ParseTree.Range.from_node(resolver.tree, sequence);
+
+            var start: Value = if (range.lo != 0)
+                interpreter.evaluate(range.lo)
+            else
+                .int(.u64_type, 0);
+            var end: Value = .empty;
+            if (range.hi != 0) end = interpreter.evaluate(range.hi);
+
+            const end_is_int = end.is(.none) or Value.is_int(end.value_type);
+            if (!Value.is_int(start.value_type) or !end_is_int) {
+                if (start.is(.poison_type) or end.is(.poison_type)) return .poison;
+                return interpreter.fail(sequence, .not_static, 0, 0);
+            }
+
+            const range_type = interpreter.node_info(.node_type, sequence);
+            start = .fit(start, static_pool.element_type(range_type));
+
+            source.range_start = start;
+            source.range_end = end;
+            source.range_inclusive = range.incl;
+        } else {
+            // a sequence with elements goes by index, any other value through `has_next` and `next`
+            const assignable = resolver.tree.props(sequence).assignable;
+
+            var in_place = assignable and !resolver.tree.props(sequence).name;
+            if (in_place and framed) {
+                const sequence_type = static_pool.substitute_type_variables(
+                    interpreter.node_info(.node_type, sequence),
+                );
+                in_place = static_pool.tag(static_pool.pointee(sequence_type)) != .array_type;
+            }
+            const place_cell: ?u32 = if (in_place)
+                interpreter.variables.cell_of_place(sequence) orelse return .poison
+            else
+                null;
+            const evaluated = if (place_cell) |cell|
+                interpreter.memory.buffer[cell]
+            else
+                interpreter.evaluate(sequence);
+
+            source.sequence = interpreter.dereference(evaluated);
+            if (source.sequence.is(.poison_type)) return source.sequence;
+            if (interpreter.element_count(source.sequence) == null) {
+                const cell = place_cell orelse if (assignable)
+                    interpreter.variables.cell_of_place(sequence) orelse return .poison
+                else
+                    interpreter.push_cell(evaluated);
+                const held = interpreter.memory.buffer[cell];
+
+                source.receiver = if (held.is_ref())
+                    held
+                else
+                    .ref(static_pool.pointer_to(interpreter.value_type(held), true), cell);
+                source.iterator_type = interpreter.value_type(interpreter.dereference(held));
+                source.sequence = .empty;
+            }
+        }
+        // `for xs` without a variable binds `it`
+        source.variable = if (framed) interpreter.node_info(.declaration, parts.head) else blk: {
+            const name = if (parts.variable != 0)
+                resolver.name_pool.name_of_node(parts.variable)
+            else
+                .it;
+            break :blk resolver.declarations.declare_local(name, node, .loop_variable, .none);
+        };
     }
 
-    const collects = !framed or self.has_array_type(node);
+    // a loop typed as an array collects the values of its body
+    const collects = !framed or blk: {
+        const declared_type = interpreter.node_info(.node_type, node);
+        const loop_type = static_pool.substitute_type_variables(declared_type);
+        break :blk static_pool.tag(loop_type) == .array_type;
+    };
     const list_mark = interpreter.argument_values.len;
     defer interpreter.argument_values.len = list_mark;
 
@@ -168,10 +233,40 @@ pub fn loop(self: *Flow, node: NodeId) Value {
 
     var index: u32 = 0;
     while (!source.range_finished) : (index += 1) {
-        switch (self.advance(&source, parts.seq, index)) {
-            .proceed => {},
-            .finished => break,
-            .failed => |failure| return failure,
+        // the next item of the source bound to the loop variable, a loop without one just proceeds
+        if (!source.range_start.is(.none)) {
+            const current = source.range_current;
+            const end = source.range_end;
+
+            if (!end.is(.none)) {
+                const past_end = if (source.range_inclusive)
+                    Value.less(end, current)
+                else
+                    !Value.less(current, end);
+                if (past_end) break;
+            }
+
+            interpreter.variables.bind(source.variable, current);
+            source.range_finished = source.range_inclusive and current.bits == end.bits;
+            source.range_current = .int(current.value_type, current.bits +% 1);
+        } else if (!source.sequence.is(.none)) {
+            if (index >= source.sequence_length) break;
+            interpreter.variables.bind(
+                source.variable,
+                interpreter.element(source.sequence, index),
+            );
+        } else if (source.iterator_type != .none) {
+            const calls = &interpreter.calls;
+            const sequence = parts.seq;
+
+            const more =
+                calls.call_method(sequence, source.iterator_type, .has_next, source.receiver);
+            if (boolean_failure(interpreter, sequence, more)) |failure| return failure;
+            if (more.bits == 0) break;
+
+            const item = calls.call_method(sequence, source.iterator_type, .next, source.receiver);
+            if (item.is(.poison_type)) return item;
+            interpreter.variables.bind(source.variable, item);
         }
 
         if (repeat_first and interpreter.evaluate(parts.repeat).is(.poison_type)) return .poison;
@@ -200,180 +295,19 @@ pub fn loop(self: *Flow, node: NodeId) Value {
     }
 
     if (!collects) return .unit;
-    return self.collected_array(node, list_mark);
-}
 
-// null when the source is open, else the failure that ends the loop
-inline fn open_source(self: *Flow, source: *LoopSource, sequence: NodeId, framed: bool) ?Value {
-    const resolver = self.owning_interpreter().owning_resolver();
-    if (resolver.tree.props(sequence).range) return self.open_range(source, sequence);
-    return self.open_sequence(source, sequence, framed);
-}
-
-inline fn open_range(self: *Flow, source: *LoopSource, sequence: NodeId) ?Value {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    const range = ParseTree.Range.from_node(resolver.tree, sequence);
-
-    var start: Value = if (range.lo != 0) interpreter.evaluate(range.lo) else .int(.u64_type, 0);
-    var end: Value = .empty;
-    if (range.hi != 0) end = interpreter.evaluate(range.hi);
-
-    const end_is_int = end.is(.none) or Value.is_int(end.value_type);
-    if (!Value.is_int(start.value_type) or !end_is_int) {
-        if (start.is(.poison_type) or end.is(.poison_type)) return .poison;
-        return interpreter.fail(sequence, .not_static, 0, 0);
-    }
-
-    const range_type = interpreter.node_info(.node_type, sequence);
-    start = .fit(start, resolver.static_pool.element_type(range_type));
-
-    source.range_start = start;
-    source.range_end = end;
-    source.range_inclusive = range.incl;
-    return null;
-}
-
-// a sequence with elements is iterated by index, any other value through `has_next` and `next`
-inline fn open_sequence(
-    self: *Flow,
-    source: *LoopSource,
-    sequence: NodeId,
-    framed: bool,
-) ?Value {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const assignable = resolver.tree.props(sequence).assignable;
-
-    const in_place = assignable and
-        !resolver.tree.props(sequence).name and
-        !self.iterates_array(sequence, framed);
-    const place_cell: ?u32 = if (in_place)
-        interpreter.variables.cell_of_place(sequence) orelse return .poison
-    else
-        null;
-    const evaluated = if (place_cell) |cell|
-        interpreter.memory.buffer[cell]
-    else
-        interpreter.evaluate(sequence);
-
-    source.sequence = interpreter.dereference(evaluated);
-    if (source.sequence.is(.poison_type)) return source.sequence;
-    if (interpreter.element_count(source.sequence) != null) return null;
-
-    const cell = place_cell orelse if (assignable)
-        interpreter.variables.cell_of_place(sequence) orelse return .poison
-    else
-        interpreter.push_cell(evaluated);
-    const held = interpreter.memory.buffer[cell];
-
-    source.receiver = if (held.is_ref())
-        held
-    else
-        .ref(static_pool.pointer_to(interpreter.value_type(held), true), cell);
-    source.iterator_type = interpreter.value_type(interpreter.dereference(held));
-    source.sequence = .empty;
-    return null;
-}
-
-inline fn iterates_array(self: *Flow, sequence: NodeId, framed: bool) bool {
-    if (!framed) return false;
-
-    const interpreter = self.owning_interpreter();
-    const static_pool = &interpreter.owning_resolver().static_pool;
-    const sequence_type = static_pool.substitute_type_variables(
-        interpreter.node_info(.node_type, sequence),
-    );
-    return static_pool.tag(static_pool.pointee(sequence_type)) == .array_type;
-}
-
-// `for xs` without a variable binds `it`
-inline fn loop_variable(
-    self: *Flow,
-    node: NodeId,
-    parts: ParseTree.Loop,
-    framed: bool,
-) DeclPool.Index {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    if (framed) return interpreter.node_info(.declaration, parts.head);
-
-    const name = if (parts.variable != 0) resolver.name_pool.name_of_node(parts.variable) else .it;
-    return resolver.declarations.declare_local(name, node, .loop_variable, .none);
-}
-
-// a loop typed as an array collects the values of its body
-inline fn has_array_type(self: *Flow, node: NodeId) bool {
-    const interpreter = self.owning_interpreter();
-    const static_pool = &interpreter.owning_resolver().static_pool;
-    const declared_type = interpreter.node_info(.node_type, node);
-    const loop_type = static_pool.substitute_type_variables(declared_type);
-    return static_pool.tag(loop_type) == .array_type;
-}
-
-// the next item of the source bound to the loop variable; a loop without a source just proceeds
-inline fn advance(self: *Flow, source: *LoopSource, sequence: NodeId, index: u32) Step {
-    const interpreter = self.owning_interpreter();
-
-    if (!source.range_start.is(.none)) return advance_range(interpreter, source);
-
-    if (!source.sequence.is(.none)) {
-        if (index >= source.sequence_length) return .finished;
-        interpreter.variables.bind(source.variable, interpreter.element(source.sequence, index));
-        return .proceed;
-    }
-
-    if (source.iterator_type != .none) return advance_iterator(interpreter, source, sequence);
-    return .proceed;
-}
-
-inline fn advance_range(interpreter: *Interpreter, source: *LoopSource) Step {
-    const current = source.range_current;
-    const end = source.range_end;
-
-    if (!end.is(.none)) {
-        const past_end = if (source.range_inclusive)
-            Value.less(end, current)
-        else
-            !Value.less(current, end);
-        if (past_end) return .finished;
-    }
-
-    interpreter.variables.bind(source.variable, current);
-    source.range_finished = source.range_inclusive and current.bits == end.bits;
-    source.range_current = .int(current.value_type, current.bits +% 1);
-    return .proceed;
-}
-
-inline fn advance_iterator(interpreter: *Interpreter, source: *LoopSource, sequence: NodeId) Step {
-    const calls = &interpreter.calls;
-
-    const more = calls.call_method(sequence, source.iterator_type, .has_next, source.receiver);
-    if (boolean_failure(interpreter, sequence, more)) |failure| return .{ .failed = failure };
-    if (more.bits == 0) return .finished;
-
-    const item = calls.call_method(sequence, source.iterator_type, .next, source.receiver);
-    if (item.is(.poison_type)) return .{ .failed = item };
-    interpreter.variables.bind(source.variable, item);
-    return .proceed;
-}
-
-// the values the body produced since `mark`, as an array of the loop's element type
-fn collected_array(self: *Flow, node: NodeId, mark: u32) Value {
-    const interpreter = self.owning_interpreter();
-    const static_pool = &interpreter.owning_resolver().static_pool;
-    const length = interpreter.argument_values.len - mark;
+    // the values the body produced since `list_mark`, as an array of the loop's element type
+    const length = interpreter.argument_values.len - list_mark;
 
     var element_type = static_pool.element_type(interpreter.node_info(.node_type, node));
     if (element_type == .none) {
-        const elements = interpreter.argument_values.buffer[mark..][0..length];
+        const elements = interpreter.argument_values.buffer[list_mark..][0..length];
         element_type = interpreter.types.joined_type(elements);
     }
 
     const start = interpreter.allocate_cells(length);
     for (0..length) |j| {
-        const element = interpreter.argument_values.buffer[mark + j];
+        const element = interpreter.argument_values.buffer[list_mark + j];
         interpreter.store_converted(start + j, element, element_type);
     }
     return .block(static_pool.array_of(length, element_type), start, length);
@@ -398,7 +332,24 @@ pub fn unwrap(self: *Flow, node: NodeId) Value {
         return value;
     }
 
-    const payload = self.unwrapped_payload(operand, value);
+    // a self-tagged variant unwraps to its first payload case, its other cases to nothing
+    const payload: ?Value = blk: {
+        const static_pool = &interpreter.owning_resolver().static_pool;
+
+        const case = interpreter.patterns.case_of(value);
+        if (case == .none) break :blk interpreter.patterns.payload_of(value);
+
+        const operand_type = interpreter.node_info(.node_type, operand);
+        if (static_pool.tag(operand_type) == .variant_case_type) {
+            break :blk interpreter.patterns.payload_of(value);
+        }
+
+        const variant = static_pool.get(case).variant_case_type.variant;
+        if (static_pool.first_payload_case(variant) == case) {
+            break :blk interpreter.patterns.payload_of(value);
+        }
+        break :blk null;
+    };
     return switch (kind) {
         .selftag_arrow => blk: {
             if (payload) |unwrapped| interpreter.patterns.bind_label(tree.arg(node, 1), unwrapped);
@@ -408,24 +359,4 @@ pub fn unwrap(self: *Flow, node: NodeId) Value {
         else => payload orelse
             interpreter.fail(node, .static_eval_failed, interpreter.interned(value), 0),
     };
-}
-
-// a self-tagged variant unwraps to its first payload case, its other cases to nothing
-fn unwrapped_payload(self: *Flow, operand: NodeId, value: Value) ?Value {
-    const interpreter = self.owning_interpreter();
-    const static_pool = &interpreter.owning_resolver().static_pool;
-
-    const case = interpreter.patterns.case_of(value);
-    if (case == .none) return interpreter.patterns.payload_of(value);
-
-    const operand_type = interpreter.node_info(.node_type, operand);
-    if (static_pool.tag(operand_type) == .variant_case_type) {
-        return interpreter.patterns.payload_of(value);
-    }
-
-    const variant = static_pool.get(case).variant_case_type.variant;
-    if (static_pool.first_payload_case(variant) == case) {
-        return interpreter.patterns.payload_of(value);
-    }
-    return null;
 }

@@ -23,15 +23,6 @@ fn resolve_bound(pool: *StaticPool, index: Index) Index {
     return current;
 }
 
-fn unify_lists(pool: *StaticPool, left: []const Index, right: []const Index) UnifyResult {
-    if (left.len != right.len) return .mismatch;
-    for (left, right) |left_item, right_item| {
-        const result = pool.unify(left_item, right_item);
-        if (result != .ok) return result;
-    }
-    return .ok;
-}
-
 // makes the two types equal by binding type variables, structurally through compound types
 pub fn unify(pool: *StaticPool, left_type: Index, right_type: Index) UnifyResult {
     const left = resolve_bound(pool, left_type);
@@ -44,9 +35,14 @@ pub fn unify(pool: *StaticPool, left_type: Index, right_type: Index) UnifyResult
         pool.type_variables.unite(pool.get(left).type_variable, pool.get(right).type_variable);
         return .ok;
     }
-    if (left_tag == .type_variable) return bind_variable(pool, pool.get(left).type_variable, right);
-    if (right_tag == .type_variable) {
-        return bind_variable(pool, pool.get(right).type_variable, left);
+    if (left_tag == .type_variable or right_tag == .type_variable) {
+        const variable, const bound_type = if (left_tag == .type_variable)
+            .{ pool.get(left).type_variable, right }
+        else
+            .{ pool.get(right).type_variable, left };
+        if (pool.occurs_in(variable, bound_type)) return .infinite;
+        pool.type_variables.bind(variable, bound_type);
+        return .ok;
     }
 
     if (left == .poison_type or right == .poison_type) return .ok;
@@ -64,25 +60,29 @@ pub fn unify(pool: *StaticPool, left_type: Index, right_type: Index) UnifyResult
             const left_function = pool.get(left).function_type;
             const right_function = pool.get(right).function_type;
             if (left_function.category != right_function.category) return .mismatch;
-            const parameters =
-                unify_lists(pool, left_function.parameters, right_function.parameters);
-            if (parameters != .ok) return parameters;
+            const left_parameters = left_function.parameters;
+            const right_parameters = right_function.parameters;
+            if (left_parameters.len != right_parameters.len) return .mismatch;
+            for (left_parameters, right_parameters) |left_parameter, right_parameter| {
+                const result = pool.unify(left_parameter, right_parameter);
+                if (result != .ok) return result;
+            }
             return pool.unify(left_function.return_type, right_function.return_type);
         },
         .union_of_variants => {
             const left_members = pool.get(left).variant_union_type;
-            return unify_lists(pool, left_members, pool.get(right).variant_union_type);
+            const right_members = pool.get(right).variant_union_type;
+            if (left_members.len != right_members.len) return .mismatch;
+            for (left_members, right_members) |left_member, right_member| {
+                const result = pool.unify(left_member, right_member);
+                if (result != .ok) return result;
+            }
+            return .ok;
         },
         // two distinct leaves are distinct types (nominal ones compare by declaration),
         // trees unify only when they are the same entry
         .leaf, .tree => .mismatch,
     };
-}
-
-fn bind_variable(pool: *StaticPool, variable: TypeVariables.Index, bound_type: Index) UnifyResult {
-    if (pool.occurs_in(variable, bound_type)) return .infinite;
-    pool.type_variables.bind(variable, bound_type);
-    return .ok;
 }
 
 // how a value of type `from` may be used where `to` is expected without `as`,
@@ -95,18 +95,9 @@ pub fn coercion(pool: *StaticPool, from_type: Index, to_type: Index) CoercionKin
     if (from == .never_type) return .never_to_any;
     if (from == .unit_type and to == .runit_type) return .unit_to_runit;
     if (to == .fun_type and pool.tag(from) == .function_type) return .identity;
-    if (tree_coercion(pool, from, to)) |kind| return kind;
-    if (pool.has_type_variables(from) or pool.has_type_variables(to)) {
-        return variable_coercion(pool, from, to);
-    }
-    if (number_coercion(pool, from, to)) |kind| return kind;
-    if (pointer_or_array_coercion(pool, from, to)) |kind| return kind;
-    return nominal_coercion(pool, from, to);
-}
 
-// trees, their pointers and lists: what they produce is checked as far as known,
-// their root when evaluated
-fn tree_coercion(pool: *StaticPool, from: Index, to: Index) ?CoercionKind {
+    // trees, their pointers and lists: what they produce is checked as far as known,
+    // their root when evaluated
     if (pool.tag(from) == .ast_type and pool.tag(to) == .ast_type) {
         return if (trees_fit(pool, from, to)) .identity else .incompatible;
     }
@@ -118,28 +109,29 @@ fn tree_coercion(pool: *StaticPool, from: Index, to: Index) ?CoercionKind {
         const fits = keeps_writability and trees_fit(pool, pool.pointee(from), pool.pointee(to));
         return if (fits) .identity else .incompatible;
     }
-    if (pool.tag(from) != .array_type or pool.tag(to) != .array_type) return null;
-    const from_array = pool.get(from).array_type;
-    const to_array = pool.get(to).array_type;
-    if (!pool.is_tree(from_array.element) or !pool.is_tree(to_array.element)) return null;
-    const length_fits = to_array.length == dyn_len or to_array.length == from_array.length;
-    const elements_fit = pool.coercion(from_array.element, to_array.element) != .incompatible;
-    return if (length_fits and elements_fit) .identity else .incompatible;
-}
+    if (pool.tag(from) == .array_type and pool.tag(to) == .array_type) {
+        const from_array = pool.get(from).array_type;
+        const to_array = pool.get(to).array_type;
+        if (pool.is_tree(from_array.element) and pool.is_tree(to_array.element)) {
+            const length_fits = to_array.length == dyn_len or to_array.length == from_array.length;
+            const elements_fit =
+                pool.coercion(from_array.element, to_array.element) != .incompatible;
+            return if (length_fits and elements_fit) .identity else .incompatible;
+        }
+    }
 
-// a type still holding variables coerces when it unifies,
-// through pointers that keep or drop writability
-fn variable_coercion(pool: *StaticPool, from: Index, to: Index) CoercionKind {
-    const through_pointers = pool.is_pointer(from) and pool.is_pointer(to) and
-        (pool.tag(from) == .mutable_pointer_type or pool.tag(to) == .pointer_type);
-    const unified_from = if (through_pointers) pool.pointee(from) else from;
-    const unified_to = if (through_pointers) pool.pointee(to) else to;
-    return if (pool.unify(unified_from, unified_to) == .ok) .unified else .incompatible;
-}
+    // a type still holding variables coerces when it unifies,
+    // through pointers that keep or drop writability
+    if (pool.has_type_variables(from) or pool.has_type_variables(to)) {
+        const through_pointers = pool.is_pointer(from) and pool.is_pointer(to) and
+            (pool.tag(from) == .mutable_pointer_type or pool.tag(to) == .pointer_type);
+        const unified_from = if (through_pointers) pool.pointee(from) else from;
+        const unified_to = if (through_pointers) pool.pointee(to) else to;
+        return if (pool.unify(unified_from, unified_to) == .ok) .unified else .incompatible;
+    }
 
-// integers widen to integers of at least their width (unsigned to wider signed),
-// floats to wider floats
-fn number_coercion(pool: *StaticPool, from: Index, to: Index) ?CoercionKind {
+    // integers widen to integers of at least their width (unsigned to wider signed),
+    // floats to wider floats
     const from_key = pool.get(from);
     const to_key = pool.get(to);
     if (from_key == .int_type and to_key == .int_type) {
@@ -155,12 +147,7 @@ fn number_coercion(pool: *StaticPool, from: Index, to: Index) ?CoercionKind {
         const widens = to_key.float_type.bits >= from_key.float_type.bits;
         return if (widens) .float_widen else .incompatible;
     }
-    return null;
-}
 
-fn pointer_or_array_coercion(pool: *StaticPool, from: Index, to: Index) ?CoercionKind {
-    const from_key = pool.get(from);
-    const to_key = pool.get(to);
     if (from_key == .pointer_type and to_key == .pointer_type) {
         const from_pointer = from_key.pointer_type;
         const to_pointer = to_key.pointer_type;
@@ -185,13 +172,8 @@ fn pointer_or_array_coercion(pool: *StaticPool, from: Index, to: Index) ?Coercio
         to_key.array_type.length == dyn_len and
         from_key.array_type.element == to_key.array_type.element;
     if (array_to_runtime_length) return .to_dyn;
-    return null;
-}
 
-// variants, unions, traits and single-payload variants (`Opt8 x = 42`)
-fn nominal_coercion(pool: *StaticPool, from: Index, to: Index) CoercionKind {
-    const from_key = pool.get(from);
-    const to_key = pool.get(to);
+    // variants, unions, traits and single-payload variants (`Opt8 x = 42`)
     if (from_key == .variant_case_type) {
         const variant = from_key.variant_case_type.variant;
         const fits = variant == to or pool.coercion(variant, to) != .incompatible;
@@ -271,7 +253,7 @@ pub fn cast_kind(pool: *StaticPool, from: Index, to: Index) CastKind {
             .invalid,
         .variant_case_type => |case| case_cast(pool, from, case),
         .pointer_type => |to_pointer| pointer_cast(pool, from, to_pointer),
-        .array_type => |to_array| array_cast(pool, from, to, to_array),
+        .array_type => |to_array| array_cast(pool, from, to_array),
         .simple_type, .meta_type, .function_type, .record_type => .invalid,
         .variant_type, .variant_union_type => .invalid,
         .trait_type, .static_function, .template_type, .type_variable, .ast_type => .invalid,
@@ -299,36 +281,44 @@ fn pointer_cast(pool: *StaticPool, from: Index, to_pointer: StaticPool.PointerTy
     if (to_pointer.is_mutable and !from_pointer.is_mutable) return .invalid;
     const to_pointee = pool.get(to_pointer.pointee);
     if (to_pointee != .array_type) return .bit_reinterpret;
-    const from_element = element_or_self(pool, from_pointer.pointee);
+    const from_pointee = pool.get(from_pointer.pointee);
+    const from_element = if (from_pointee == .array_type)
+        from_pointee.array_type.element
+    else
+        from_pointer.pointee;
     if (from_element != to_pointee.array_type.element) return .bit_reinterpret;
-    if (is_longer_array(pool, to_pointer.pointee, from_pointer.pointee)) return .invalid;
+    // both lengths static and the target the longer one
+    if (from_pointee == .array_type) {
+        const from_length = from_pointee.array_type.length;
+        const to_length = to_pointee.array_type.length;
+        const both_static = pool.tag(from_length) == .int_value and
+            pool.tag(to_length) == .int_value;
+        const longer = both_static and
+            pool.get(to_length).int_value.bits > pool.get(from_length).int_value.bits;
+        if (longer) return .invalid;
+    }
     const to_runtime_length = pool.tag(to_pointee.array_type.length) != .int_value;
     if (to_runtime_length and pool.get(from_pointer.pointee) != .array_type) return .invalid;
     return .pointer_relength;
 }
 
-fn array_cast(pool: *StaticPool, from: Index, to: Index, to_array: StaticPool.ArrayType) CastKind {
+fn array_cast(pool: *StaticPool, from: Index, to_array: StaticPool.ArrayType) CastKind {
     const from_key = pool.get(from);
     const source = if (from_key == .pointer_type) from_key.pointer_type.pointee else from;
     const source_has_static_length = pool.static_length(source) != null;
-    if (element_or_self(pool, source) != to_array.element) return .invalid;
+    const source_key = pool.get(source);
+    const source_element = if (source_key == .array_type) source_key.array_type.element else source;
+    if (source_element != to_array.element) return .invalid;
     if (pool.tag(to_array.length) != .int_value) return .invalid;
     if (from_key != .pointer_type and !source_has_static_length) return .invalid;
-    if (is_longer_array(pool, to, source)) return .invalid;
+    // the target longer than a statically long source
+    if (source_key == .array_type) {
+        const source_length = source_key.array_type.length;
+        const longer = pool.tag(source_length) == .int_value and
+            pool.get(to_array.length).int_value.bits > pool.get(source_length).int_value.bits;
+        if (longer) return .invalid;
+    }
     return .array_narrow;
-}
-
-// both have static lengths and `to` is the longer array
-fn is_longer_array(pool: *const StaticPool, to: Index, from: Index) bool {
-    if (pool.get(from) != .array_type) return false;
-    const from_length = pool.get(from).array_type.length;
-    const to_length = pool.get(to).array_type.length;
-    if (pool.tag(from_length) != .int_value or pool.tag(to_length) != .int_value) return false;
-    return pool.get(to_length).int_value.bits > pool.get(from_length).int_value.bits;
-}
-
-fn element_or_self(pool: *const StaticPool, index: Index) Index {
-    return if (pool.get(index) == .array_type) pool.get(index).array_type.element else index;
 }
 
 // the type with every bound type variable replaced by its binding
@@ -354,7 +344,12 @@ pub fn substitute_type_variables(pool: *StaticPool, index: Index) Index {
         },
         .function => {
             const function = pool.get(index).function_type;
-            substitute_in_scratch(pool, function.parameters, mark);
+            // the scratch buffer may move while nested types are rebuilt, items are read by index
+            pool.scratch.append(function.parameters);
+            for (mark..pool.scratch.len) |i| {
+                const substituted = pool.substitute_type_variables(pool.scratch.buffer[i]);
+                pool.scratch.buffer[i] = substituted;
+            }
             const return_type = pool.substitute_type_variables(function.return_type);
             return pool.intern(.{ .function_type = .{
                 .category = function.category,
@@ -363,7 +358,11 @@ pub fn substitute_type_variables(pool: *StaticPool, index: Index) Index {
             } });
         },
         .union_of_variants => {
-            substitute_in_scratch(pool, pool.get(index).variant_union_type, mark);
+            pool.scratch.append(pool.get(index).variant_union_type);
+            for (mark..pool.scratch.len) |i| {
+                const substituted = pool.substitute_type_variables(pool.scratch.buffer[i]);
+                pool.scratch.buffer[i] = substituted;
+            }
             const members_substituted = pool.scratch.buffer[mark..pool.scratch.len];
             return pool.intern(.{ .variant_union_type = members_substituted });
         },
@@ -377,15 +376,6 @@ pub fn substitute_type_variables(pool: *StaticPool, index: Index) Index {
         // nominal types and values are interned without variables
         .leaf => index,
     };
-}
-
-// the scratch buffer may move while nested types are rebuilt, so items are read by index
-fn substitute_in_scratch(pool: *StaticPool, items: []const Index, mark: u32) void {
-    pool.scratch.append(items);
-    for (mark..pool.scratch.len) |i| {
-        const substituted = pool.substitute_type_variables(pool.scratch.buffer[i]);
-        pool.scratch.buffer[i] = substituted;
-    }
 }
 
 // a tree of one type is one of another unless both say what they produce or what their root is,

@@ -60,7 +60,18 @@ pub fn init(alloc: std.mem.Allocator, tree: *const ParseTree, src_bytes: []const
         .text_to_name = .{},
         .owned_texts = .init(alloc),
     };
-    self.intern_predefineds();
+    // the predefined names in `Index` order, so each lands at its own index. `none` names nothing
+    inline for (@typeInfo(Index).@"enum".fields) |field| {
+        if (comptime @field(Index, field.name) == .none) continue;
+        const text = comptime switch (@field(Index, field.name)) {
+            .empty => "",
+            .underscore => "_",
+            .self => "self",
+            else => "$" ++ field.name,
+        };
+        _ = self.intern(text);
+    }
+    std.debug.assert(self.text_to_name.count() == Index.first_dynamic);
     return self;
 }
 
@@ -82,24 +93,6 @@ pub inline fn name_of_node(self: *NamePool, node: ParseTree.NodeId) Index {
         .identifier_self => return .self,
         else => return .none,
     }
-}
-
-// the predefined names in `Index` order, so each lands at its own index. `none` names nothing
-inline fn intern_predefineds(self: *NamePool) void {
-    inline for (@typeInfo(Index).@"enum".fields) |field| {
-        if (comptime @field(Index, field.name) == .none) continue;
-        _ = self.intern(comptime predefined_text(field.name));
-    }
-    std.debug.assert(self.text_to_name.count() == Index.first_dynamic);
-}
-
-fn predefined_text(comptime field_name: []const u8) []const u8 {
-    return switch (@field(Index, field_name)) {
-        .empty => "",
-        .underscore => "_",
-        .self => "self",
-        else => "$" ++ field_name,
-    };
 }
 
 pub inline fn intern(self: *NamePool, str: []const u8) Index {

@@ -11,19 +11,6 @@ pub const Doctor = @import("resolver/Doctor.zig");
 pub const DynamicBuffer = @import("containers.zig").DynamicBuffer;
 pub const dbg = @import("debug.zig");
 
-inline fn alloc_file_bytes(alloc: std.mem.Allocator, io: std.Io, file: std.Io.File) []u8 {
-    const max_file_size = 50 * 1024 * 1024;
-
-    var reader_buffer: [4096]u8 = undefined;
-    var file_reader = file.reader(io, &reader_buffer);
-    const reader: *std.Io.Reader = &file_reader.interface;
-    const result = reader.allocRemaining(
-        alloc,
-        std.Io.Limit.limited(max_file_size),
-    ) catch |err| @panic(@errorName(err));
-    return result;
-}
-
 const debug = true;
 pub const target: struct { pointer_bits: u8 } = .{ .pointer_bits = 64 };
 // a panic after parsing prints the tree first, the context a compiler bug needs
@@ -87,28 +74,35 @@ const Args = struct {
         var flags = std.mem.zeroInit(Args, .{});
         var i: usize = 1;
         next: while (i < arguments.len) : (i += 1) {
-            inline for (fields) |field| if (is_flag(arguments[i], field.name)) {
-                switch (field.type) {
-                    bool => @field(flags, field.name) = true,
-                    ?[:0]const u8 => {
-                        i += 1;
-                        @field(flags, field.name) = if (i < arguments.len) arguments[i] else null;
-                    },
-                    [:0]const u8 => {
-                        i += 1;
-                        @field(flags, field.name) = if (i < arguments.len)
-                            arguments[i]
-                        else
-                            return null;
-                    },
-                    ?[]const [:0]const u8 => {
-                        @field(flags, field.name) = arguments[i + 1 ..];
-                        i = arguments.len;
-                    },
-                    else => @compileError("unsupported flag type " ++ @typeName(field.type)),
+            inline for (fields) |field| {
+                const is_flag = std.mem.eql(u8, arguments[i], comptime arg(field.name)) or
+                    std.mem.eql(u8, arguments[i], comptime short_arg(field.name));
+                if (is_flag) {
+                    switch (field.type) {
+                        bool => @field(flags, field.name) = true,
+                        ?[:0]const u8 => {
+                            i += 1;
+                            @field(flags, field.name) = if (i < arguments.len)
+                                arguments[i]
+                            else
+                                null;
+                        },
+                        [:0]const u8 => {
+                            i += 1;
+                            @field(flags, field.name) = if (i < arguments.len)
+                                arguments[i]
+                            else
+                                return null;
+                        },
+                        ?[]const [:0]const u8 => {
+                            @field(flags, field.name) = arguments[i + 1 ..];
+                            i = arguments.len;
+                        },
+                        else => @compileError("unsupported flag type " ++ @typeName(field.type)),
+                    }
+                    continue :next;
                 }
-                continue :next;
-            };
+            }
             return null;
         }
 
@@ -117,11 +111,6 @@ const Args = struct {
             if (is_required and @field(flags, field.name).len == 0) return null;
         }
         return flags;
-    }
-
-    inline fn is_flag(argument: []const u8, comptime field_name: []const u8) bool {
-        return std.mem.eql(u8, argument, comptime arg(field_name)) or
-            std.mem.eql(u8, argument, comptime short_arg(field_name));
     }
 };
 
@@ -138,7 +127,15 @@ pub fn main(init: std.process.Init) void {
         return;
     };
 
-    const source_bytes = alloc_file_bytes(alloc, io, input_file);
+    const max_file_size = 50 * 1024 * 1024;
+
+    var reader_buffer: [4096]u8 = undefined;
+    var file_reader = input_file.reader(io, &reader_buffer);
+    const reader: *std.Io.Reader = &file_reader.interface;
+    const source_bytes = reader.allocRemaining(
+        alloc,
+        std.Io.Limit.limited(max_file_size),
+    ) catch |err| @panic(@errorName(err));
     defer alloc.free(source_bytes);
 
     var lexer = Lexer{ .src_bytes = source_bytes, .tokens = .init(alloc, 10000) };

@@ -55,7 +55,11 @@ pub fn mark_written_through(self: *Mutability, assignable: NodeId) void {
         .capture => node = tree.arg(node, 0),
         .member, .array_index, .dereference => {
             const parent = tree.arg(node, 0);
-            if (tree.kind(parent) != .identifier_self and self.leaves_self(node, parent)) return;
+            // a dereference or a step through a pointer member writes the pointee, not `self`
+            const leaves_self = tree.kind(parent) != .identifier_self and
+                (tree.kind(node) == .dereference or
+                    resolver.static_pool.is_pointer(resolver.node_types[parent]));
+            if (leaves_self) return;
             node = parent;
         },
         else => return,
@@ -65,13 +69,6 @@ pub fn mark_written_through(self: *Mutability, assignable: NodeId) void {
     if (declaration == .none) return;
     if (resolver.decl_pool.get(declaration, .kind) != .self) return;
     resolver.decl_pool.pointer(declaration, .flags).writes = true;
-}
-
-// a dereference or a step through a pointer member writes the pointee, not `self`
-fn leaves_self(self: *Mutability, node: NodeId, parent: NodeId) bool {
-    const resolver = self.owning_resolver();
-    if (resolver.tree.kind(node) == .dereference) return true;
-    return resolver.static_pool.is_pointer(resolver.node_types[parent]);
 }
 
 pub fn writable(self: *Mutability, node: NodeId) Access {
@@ -104,9 +101,34 @@ fn member_access(self: *Mutability, node: NodeId) Access {
     const owner_access = self.access_through_parent(owner, true);
     if (owner_access != .ok) return owner_access;
 
-    const field_name = resolver.name_pool.name_of_node(resolver.tree.arg(node, 1));
+    const name = resolver.name_pool.name_of_node(resolver.tree.arg(node, 1));
     const owner_type = resolver.node_types[owner];
-    return if (self.is_field_mutable(owner_type, field_name)) .ok else .immutable;
+    const static_pool = &resolver.static_pool;
+    if (owner_type == .none or owner_type == .poison_type) return .ok;
+
+    var record_type = static_pool.substitute_type_variables(owner_type);
+    record_type = static_pool.pointee(record_type);
+    if (resolver.tree.macros and static_pool.tag(record_type) == .ast_type) return .ok;
+    if (static_pool.tag(record_type) == .variant_case_type) {
+        record_type = static_pool.get(record_type).variant_case_type.payload;
+    }
+
+    if (record_type != .none and static_pool.tag(record_type) == .template_type) {
+        const template = static_pool.get(record_type).template_type;
+        if (resolver.generics.template_field(template, name)) |field_node| {
+            const is_mut = ParseTree.Param.from_node(resolver.tree, field_node).is_mut;
+            return if (is_mut) .ok else .immutable;
+        }
+    }
+
+    if (record_type == .none or static_pool.tag(record_type) != .record_type) return .immutable;
+    const field_names = static_pool.get(record_type).record_type.field_names;
+    for (field_names, 0..) |field_name, i| if (field_name == name) {
+        const field_node = resolver.types.field_nodes_of(record_type)[i];
+        const is_mut = ParseTree.Param.from_node(resolver.tree, field_node).is_mut;
+        return if (is_mut) .ok else .immutable;
+    };
+    return .immutable;
 }
 
 // writing through a parent: `*T` allows it, `&T` never, anything else if the parent is writable
@@ -124,34 +146,6 @@ fn access_through_parent(self: *Mutability, parent: NodeId, or_assignable: bool)
     return if (or_assignable) self.writable(parent) else .immutable;
 }
 
-fn is_field_mutable(self: *Mutability, owner_type: StaticPool.Index, name: NamePool.Index) bool {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    if (owner_type == .none or owner_type == .poison_type) return true;
-
-    var record_type = static_pool.substitute_type_variables(owner_type);
-    record_type = static_pool.pointee(record_type);
-    if (resolver.tree.macros and static_pool.tag(record_type) == .ast_type) return true;
-    if (static_pool.tag(record_type) == .variant_case_type) {
-        record_type = static_pool.get(record_type).variant_case_type.payload;
-    }
-
-    if (record_type != .none and static_pool.tag(record_type) == .template_type) {
-        const template = static_pool.get(record_type).template_type;
-        if (resolver.generics.template_field(template, name)) |field_node| {
-            return ParseTree.Param.from_node(resolver.tree, field_node).is_mut;
-        }
-    }
-
-    if (record_type == .none or static_pool.tag(record_type) != .record_type) return false;
-    const field_names = static_pool.get(record_type).record_type.field_names;
-    for (field_names, 0..) |field_name, i| if (field_name == name) {
-        const field_node = resolver.types.field_nodes_of(record_type)[i];
-        return ParseTree.Param.from_node(resolver.tree, field_node).is_mut;
-    };
-    return false;
-}
-
 // a method calling one that writes self writes self too, over the `member_count` members of a
 // trait body until nothing changes
 pub fn propagate_writes(self: *Mutability, body: DeclPool.Index, member_count: usize) void {
@@ -162,30 +156,27 @@ pub fn propagate_writes(self: *Mutability, body: DeclPool.Index, member_count: u
         for (0..member_count) |i| {
             const member = body.member(i);
             if (resolver.decl_pool.get(member, .flags).writes) continue;
-            if (!self.calls_self_writer(member)) continue;
+            // whether `member` calls a method on `self` that writes self
+            const calls_self_writer = blk: {
+                const tree = resolver.tree;
+                const subtree = tree.subtree(resolver.declarations.value_node(member));
+                for (subtree[0]..subtree[1]) |index| {
+                    const node: NodeId = @intCast(index);
+                    const callee_declaration = resolver.node_declarations[index];
+                    if (tree.kind(node) != .fun_call or callee_declaration == .none) continue;
+
+                    const callee = tree.arg(node, 0);
+                    if (tree.kind(callee) != .member) continue;
+                    if (tree.kind(tree.arg(callee, 0)) != .identifier_self) continue;
+
+                    const realized = resolver.declarations.realized(callee_declaration);
+                    if (resolver.decl_pool.get(realized, .flags).writes) break :blk true;
+                }
+                break :blk false;
+            };
+            if (!calls_self_writer) continue;
             resolver.decl_pool.pointer(member, .flags).writes = true;
             grew = true;
         }
     }
-}
-
-// whether `method` calls a method on `self` that writes self
-fn calls_self_writer(self: *Mutability, method: DeclPool.Index) bool {
-    const resolver = self.owning_resolver();
-    const tree = resolver.tree;
-    const subtree = tree.subtree(resolver.declarations.value_node(method));
-
-    for (subtree[0]..subtree[1]) |index| {
-        const node: NodeId = @intCast(index);
-        const callee_declaration = resolver.node_declarations[index];
-        if (tree.kind(node) != .fun_call or callee_declaration == .none) continue;
-
-        const callee = tree.arg(node, 0);
-        if (tree.kind(callee) != .member) continue;
-        if (tree.kind(tree.arg(callee, 0)) != .identifier_self) continue;
-
-        const realized = resolver.declarations.realized(callee_declaration);
-        if (resolver.decl_pool.get(realized, .flags).writes) return true;
-    }
-    return false;
 }

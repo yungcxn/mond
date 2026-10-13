@@ -365,19 +365,8 @@ const composition_of_tag = blk: {
     break :blk table;
 };
 
-// the key field a tag decodes into
-fn key_name(comptime tag_value: Tag) []const u8 {
-    const row = tag_table[@intFromEnum(tag_value)];
-    return if (row.len > 4) row[4] else row[0];
-}
-
-// the tag a key encodes into, the first row naming it
-fn tag_of_key(comptime key_tag: std.meta.Tag(Key)) Tag {
-    return @field(Tag, @tagName(key_tag));
-}
-
 fn is_nominal_key(comptime key_tag: std.meta.Tag(Key)) bool {
-    return properties_of_tag[@intFromEnum(tag_of_key(key_tag))].is_nominal;
+    return properties_of_tag[@intFromEnum(@field(Tag, @tagName(key_tag)))].is_nominal;
 }
 
 // one stored entry is only 5 bytes: a tag and one u32. small payloads live directly in `data`
@@ -417,7 +406,6 @@ pub const tag_range = type_layouts.tag_range;
 pub const union_offset = type_layouts.union_offset;
 pub const union_tag_type = type_layouts.union_tag_type;
 pub const layout = type_layouts.layout;
-pub const field_offset = type_layouts.field_offset;
 pub const smallest_tag_type = type_layouts.smallest_tag_type;
 pub const unify = type_relations.unify;
 pub const coercion = type_relations.coercion;
@@ -645,8 +633,9 @@ fn encode(self: *StaticPool, key: Key, string_type: Index) Item {
             if (bytes.len > 0) self.string_bytes.append(bytes);
             break :blk .{ .tag = .string_value, .data = at };
         },
+        // the tag a key encodes into, the first row naming it
         inline else => |payload, key_tag| .{
-            .tag = comptime tag_of_key(key_tag),
+            .tag = @field(Tag, @tagName(key_tag)),
             .data = self.put(payload),
         },
     };
@@ -752,11 +741,12 @@ pub fn get(self: *const StaticPool, index: Index) Key {
             const len = self.payload_words.buffer[data + 1];
             return .{ .string_value = self.string_bytes.buffer[start..][0..len] };
         },
-        inline else => |tag_value| @unionInit(
-            Key,
-            key_name(tag_value),
-            self.take(@FieldType(Key, key_name(tag_value)), data),
-        ),
+        inline else => |tag_value| blk: {
+            // the key field a tag decodes into
+            const row = tag_table[@intFromEnum(tag_value)];
+            const field_name = if (row.len > 4) row[4] else row[0];
+            break :blk @unionInit(Key, field_name, self.take(@FieldType(Key, field_name), data));
+        },
     };
 }
 

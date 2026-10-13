@@ -127,7 +127,19 @@ last_token_start: Position = .{ .line = 0, .character = 0 },
 
 // the source comes on stdin, the `Result` goes to stdout, `path` is the document's file or empty
 pub fn run(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
-    limit_resources();
+    // a runaway compiler stops itself even when the server is gone, a crash dumps no core
+    // macos does not enforce the address space limit, the cpu limit still ends a runaway there
+    if (builtin.os.tag != .windows) {
+        const limits = [_]struct { std.posix.rlimit_resource, u64 }{
+            .{ .AS, 4 << 30 },
+            .{ .CPU, 10 },
+            .{ .CORE, 0 },
+        };
+        for (limits) |limit| {
+            const resource, const maximum = limit;
+            std.posix.setrlimit(resource, .{ .cur = maximum, .max = maximum }) catch {};
+        }
+    }
 
     var input_buffer: [1 << 16]u8 = undefined;
     var input = std.Io.File.stdin().readerStreaming(io, &input_buffer);
@@ -138,21 +150,6 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
     const result = analyze_at(allocator, source, io, path);
     try std.json.Stringify.value(result, .{}, &output.interface);
     try output.interface.flush();
-}
-
-// a runaway compiler stops itself even when the server is gone, a crash dumps no core.
-// macos does not enforce the address space limit, the cpu limit still ends a runaway there
-fn limit_resources() void {
-    if (builtin.os.tag == .windows) return;
-    const limits = [_]struct { std.posix.rlimit_resource, u64 }{
-        .{ .AS, 4 << 30 },
-        .{ .CPU, 10 },
-        .{ .CORE, 0 },
-    };
-    for (limits) |limit| {
-        const resource, const maximum = limit;
-        std.posix.setrlimit(resource, .{ .cur = maximum, .max = maximum }) catch {};
-    }
 }
 
 pub fn analyze(allocator: std.mem.Allocator, source: []u8) Result {
@@ -228,11 +225,6 @@ fn resolve(self: *Analysis, lexer: *Lexer) ?*Resolver {
         .watch = .{ .observer = self, .pass = observe_pass },
     };
     resolver.resolve() catch {};
-    self.report_resolver_diagnostics(resolver);
-    return resolver;
-}
-
-fn report_resolver_diagnostics(self: *Analysis, resolver: *Resolver) void {
     const found = resolver.doctor.diagnostics.columns();
     for (
         found.code,
@@ -240,7 +232,11 @@ fn report_resolver_diagnostics(self: *Analysis, resolver: *Resolver) void {
         found.first_operand,
         found.second_operand,
     ) |code, node, first_operand, second_operand| {
-        if (code == .missing_main and self.is_library()) continue;
+        // a file other files include needs no `$main` of its own
+        // the editor shows no `missing_main` for it
+        if (code == .missing_main and self.io != null) {
+            if (includers.is_included(self.io.?, self.allocator, self.path)) continue;
+        }
         var operands: std.Io.Writer.Allocating = .init(self.allocator);
         dbg.print_operands(
             &operands.writer,
@@ -255,12 +251,7 @@ fn report_resolver_diagnostics(self: *Analysis, resolver: *Resolver) void {
             Lexer.TextSpan{ 0, 0 };
         self.report(span[0], span[1], Doctor.severity_of(code), @tagName(code), operands.written());
     }
-}
-
-// a file other files include needs no `$main` of its own, the editor shows no `missing_main` for it
-fn is_library(self: *Analysis) bool {
-    const io = self.io orelse return false;
-    return includers.is_included(io, self.allocator, self.path);
+    return resolver;
 }
 
 // a diagnostic marks its node up to the end of the node's first line, a whole body is too much

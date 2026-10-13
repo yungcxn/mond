@@ -81,11 +81,6 @@ pub fn clear(self: *Initialization, set: u32) void {
     @memset(self.set_words(set), 0);
 }
 
-pub fn is_empty(self: *const Initialization, set: u32) bool {
-    for (self.set_words(set)) |word| if (word != 0) return false;
-    return true;
-}
-
 pub fn get(self: *const Initialization, set: u32, bit: u32) bool {
     const word_index = bit / 64;
     if (word_index >= self.width) return false;
@@ -97,7 +92,26 @@ pub fn put(self: *Initialization, set: u32, bit: u32, on: bool) void {
     if (word_index >= self.width) {
         // bits past the width read as off, so only switching one on needs room
         if (!on) return;
-        self.grow(word_index + 1);
+
+        // the open session's sets widen in place, back to front so none overwrites an unmoved one
+        const old_width = self.width;
+        const width = word_index + 1;
+        self.words.push_repeated((width - old_width) * self.count, 0);
+        self.width = width;
+
+        var set_index = self.count;
+        while (set_index > 0) {
+            set_index -= 1;
+            const from = self.base + set_index * old_width;
+            const to = self.base + set_index * width;
+
+            var word = old_width;
+            while (word > 0) {
+                word -= 1;
+                self.words.buffer[to + word] = self.words.buffer[from + word];
+            }
+            @memset(self.words.buffer[to + old_width .. to + width], 0);
+        }
     }
 
     const mask = @as(u64, 1) << @intCast(bit % 64);
@@ -118,27 +132,6 @@ pub fn import_outer(
     @memcpy(self.set_words(destination)[0..outer_session.width], outer_words);
 }
 
-// widens every set of the open session in place, back to front so no set overwrites an unmoved one
-fn grow(self: *Initialization, width: u32) void {
-    const old_width = self.width;
-    self.words.push_repeated((width - old_width) * self.count, 0);
-    self.width = width;
-
-    var set = self.count;
-    while (set > 0) {
-        set -= 1;
-        const from = self.base + set * old_width;
-        const to = self.base + set * width;
-
-        var word = old_width;
-        while (word > 0) {
-            word -= 1;
-            self.words.buffer[to + word] = self.words.buffer[from + word];
-        }
-        @memset(self.words.buffer[to + old_width .. to + width], 0);
-    }
-}
-
 pub fn track(self: *Initialization, declaration: DeclPool.Index) void {
     self.put(0, self.tracked.len, true);
     self.tracked.push(declaration);
@@ -156,7 +149,11 @@ pub fn mark_written(self: *Initialization, declaration: DeclPool.Index) void {
 
 // a read of `declaration` before it is written, reported once
 pub fn is_unwritten(self: *Initialization, declaration: DeclPool.Index) bool {
-    if (self.is_empty(0)) return false;
+    const is_empty = blk: {
+        for (self.set_words(0)) |word| if (word != 0) break :blk false;
+        break :blk true;
+    };
+    if (is_empty) return false;
     const bit = self.bit_of(declaration) orelse return false;
     if (!self.get(0, bit)) return false;
     self.put(0, bit, false);

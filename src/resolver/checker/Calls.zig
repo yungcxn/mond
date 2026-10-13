@@ -1,7 +1,6 @@
 const std = @import("std");
 const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
-const NamePool = @import("../NamePool.zig");
 const StaticPool = @import("../StaticPool.zig");
 const DeclPool = @import("../DeclPool.zig");
 const FunctionContext = Resolver.FunctionContext;
@@ -37,16 +36,70 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
     const tree = resolver.tree;
     const arguments = tree.manychildren(tree.arg(node, 1));
 
-    if (tree.kind(node) == .with) return self.check_record_update(context, node, arguments);
+    // a copy of a record, the named arguments must be its fields
+    if (tree.kind(node) == .with) {
+        const original_type = resolver.expressions.infer(context, tree.arg(node, 0), .none);
+        const record_type = static_pool.through_pointer(original_type);
 
+        // of a tree: its children by their field names, known once it is evaluated
+        if (tree.macros and static_pool.is_tree(record_type)) {
+            for (arguments) |argument| {
+                _ = resolver.expressions.check(context, tree.arg_value(argument), .ast_type);
+            }
+            return static_pool.pointee(record_type);
+        }
+
+        for (arguments) |argument| {
+            const name_node = tree.arg_name(argument);
+            const name = resolver.name_pool.name_of_node(name_node);
+
+            const member = if (name_node != 0 and record_type != .poison_type)
+                static_pool.lookup_member(record_type, name)
+            else
+                StaticPool.Member.none;
+
+            if (member == .field) {
+                const field_type = self.type_named_argument(argument, member.field.field_type);
+                _ = resolver.expressions.check(context, tree.arg_value(argument), field_type);
+                continue;
+            }
+            if (record_type == .poison_type) continue;
+            _ = resolver.report(.unknown_named_argument, argument, name, record_type);
+        }
+        return record_type;
+    }
+
+    // `$fresh(..)` and `$error(..)` belong to the macros
     const callee = tree.arg(node, 0);
-    if (self.macro_builtin_of(callee)) |builtin| {
-        return resolver.macros.check_builtin(context, node, builtin, arguments);
+    const names_builtin = tree.macros and
+        tree.kind(callee) == .identifier and
+        tree.text(callee, resolver.src_bytes)[0] == '$';
+    if (names_builtin) {
+        const name = resolver.name_pool.name_of_node(callee);
+        switch (name) {
+            .fresh, .@"error" => {
+                return resolver.macros.check_builtin(context, node, name, arguments);
+            },
+            else => {},
+        }
     }
 
     const callee_type = resolver.expressions.infer(context, callee, .none);
-    const declaration = self.called_declaration(callee);
-    const receiver = self.receiver_of(callee);
+    // a stcfun call producing a function is called like that function
+    const declaration: DeclPool.Index = blk: {
+        if (tree.kind(callee) != .fun_call) break :blk resolver.node_declarations[callee];
+
+        const inner_callee = resolver.node_declarations[tree.arg(callee, 0)];
+        if (inner_callee == .none) break :blk .none;
+        if (resolver.decl_pool.get(inner_callee, .kind) != .static_function) break :blk .none;
+        break :blk resolver.node_declarations[callee];
+    };
+    // `x.m(..)` binds x as the self argument, `Type.m(x.&, ..)` passes it like any other argument
+    const receiver: NodeId = if (tree.kind(callee) == .member and
+        static_pool.tag(resolver.node_types[tree.arg(callee, 0)]) != .meta_type)
+        tree.arg(callee, 0)
+    else
+        0;
 
     const calls_declared_function = callee_type != .poison_type and
         declaration != .none and
@@ -57,8 +110,12 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
 
     const callee_is_type = static_pool.tag(callee_type) == .meta_type;
     const target_type = if (callee_is_type)
-        resolver.static_values.evaluate_or_defer(context, callee) orelse
-            return self.infer_arguments_alone(context, arguments)
+        resolver.static_values.evaluate_or_defer(context, callee) orelse {
+            for (arguments) |argument| {
+                _ = resolver.expressions.infer(context, tree.arg_value(argument), .none);
+            }
+            return .poison_type;
+        }
     else
         static_pool.substitute_type_variables(callee_type);
     const called_as_value = !callee_is_type and (tree.kind(callee) != .member or receiver != 0);
@@ -66,10 +123,9 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
     switch (static_pool.tag(target_type)) {
         // type constructors: records (`Person(name = ..)`) and variant cases (`Event.Key(13)`)
         .record_type, .variant_case_type => {
-            if (called_as_value) {
-                return self.reject_call(context, callee, callee_type, target_type, arguments);
+            if (!called_as_value) {
+                return self.check_constructor(context, node, target_type, arguments);
             }
-            return self.check_constructor(context, node, target_type, arguments);
         },
         .ast_type => return resolver.macros.check_tree_call(context, node, target_type, arguments),
         .function_type => {
@@ -96,118 +152,15 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
         .variant_value,
         .function_value,
         .tree_value,
-        => return self.reject_call(context, callee, callee_type, target_type, arguments),
-    }
-}
-
-// a copy of a record, the named arguments must be its fields
-fn check_record_update(
-    self: *Calls,
-    context: *FunctionContext,
-    node: NodeId,
-    arguments: []const NodeId,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    const original_type = resolver.expressions.infer(context, resolver.tree.arg(node, 0), .none);
-    const record_type = static_pool.through_pointer(original_type);
-
-    // of a tree: its children by their field names, known once it is evaluated
-    if (resolver.tree.macros and static_pool.is_tree(record_type)) {
-        for (arguments) |argument| {
-            _ = resolver.expressions.check(context, resolver.tree.arg_value(argument), .ast_type);
-        }
-        return static_pool.pointee(record_type);
+        => {},
     }
 
-    for (arguments) |argument| self.check_updated_field(context, argument, record_type);
-    return record_type;
-}
-
-fn check_updated_field(
-    self: *Calls,
-    context: *FunctionContext,
-    argument: NodeId,
-    record_type: StaticPool.Index,
-) void {
-    const resolver = self.owning_resolver();
-    const name_node = resolver.tree.arg_name(argument);
-    const name = resolver.name_pool.name_of_node(name_node);
-
-    const member = if (name_node != 0 and record_type != .poison_type)
-        resolver.static_pool.lookup_member(record_type, name)
-    else
-        StaticPool.Member.none;
-
-    if (member == .field) {
-        const field_type = self.type_named_argument(argument, member.field.field_type);
-        _ = resolver.expressions.check(context, resolver.tree.arg_value(argument), field_type);
-        return;
-    }
-    if (record_type == .poison_type) return;
-    _ = resolver.report(.unknown_named_argument, argument, name, record_type);
-}
-
-// `$fresh(..)` and `$error(..)` belong to the macros
-fn macro_builtin_of(self: *Calls, callee: NodeId) ?NamePool.Index {
-    const resolver = self.owning_resolver();
-    const tree = resolver.tree;
-
-    if (!tree.macros or tree.kind(callee) != .identifier) return null;
-    if (tree.text(callee, resolver.src_bytes)[0] != '$') return null;
-
-    const name = resolver.name_pool.name_of_node(callee);
-    return switch (name) {
-        .fresh, .@"error" => name,
-        else => null,
-    };
-}
-
-// a stcfun call producing a function is called like that function
-fn called_declaration(self: *Calls, callee: NodeId) DeclPool.Index {
-    const resolver = self.owning_resolver();
-    if (resolver.tree.kind(callee) != .fun_call) return resolver.node_declarations[callee];
-
-    const inner_callee = resolver.node_declarations[resolver.tree.arg(callee, 0)];
-    if (inner_callee == .none) return .none;
-    if (resolver.decl_pool.get(inner_callee, .kind) != .static_function) return .none;
-    return resolver.node_declarations[callee];
-}
-
-// `x.m(..)` binds x as the self argument, `Type.m(x.&, ..)` passes it like any other argument
-fn receiver_of(self: *Calls, callee: NodeId) NodeId {
-    const resolver = self.owning_resolver();
-    if (resolver.tree.kind(callee) != .member) return 0;
-
-    const object = resolver.tree.arg(callee, 0);
-    if (resolver.static_pool.tag(resolver.node_types[object]) == .meta_type) return 0;
-    return object;
-}
-
-fn infer_arguments_alone(
-    self: *Calls,
-    context: *FunctionContext,
-    arguments: []const NodeId,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
+    // anything else is not callable, its arguments are inferred alone
     for (arguments) |argument| {
-        _ = resolver.expressions.infer(context, resolver.tree.arg_value(argument), .none);
+        _ = resolver.expressions.infer(context, tree.arg_value(argument), .none);
     }
-    return .poison_type;
-}
-
-fn reject_call(
-    self: *Calls,
-    context: *FunctionContext,
-    callee: NodeId,
-    callee_type: StaticPool.Index,
-    target_type: StaticPool.Index,
-    arguments: []const NodeId,
-) StaticPool.Index {
-    _ = self.infer_arguments_alone(context, arguments);
     if (target_type == .poison_type) return target_type;
-    return self.owning_resolver().report(.not_callable, callee, callee_type, .none);
+    return resolver.report(.not_callable, callee, callee_type, .none);
 }
 
 fn check_constructor(
@@ -279,8 +232,103 @@ fn call_declared(
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
 
+    // a stcfun runs at compile time: the realization for its argument values is the call's result
     if (resolver.decl_pool.get(first, .kind) == .static_function) {
-        return self.call_static_function(context, node, first, all_arguments);
+        const expressions = &resolver.expressions;
+        const parameter_count = resolver.types.signature(first).parameters.len;
+        if (all_arguments.len != parameter_count) {
+            return resolver.report(.wrong_arity, node, all_arguments.len, parameter_count);
+        }
+        const return_type = resolver.types.signature(first).return_type;
+
+        var any_failed = false;
+        for (all_arguments, 0..) |argument, i| {
+            const parameter_type = resolver.types.signature(first).parameters[i];
+            const value = resolver.tree.arg_value(argument);
+            const fails = blk: {
+                if (static_pool.template_of(parameter_type) != .none) {
+                    const argument_type = expressions.infer(context, value, .none);
+                    const passes =
+                        resolver.generics.passes_template_parameter(argument_type, parameter_type);
+                    if (passes) break :blk false;
+
+                    _ = resolver.report(.type_mismatch, value, argument_type, parameter_type);
+                    break :blk true;
+                }
+
+                if (static_pool.tag(parameter_type) != .meta_type) {
+                    if (!static_pool.has_type_variables(parameter_type)) {
+                        break :blk expressions.check(
+                            context,
+                            value,
+                            parameter_type,
+                        ) == .poison_type;
+                    }
+
+                    const argument_type = expressions.infer(context, value, parameter_type);
+                    if (argument_type == .poison_type) break :blk true;
+                    if (static_pool.argument_length(argument_type, parameter_type) != .none) {
+                        break :blk false;
+                    }
+
+                    _ = resolver.report(.type_mismatch, value, argument_type, parameter_type);
+                    break :blk true;
+                }
+
+                // a `type` parameter takes any type, any other meta type exactly itself
+                const argument_type = expressions.infer(context, value, parameter_type);
+                if (argument_type == .poison_type) break :blk true;
+
+                const fits = static_pool.tag(argument_type) == .meta_type and
+                    (parameter_type == .type_type or argument_type == parameter_type);
+                if (fits) break :blk false;
+
+                _ = resolver.report(.type_mismatch, value, argument_type, parameter_type);
+                break :blk true;
+            };
+            if (fails) any_failed = true;
+        }
+        if (any_failed) return .poison_type;
+        if (context.is_interpreted and return_type != .fun_type) return return_type;
+
+        const values = resolver.temporary_slice(StaticPool.Index, all_arguments.len);
+        for (all_arguments, 0..) |argument, i| {
+            const value_node = resolver.tree.arg_value(argument);
+            const evaluated = resolver.interpreter.evaluate_static(context, value_node);
+            const parameter_type = resolver.types.signature(first).parameters[i];
+            values[i] = resolver.static_values.retyped(evaluated, parameter_type);
+            if (static_pool.contains_template(values[i])) return .poison_type;
+
+            // a tree for `ast.Kind` has a root of that kind, known now that it is evaluated
+            const tree_misfits = resolver.tree.macros and
+                values[i] != .poison_type and
+                !resolver.interpreter.trees.admits(.of(static_pool, values[i]), parameter_type);
+            if (tree_misfits) {
+                const tree_kind = resolver.interpreter.trees.kind_of(values[i]);
+                return resolver.report(.type_mismatch, value_node, tree_kind, parameter_type);
+            }
+        }
+
+        if (resolver.interpreter.depth == 0) resolver.interpreter.evaluation_root = node;
+        const realization_key = static_pool.intern(.{ .aggregate_value = .{
+            .value_type = .none,
+            .elements = values,
+        } });
+        const realization = resolver.generics.realize(first, realization_key);
+        if (static_pool.tag(return_type) != .meta_type) {
+            resolver.node_static_values[node] = realization;
+        }
+
+        if (static_pool.tag(realization) != .function_value) {
+            const produces_type = static_pool.tag(return_type) == .meta_type or
+                return_type == .poison_type;
+            if (produces_type) return static_pool.type_of(realization);
+            return return_type;
+        }
+
+        const produced_function = static_pool.get(realization).function_value;
+        resolver.node_declarations[node] = produced_function;
+        return resolver.decl_pool.get(produced_function, .value_type);
     }
 
     // the self argument of a method: the receiver, or the first argument when called via the type
@@ -290,8 +338,40 @@ fn call_declared(
         if (receiver == 0 and argument_nodes.len == 0) {
             return resolver.report(.wrong_arity, node, 0, 1);
         }
-        self.check_self_argument(context, first, receiver, argument_nodes);
-        if (receiver == 0) argument_nodes = argument_nodes[1..];
+
+        const method_type =
+            resolver.decl_pool.get(resolver.declarations.realized(first), .value_type);
+        const self_parameter: StaticPool.Index = if (method_type != .none and
+            static_pool.tag(method_type) == .function_type)
+            static_pool.get(method_type).function_type.parameters[0]
+        else
+            .poison_type;
+
+        if (receiver == 0) {
+            // a method that does not write `self` takes a read only one as well
+            const expected = if (static_pool.is_pointer(self_parameter))
+                static_pool.pointer_to(static_pool.pointee(self_parameter), false)
+            else
+                self_parameter;
+            _ = resolver.expressions.check(
+                context,
+                resolver.tree.arg_value(argument_nodes[0]),
+                expected,
+            );
+            argument_nodes = argument_nodes[1..];
+        } else {
+            const receiver_type =
+                static_pool.substitute_type_variables(resolver.node_types[receiver]);
+            const self_type = static_pool.pointee(self_parameter);
+            const mismatch = receiver_type != .poison_type and
+                self_parameter != .poison_type and
+                receiver_type != self_type and
+                !static_pool.implements(receiver_type, self_type) and
+                static_pool.coercion(receiver_type, self_parameter) == .incompatible;
+            if (mismatch) {
+                _ = resolver.report(.type_mismatch, receiver, receiver_type, self_parameter);
+            }
+        }
     }
 
     const arguments = CallArguments{
@@ -301,205 +381,8 @@ fn call_declared(
         .self_count = self_count,
     };
     const first_function = resolver.declarations.realized(first);
-    const first_binds = self.infer_argument_types(context, first_function, arguments);
 
-    const choice = self.most_specific_overload(first, arguments);
-    if (choice.best == .none) {
-        return self.report_no_overload(node, first_function, first_binds, choice, arguments);
-    }
-    if (choice.ambiguous) _ = resolver.report(.ambiguous_overload, node, choice.best, 0);
-
-    const callee = resolver.declarations.realized(choice.best);
-    if (self_count == 1 and resolver.decl_pool.get(callee, .flags).writes) {
-        self.record_self_write(callee, receiver, all_arguments);
-    }
-
-    const parameter_nodes = resolver.tree.params_of(resolver.declarations.value_node(callee));
-    _ = self.bind_arguments(parameter_nodes, arguments.nodes, arguments.parameter_of, false);
-    self.check_stcwhere(
-        context,
-        node,
-        callee,
-        parameter_nodes,
-        arguments.nodes,
-        arguments.parameter_of,
-    );
-
-    if (static_pool.is_length_generic(resolver.decl_pool.get(callee, .value_type))) {
-        return self.call_length_generic(context, node, callee, parameter_nodes, arguments);
-    }
-
-    for (arguments.nodes, 0..) |argument, i| {
-        const parameter_index = arguments.parameter_of[i] + self_count;
-        const parameter_type = resolver.types.signature(callee).parameters[parameter_index];
-        _ = resolver.expressions.expect_type(
-            resolver.tree.arg_value(argument),
-            arguments.types[i],
-            self.type_named_argument(argument, parameter_type),
-        );
-    }
-
-    // the call names its dispatch group's head: the lowerer walks `next_overload` from there
-    // the lowerer tests the where clauses of same-typed overloads in order, the where-less one last
-    const group = self.group_head(first, choice.best);
-    resolver.node_declarations[node] = resolver.declarations.realized(group);
-    return resolver.types.signature(callee).return_type;
-}
-
-// a stcfun runs at compile time: the realization for its argument values is the call's result
-fn call_static_function(
-    self: *Calls,
-    context: *FunctionContext,
-    node: NodeId,
-    stcfun: DeclPool.Index,
-    arguments: []const NodeId,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    const parameter_count = resolver.types.signature(stcfun).parameters.len;
-    if (arguments.len != parameter_count) {
-        return resolver.report(.wrong_arity, node, arguments.len, parameter_count);
-    }
-    const return_type = resolver.types.signature(stcfun).return_type;
-
-    var any_failed = false;
-    for (arguments, 0..) |argument, i| {
-        const parameter_type = resolver.types.signature(stcfun).parameters[i];
-        const value = resolver.tree.arg_value(argument);
-        if (self.static_argument_fails(context, value, parameter_type)) any_failed = true;
-    }
-    if (any_failed) return .poison_type;
-    if (context.is_interpreted and return_type != .fun_type) return return_type;
-
-    const values = resolver.temporary_slice(StaticPool.Index, arguments.len);
-    for (arguments, 0..) |argument, i| {
-        const value_node = resolver.tree.arg_value(argument);
-        const evaluated = resolver.interpreter.evaluate_static(context, value_node);
-        const parameter_type = resolver.types.signature(stcfun).parameters[i];
-        values[i] = resolver.static_values.retyped(evaluated, parameter_type);
-        if (static_pool.contains_template(values[i])) return .poison_type;
-
-        // a tree for `ast.Kind` has a root of that kind, known now that it is evaluated
-        const tree_misfits = resolver.tree.macros and
-            values[i] != .poison_type and
-            !resolver.interpreter.trees.admits(.of(static_pool, values[i]), parameter_type);
-        if (tree_misfits) {
-            const tree_kind = resolver.interpreter.trees.kind_of(values[i]);
-            return resolver.report(.type_mismatch, value_node, tree_kind, parameter_type);
-        }
-    }
-
-    if (resolver.interpreter.depth == 0) resolver.interpreter.evaluation_root = node;
-    const realization_key = static_pool.intern(.{ .aggregate_value = .{
-        .value_type = .none,
-        .elements = values,
-    } });
-    const realization = resolver.generics.realize(stcfun, realization_key);
-    if (static_pool.tag(return_type) != .meta_type) resolver.node_static_values[node] = realization;
-
-    if (static_pool.tag(realization) != .function_value) {
-        const produces_type = static_pool.tag(return_type) == .meta_type or
-            return_type == .poison_type;
-        if (produces_type) return static_pool.type_of(realization);
-        return return_type;
-    }
-
-    const produced_function = static_pool.get(realization).function_value;
-    resolver.node_declarations[node] = produced_function;
-    return resolver.decl_pool.get(produced_function, .value_type);
-}
-
-fn static_argument_fails(
-    self: *Calls,
-    context: *FunctionContext,
-    value: NodeId,
-    parameter_type: StaticPool.Index,
-) bool {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const expressions = &resolver.expressions;
-
-    if (static_pool.template_of(parameter_type) != .none) {
-        const argument_type = expressions.infer(context, value, .none);
-        const passes = resolver.generics.passes_template_parameter(argument_type, parameter_type);
-        if (passes) return false;
-
-        _ = resolver.report(.type_mismatch, value, argument_type, parameter_type);
-        return true;
-    }
-
-    if (static_pool.tag(parameter_type) != .meta_type) {
-        if (!static_pool.has_type_variables(parameter_type)) {
-            return expressions.check(context, value, parameter_type) == .poison_type;
-        }
-
-        const argument_type = expressions.infer(context, value, parameter_type);
-        if (argument_type == .poison_type) return true;
-        if (static_pool.argument_length(argument_type, parameter_type) != .none) return false;
-
-        _ = resolver.report(.type_mismatch, value, argument_type, parameter_type);
-        return true;
-    }
-
-    // a `type` parameter takes any type, any other meta type exactly itself
-    const argument_type = expressions.infer(context, value, parameter_type);
-    if (argument_type == .poison_type) return true;
-
-    const fits = static_pool.tag(argument_type) == .meta_type and
-        (parameter_type == .type_type or argument_type == parameter_type);
-    if (fits) return false;
-
-    _ = resolver.report(.type_mismatch, value, argument_type, parameter_type);
-    return true;
-}
-
-fn check_self_argument(
-    self: *Calls,
-    context: *FunctionContext,
-    method: DeclPool.Index,
-    receiver: NodeId,
-    arguments: []const NodeId,
-) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    const method_type = resolver.decl_pool.get(resolver.declarations.realized(method), .value_type);
-    const self_parameter: StaticPool.Index = if (method_type != .none and
-        static_pool.tag(method_type) == .function_type)
-        static_pool.get(method_type).function_type.parameters[0]
-    else
-        .poison_type;
-
-    if (receiver == 0) {
-        // a method that does not write `self` takes a read only one as well
-        const expected = if (static_pool.is_pointer(self_parameter))
-            static_pool.pointer_to(static_pool.pointee(self_parameter), false)
-        else
-            self_parameter;
-        _ = resolver.expressions.check(context, resolver.tree.arg_value(arguments[0]), expected);
-        return;
-    }
-
-    const receiver_type = static_pool.substitute_type_variables(resolver.node_types[receiver]);
-    const self_type = static_pool.pointee(self_parameter);
-    const mismatch = receiver_type != .poison_type and
-        self_parameter != .poison_type and
-        receiver_type != self_type and
-        !static_pool.implements(receiver_type, self_type) and
-        static_pool.coercion(receiver_type, self_parameter) == .incompatible;
-    if (mismatch) _ = resolver.report(.type_mismatch, receiver, receiver_type, self_parameter);
-}
-
-// argument types once, with the first candidate's parameters as expectation
-fn infer_argument_types(
-    self: *Calls,
-    context: *FunctionContext,
-    first_function: DeclPool.Index,
-    arguments: CallArguments,
-) bool {
-    const resolver = self.owning_resolver();
-
+    // argument types once, with the first candidate's parameters as expectation
     const first_node = resolver.declarations.value_node(first_function);
     const first_parameters = resolver.tree.params_of(first_node);
     const first_binds = resolver.decl_pool.get(first_function, .value_type) != .none and
@@ -515,17 +398,8 @@ fn infer_argument_types(
         const value = resolver.tree.arg_value(argument);
         arguments.types[i] = resolver.expressions.infer(context, value, hint);
     }
-    return first_binds;
-}
 
-// most specific candidate: exact > coercion > unlengthed, a where clause beats none
-fn most_specific_overload(
-    self: *Calls,
-    first: DeclPool.Index,
-    arguments: CallArguments,
-) OverloadChoice {
-    const resolver = self.owning_resolver();
-
+    // most specific candidate: exact > coercion > unlengthed, a where clause beats none
     var choice = OverloadChoice{ .best = .none, .candidate_count = 0, .ambiguous = false };
     var best_score: i32 = -1;
     var candidate = first;
@@ -552,151 +426,149 @@ fn most_specific_overload(
     if (std.mem.indexOfScalar(StaticPool.Index, arguments.types, .poison_type) != null) {
         choice.ambiguous = false;
     }
-    return choice;
-}
 
-fn report_no_overload(
-    self: *Calls,
-    node: NodeId,
-    first_function: DeclPool.Index,
-    first_binds: bool,
-    choice: OverloadChoice,
-    arguments: CallArguments,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
+    if (choice.best == .none) {
+        if (choice.candidate_count > 1) {
+            return resolver.report(.no_matching_overload, node, arguments.nodes.len, 0);
+        }
+        if (!first_binds) {
+            const parameters = resolver.tree.params_of(first_node);
+            return self.report_bad_arguments(node, parameters, arguments.nodes);
+        }
 
-    if (choice.candidate_count > 1) {
-        return resolver.report(.no_matching_overload, node, arguments.nodes.len, 0);
+        for (arguments.nodes, 0..) |argument, i| {
+            const parameter_index = arguments.parameter_of[i] + arguments.self_count;
+            const parameter_type =
+                resolver.types.signature(first_function).parameters[parameter_index];
+            const value = resolver.tree.arg_value(argument);
+            const argument_type = arguments.types[i];
+
+            if (!static_pool.has_type_variables(parameter_type)) {
+                _ = resolver.expressions.expect_type(value, argument_type, parameter_type);
+            } else if (static_pool.argument_length(argument_type, parameter_type) == .none) {
+                _ = resolver.report_mismatch(value, argument_type, parameter_type);
+            }
+        }
+        return .poison_type;
     }
-    if (!first_binds) {
-        const first_node = resolver.declarations.value_node(first_function);
-        const parameters = resolver.tree.params_of(first_node);
-        return self.report_bad_arguments(node, parameters, arguments.nodes);
+    if (choice.ambiguous) _ = resolver.report(.ambiguous_overload, node, choice.best, 0);
+
+    // a method writing `self` needs it writable: a read-only pointer cannot be written through
+    const callee = resolver.declarations.realized(choice.best);
+    if (self_count == 1 and resolver.decl_pool.get(callee, .flags).writes) {
+        const self_node = if (receiver != 0)
+            receiver
+        else
+            resolver.tree.arg_value(all_arguments[0]);
+        const self_type = static_pool.substitute_type_variables(resolver.node_types[self_node]);
+        const assignable = resolver.tree.props(self_node).assignable;
+
+        if (receiver == 0) {
+            if (static_pool.tag(self_type) == .pointer_type) {
+                const self_parameter = resolver.types.signature(callee).parameters[0];
+                _ = resolver.report(.type_mismatch, self_node, self_type, self_parameter);
+            }
+        } else if (static_pool.is_pointer(self_type)) {
+            const read_only = static_pool.tag(self_type) == .pointer_type;
+            resolver.mutability.record_write_access(
+                self_node,
+                if (read_only) .through_ptr else .ok,
+            );
+        } else if (assignable) {
+            resolver.mutability.record_write_access(
+                self_node,
+                resolver.mutability.writable(self_node),
+            );
+        }
+    }
+
+    const parameter_nodes = resolver.tree.params_of(resolver.declarations.value_node(callee));
+    _ = self.bind_arguments(parameter_nodes, arguments.nodes, arguments.parameter_of, false);
+    self.check_stcwhere(
+        context,
+        node,
+        callee,
+        parameter_nodes,
+        arguments.nodes,
+        arguments.parameter_of,
+    );
+
+    // the argument lengths, in parameter order, pick the realization
+    if (static_pool.is_length_generic(resolver.decl_pool.get(callee, .value_type))) {
+        const generic_buffer = resolver.temporary_slice(StaticPool.Index, arguments.nodes.len);
+        var generic_count: usize = 0;
+        for (0..parameter_nodes.len) |j| {
+            const parameter_index = j + arguments.self_count;
+            const parameter_type = resolver.types.signature(callee).parameters[parameter_index];
+            if (!static_pool.is_generic_parameter(parameter_type)) continue;
+
+            for (0..arguments.nodes.len) |i| {
+                if (arguments.parameter_of[i] != j) continue;
+
+                // what a generic parameter takes from its argument
+                const argument_type = arguments.types[i];
+                generic_buffer[generic_count] = blk: {
+                    if (static_pool.template_of(parameter_type) != .none) {
+                        break :blk static_pool.unwrapped(argument_type);
+                    }
+                    if (static_pool.tag(parameter_type) != .meta_type) {
+                        break :blk static_pool.argument_length(argument_type, parameter_type);
+                    }
+
+                    const value = resolver.tree.arg_value(arguments.nodes[i]);
+                    if (resolver.static_values.try_evaluate(context, value)) |static_value| {
+                        break :blk static_value;
+                    }
+                    if (context.is_interpreted) break :blk .none;
+                    return resolver.report(.not_static, arguments.nodes[i], 0, 0);
+                };
+                generic_count += 1;
+            }
+        }
+        const generic_arguments = generic_buffer[0..generic_count];
+
+        if (std.mem.indexOfScalar(StaticPool.Index, generic_arguments, .none) != null) {
+            if (context.is_interpreted) resolver.node_declarations[node] = callee;
+            return .poison_type;
+        }
+        // none is ruled out above
+        for (generic_arguments) |generic| {
+            if (static_pool.tag(generic) != .template_type) continue;
+
+            resolver.declarations.check_body(callee);
+            return resolver.types.signature(callee).return_type;
+        }
+
+        const realization_key = static_pool.intern(.{ .aggregate_value = .{
+            .value_type = .none,
+            .elements = generic_arguments,
+        } });
+        const realization = resolver.generics.realize(callee, realization_key);
+        if (static_pool.tag(realization) != .function_value) return .poison_type;
+
+        const realized_callee = static_pool.get(realization).function_value;
+        resolver.node_declarations[node] = realized_callee;
+        return resolver.types.signature(realized_callee).return_type;
     }
 
     for (arguments.nodes, 0..) |argument, i| {
-        const parameter_index = arguments.parameter_of[i] + arguments.self_count;
-        const parameter_type = resolver.types.signature(first_function).parameters[parameter_index];
-        const value = resolver.tree.arg_value(argument);
-        const argument_type = arguments.types[i];
-
-        if (!static_pool.has_type_variables(parameter_type)) {
-            _ = resolver.expressions.expect_type(value, argument_type, parameter_type);
-        } else if (static_pool.argument_length(argument_type, parameter_type) == .none) {
-            _ = resolver.report_mismatch(value, argument_type, parameter_type);
-        }
-    }
-    return .poison_type;
-}
-
-// a method writing `self` needs it writable: a read-only pointer argument cannot be written through
-fn record_self_write(
-    self: *Calls,
-    callee: DeclPool.Index,
-    receiver: NodeId,
-    all_arguments: []const NodeId,
-) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    const self_node = if (receiver != 0) receiver else resolver.tree.arg_value(all_arguments[0]);
-    const self_type = static_pool.substitute_type_variables(resolver.node_types[self_node]);
-    const assignable = resolver.tree.props(self_node).assignable;
-
-    if (receiver == 0) {
-        if (static_pool.tag(self_type) == .pointer_type) {
-            const self_parameter = resolver.types.signature(callee).parameters[0];
-            _ = resolver.report(.type_mismatch, self_node, self_type, self_parameter);
-        }
-        return;
-    }
-    if (static_pool.is_pointer(self_type)) {
-        const read_only = static_pool.tag(self_type) == .pointer_type;
-        resolver.mutability.record_write_access(self_node, if (read_only) .through_ptr else .ok);
-        return;
-    }
-    if (assignable) {
-        resolver.mutability.record_write_access(self_node, resolver.mutability.writable(self_node));
-    }
-}
-
-// the argument lengths, in parameter order, pick the realization
-fn call_length_generic(
-    self: *Calls,
-    context: *FunctionContext,
-    node: NodeId,
-    callee: DeclPool.Index,
-    parameter_nodes: []const NodeId,
-    arguments: CallArguments,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    const generic_buffer = resolver.temporary_slice(StaticPool.Index, arguments.nodes.len);
-    var generic_count: usize = 0;
-    for (0..parameter_nodes.len) |j| {
-        const parameter_index = j + arguments.self_count;
+        const parameter_index = arguments.parameter_of[i] + self_count;
         const parameter_type = resolver.types.signature(callee).parameters[parameter_index];
-        if (!static_pool.is_generic_parameter(parameter_type)) continue;
-
-        for (0..arguments.nodes.len) |i| {
-            if (arguments.parameter_of[i] != j) continue;
-            generic_buffer[generic_count] =
-                self.generic_argument(context, parameter_type, arguments, i) orelse
-                return resolver.report(.not_static, arguments.nodes[i], 0, 0);
-            generic_count += 1;
-        }
-    }
-    const generic_arguments = generic_buffer[0..generic_count];
-
-    if (std.mem.indexOfScalar(StaticPool.Index, generic_arguments, .none) != null) {
-        if (context.is_interpreted) resolver.node_declarations[node] = callee;
-        return .poison_type;
-    }
-    // none is ruled out above
-    for (generic_arguments) |generic| {
-        if (static_pool.tag(generic) != .template_type) continue;
-
-        resolver.declarations.check_body(callee);
-        return resolver.types.signature(callee).return_type;
+        _ = resolver.expressions.expect_type(
+            resolver.tree.arg_value(argument),
+            arguments.types[i],
+            self.type_named_argument(argument, parameter_type),
+        );
     }
 
-    const realization_key = static_pool.intern(.{ .aggregate_value = .{
-        .value_type = .none,
-        .elements = generic_arguments,
-    } });
-    const realization = resolver.generics.realize(callee, realization_key);
-    if (static_pool.tag(realization) != .function_value) return .poison_type;
-
-    const realized_callee = static_pool.get(realization).function_value;
-    resolver.node_declarations[node] = realized_callee;
-    return resolver.types.signature(realized_callee).return_type;
-}
-
-// what a generic parameter takes from its argument, null for a value that is not static
-fn generic_argument(
-    self: *Calls,
-    context: *FunctionContext,
-    parameter_type: StaticPool.Index,
-    arguments: CallArguments,
-    i: usize,
-) ?StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const argument_type = arguments.types[i];
-
-    if (static_pool.template_of(parameter_type) != .none) {
-        return static_pool.unwrapped(argument_type);
+    // the call names its dispatch group's head: the lowerer walks `next_overload` from there
+    // the lowerer tests the where clauses of same-typed overloads in order, the where-less one last
+    var group = first;
+    while (group != choice.best and !self.has_same_parameters(group, choice.best)) {
+        group = resolver.decl_pool.get(group, .next_overload);
     }
-    if (static_pool.tag(parameter_type) != .meta_type) {
-        return static_pool.argument_length(argument_type, parameter_type);
-    }
-
-    const value = resolver.tree.arg_value(arguments.nodes[i]);
-    if (resolver.static_values.try_evaluate(context, value)) |static_value| return static_value;
-    if (context.is_interpreted) return .none;
-    return null;
+    resolver.node_declarations[node] = resolver.declarations.realized(group);
+    return resolver.types.signature(callee).return_type;
 }
 
 // stcwhere holds at every call: a scope of its own binds the parameters to the static arguments
@@ -710,8 +582,11 @@ fn check_stcwhere(
     parameter_of: []const u32,
 ) void {
     const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
     if (context.is_interpreted) return;
-    if (!self.has_stcwhere(parameter_nodes)) return;
+    for (parameter_nodes) |parameter_node| {
+        if (ParseTree.Param.from_node(resolver.tree, parameter_node).stc) break;
+    } else return;
 
     const static_values = resolver.temporary_slice(StaticPool.Index, parameter_nodes.len);
     @memset(static_values, .none);
@@ -730,71 +605,38 @@ fn check_stcwhere(
 
     for (parameter_nodes, 0..) |parameter_node, j| {
         const argument_type = argument_types[j];
-        self.declare_static_parameter(callee, parameter_node, j, argument_type, static_values[j]);
+        const static_value = static_values[j];
+        const callee_type = resolver.decl_pool.get(callee, .value_type);
+        const self_count = resolver.decl_pool.implicit_self_count(callee);
+        const declared_type = static_pool.get(callee_type).function_type.parameters[j + self_count];
+        const parameter_type = if (static_pool.template_of(declared_type) != .none and
+            argument_type != .none)
+            argument_type
+        else
+            declared_type;
+
+        const parameter = resolver.declarations.declare_local(
+            resolver.declarations.parameter_name(parameter_node, j),
+            parameter_node,
+            .static_parameter,
+            parameter_type,
+        );
+        const value = if (static_value == .none)
+            .none
+        else
+            resolver.static_values.retyped(static_value, parameter_type);
+        resolver.decl_pool.set(parameter, .static_value, value);
     }
     for (parameter_nodes) |parameter_node| {
-        self.check_stcwhere_clause(context, node, callee, parameter_node);
+        const parameter = ParseTree.Param.from_node(resolver.tree, parameter_node);
+        if (!parameter.stc) continue;
+
+        const holds = resolver.static_values.try_evaluate(context, parameter.where) orelse {
+            _ = resolver.report(.not_static, node, 0, 0);
+            continue;
+        };
+        if (holds == .bool_false) _ = resolver.report(.stcwhere_violated, node, callee, .none);
     }
-}
-
-fn has_stcwhere(self: *Calls, parameter_nodes: []const NodeId) bool {
-    const tree = self.owning_resolver().tree;
-    for (parameter_nodes) |parameter_node| {
-        if (ParseTree.Param.from_node(tree, parameter_node).stc) return true;
-    }
-    return false;
-}
-
-fn declare_static_parameter(
-    self: *Calls,
-    callee: DeclPool.Index,
-    parameter_node: NodeId,
-    j: usize,
-    argument_type: StaticPool.Index,
-    static_value: StaticPool.Index,
-) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    const callee_type = resolver.decl_pool.get(callee, .value_type);
-    const self_count = resolver.decl_pool.implicit_self_count(callee);
-    const declared_type = static_pool.get(callee_type).function_type.parameters[j + self_count];
-    const parameter_type = if (static_pool.template_of(declared_type) != .none and
-        argument_type != .none)
-        argument_type
-    else
-        declared_type;
-
-    const parameter = resolver.declarations.declare_local(
-        resolver.declarations.parameter_name(parameter_node, j),
-        parameter_node,
-        .static_parameter,
-        parameter_type,
-    );
-    const value = if (static_value == .none)
-        .none
-    else
-        resolver.static_values.retyped(static_value, parameter_type);
-    resolver.decl_pool.set(parameter, .static_value, value);
-}
-
-fn check_stcwhere_clause(
-    self: *Calls,
-    context: *FunctionContext,
-    node: NodeId,
-    callee: DeclPool.Index,
-    parameter_node: NodeId,
-) void {
-    const resolver = self.owning_resolver();
-
-    const parameter = ParseTree.Param.from_node(resolver.tree, parameter_node);
-    if (!parameter.stc) return;
-
-    const holds = resolver.static_values.try_evaluate(context, parameter.where) orelse {
-        _ = resolver.report(.not_static, node, 0, 0);
-        return;
-    };
-    if (holds == .bool_false) _ = resolver.report(.stcwhere_violated, node, callee, .none);
 }
 
 // overloads that differ only by where clauses dispatch at runtime and need a where-less fallback
@@ -810,8 +652,12 @@ pub fn check_dispatch_groups(self: *Calls) void {
 
         var candidate = head;
         while (candidate != .none) {
-            const heads_group = self.group_head(head, candidate) == candidate;
-            if (heads_group) self.check_dispatch_group(candidate);
+            // the first overload in the chain with the same parameters as `candidate`
+            var group_head = head;
+            while (group_head != candidate and !self.has_same_parameters(group_head, candidate)) {
+                group_head = resolver.decl_pool.get(group_head, .next_overload);
+            }
+            if (group_head == candidate) self.check_dispatch_group(candidate);
             candidate = resolver.decl_pool.get(candidate, .next_overload);
         }
     }
@@ -827,7 +673,12 @@ fn check_dispatch_group(self: *Calls, head: DeclPool.Index) void {
         if (!self.has_same_parameters(member, head)) continue;
         size += 1;
 
-        const is_fallback = !self.dispatches(resolver.declarations.realized(member));
+        // a where clause without `else` that is not static picks the overload at runtime
+        const value_node = resolver.declarations.value_node(resolver.declarations.realized(member));
+        const is_fallback = for (resolver.tree.params_of(value_node)) |parameter_node| {
+            const parameter = ParseTree.Param.from_node(resolver.tree, parameter_node);
+            if (parameter.where != 0 and parameter.@"else" == 0 and !parameter.stc) break false;
+        } else true;
         fallback_count += @intFromBool(is_fallback);
         if (is_fallback and fallback_count > 1) {
             const member_node = resolver.decl_pool.get(member, .node);
@@ -839,17 +690,6 @@ fn check_dispatch_group(self: *Calls, head: DeclPool.Index) void {
     if (size > 1 and fallback_count == 0) {
         _ = resolver.report(.no_matching_overload, resolver.decl_pool.get(head, .node), size, 0);
     }
-}
-
-// a where clause without `else` that is not static picks the overload at runtime
-fn dispatches(self: *Calls, declaration: DeclPool.Index) bool {
-    const resolver = self.owning_resolver();
-
-    for (resolver.tree.params_of(resolver.declarations.value_node(declaration))) |parameter_node| {
-        const parameter = ParseTree.Param.from_node(resolver.tree, parameter_node);
-        if (parameter.where != 0 and parameter.@"else" == 0 and !parameter.stc) return true;
-    }
-    return false;
 }
 
 // how well a candidate fits the argument types, -1 when it does not
@@ -871,56 +711,41 @@ fn score(self: *Calls, candidate: DeclPool.Index, arguments: CallArguments) i32 
         const parameter_index = parameter_of[i] + arguments.self_count;
         const parameters = static_pool.get(function_type).function_type.parameters;
         const parameter_type = parameters[parameter_index];
-        total += self.argument_score(argument, argument_type, parameter_type) orelse return -1;
+
+        // exact 6 (5 for an integer literal taking a float), template 5, coercion 4, unlengthed 2
+        const argument_score: i32 = blk: {
+            if (static_pool.template_of(parameter_type) != .none) {
+                if (!resolver.generics.passes_template_parameter(argument_type, parameter_type)) {
+                    return -1;
+                }
+                break :blk 5;
+            }
+            if (static_pool.has_type_variables(parameter_type) and argument_type != .poison_type) {
+                if (static_pool.argument_length(argument_type, parameter_type) == .none) return -1;
+                break :blk 2;
+            }
+
+            const value = resolver.tree.arg_value(argument);
+            const fits_exactly = argument_type == parameter_type or
+                argument_type == .poison_type or
+                resolver.tree.is_literal(value) and static_pool.coercion(
+                    resolver.static_values.literal_type(value, parameter_type),
+                    parameter_type,
+                ) == .identity;
+            if (fits_exactly) {
+                const widens_to_float = static_pool.properties(parameter_type).is_float and
+                    !static_pool.properties(argument_type).is_float;
+                break :blk @as(i32, 6) - @intFromBool(widens_to_float);
+            }
+            if (static_pool.coercion(argument_type, parameter_type) != .incompatible) break :blk 4;
+            return -1;
+        };
+        total += argument_score;
 
         const parameter_node = parameter_nodes[parameter_of[i]];
         if (ParseTree.Param.from_node(resolver.tree, parameter_node).where != 0) total += 1;
     }
     return total;
-}
-
-// exact 6 (5 for an integer literal taking a float), template 5, coercion 4, unlengthed 2
-fn argument_score(
-    self: *Calls,
-    argument: NodeId,
-    argument_type: StaticPool.Index,
-    parameter_type: StaticPool.Index,
-) ?i32 {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    if (static_pool.template_of(parameter_type) != .none) {
-        if (resolver.generics.passes_template_parameter(argument_type, parameter_type)) return 5;
-        return null;
-    }
-    if (static_pool.has_type_variables(parameter_type) and argument_type != .poison_type) {
-        if (static_pool.argument_length(argument_type, parameter_type) != .none) return 2;
-        return null;
-    }
-    if (self.fits_exactly(argument, argument_type, parameter_type)) {
-        const widens_to_float = static_pool.properties(parameter_type).is_float and
-            !static_pool.properties(argument_type).is_float;
-        return @as(i32, 6) - @intFromBool(widens_to_float);
-    }
-    if (static_pool.coercion(argument_type, parameter_type) != .incompatible) return 4;
-    return null;
-}
-
-fn fits_exactly(
-    self: *Calls,
-    argument: NodeId,
-    argument_type: StaticPool.Index,
-    parameter_type: StaticPool.Index,
-) bool {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    if (argument_type == parameter_type or argument_type == .poison_type) return true;
-
-    const value = resolver.tree.arg_value(argument);
-    if (!resolver.tree.is_literal(value)) return false;
-    const literal_type = resolver.static_values.literal_type(value, parameter_type);
-    return static_pool.coercion(literal_type, parameter_type) == .identity;
 }
 
 pub fn has_where(self: *Calls, declaration: DeclPool.Index) bool {
@@ -939,10 +764,24 @@ pub fn has_same_parameters(
     second_declaration: DeclPool.Index,
 ) bool {
     const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
 
     const first = resolver.declarations.realized(first_declaration);
     const second = resolver.declarations.realized(second_declaration);
-    if (!self.has_same_parameter_types(first, second)) return false;
+    const first_type = resolver.decl_pool.get(first, .value_type);
+    const second_type = resolver.decl_pool.get(second, .value_type);
+    if (first_type != second_type) {
+        if (first_type == .none or second_type == .none) return false;
+        if (static_pool.tag(first_type) != .function_type) return false;
+        if (static_pool.tag(second_type) != .function_type) return false;
+
+        const same_types = std.mem.eql(
+            StaticPool.Index,
+            static_pool.get(first_type).function_type.parameters,
+            static_pool.get(second_type).function_type.parameters,
+        );
+        if (!same_types) return false;
+    }
 
     const first_parameters = resolver.tree.params_of(resolver.declarations.value_node(first));
     const second_parameters = resolver.tree.params_of(resolver.declarations.value_node(second));
@@ -956,24 +795,6 @@ pub fn has_same_parameters(
     return true;
 }
 
-fn has_same_parameter_types(self: *Calls, first: DeclPool.Index, second: DeclPool.Index) bool {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    const first_type = resolver.decl_pool.get(first, .value_type);
-    const second_type = resolver.decl_pool.get(second, .value_type);
-    if (first_type == second_type) return true;
-    if (first_type == .none or second_type == .none) return false;
-    if (static_pool.tag(first_type) != .function_type) return false;
-    if (static_pool.tag(second_type) != .function_type) return false;
-
-    return std.mem.eql(
-        StaticPool.Index,
-        static_pool.get(first_type).function_type.parameters,
-        static_pool.get(second_type).function_type.parameters,
-    );
-}
-
 pub fn bind_arguments(
     self: *Calls,
     parameters: []const NodeId,
@@ -985,8 +806,15 @@ pub fn bind_arguments(
     if (arguments.len > parameters.len) return false;
 
     for (arguments, 0..) |argument, i| {
-        const parameter_index = self.bound_parameter_index(parameters, argument, i) orelse
-            return false;
+        // a named argument binds by its name, any other by its position
+        const name_node = resolver.tree.arg_name(argument);
+        const parameter_index: u32 = if (name_node == 0)
+            @intCast(i)
+        else
+            resolver.declarations.parameter_index(
+                parameters,
+                resolver.name_pool.name_of_node(name_node),
+            ) orelse return false;
         if (std.mem.indexOfScalar(u32, parameter_of[0..i], parameter_index) != null) return false;
         parameter_of[i] = parameter_index;
     }
@@ -1000,21 +828,6 @@ pub fn bind_arguments(
         if (ParseTree.Param.from_node(resolver.tree, parameter_node).default == 0) return false;
     }
     return true;
-}
-
-// a named argument binds by its name, any other by its position
-fn bound_parameter_index(
-    self: *Calls,
-    parameters: []const NodeId,
-    argument: NodeId,
-    position: usize,
-) ?u32 {
-    const resolver = self.owning_resolver();
-
-    const name_node = resolver.tree.arg_name(argument);
-    if (name_node == 0) return @intCast(position);
-    const name = resolver.name_pool.name_of_node(name_node);
-    return resolver.declarations.parameter_index(parameters, name);
 }
 
 pub fn type_named_argument(
@@ -1089,17 +902,6 @@ pub fn builtin_member_of(
         static_pool.through_pointer(object_type);
     const member_name = resolver.name_pool.name_of_node(resolver.tree.arg(callee, 1));
     return static_pool.lookup_member(owner_type, member_name);
-}
-
-// the first overload in the chain with the same parameters as `declaration`
-fn group_head(self: *Calls, first: DeclPool.Index, declaration: DeclPool.Index) DeclPool.Index {
-    const resolver = self.owning_resolver();
-
-    var head = first;
-    while (head != declaration and !self.has_same_parameters(head, declaration)) {
-        head = resolver.decl_pool.get(head, .next_overload);
-    }
-    return head;
 }
 
 pub fn field_index_of(

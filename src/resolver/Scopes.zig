@@ -44,7 +44,9 @@ pub fn lookup(
         i -= 1;
         if (names[i] == name) {
             const declaration = self.local_declarations.buffer[i];
-            if (!walled or is_seen_through_wall(decl_pool, declaration)) return declaration;
+            const kind = decl_pool.get(declaration, .kind);
+            const seen = kind.is_type_declaration() or kind == .static_function;
+            if (!walled or seen) return declaration;
         }
         // a declaration body never sees the locals of its user
         if (names[i] == .none) break;
@@ -52,11 +54,6 @@ pub fn lookup(
         walled = walled or names[i] == .wall;
     }
     return self.globals.get(name) orelse .none;
-}
-
-fn is_seen_through_wall(decl_pool: *const DeclPool, declaration: DeclPool.Index) bool {
-    const kind = decl_pool.get(declaration, .kind);
-    return kind.is_type_declaration() or kind == .static_function;
 }
 
 pub fn bind(self: *Scopes, name: NamePool.Index, declaration: DeclPool.Index) void {

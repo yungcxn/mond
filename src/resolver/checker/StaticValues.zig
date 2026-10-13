@@ -29,14 +29,8 @@ pub fn evaluate_or_defer(
 
     resolver.node_static_values[node] = .none;
     self.deferrals += 1;
-    self.link_identifiers_in_scope(node);
-    return null;
-}
-
-// a deferred node is evaluated after these scopes are closed, so its names are bound now
-fn link_identifiers_in_scope(self: *StaticValues, root: NodeId) void {
-    const resolver = self.owning_resolver();
-    const subtree = resolver.tree.subtree(root);
+    // a deferred node is evaluated after these scopes are closed, so its names are bound now
+    const subtree = resolver.tree.subtree(node);
     for (subtree[0]..subtree[1]) |index| switch (resolver.tree.kind(@intCast(index))) {
         .identifier, .identifier_self => {
             const name = resolver.name_pool.name_of_node(@intCast(index));
@@ -45,6 +39,7 @@ fn link_identifiers_in_scope(self: *StaticValues, root: NodeId) void {
         },
         else => {},
     };
+    return null;
 }
 
 // static evaluation that leaves no diagnostics behind when the node turns out not to be static
@@ -83,13 +78,10 @@ pub fn static_integer(self: *StaticValues, context: *FunctionContext, node: Node
     if (static_pool.tag(value) != .int_value) return null;
 
     const int = static_pool.get(value).int_value;
-    if (is_signed_int_type(static_pool, int.value_type)) return @as(i64, @bitCast(int.bits));
+    const is_signed = static_pool.get(int.value_type) == .int_type and
+        static_pool.get(int.value_type).int_type.signedness == .signed;
+    if (is_signed) return @as(i64, @bitCast(int.bits));
     return int.bits;
-}
-
-fn is_signed_int_type(static_pool: *StaticPool, int_type: StaticPool.Index) bool {
-    if (static_pool.get(int_type) != .int_type) return false;
-    return static_pool.get(int_type).int_type.signedness == .signed;
 }
 
 // the static value of a literal: ints as u64 (i64 when negated), floats as f64
@@ -112,16 +104,23 @@ pub fn literal_value(self: *StaticValues, node: NodeId, negated: bool) StaticPoo
         },
         .float => {
             const float = std.fmt.parseFloat(f64, text) catch {
-                return self.malformed_literal(literal, .none);
+                // the parser may already have reported the literal, one report is enough
+                if (resolver.doctor.has_report_at(literal)) return .poison_type;
+                return resolver.report(.type_mismatch, literal, .none, .none);
             };
             const value = if (is_negated) -float else float;
             const float_value = StaticPool.FloatValue{ .value_type = .f64_type, .value = value };
             return static_pool.intern(.{ .float_value = float_value });
         },
         else => {
-            const bits = integer_bits(resolver.tree, literal, text, &buffer) catch {
-                return self.malformed_literal(literal, .u64_type);
-            };
+            const bits = if (resolver.tree.kind(literal) == .char)
+                unescape(text, &buffer)[0]
+            else
+                std.fmt.parseInt(u64, text, 0) catch {
+                    // the parser may already have reported the literal, one report is enough
+                    if (resolver.doctor.has_report_at(literal)) return .poison_type;
+                    return resolver.report(.type_mismatch, literal, .none, .u64_type);
+                };
             if (is_negated) {
                 const int = StaticPool.IntValue{ .value_type = .i64_type, .bits = 0 -% bits };
                 return static_pool.intern(.{ .int_value = int });
@@ -129,22 +128,6 @@ pub fn literal_value(self: *StaticValues, node: NodeId, negated: bool) StaticPoo
             return static_pool.intern(.{ .int_value = .{ .value_type = .u64_type, .bits = bits } });
         },
     }
-}
-
-fn integer_bits(tree: *ParseTree, literal: NodeId, text: []const u8, buffer: []u8) !u64 {
-    if (tree.kind(literal) == .char) return unescape(text, buffer)[0];
-    return std.fmt.parseInt(u64, text, 0);
-}
-
-// the parser may already have reported the literal, one report per literal is enough
-fn malformed_literal(
-    self: *StaticValues,
-    literal: NodeId,
-    expected_type: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    if (resolver.doctor.has_report_at(literal)) return .poison_type;
-    return resolver.report(.type_mismatch, literal, .none, expected_type);
 }
 
 // untyped literals take the expected type when they fit, else u32 / i32, then u64 / i64, floats f32
@@ -162,8 +145,19 @@ pub fn literal_type(
 
     const value = self.literal_value(literal, is_negated);
     var target = static_pool.substitute_type_variables(expected);
-    if (kind == .string and target != .none and holds_string(static_pool, target, value)) {
-        return target;
+    if (kind == .string and target != .none) {
+        // a string literal is a `*u8`-like pointer or fills an u8 array at least its length
+        const holds_string = blk: {
+            if (static_pool.tag(target) == .pointer_type) {
+                if (static_pool.get(target).pointer_type.pointee == .u8_type) break :blk true;
+            }
+            if (static_pool.get(target) != .array_type) break :blk false;
+            if (static_pool.get(target).array_type.element != .u8_type) break :blk false;
+
+            const length = static_pool.static_length(target) orelse break :blk false;
+            break :blk length >= static_pool.get(value).string_value.len;
+        };
+        if (holds_string) return target;
     }
     if (value == .poison_type) return value;
     if (kind == .string) return static_pool.type_of(value);
@@ -180,30 +174,6 @@ pub fn literal_type(
 
     const is_number = properties.is_integer or properties.is_float;
     if (is_number and static_pool.fits(value, target)) return target;
-    return default_integer_type(static_pool, value, is_negated);
-}
-
-// a string literal is a `*u8`-like pointer or fills an u8 array at least its length
-fn holds_string(
-    static_pool: *StaticPool,
-    target: StaticPool.Index,
-    value: StaticPool.Index,
-) bool {
-    if (static_pool.tag(target) == .pointer_type) {
-        if (static_pool.get(target).pointer_type.pointee == .u8_type) return true;
-    }
-    if (static_pool.get(target) != .array_type) return false;
-    if (static_pool.get(target).array_type.element != .u8_type) return false;
-
-    const length = static_pool.static_length(target) orelse return false;
-    return length >= static_pool.get(value).string_value.len;
-}
-
-fn default_integer_type(
-    static_pool: *StaticPool,
-    value: StaticPool.Index,
-    is_negated: bool,
-) StaticPool.Index {
     if (is_negated) return if (static_pool.fits(value, .i32_type)) .i32_type else .i64_type;
     return if (static_pool.fits(value, .u32_type)) .u32_type else .u64_type;
 }
@@ -232,7 +202,9 @@ pub fn retyped(
     }
     if (!static_pool.properties(target_type).is_float) return value;
 
-    const float: f64 = if (is_signed_int_type(static_pool, int.value_type))
+    const is_signed = static_pool.get(int.value_type) == .int_type and
+        static_pool.get(int.value_type).int_type.signedness == .signed;
+    const float: f64 = if (is_signed)
         @floatFromInt(@as(i64, @bitCast(int.bits)))
     else
         @floatFromInt(int.bits);

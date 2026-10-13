@@ -36,42 +36,19 @@ pub fn check_match(
     // a stcmatch needs a static scrutinee, then only the matching arm is checked (as in a stcfun)
     if (is_stc or known != null) {
         const value = known orelse resolver.interpreter.evaluate_static(context, scrutinee);
-        return self.check_static_match(context, node, arms, value, expected);
+        if (value == .poison_type) return value;
+
+        resolver.scopes.open();
+        defer resolver.scopes.close();
+        for (arms) |arm| {
+            const arm_pattern = resolver.tree.arg(arm, 0);
+            if (!resolver.interpreter.matches_static(context, arm_pattern, value)) continue;
+            resolver.node_static_values[arm] = .bool_true;
+            return resolver.flow.check_branch(context, resolver.tree.arg(arm, 1), expected);
+        }
+        return resolver.report(.non_exhaustive_match, node, value, .none);
     }
-    return self.check_arms(context, node, arms, scrutinee_type, expected);
-}
 
-fn check_static_match(
-    self: *Patterns,
-    context: *FunctionContext,
-    node: NodeId,
-    arms: []const NodeId,
-    value: StaticPool.Index,
-    expected: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    if (value == .poison_type) return value;
-
-    resolver.scopes.open();
-    defer resolver.scopes.close();
-    for (arms) |arm| {
-        const arm_pattern = resolver.tree.arg(arm, 0);
-        if (!resolver.interpreter.matches_static(context, arm_pattern, value)) continue;
-        resolver.node_static_values[arm] = .bool_true;
-        return resolver.flow.check_branch(context, resolver.tree.arg(arm, 1), expected);
-    }
-    return resolver.report(.non_exhaustive_match, node, value, .none);
-}
-
-fn check_arms(
-    self: *Patterns,
-    context: *FunctionContext,
-    node: NodeId,
-    arms: []const NodeId,
-    scrutinee_type: StaticPool.Index,
-    expected: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
     // errors in a template realization were reported for the template already
     var quiet = resolver.generics.is_inside_template_realization(context);
     var has_catch_all = false;
@@ -102,9 +79,12 @@ fn check_arms(
         const takes_every_value = self.pattern(context, resolver.tree.arg(arm, 0), scrutinee_type);
         quiet = quiet or resolver.doctor.errors_since(resolver.tree, mark, arm);
         const may_be_redundant = !quiet and scrutinee_type != .poison_type;
-        if (may_be_redundant and self.is_redundant(context, scrutinee_type, patterns.items, i)) {
-            resolver.doctor.report(.redundant_match_arm, arm, 0, 0);
-        }
+        // the arms above already cover every value the pattern of this one takes
+        const earlier_rows = patterns.items[0..i];
+        const this_row = patterns.items[i..][0..1];
+        const is_redundant = may_be_redundant and
+            self.covers(context, &.{scrutinee_type}, earlier_rows, i, this_row);
+        if (is_redundant) resolver.doctor.report(.redundant_match_arm, arm, 0, 0);
         has_catch_all = has_catch_all or takes_every_value;
 
         const body = resolver.tree.arg(arm, 1);
@@ -119,48 +99,7 @@ fn check_arms(
         result = resolver.flow.merge_branch_types(arm, result, joined_type, expected);
     }
 
-    result = self.join_literal_arms(arms, result, expected);
-    self.settle_arms(arms[0..first_settled_arm], expected);
-
-    const needs_exhaustiveness = !has_catch_all and scrutinee_type != .poison_type;
-    if (needs_exhaustiveness and !self.is_exhaustive(context, scrutinee_type, patterns.items)) {
-        _ = resolver.report(.non_exhaustive_match, node, scrutinee_type, .none);
-    }
-    return if (result == .none) .unit_type else result;
-}
-
-// the arms above already cover every value the pattern of this one takes
-fn is_redundant(
-    self: *Patterns,
-    context: *FunctionContext,
-    scrutinee_type: StaticPool.Index,
-    patterns: []const NodeId,
-    arm_index: usize,
-) bool {
-    const earlier_rows = patterns[0..arm_index];
-    const this_row = patterns[arm_index..][0..1];
-    return self.covers(context, &.{scrutinee_type}, earlier_rows, arm_index, this_row);
-}
-
-// the arms cover a single wildcard, so every value
-fn is_exhaustive(
-    self: *Patterns,
-    context: *FunctionContext,
-    scrutinee_type: StaticPool.Index,
-    patterns: []const NodeId,
-) bool {
-    return self.covers(context, &.{scrutinee_type}, patterns, patterns.len, &.{0});
-}
-
-// literal bodies were left out of the join: they take the common type of the arms
-fn join_literal_arms(
-    self: *Patterns,
-    arms: []const NodeId,
-    joined_type: StaticPool.Index,
-    expected: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    var result = joined_type;
+    // literal bodies were left out of the join: they take the common type of the arms
     const is_unjoined = result == .none or result == .never_type;
     if (!resolver.static_pool.is_concrete(expected) and is_unjoined) {
         const bodies = resolver.temporary_slice(NodeId, arms.len);
@@ -168,26 +107,32 @@ fn join_literal_arms(
         const literal_type = resolver.flow.common_literal_type(bodies);
         if (literal_type != .none) result = literal_type;
     }
-
-    if (resolver.static_pool.is_concrete(expected)) return result;
-    for (arms) |arm| {
-        const body = resolver.tree.arg(arm, 1);
-        if (!resolver.tree.is_literal(body)) continue;
-        const adapted_type = resolver.flow.adapt(body, resolver.node_types[body], result);
-        result = resolver.flow.merge_branch_types(arm, result, adapted_type, expected);
+    if (!resolver.static_pool.is_concrete(expected)) {
+        for (arms) |arm| {
+            const body = resolver.tree.arg(arm, 1);
+            if (!resolver.tree.is_literal(body)) continue;
+            const adapted_type = resolver.flow.adapt(body, resolver.node_types[body], result);
+            result = resolver.flow.merge_branch_types(arm, result, adapted_type, expected);
+        }
     }
-    return result;
-}
 
-fn settle_arms(self: *Patterns, arms: []const NodeId, expected: StaticPool.Index) void {
-    const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
-    if (!static_pool.is_concrete(expected)) return;
-    for (arms) |arm| {
-        const body = resolver.tree.arg(arm, 1);
-        const body_type = static_pool.substitute_type_variables(resolver.node_types[body]);
-        _ = resolver.flow.settle(body, body_type, expected);
+    if (static_pool.is_concrete(expected)) {
+        for (arms[0..first_settled_arm]) |arm| {
+            const body = resolver.tree.arg(arm, 1);
+            const body_type = static_pool.substitute_type_variables(resolver.node_types[body]);
+            _ = resolver.flow.settle(body, body_type, expected);
+        }
     }
+
+    const needs_exhaustiveness = !has_catch_all and scrutinee_type != .poison_type;
+    // the arms cover a single wildcard, so every value
+    if (needs_exhaustiveness and
+        !self.covers(context, &.{scrutinee_type}, patterns.items, patterns.items.len, &.{0}))
+    {
+        _ = resolver.report(.non_exhaustive_match, node, scrutinee_type, .none);
+    }
+    return if (result == .none) .unit_type else result;
 }
 
 // whether the pattern takes every value of its type
@@ -251,56 +196,35 @@ fn alternatives_pattern(
             continue;
         }
 
-        self.report_unbound_names(alternative, first_start, first_end, alternative_start);
-        self.share_first_declarations(first_start, first_end, alternative_start);
+        // the names of the first alternative this one does not bind
+        const bound_here = scope_names.buffer[alternative_start..scope_names.len];
+        for (scope_names.buffer[first_start..first_end]) |name| {
+            if (std.mem.indexOfScalar(NamePool.Index, bound_here, name) != null) continue;
+            resolver.doctor.report(.undefined_name, alternative, name, 0);
+        }
+
+        // later binders take the declarations of the first alternative, which must agree
+        const scopes = &resolver.scopes;
+        for (alternative_start..scopes.local_names.len) |j| {
+            const binder = resolver.decl_pool.get(scopes.local_declarations.buffer[j], .node);
+            const name = scopes.local_names.buffer[j];
+            const first_names = scopes.local_names.buffer[first_start..first_end];
+            const index_in_first = std.mem.indexOfScalar(NamePool.Index, first_names, name) orelse {
+                resolver.doctor.report(.undefined_name, binder, name, 0);
+                continue;
+            };
+
+            const shared = scopes.local_declarations.buffer[first_start + index_in_first];
+            resolver.node_declarations[binder] = shared;
+            const shared_type = resolver.decl_pool.get(shared, .value_type);
+            const binder_type = resolver.node_types[binder];
+            const disagrees = binder_type != shared_type and binder_type != .poison_type and
+                shared_type != .poison_type;
+            if (disagrees) _ = resolver.report(.type_mismatch, binder, binder_type, shared_type);
+        }
         resolver.scopes.close();
     }
     return takes_every_value;
-}
-
-// the names of the first alternative this one does not bind
-fn report_unbound_names(
-    self: *Patterns,
-    alternative: NodeId,
-    first_start: usize,
-    first_end: usize,
-    alternative_start: usize,
-) void {
-    const resolver = self.owning_resolver();
-    const scope_names = &resolver.scopes.local_names;
-    const bound_here = scope_names.buffer[alternative_start..scope_names.len];
-    for (scope_names.buffer[first_start..first_end]) |name| {
-        if (std.mem.indexOfScalar(NamePool.Index, bound_here, name) != null) continue;
-        resolver.doctor.report(.undefined_name, alternative, name, 0);
-    }
-}
-
-// the binders of a later alternative take the declarations of the first one, which must agree
-fn share_first_declarations(
-    self: *Patterns,
-    first_start: usize,
-    first_end: usize,
-    alternative_start: usize,
-) void {
-    const resolver = self.owning_resolver();
-    const scopes = &resolver.scopes;
-    for (alternative_start..scopes.local_names.len) |j| {
-        const binder = resolver.decl_pool.get(scopes.local_declarations.buffer[j], .node);
-        const name = scopes.local_names.buffer[j];
-        const first_names = scopes.local_names.buffer[first_start..first_end];
-        const index_in_first = std.mem.indexOfScalar(NamePool.Index, first_names, name) orelse {
-            resolver.doctor.report(.undefined_name, binder, name, 0);
-            continue;
-        };
-
-        const shared = scopes.local_declarations.buffer[first_start + index_in_first];
-        resolver.node_declarations[binder] = shared;
-        const shared_type = resolver.decl_pool.get(shared, .value_type);
-        const binder_type = resolver.node_types[binder];
-        const disagrees = binder_type != shared_type and binder_type != .poison_type and
-            shared_type != .poison_type;
-        if (disagrees) _ = resolver.report(.type_mismatch, binder, binder_type, shared_type);
-    }
 }
 
 // `T x`: binds x as a T, every value when the scrutinee always is one
@@ -320,7 +244,10 @@ fn typecast_pattern(
         resolver.declarations.declare_local(name, binder, .pattern_binder, cast_type);
     _ = resolver.set_node_type(binder, cast_type);
 
-    const widens = type_pattern_widens(static_pool, scrutinee_type, cast_type);
+    // poison on either side matches too, its error is reported already
+    const widens = cast_type == scrutinee_type or
+        cast_type == .poison_type or scrutinee_type == .poison_type or
+        static_pool.coercion(scrutinee_type, cast_type) != .incompatible;
     // a variant or trait value may hold a value of a narrower type
     const narrows = switch (static_pool.tag(scrutinee_type)) {
         .variant_type,
@@ -388,23 +315,8 @@ fn constructor_pattern(
         }
         return false;
     }
-    return self.field_patterns(context, node, target);
-}
 
-fn argument_nodes(self: *Patterns, call: NodeId) []const NodeId {
-    const tree = self.owning_resolver().tree;
-    return tree.manychildren(tree.arg(call, 1));
-}
-
-// the arguments of a case or record pattern matched against the fields they bind to
-fn field_patterns(
-    self: *Patterns,
-    context: *FunctionContext,
-    node: NodeId,
-    target: StaticPool.Index,
-) bool {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
+    // the arguments of a case or record pattern matched against the fields they bind to
     const is_case = static_pool.tag(target) == .variant_case_type;
     const record_type = if (is_case) static_pool.get(target).variant_case_type.payload else target;
     const arguments = self.argument_nodes(node);
@@ -433,6 +345,11 @@ fn field_patterns(
     return !is_case and all_take_every_value;
 }
 
+fn argument_nodes(self: *Patterns, call: NodeId) []const NodeId {
+    const tree = self.owning_resolver().tree;
+    return tree.manychildren(tree.arg(call, 1));
+}
+
 // literals, ranges and constant paths match by value, so never every value
 fn value_pattern(
     self: *Patterns,
@@ -443,7 +360,16 @@ fn value_pattern(
     const resolver = self.owning_resolver();
     const pattern_type = resolver.expressions.infer(context, node, scrutinee_type);
     if (resolver.tree.props(node).range) {
-        self.check_range_pattern(node, pattern_type, scrutinee_type);
+        // a range is an array of its elements, those must fit the scrutinee
+        const static_pool = &resolver.static_pool;
+        const range_type = static_pool.substitute_type_variables(pattern_type);
+        if (pattern_type == .poison_type or scrutinee_type == .poison_type) return false;
+        if (static_pool.get(range_type) != .array_type) return false;
+
+        const element_type = static_pool.get(range_type).array_type.element;
+        if (static_pool.coercion(element_type, scrutinee_type) == .incompatible) {
+            _ = resolver.report(.type_mismatch, node, element_type, scrutinee_type);
+        }
         return false;
     }
 
@@ -451,25 +377,6 @@ fn value_pattern(
         _ = resolver.expressions.expect_type(node, pattern_type, scrutinee_type);
     }
     return false;
-}
-
-// a range is an array of its elements, those must fit the scrutinee
-fn check_range_pattern(
-    self: *Patterns,
-    node: NodeId,
-    pattern_type: StaticPool.Index,
-    scrutinee_type: StaticPool.Index,
-) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const range_type = static_pool.substitute_type_variables(pattern_type);
-    if (pattern_type == .poison_type or scrutinee_type == .poison_type) return;
-    if (static_pool.get(range_type) != .array_type) return;
-
-    const element_type = static_pool.get(range_type).array_type.element;
-    if (static_pool.coercion(element_type, scrutinee_type) == .incompatible) {
-        _ = resolver.report(.type_mismatch, node, element_type, scrutinee_type);
-    }
 }
 
 // whether `row_count` rows of patterns over the column types cover the vector `query`
@@ -581,7 +488,40 @@ fn covers_constructors(
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
     const width = columns.len;
-    const constructors = self.constructors_of(columns[0]);
+    // the cases of a variant or of every variant of a union, a record is its own constructor
+    const column_type = columns[0];
+    const is_union = static_pool.tag(column_type) == .variant_union_type;
+    const member_count = if (is_union) static_pool.get(column_type).variant_union_type.len else 1;
+
+    var constructor_count: usize = 0;
+    for (0..member_count) |i| {
+        if (is_union) {
+            const member = static_pool.get(column_type).variant_union_type[i];
+            constructor_count += static_pool.get(member).variant_type.cases.len;
+        } else if (static_pool.tag(column_type) == .variant_type) {
+            constructor_count += static_pool.get(column_type).variant_type.cases.len;
+        } else {
+            constructor_count += 1;
+        }
+    }
+
+    const constructors = resolver.temporary_slice(StaticPool.Index, constructor_count);
+    var filled: usize = 0;
+    for (0..member_count) |i| {
+        const member = if (is_union)
+            static_pool.get(column_type).variant_union_type[i]
+        else
+            column_type;
+        if (static_pool.tag(member) == .record_type) {
+            constructors[filled] = member;
+            filled += 1;
+            continue;
+        }
+        for (static_pool.get(member).variant_type.cases) |case| {
+            constructors[filled] = case;
+            filled += 1;
+        }
+    }
     var next_rows: std.ArrayList(NodeId) = .empty;
     defer next_rows.deinit(resolver.allocator);
     var next_query: std.ArrayList(NodeId) = .empty;
@@ -608,55 +548,6 @@ fn covers_constructors(
         }
     }
     return true;
-}
-
-// the cases of a variant or of every variant of a union, a record is its own constructor
-fn constructors_of(self: *Patterns, column_type: StaticPool.Index) []StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const is_union = static_pool.tag(column_type) == .variant_union_type;
-    const member_count = if (is_union) static_pool.get(column_type).variant_union_type.len else 1;
-
-    var constructor_count: usize = 0;
-    for (0..member_count) |i| {
-        constructor_count += self.constructor_count_of_member(column_type, is_union, i);
-    }
-
-    const constructors = resolver.temporary_slice(StaticPool.Index, constructor_count);
-    var filled: usize = 0;
-    for (0..member_count) |i| {
-        const member = if (is_union)
-            static_pool.get(column_type).variant_union_type[i]
-        else
-            column_type;
-        if (static_pool.tag(member) == .record_type) {
-            constructors[filled] = member;
-            filled += 1;
-            continue;
-        }
-        for (static_pool.get(member).variant_type.cases) |case| {
-            constructors[filled] = case;
-            filled += 1;
-        }
-    }
-    return constructors;
-}
-
-fn constructor_count_of_member(
-    self: *Patterns,
-    column_type: StaticPool.Index,
-    is_union: bool,
-    member_index: usize,
-) usize {
-    const static_pool = &self.owning_resolver().static_pool;
-    if (is_union) {
-        const member = static_pool.get(column_type).variant_union_type[member_index];
-        return static_pool.get(member).variant_type.cases.len;
-    }
-    if (static_pool.tag(column_type) == .variant_type) {
-        return static_pool.get(column_type).variant_type.cases.len;
-    }
-    return 1;
 }
 
 // an integer column splits into the segments between the bounds of the patterns
@@ -686,78 +577,49 @@ fn covers_integers(
     defer next_rows.deinit(resolver.allocator);
     var cuts: std.ArrayList(i128) = .empty;
     defer cuts.deinit(resolver.allocator);
-    self.collect_cuts(context, rows, width, min, query_bounds, &cuts);
+    // the segments start at the type minimum and at each bound of the query and of the rows
+    cuts.append(resolver.allocator, min) catch @panic("OOM");
+    if (query_bounds) |bounds| {
+        cuts.appendSlice(resolver.allocator, &.{ bounds[0], bounds[1] +| 1 }) catch @panic("OOM");
+    }
+    for (0..rows.len / width) |row_index| {
+        const row_pattern = rows[row_index * width];
+        if (row_pattern == 0) continue;
+        const bounds = self.interval(context, row_pattern) orelse continue;
+        cuts.appendSlice(resolver.allocator, &.{ bounds[0], bounds[1] +| 1 }) catch @panic("OOM");
+    }
+    std.mem.sort(i128, cuts.items, {}, std.sort.asc(i128));
 
     for (cuts.items, 0..) |low, cut_index| {
         const is_repeated = cut_index > 0 and cuts.items[cut_index - 1] == low;
         if (low < min or low > max or is_repeated) continue;
-        const high = segment_end(cuts.items[cut_index..], low, max);
+        // a segment ends before the next cut above its start
+        const high = blk: {
+            for (cuts.items[cut_index..]) |cut| {
+                if (cut > low) break :blk @min(cut - 1, max);
+            }
+            break :blk max;
+        };
         if (query_bounds) |bounds| if (low < bounds[0] or high > bounds[1]) continue;
 
         next_rows.clearRetainingCapacity();
-        const next_count = self.rows_covering_segment(context, rows, width, low, high, &next_rows);
+        // the rest of the rows whose first pattern takes every value of the segment
+        var next_count: usize = 0;
+        for (0..rows.len / width) |row_index| {
+            const row = rows[row_index * width ..][0..width];
+            if (row[0] != 0) {
+                const bounds = self.interval(context, row[0]) orelse continue;
+                if (bounds[0] > low or bounds[1] < high) continue;
+            }
+            next_rows.appendSlice(resolver.allocator, row[1..]) catch @panic("OOM");
+            next_count += 1;
+        }
         const rest_columns = columns[1..];
         if (!self.covers(context, rest_columns, next_rows.items, next_count, query[1..width])) {
             return false;
         }
     }
     return true;
-}
-
-// the segments start at the type minimum and at each bound of the query and of the rows
-fn collect_cuts(
-    self: *Patterns,
-    context: *FunctionContext,
-    rows: []const NodeId,
-    width: usize,
-    min: i128,
-    query_bounds: ?[2]i128,
-    cuts: *std.ArrayList(i128),
-) void {
-    const alloc = self.owning_resolver().allocator;
-    cuts.append(alloc, min) catch @panic("OOM");
-    if (query_bounds) |bounds| {
-        cuts.appendSlice(alloc, &.{ bounds[0], bounds[1] +| 1 }) catch @panic("OOM");
-    }
-    for (0..rows.len / width) |row_index| {
-        const row_pattern = rows[row_index * width];
-        if (row_pattern == 0) continue;
-        const bounds = self.interval(context, row_pattern) orelse continue;
-        cuts.appendSlice(alloc, &.{ bounds[0], bounds[1] +| 1 }) catch @panic("OOM");
-    }
-    std.mem.sort(i128, cuts.items, {}, std.sort.asc(i128));
-}
-
-// a segment ends before the next cut above its start
-fn segment_end(cuts_from_start: []const i128, low: i128, max: i128) i128 {
-    for (cuts_from_start) |cut| {
-        if (cut > low) return @min(cut - 1, max);
-    }
-    return max;
-}
-
-// the rest of the rows whose first pattern takes every value of the segment
-fn rows_covering_segment(
-    self: *Patterns,
-    context: *FunctionContext,
-    rows: []const NodeId,
-    width: usize,
-    low: i128,
-    high: i128,
-    out: *std.ArrayList(NodeId),
-) usize {
-    const alloc = self.owning_resolver().allocator;
-    var count: usize = 0;
-    for (0..rows.len / width) |row_index| {
-        const row = rows[row_index * width ..][0..width];
-        if (row[0] != 0) {
-            const bounds = self.interval(context, row[0]) orelse continue;
-            if (bounds[0] > low or bounds[1] < high) continue;
-        }
-        out.appendSlice(alloc, row[1..]) catch @panic("OOM");
-        count += 1;
-    }
-    return count;
 }
 
 // any other type has no constructors to split by, only wildcards cover it
@@ -804,7 +666,11 @@ fn spread(
         },
         .partial__match_case_pattern_typecast => {
             const cast_type = resolver.node_types[resolver.tree.arg(normalized, 1)];
-            if (!type_pattern_widens(&resolver.static_pool, column_type, cast_type)) break;
+            // poison on either side matches too, its error is reported already
+            const widens = cast_type == column_type or
+                cast_type == .poison_type or column_type == .poison_type or
+                resolver.static_pool.coercion(column_type, cast_type) != .incompatible;
+            if (!widens) break;
             normalized = 0;
         },
         else => break,
@@ -823,59 +689,52 @@ fn specialize(
     fields: []const NodeId,
     out: *std.ArrayList(NodeId),
 ) usize {
-    const alloc = self.owning_resolver().allocator;
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const alloc = resolver.allocator;
     var count: usize = 0;
     for (0..rows.len / width) |row_index| {
         const row = rows[row_index * width ..][0..width];
-        if (!self.is_of_constructor(row[0], constructor)) continue;
-        self.append_field_patterns(row[0], fields, out);
+        const row_pattern = row[0];
+        const is_of_constructor = blk: {
+            if (row_pattern == 0) break :blk true;
+
+            const is_typecast =
+                resolver.tree.kind(row_pattern) == .partial__match_case_pattern_typecast;
+            const pattern_type = if (is_typecast)
+                resolver.node_types[resolver.tree.arg(row_pattern, 1)]
+            else
+                resolver.node_types[row_pattern];
+            switch (static_pool.tag(constructor)) {
+                .variant_case_type => {
+                    const variant = static_pool.get(constructor).variant_case_type.variant;
+                    break :blk pattern_type == variant or self.same(pattern_type, constructor);
+                },
+                .record_type => break :blk self.same(pattern_type, constructor),
+                else => {
+                    const boolean_kind: ParseTree.Node.Kind =
+                        if (constructor == .bool_true) .boolean_true else .boolean_false;
+                    break :blk resolver.tree.kind(row_pattern) == boolean_kind;
+                },
+            }
+        };
+        if (!is_of_constructor) continue;
+
+        // what a constructor pattern gives its fields, by name or position, wildcards for the rest
+        const at = out.items.len;
+        out.appendNTimes(alloc, 0, fields.len) catch @panic("OOM");
+        const is_call = row_pattern != 0 and resolver.tree.kind(row_pattern) == .fun_call;
+        const arguments = if (is_call) self.argument_nodes(row_pattern) else &[_]NodeId{};
+        const field_of_argument = resolver.temporary_slice(u32, arguments.len);
+        if (resolver.calls.bind_arguments(fields, arguments, field_of_argument, true)) {
+            for (arguments, 0..) |argument, i| {
+                out.items[at + field_of_argument[i]] = resolver.tree.arg_value(argument);
+            }
+        }
         out.appendSlice(alloc, row[1..]) catch @panic("OOM");
         count += 1;
     }
     return count;
-}
-
-fn is_of_constructor(self: *Patterns, row_pattern: NodeId, constructor: StaticPool.Index) bool {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    if (row_pattern == 0) return true;
-
-    const is_typecast = resolver.tree.kind(row_pattern) == .partial__match_case_pattern_typecast;
-    const pattern_type = if (is_typecast)
-        resolver.node_types[resolver.tree.arg(row_pattern, 1)]
-    else
-        resolver.node_types[row_pattern];
-    return switch (static_pool.tag(constructor)) {
-        .variant_case_type => {
-            const variant = static_pool.get(constructor).variant_case_type.variant;
-            return pattern_type == variant or self.same(pattern_type, constructor);
-        },
-        .record_type => self.same(pattern_type, constructor),
-        else => {
-            const boolean_kind: ParseTree.Node.Kind =
-                if (constructor == .bool_true) .boolean_true else .boolean_false;
-            return resolver.tree.kind(row_pattern) == boolean_kind;
-        },
-    };
-}
-
-// the patterns a constructor pattern gives its fields, by name or position, wildcards for the rest
-fn append_field_patterns(
-    self: *Patterns,
-    row_pattern: NodeId,
-    fields: []const NodeId,
-    out: *std.ArrayList(NodeId),
-) void {
-    const resolver = self.owning_resolver();
-    const at = out.items.len;
-    out.appendNTimes(resolver.allocator, 0, fields.len) catch @panic("OOM");
-    const is_call = row_pattern != 0 and resolver.tree.kind(row_pattern) == .fun_call;
-    const arguments = if (is_call) self.argument_nodes(row_pattern) else &[_]NodeId{};
-    const field_of_argument = resolver.temporary_slice(u32, arguments.len);
-    if (!resolver.calls.bind_arguments(fields, arguments, field_of_argument, true)) return;
-    for (arguments, 0..) |argument, i| {
-        out.items[at + field_of_argument[i]] = resolver.tree.arg_value(argument);
-    }
 }
 
 // a constructor of another realization of the same template stands for this one
@@ -911,16 +770,4 @@ fn interval(self: *Patterns, context: *FunctionContext, node: NodeId) ?[2]i128 {
     if (range.hi == 0) return .{ low, std.math.maxInt(i128) };
     const high = static_values.static_integer(context, range.hi) orelse return null;
     return .{ low, high - @intFromBool(!range.incl) };
-}
-
-// `T x` matches every value (it binds like a name) when the scrutinee coerces to `T`.
-// poison on either side matches too, its error is reported already
-fn type_pattern_widens(
-    static_pool: *StaticPool,
-    scrutinee_type: StaticPool.Index,
-    cast_type: StaticPool.Index,
-) bool {
-    if (cast_type == scrutinee_type) return true;
-    if (cast_type == .poison_type or scrutinee_type == .poison_type) return true;
-    return static_pool.coercion(scrutinee_type, cast_type) != .incompatible;
 }

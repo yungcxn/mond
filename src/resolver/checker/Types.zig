@@ -89,28 +89,24 @@ fn unlengthed_array_type(self: *Types, context: *FunctionContext, node: NodeId) 
 
 fn lengthed_array_type(self: *Types, context: *FunctionContext, node: NodeId) StaticPool.Index {
     const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
     const length_node = resolver.tree.arg(node, 0);
     const length_value = resolver.static_values.evaluate_or_defer(context, length_node) orelse
         .poison_type;
-    const length = self.array_length_of_value(length_node, length_value);
+    const length: StaticPool.Index = blk: {
+        if (static_pool.tag(length_value) == .int_value) {
+            const bits = static_pool.get(length_value).int_value.bits;
+            break :blk static_pool.intern(.{ .int_value = .{
+                .value_type = .u64_type,
+                .bits = bits,
+            } });
+        }
+        if (length_value == .poison_type) break :blk length_value;
+        break :blk resolver.report(.not_static, length_node, length_value, 0);
+    };
     const element = self.type_from_node(context, resolver.tree.arg(node, 1));
     const array_type = StaticPool.ArrayType{ .length = length, .element = element };
     return resolver.static_pool.intern(.{ .array_type = array_type });
-}
-
-fn array_length_of_value(
-    self: *Types,
-    length_node: NodeId,
-    value: StaticPool.Index,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    if (static_pool.tag(value) == .int_value) {
-        const bits = static_pool.get(value).int_value.bits;
-        return static_pool.intern(.{ .int_value = .{ .value_type = .u64_type, .bits = bits } });
-    }
-    if (value == .poison_type) return value;
-    return resolver.report(.not_static, length_node, value, 0);
 }
 
 fn type_from_static_value(
@@ -237,8 +233,31 @@ pub fn check_type_definition(
     defer resolver.scopes.close();
 
     const body = definition.body;
-    const members = if (!is_trait and body != 0) trait_members(resolver.tree, body) else 0;
-    const implemented = self.implemented_traits(context, declaration, body, members);
+    // `!{..}` keeps its members in argument 0, `implof(..) !{..}` in argument 1
+    const members = if (!is_trait and body != 0)
+        resolver.tree.arg(body, if (resolver.tree.kind(body) == .def_trait_implof) 1 else 0)
+    else
+        0;
+    const implemented: ImplementedTraits = blk: {
+        // `implof(A, B) X` names its traits in argument 0, anything else implements none
+        const trait_nodes: []const NodeId = if (members != 0 and
+            resolver.tree.kind(body) == .def_trait_implof)
+            resolver.tree.manychildren(resolver.tree.arg(body, 0))
+        else
+            &.{};
+        const traits = resolver.temporary_slice(StaticPool.Index, trait_nodes.len + 1);
+        if (members == 0) break :blk .{ .own = .none, .traits = traits[0..0] };
+
+        var own: StaticPool.Index = .none;
+        var count: usize = 0;
+        if (resolver.tree.manychildren(members).len > 0) {
+            own = static_pool.reserve_nominal(declaration);
+            traits[0] = own;
+            count = 1;
+        }
+        count += self.resolve_traits(context, trait_nodes, traits[count..]);
+        break :blk .{ .own = own, .traits = traits[0..count] };
+    };
     var own = implemented.own;
 
     switch (core_kind) {
@@ -255,45 +274,78 @@ pub fn check_type_definition(
     if (own != .none and !is_trait) {
         _ = self.trait_body(context, members, own, nominal, &.{}, declaration);
     }
-    if (own != .none) self.check_member_bodies(own);
+    // member bodies once the type is complete, before the fields are names
+    if (own != .none) {
+        const trait = static_pool.get(own).trait_type;
+        const member_count = trait.member_names.len;
+        for (0..member_count) |i| resolver.declarations.check_body(trait.declaration.member(i));
+        resolver.mutability.propagate_writes(trait.declaration, member_count);
+    }
+    // defaults and where-clauses see the fields by name, the snapshot's locals start at them
     if (static_pool.tag(nominal) == .record_type) {
-        first_local = self.check_field_clauses(context, nominal, core);
+        const fields = resolver.tree.fields_of(core);
+        first_local = decl_pool.entries.len();
+        for (fields, 0..) |field_node, i| {
+            const field_type = static_pool.field_type(nominal, i);
+            const name = static_pool.get(nominal).record_type.field_names[i];
+            const field_declaration =
+                resolver.declarations.declare_local(name, field_node, .field, field_type);
+            const field = ParseTree.Param.from_node(resolver.tree, field_node);
+            decl_pool.pointer(field_declaration, .flags).is_mut = field.is_mut;
+            resolver.declarations.link_identifier(field.name, field_declaration, field_type);
+        }
+
+        // a default sees the fields before its own, a where-clause all of them
+        const first_field = resolver.scopes.local_names.len - fields.len;
+        const names = resolver.temporary_slice(NamePool.Index, fields.len);
+        @memcpy(names, resolver.scopes.local_names.buffer[first_field..][0..fields.len]);
+        @memset(resolver.scopes.local_names.buffer[first_field..][0..fields.len], .empty);
+
+        for (fields, 0..) |field_node, i| {
+            const field = ParseTree.Param.from_node(resolver.tree, field_node);
+            if (field.default != 0) {
+                const field_type = static_pool.field_type(nominal, i);
+                _ = resolver.expressions.check(context, field.default, field_type);
+            }
+            resolver.scopes.local_names.buffer[first_field + i] = names[i];
+        }
+        for (fields, 0..) |field_node, i| {
+            const field = ParseTree.Param.from_node(resolver.tree, field_node);
+            const field_type = static_pool.field_type(nominal, i);
+            resolver.declarations.check_parameter_guards(context, field, field_type);
+        }
     }
     if (!is_trait) {
-        self.check_conformance(nominal, own, implemented.traits, node);
+        for (implemented.traits) |trait| {
+            if (trait == own or static_pool.tag(trait) != .trait_type) continue;
+            self.conform(nominal, own, trait, node);
+        }
         if (static_pool.layout(nominal).state == .infinite) {
             _ = resolver.report(.recursive_by_value_type, node, nominal, .none);
         }
         resolver.bodies.register(resolver.capture_body(declaration, node, first_local));
     }
-    if (definition.size != 0) self.check_assert_size(context, definition.size, nominal);
-    return nominal;
-}
+    if (definition.size != 0) {
+        const size_node = definition.size;
+        const value = resolver.interpreter.evaluate_static(context, size_node);
+        if (value == .poison_type) return nominal;
+        // `assertsize(T)` asks for the size of `T`, `assertsize(8)` for 8 bytes
+        const wanted_size: u64 = if (static_pool.properties(value).is_type)
+            static_pool.layout(value).size
+        else if (static_pool.tag(value) == .int_value)
+            static_pool.get(value).int_value.bits
+        else {
+            // a size is asserted as a type or a byte count
+            _ = resolver.report(.type_mismatch, size_node, static_pool.type_of(value), .u64_type);
+            return nominal;
+        };
 
-fn implemented_traits(
-    self: *Types,
-    context: *FunctionContext,
-    declaration: DeclPool.Index,
-    body: NodeId,
-    members: NodeId,
-) ImplementedTraits {
-    const resolver = self.owning_resolver();
-    const trait_nodes: []const NodeId = if (members != 0)
-        implemented_trait_nodes(resolver.tree, body)
-    else
-        &.{};
-    const traits = resolver.temporary_slice(StaticPool.Index, trait_nodes.len + 1);
-    if (members == 0) return .{ .own = .none, .traits = traits[0..0] };
-
-    var own: StaticPool.Index = .none;
-    var count: usize = 0;
-    if (resolver.tree.manychildren(members).len > 0) {
-        own = resolver.static_pool.reserve_nominal(declaration);
-        traits[0] = own;
-        count = 1;
+        const actual_size = static_pool.layout(nominal).size;
+        if (actual_size != wanted_size) {
+            _ = resolver.report(.assertsize_failed, size_node, actual_size, wanted_size);
+        }
     }
-    count += self.resolve_traits(context, trait_nodes, traits[count..]);
-    return .{ .own = own, .traits = traits[0..count] };
+    return nominal;
 }
 
 // the traits named by `trait_nodes` into `traits`, poisoned ones left out; returns their count
@@ -317,18 +369,6 @@ fn resolve_traits(
     return count;
 }
 
-// `implof(A, B) X` names its traits in argument 0, anything else implements none
-fn implemented_trait_nodes(tree: *const ParseTree, node: NodeId) []const NodeId {
-    if (tree.kind(node) != .def_trait_implof) return &.{};
-    return tree.manychildren(tree.arg(node, 0));
-}
-
-// `!{..}` keeps its members in argument 0, `implof(..) !{..}` in argument 1
-fn trait_members(tree: *const ParseTree, node: NodeId) NodeId {
-    const is_implof = tree.kind(node) == .def_trait_implof;
-    return tree.arg(node, if (is_implof) 1 else 0);
-}
-
 fn define_trait(
     self: *Types,
     context: *FunctionContext,
@@ -337,31 +377,22 @@ fn define_trait(
     core: NodeId,
 ) StaticPool.Index {
     const resolver = self.owning_resolver();
-    const super_nodes = implemented_trait_nodes(resolver.tree, core);
+    const is_implof = resolver.tree.kind(core) == .def_trait_implof;
+    // `implof(A, B) X` names its traits in argument 0, anything else implements none
+    const super_nodes: []const NodeId = if (is_implof)
+        resolver.tree.manychildren(resolver.tree.arg(core, 0))
+    else
+        &.{};
     const super_traits = resolver.temporary_slice(StaticPool.Index, super_nodes.len);
     const super_count = self.resolve_traits(context, super_nodes, super_traits);
-    const members = trait_members(resolver.tree, core);
+    // `!{..}` keeps its members in argument 0, `implof(..) !{..}` in argument 1
+    const members = resolver.tree.arg(core, if (is_implof) 1 else 0);
     const resolved_supers = super_traits[0..super_count];
     return self.trait_body(context, members, nominal, .none, resolved_supers, declaration);
 }
 
 // the parts of one variant case `name: Payload = tag`, absent parts are 0
 const VariantCaseParts = struct { name: NodeId, tag: NodeId, payload: NodeId };
-
-fn variant_case_parts(tree: *const ParseTree, case_node: NodeId) VariantCaseParts {
-    var parts = VariantCaseParts{ .name = 0, .tag = 0, .payload = 0 };
-    var inner = case_node;
-    if (tree.kind(inner) == .partial__variant_def_param_tagged) {
-        parts.tag = tree.arg(inner, 1);
-        inner = tree.arg(inner, 0);
-    }
-    if (tree.kind(inner) == .partial__variant_def_param_typed) {
-        parts.payload = tree.arg(inner, 1);
-        inner = tree.arg(inner, 0);
-    }
-    parts.name = tree.arg(inner, 0);
-    return parts;
-}
 
 // which cases carry a payload: how many and the last one
 const PayloadSummary = struct { count: usize = 0, last_case: ?usize = null };
@@ -383,15 +414,53 @@ fn define_variant(
     var payloads = PayloadSummary{};
     var next_tag: StaticPool.IntValue = .{ .value_type = .u64_type, .bits = 0 };
     for (case_nodes, 0..) |case_node, i| {
-        cases[i] = self.variant_case(
-            context,
-            declaration,
-            nominal,
-            case_node,
-            i,
-            cases[0..i],
-            &next_tag,
-        );
+        var parts = VariantCaseParts{ .name = 0, .tag = 0, .payload = 0 };
+        var inner = case_node;
+        if (resolver.tree.kind(inner) == .partial__variant_def_param_tagged) {
+            parts.tag = resolver.tree.arg(inner, 1);
+            inner = resolver.tree.arg(inner, 0);
+        }
+        if (resolver.tree.kind(inner) == .partial__variant_def_param_typed) {
+            parts.payload = resolver.tree.arg(inner, 1);
+            inner = resolver.tree.arg(inner, 0);
+        }
+        parts.name = resolver.tree.arg(inner, 0);
+        const payload = if (parts.payload == 0)
+            .none
+        else
+            self.check_type_definition(
+                context,
+                resolver.decl_pool.push(.empty, parts.payload, .record, .none, .{}),
+                parts.payload,
+            );
+
+        const tag_value = if (parts.tag == 0)
+            static_pool.intern(.{ .int_value = next_tag })
+        else
+            resolver.interpreter.evaluate_static(context, parts.tag);
+        if (static_pool.tag(tag_value) == .int_value) {
+            const int = static_pool.get(tag_value).int_value;
+            next_tag = .{ .value_type = int.value_type, .bits = int.bits +% 1 };
+        } else if (tag_value != .poison_type) {
+            _ = resolver.report_mismatch(parts.tag, static_pool.type_of(tag_value), .u64_type);
+        }
+
+        const name = resolver.name_pool.name_of_node(parts.name);
+        for (cases[0..i]) |previous| {
+            if (static_pool.get(previous).variant_case_type.name != name) continue;
+            // one report per repeated case, like fields and parameters
+            resolver.doctor.report(.duplicate_declaration, case_node, name, declaration);
+            break;
+        }
+
+        const case_type = static_pool.intern(.{ .variant_case_type = .{
+            .variant = nominal,
+            .case_index = @intCast(i),
+            .name = name,
+            .tag = tag_value,
+            .payload = payload,
+        } });
+        cases[i] = resolver.set_node_type(parts.name, case_type);
         if (static_pool.get(cases[i]).variant_case_type.payload == .none) continue;
         payloads.last_case = i;
         payloads.count += 1;
@@ -400,9 +469,28 @@ fn define_variant(
     // variants are always tagged, without tagof by the smallest tag type for their case count
     const is_self_tagged = tagof != 0 and resolver.tree.kind(tagof) == .identifier_self;
     const mode: StaticPool.VariantTagMode = if (is_self_tagged) .self else .int;
-    const tag_type = self.variant_tag_type(context, tagof, mode, cases, payloads);
+    const tag_type: StaticPool.Index = blk: {
+        if (tagof == 0) break :blk StaticPool.smallest_tag_type(cases.len);
+        if (mode != .self) break :blk self.type_from_node(context, tagof);
+
+        // the one payload type encodes the other cases in bit patterns it never uses
+        if (payloads.count != 1) {
+            break :blk resolver.report(.self_tag_without_niche, tagof, payloads.count, 0);
+        }
+        const payload = static_pool.get(cases[payloads.last_case.?]).variant_case_type.payload;
+        const fields = static_pool.get(payload).record_type.field_types;
+        if (fields.len == 1 and static_pool.properties(fields[0]).is_integer) break :blk fields[0];
+        break :blk resolver.report(.self_tag_without_niche, tagof, 0, 0);
+    };
+    // with a self tag the payload case is told apart by its niche, it has no tag value to overflow
     if (tag_type != .none and tag_type != .poison_type) {
-        self.check_tag_overflow(case_nodes, cases, mode, tag_type);
+        for (case_nodes, 0..) |case_node, i| {
+            const case = static_pool.get(cases[i]).variant_case_type;
+            if (mode != .int and case.payload != .none) continue;
+            if (static_pool.tag(case.tag) != .int_value) continue;
+            if (static_pool.fits(case.tag, tag_type)) continue;
+            _ = resolver.report(.tag_overflow, case_node, case.tag, tag_type);
+        }
     }
 
     static_pool.complete_nominal(nominal, .{ .variant_type = .{
@@ -413,98 +501,6 @@ fn define_variant(
         .cases = cases[0..case_nodes.len],
         .traits = traits,
     } });
-}
-
-fn variant_case(
-    self: *Types,
-    context: *FunctionContext,
-    declaration: DeclPool.Index,
-    nominal: StaticPool.Index,
-    case_node: NodeId,
-    case_index: usize,
-    previous_cases: []const StaticPool.Index,
-    next_tag: *StaticPool.IntValue,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const parts = variant_case_parts(resolver.tree, case_node);
-    const payload = if (parts.payload == 0) .none else self.payload_type(context, parts.payload);
-
-    const tag_value = if (parts.tag == 0)
-        static_pool.intern(.{ .int_value = next_tag.* })
-    else
-        resolver.interpreter.evaluate_static(context, parts.tag);
-    if (static_pool.tag(tag_value) == .int_value) {
-        const int = static_pool.get(tag_value).int_value;
-        next_tag.* = .{ .value_type = int.value_type, .bits = int.bits +% 1 };
-    } else if (tag_value != .poison_type) {
-        _ = resolver.report_mismatch(parts.tag, static_pool.type_of(tag_value), .u64_type);
-    }
-
-    const name = resolver.name_pool.name_of_node(parts.name);
-    for (previous_cases) |previous| {
-        if (static_pool.get(previous).variant_case_type.name != name) continue;
-        // one report per repeated case, like fields and parameters
-        resolver.doctor.report(.duplicate_declaration, case_node, name, declaration);
-        break;
-    }
-
-    const case_type = static_pool.intern(.{ .variant_case_type = .{
-        .variant = nominal,
-        .case_index = @intCast(case_index),
-        .name = name,
-        .tag = tag_value,
-        .payload = payload,
-    } });
-    return resolver.set_node_type(parts.name, case_type);
-}
-
-fn payload_type(self: *Types, context: *FunctionContext, payload_node: NodeId) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const declaration = resolver.decl_pool.push(.empty, payload_node, .record, .none, .{});
-    return self.check_type_definition(context, declaration, payload_node);
-}
-
-fn variant_tag_type(
-    self: *Types,
-    context: *FunctionContext,
-    tagof: NodeId,
-    mode: StaticPool.VariantTagMode,
-    cases: []const StaticPool.Index,
-    payloads: PayloadSummary,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    if (tagof == 0) return StaticPool.smallest_tag_type(cases.len);
-    if (mode != .self) return self.type_from_node(context, tagof);
-
-    // the one payload type encodes the other cases in bit patterns it never uses
-    if (payloads.count != 1) {
-        return resolver.report(.self_tag_without_niche, tagof, payloads.count, 0);
-    }
-    const payload = static_pool.get(cases[payloads.last_case.?]).variant_case_type.payload;
-    const fields = static_pool.get(payload).record_type.field_types;
-    if (fields.len == 1 and static_pool.properties(fields[0]).is_integer) return fields[0];
-    return resolver.report(.self_tag_without_niche, tagof, 0, 0);
-}
-
-// with a self tag the payload case is told apart by its niche, it has no tag value to overflow
-fn check_tag_overflow(
-    self: *Types,
-    case_nodes: []const NodeId,
-    cases: []const StaticPool.Index,
-    mode: StaticPool.VariantTagMode,
-    tag_type: StaticPool.Index,
-) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    for (case_nodes, 0..) |case_node, i| {
-        const case = static_pool.get(cases[i]).variant_case_type;
-        if (mode != .int and case.payload != .none) continue;
-        if (static_pool.tag(case.tag) != .int_value) continue;
-        if (static_pool.fits(case.tag, tag_type)) continue;
-        _ = resolver.report(.tag_overflow, case_node, case.tag, tag_type);
-    }
 }
 
 fn define_record(
@@ -537,115 +533,6 @@ fn define_record(
     } });
 }
 
-// member bodies once the type is complete, before the fields are names
-fn check_member_bodies(self: *Types, own: StaticPool.Index) void {
-    const resolver = self.owning_resolver();
-    const trait = resolver.static_pool.get(own).trait_type;
-    const body = trait.declaration;
-    const member_count = trait.member_names.len;
-    for (0..member_count) |i| resolver.declarations.check_body(body.member(i));
-    resolver.mutability.propagate_writes(body, member_count);
-}
-
-// defaults and where-clauses see the fields by name; returns where the snapshot's locals start
-fn check_field_clauses(
-    self: *Types,
-    context: *FunctionContext,
-    nominal: StaticPool.Index,
-    core: NodeId,
-) u32 {
-    const resolver = self.owning_resolver();
-    const fields = resolver.tree.fields_of(core);
-    const first_local = resolver.decl_pool.entries.len();
-    self.declare_fields(nominal, fields);
-    self.check_field_defaults(context, nominal, fields);
-    for (fields, 0..) |field_node, i| {
-        const field = ParseTree.Param.from_node(resolver.tree, field_node);
-        const field_type = resolver.static_pool.field_type(nominal, i);
-        resolver.declarations.check_parameter_guards(context, field, field_type);
-    }
-    return first_local;
-}
-
-fn declare_fields(self: *Types, nominal: StaticPool.Index, fields: []const NodeId) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    for (fields, 0..) |field_node, i| {
-        const field_type = static_pool.field_type(nominal, i);
-        const name = static_pool.get(nominal).record_type.field_names[i];
-        const declaration =
-            resolver.declarations.declare_local(name, field_node, .field, field_type);
-        const field = ParseTree.Param.from_node(resolver.tree, field_node);
-        resolver.decl_pool.pointer(declaration, .flags).is_mut = field.is_mut;
-        resolver.declarations.link_identifier(field.name, declaration, field_type);
-    }
-}
-
-// a default sees the fields before its own, a where-clause all of them
-fn check_field_defaults(
-    self: *Types,
-    context: *FunctionContext,
-    nominal: StaticPool.Index,
-    fields: []const NodeId,
-) void {
-    const resolver = self.owning_resolver();
-    const first_field = resolver.scopes.local_names.len - fields.len;
-    const names = resolver.temporary_slice(NamePool.Index, fields.len);
-    @memcpy(names, resolver.scopes.local_names.buffer[first_field..][0..fields.len]);
-    @memset(resolver.scopes.local_names.buffer[first_field..][0..fields.len], .empty);
-
-    for (fields, 0..) |field_node, i| {
-        const field = ParseTree.Param.from_node(resolver.tree, field_node);
-        if (field.default != 0) {
-            const field_type = resolver.static_pool.field_type(nominal, i);
-            _ = resolver.expressions.check(context, field.default, field_type);
-        }
-        resolver.scopes.local_names.buffer[first_field + i] = names[i];
-    }
-}
-
-fn check_conformance(
-    self: *Types,
-    nominal: StaticPool.Index,
-    own: StaticPool.Index,
-    traits: []const StaticPool.Index,
-    node: NodeId,
-) void {
-    const static_pool = &self.owning_resolver().static_pool;
-    for (traits) |trait| {
-        if (trait == own or static_pool.tag(trait) != .trait_type) continue;
-        self.conform(nominal, own, trait, node);
-    }
-}
-
-fn check_assert_size(
-    self: *Types,
-    context: *FunctionContext,
-    size_node: NodeId,
-    nominal: StaticPool.Index,
-) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const value = resolver.interpreter.evaluate_static(context, size_node);
-    if (value == .poison_type) return;
-    const wanted_size = asserted_size(static_pool, value) orelse {
-        // a size is asserted as a type or a byte count
-        _ = resolver.report(.type_mismatch, size_node, static_pool.type_of(value), .u64_type);
-        return;
-    };
-
-    const actual_size = static_pool.layout(nominal).size;
-    if (actual_size == wanted_size) return;
-    _ = resolver.report(.assertsize_failed, size_node, actual_size, wanted_size);
-}
-
-// `assertsize(T)` asks for the size of `T`, `assertsize(8)` for 8 bytes
-fn asserted_size(static_pool: *StaticPool, value: StaticPool.Index) ?u64 {
-    if (static_pool.properties(value).is_type) return static_pool.layout(value).size;
-    if (static_pool.tag(value) == .int_value) return static_pool.get(value).int_value.bits;
-    return null;
-}
-
 // a trait body: one row for the body (its value is the self type), then one row per function member
 // rows are contiguous so member i is row + 1 + i; static members (`stc u32 MASK = ..`) are locals
 fn trait_body(
@@ -661,7 +548,23 @@ fn trait_body(
     const static_pool = &resolver.static_pool;
     const body_name = if (self_type == .none) resolver.decl_pool.get(owner, .name) else .empty;
     const body_declaration = resolver.decl_pool.push(body_name, body, .trait, .trait_type, .{});
-    self.inherit_realization(owner, body_declaration);
+
+    // the body of a realized type belongs to the same realization as the type
+    const generics = &resolver.generics;
+    if (generics.realization_arguments.get(owner)) |arguments| {
+        generics.realization_arguments.put(
+            resolver.allocator,
+            body_declaration,
+            arguments,
+        ) catch @panic("OOM");
+    }
+    if (generics.template_of.get(owner)) |template| {
+        generics.template_of.put(
+            resolver.allocator,
+            body_declaration,
+            template,
+        ) catch @panic("OOM");
+    }
 
     const trait = if (reserved != .none)
         reserved
@@ -670,38 +573,7 @@ fn trait_body(
     const body_value = if (self_type != .none) self_type else trait;
     resolver.decl_pool.set(body_declaration, .static_value, body_value);
 
-    const names = self.declare_trait_members(body, owner);
-    for (resolver.tree.manychildren(body)) |statement| {
-        if (Declarations.Stmt.from_node(resolver, statement).is_member()) continue;
-        _ = resolver.declarations.check_statement(context, statement);
-    }
-
-    const types = resolver.temporary_slice(StaticPool.Index, names.len);
-    for (0..names.len) |i| types[i] = self.declaration_type(body_declaration.member(i));
-    static_pool.complete_nominal(trait, .{ .trait_type = .{
-        .declaration = body_declaration,
-        .member_names = names,
-        .member_types = types,
-        .super_traits = super_traits,
-    } });
-    return trait;
-}
-
-// the body of a realized type belongs to the same realization as the type
-fn inherit_realization(self: *Types, owner: DeclPool.Index, body: DeclPool.Index) void {
-    const resolver = self.owning_resolver();
-    const generics = &resolver.generics;
-    if (generics.realization_arguments.get(owner)) |arguments| {
-        generics.realization_arguments.put(resolver.allocator, body, arguments) catch @panic("OOM");
-    }
-    if (generics.template_of.get(owner)) |template| {
-        generics.template_of.put(resolver.allocator, body, template) catch @panic("OOM");
-    }
-}
-
-// one declaration per function member, pushed right after the body; returns their names
-fn declare_trait_members(self: *Types, body: NodeId, owner: DeclPool.Index) []NamePool.Index {
-    const resolver = self.owning_resolver();
+    // one declaration per function member, pushed right after the body
     const statements = resolver.tree.manychildren(body);
     const names = resolver.temporary_slice(NamePool.Index, statements.len);
     var count: usize = 0;
@@ -724,7 +596,20 @@ fn declare_trait_members(self: *Types, body: NodeId, owner: DeclPool.Index) []Na
         resolver.node_declarations[name_node] = declaration;
         count += 1;
     }
-    return names[0..count];
+    for (resolver.tree.manychildren(body)) |statement| {
+        if (Declarations.Stmt.from_node(resolver, statement).is_member()) continue;
+        _ = resolver.declarations.check_statement(context, statement);
+    }
+
+    const types = resolver.temporary_slice(StaticPool.Index, count);
+    for (0..count) |i| types[i] = self.declaration_type(body_declaration.member(i));
+    static_pool.complete_nominal(trait, .{ .trait_type = .{
+        .declaration = body_declaration,
+        .member_names = names[0..count],
+        .member_types = types,
+        .super_traits = super_traits,
+    } });
+    return trait;
 }
 
 pub fn declaration_type(self: *Types, declaration: DeclPool.Index) StaticPool.Index {
@@ -781,7 +666,30 @@ fn conform(
         const own_types = static_pool.get(own).trait_type.member_types;
         const have = static_pool.substitute_type_variables(own_types[member.trait_method.index]);
         const want = static_pool.substitute_type_variables(wanted);
-        if (!self.same_signature(have, want, trait, implementer)) {
+        const same_signature = blk: {
+            if (have == want or have == .poison_type or want == .poison_type) break :blk true;
+            if (static_pool.tag(have) != .function_type) break :blk false;
+            if (static_pool.tag(want) != .function_type) break :blk false;
+
+            const have_function = static_pool.get(have).function_type;
+            const want_function = static_pool.get(want).function_type;
+            if (have_function.parameters.len != want_function.parameters.len) break :blk false;
+            for (
+                have_function.parameters,
+                want_function.parameters,
+            ) |have_parameter, want_parameter| {
+                if (!self.same_as(have_parameter, want_parameter, trait, implementer)) {
+                    break :blk false;
+                }
+            }
+            break :blk self.same_as(
+                have_function.return_type,
+                want_function.return_type,
+                trait,
+                implementer,
+            );
+        };
+        if (!same_signature) {
             resolver.doctor.report(.trait_signature_mismatch, node, name, trait);
         }
     }
@@ -789,27 +697,6 @@ fn conform(
     for (0..static_pool.get(trait).trait_type.super_traits.len) |i| {
         self.conform(implementer, own, static_pool.get(trait).trait_type.super_traits[i], node);
     }
-}
-
-fn same_signature(
-    self: *Types,
-    have: StaticPool.Index,
-    want: StaticPool.Index,
-    trait: StaticPool.Index,
-    implementer: StaticPool.Index,
-) bool {
-    const static_pool = &self.owning_resolver().static_pool;
-    if (have == want or have == .poison_type or want == .poison_type) return true;
-    if (static_pool.tag(have) != .function_type) return false;
-    if (static_pool.tag(want) != .function_type) return false;
-
-    const have_function = static_pool.get(have).function_type;
-    const want_function = static_pool.get(want).function_type;
-    if (have_function.parameters.len != want_function.parameters.len) return false;
-    for (have_function.parameters, want_function.parameters) |have_parameter, want_parameter| {
-        if (!self.same_as(have_parameter, want_parameter, trait, implementer)) return false;
-    }
-    return self.same_as(have_function.return_type, want_function.return_type, trait, implementer);
 }
 
 // left == right with the trait read as the implementing type anywhere inside
@@ -929,35 +816,25 @@ pub fn with_runtime_lengths(self: *Types, value_type: StaticPool.Index) StaticPo
             const pointee = self.with_runtime_lengths(pointer.pointee);
             return static_pool.pointer_to(pointee, pointer.is_mutable);
         },
+        // the parameters are read from the pool again each time, interning may move them
         .function => {
             const function = static_pool.get(value_type).function_type;
-            return self.function_with_runtime_lengths(value_type, function);
+            const parameters = resolver.temporary_slice(StaticPool.Index, function.parameters.len);
+            for (parameters, 0..) |*parameter, i| {
+                const original = static_pool.get(value_type).function_type.parameters[i];
+                parameter.* = self.with_runtime_lengths(original);
+            }
+            const original_return = static_pool.get(value_type).function_type.return_type;
+            const return_type = self.with_runtime_lengths(original_return);
+            return static_pool.intern(.{ .function_type = .{
+                .category = function.category,
+                .parameters = parameters,
+                .return_type = return_type,
+            } });
         },
         // lengths are only made runtime ones through arrays, pointers and functions
         .leaf, .union_of_variants, .tree => value_type,
     };
-}
-
-// the parameters are read from the pool again each time, interning may move them
-fn function_with_runtime_lengths(
-    self: *Types,
-    function_type: StaticPool.Index,
-    function: StaticPool.FunctionType,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const parameters = resolver.temporary_slice(StaticPool.Index, function.parameters.len);
-    for (parameters, 0..) |*parameter, i| {
-        const original = static_pool.get(function_type).function_type.parameters[i];
-        parameter.* = self.with_runtime_lengths(original);
-    }
-    const original_return = static_pool.get(function_type).function_type.return_type;
-    const return_type = self.with_runtime_lengths(original_return);
-    return static_pool.intern(.{ .function_type = .{
-        .category = function.category,
-        .parameters = parameters,
-        .return_type = return_type,
-    } });
 }
 
 pub fn concrete_type_from_node(
@@ -1025,16 +902,9 @@ pub fn cast_target(
 // type vars nothing bound: an open element type is an error, an open length a runtime length
 pub fn finish_inference(self: *Types) void {
     const resolver = self.owning_resolver();
-    if (resolver.static_pool.type_variables.count() == 0) return;
-
-    self.report_uninferable_declarations();
-    self.bind_unfixed_lengths();
-    self.substitute_all_type_variables();
-}
-
-fn report_uninferable_declarations(self: *Types) void {
-    const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
+    if (static_pool.type_variables.count() == 0) return;
+
     for (resolver.decl_pool.entries.column(.value_type), 0..) |value_type, i| {
         if (value_type == .none or !static_pool.has_type_variables(value_type)) continue;
         const resolved = static_pool.substitute_type_variables(value_type);
@@ -1043,12 +913,8 @@ fn report_uninferable_declarations(self: *Types) void {
         const node = resolver.decl_pool.get(@enumFromInt(i), .node);
         _ = resolver.report(.uninferable_type, node, resolved, .none);
     }
-}
 
-// lengths nothing fixed are only known at runtime; a loop value then needs its count at loop entry
-fn bind_unfixed_lengths(self: *Types) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
+    // lengths nothing fixed are only known at runtime, a loop value then needs its count at entry
     const type_variables = &static_pool.type_variables;
     const columns = type_variables.variables.columns();
 
@@ -1062,7 +928,31 @@ fn bind_unfixed_lengths(self: *Types) void {
         const root = @intFromEnum(type_variables.root_of(@enumFromInt(i)));
         if (columns.binding[root] != .none) continue;
         const origin = columns.origin[i];
-        const counted = self.origin_counts_elements(origin) orelse continue;
+        // whether the element count is known where the length's origin needs it
+        const counted = switch (resolver.tree.kind(origin)) {
+            .for_seq, .for_var_in_seq => blk: {
+                const sequence = ParseTree.Loop.from_node(resolver.tree, origin).seq;
+                const sequence_type = resolver.node_types[sequence];
+                const through = static_pool.through_pointer(
+                    static_pool.substitute_type_variables(sequence_type),
+                );
+                if (resolver.tree.props(sequence).range) {
+                    break :blk ParseTree.Range.from_node(resolver.tree, sequence).hi != 0;
+                }
+                if (through == .none) break :blk false;
+                break :blk static_pool.tag(static_pool.pointee(through)) == .array_type;
+            },
+            .@"while", .while_with_repeat_stmt, .loop, .loop_with_repeat_stmt => false,
+            .type_array_unlengthed,
+            .array_index,
+            .gen_incl,
+            .gen_excl,
+            .gen_lowerbound,
+            .gen_upperbound_incl,
+            .gen_upperbound_excl,
+            => true,
+            else => continue,
+        };
         if (group[root] == ParseTree.none_node or !counted) {
             group[root] = if (counted) 0 else origin;
         }
@@ -1076,41 +966,7 @@ fn bind_unfixed_lengths(self: *Types) void {
         }
         type_variables.bind(@enumFromInt(i), StaticPool.dyn_len);
     }
-}
 
-// whether the element count is known where the length's origin needs it, null for other origins
-fn origin_counts_elements(self: *Types, origin: NodeId) ?bool {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    return switch (resolver.tree.kind(origin)) {
-        .for_seq, .for_var_in_seq => {
-            const sequence = ParseTree.Loop.from_node(resolver.tree, origin).seq;
-            const sequence_type = resolver.node_types[sequence];
-            const through = static_pool.through_pointer(
-                static_pool.substitute_type_variables(sequence_type),
-            );
-            if (resolver.tree.props(sequence).range) {
-                return ParseTree.Range.from_node(resolver.tree, sequence).hi != 0;
-            }
-            if (through == .none) return false;
-            return static_pool.tag(static_pool.pointee(through)) == .array_type;
-        },
-        .@"while", .while_with_repeat_stmt, .loop, .loop_with_repeat_stmt => false,
-        .type_array_unlengthed,
-        .array_index,
-        .gen_incl,
-        .gen_excl,
-        .gen_lowerbound,
-        .gen_upperbound_incl,
-        .gen_upperbound_excl,
-        => true,
-        else => null,
-    };
-}
-
-fn substitute_all_type_variables(self: *Types) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
     const tables = [_][]StaticPool.Index{
         resolver.node_types,
         resolver.decl_pool.entries.column(.value_type),

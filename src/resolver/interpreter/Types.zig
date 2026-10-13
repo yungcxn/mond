@@ -95,7 +95,24 @@ fn build(self: *Types, node: NodeId) Value {
     const tree = resolver.tree;
     const kind = tree.kind(node);
 
-    if (kind == .unify_variants) return self.union_of_variants(node);
+    // `A | B`: the variants of both sides, a union on either side contributes its members
+    if (kind == .unify_variants) {
+        const mark = interpreter.pool_indices.len;
+        defer interpreter.pool_indices.len = mark;
+        for ([_]NodeId{ tree.arg(node, 0), tree.arg(node, 1) }) |side| {
+            const side_type = self.type_of_node(side) orelse return .poison;
+            switch (static_pool.tag(side_type)) {
+                .variant_union_type => {
+                    interpreter.pool_indices.append(static_pool.get(side_type).variant_union_type);
+                },
+                .variant_type => interpreter.pool_indices.push(side_type),
+                else => return interpreter.fail(side, .type_mismatch, side_type, .variant_type),
+            }
+        }
+
+        const members = interpreter.pool_indices.buffer[mark..interpreter.pool_indices.len];
+        return .pooled(static_pool.intern(.{ .variant_union_type = members }));
+    }
 
     const element_node = tree.arg(node, if (kind == .type_array) 1 else 0);
     const element = self.type_of_node(element_node) orelse return .poison;
@@ -115,30 +132,6 @@ fn build(self: *Types, node: NodeId) Value {
         return interpreter.fail(length_node, .not_static, interpreter.interned(length), 0);
     }
     return .pooled(static_pool.array_of(length.bits, element));
-}
-
-// `A | B`: the variants of both sides, a union on either side contributes its members
-fn union_of_variants(self: *Types, node: NodeId) Value {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const tree = resolver.tree;
-
-    const mark = interpreter.pool_indices.len;
-    defer interpreter.pool_indices.len = mark;
-    for ([_]NodeId{ tree.arg(node, 0), tree.arg(node, 1) }) |side| {
-        const side_type = self.type_of_node(side) orelse return .poison;
-        switch (static_pool.tag(side_type)) {
-            .variant_union_type => {
-                interpreter.pool_indices.append(static_pool.get(side_type).variant_union_type);
-            },
-            .variant_type => interpreter.pool_indices.push(side_type),
-            else => return interpreter.fail(side, .type_mismatch, side_type, .variant_type),
-        }
-    }
-
-    const members = interpreter.pool_indices.buffer[mark..interpreter.pool_indices.len];
-    return .pooled(static_pool.intern(.{ .variant_union_type = members }));
 }
 
 // a type defined in a frame sees the frame's values of the locals it names as static parameters
@@ -191,7 +184,46 @@ pub fn cast(self: *Types, node: NodeId) Value {
 
     const value = interpreter.evaluate(operand);
     if (!framed or interpreter.node_info(.node_type, node) != .poison_type) {
-        return self.checked_cast(node, value);
+        // the type cast from: the checked one in a frame, else the value's case or type
+        const source = blk: {
+            if (interpreter.has_body_frame()) {
+                const operand_type = interpreter.node_info(.node_type, operand);
+                break :blk static_pool.substitute_type_variables(operand_type);
+            }
+            const case = interpreter.patterns.case_of(value);
+            if (case != .none) break :blk case;
+            break :blk interpreter.value_type(value);
+        };
+        const target = if (interpreter.has_body_frame())
+            interpreter.node_info(.node_type, node)
+        else
+            resolver.types.cast_target(
+                interpreter.function_context,
+                resolver.tree.arg(node, 1),
+                source,
+            );
+
+        switch (static_pool.cast_kind(source, target)) {
+            .bit_reinterpret => {
+                const variant_to_int = Value.is_int(target) and
+                    static_pool.properties(source).is_variant;
+                if (variant_to_int) return self.tag(node, value, target);
+                return .cast(value, target);
+            },
+            .variant_retag => return self.retag(node, value, target),
+            .array_narrow, .pointer_relength => return self.shrink(node, value, target),
+            .identity,
+            .int_resize,
+            .int_to_float,
+            .float_to_int,
+            .float_resize,
+            .bit_extend,
+            .payload_wrap,
+            .trait_narrow,
+            => return .cast(value, target),
+            // the checker reports invalid casts it can see, this is one only the value shows
+            .invalid => return interpreter.fail(node, .invalid_cast, source, target),
+        }
     }
 
     // the checker could not type the target, so it is a type the frame computes
@@ -203,58 +235,6 @@ pub fn cast(self: *Types, node: NodeId) Value {
         return interpreter.fail(node, .invalid_cast, interpreter.value_type(value), target);
     }
     return .cast(value, target);
-}
-
-inline fn checked_cast(self: *Types, node: NodeId, value: Value) Value {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    const static_pool = &resolver.static_pool;
-
-    const source = self.cast_source(node, value);
-    const target = if (interpreter.has_body_frame())
-        interpreter.node_info(.node_type, node)
-    else
-        resolver.types.cast_target(
-            interpreter.function_context,
-            resolver.tree.arg(node, 1),
-            source,
-        );
-
-    switch (static_pool.cast_kind(source, target)) {
-        .bit_reinterpret => {
-            const variant_to_int = Value.is_int(target) and
-                static_pool.properties(source).is_variant;
-            if (variant_to_int) return self.tag(node, value, target);
-            return .cast(value, target);
-        },
-        .variant_retag => return self.retag(node, value, target),
-        .array_narrow, .pointer_relength => return self.shrink(node, value, target),
-        .identity,
-        .int_resize,
-        .int_to_float,
-        .float_to_int,
-        .float_resize,
-        .bit_extend,
-        .payload_wrap,
-        .trait_narrow,
-        => return .cast(value, target),
-        // the checker reports invalid casts it can see, this is one only the value shows
-        .invalid => return interpreter.fail(node, .invalid_cast, source, target),
-    }
-}
-
-// the type cast from: the checked one in a frame, else the value's case or type
-inline fn cast_source(self: *Types, node: NodeId, value: Value) Index {
-    const interpreter = self.owning_interpreter();
-    const static_pool = &interpreter.owning_resolver().static_pool;
-    const operand = interpreter.owning_resolver().tree.arg(node, 0);
-
-    if (interpreter.has_body_frame()) {
-        return static_pool.substitute_type_variables(interpreter.node_info(.node_type, operand));
-    }
-    const case = interpreter.patterns.case_of(value);
-    if (case != .none) return case;
-    return interpreter.value_type(value);
 }
 
 // a variant case without payload reinterpreted as an integer is its tag
@@ -393,9 +373,16 @@ pub fn type_test(self: *Types, node: NodeId) Value {
             resolver.expressions.infer(interpreter.function_context, operand, .none),
         );
 
-    if (resolver.tree.macros and self.tests_tree(operand, static_type)) {
-        const tree = interpreter.trees.node_of(interpreter.evaluate(operand)) orelse return .poison;
-        return .boolean(interpreter.trees.has_type(tree, self.tested_type(type_node)));
+    if (resolver.tree.macros) {
+        const operand_type = if (framed)
+            interpreter.node_info(.node_type, operand)
+        else
+            static_type;
+        if (static_pool.is_tree(operand_type)) {
+            const evaluated = interpreter.evaluate(operand);
+            const tree = interpreter.trees.node_of(evaluated) orelse return .poison;
+            return .boolean(interpreter.trees.has_type(tree, self.tested_type(type_node)));
+        }
     }
 
     // a precise static type answers without evaluating the operand
@@ -428,16 +415,6 @@ pub fn type_test(self: *Types, node: NodeId) Value {
     return .boolean(subject_type == wanted or
         static_pool.type_of(subject) == wanted or
         static_pool.implements(subject_type, wanted));
-}
-
-inline fn tests_tree(self: *Types, operand: NodeId, static_type: Index) bool {
-    const interpreter = self.owning_interpreter();
-    const static_pool = &interpreter.owning_resolver().static_pool;
-    const operand_type = if (interpreter.has_body_frame())
-        interpreter.node_info(.node_type, operand)
-    else
-        static_type;
-    return static_pool.is_tree(operand_type);
 }
 
 // the type named on the right of `oftype` as the checker knows it, none when it does not

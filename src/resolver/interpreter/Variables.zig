@@ -77,39 +77,24 @@ fn rejects_impure_write(self: *Variables, node: NodeId) bool {
 
 pub fn flush(self: *Variables, mark: u32) void {
     const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
     while (self.adopted.len > mark) {
         self.adopted.len -= 1;
         const entry = self.adopted.buffer[self.adopted.len];
-        self.set_static_value(entry.decl, interpreter.memory.buffer[entry.cell]);
+        const value = interpreter.memory.buffer[entry.cell];
+        // a static keeps its exported value, retyped to its declared type
+        const declaration_node = resolver.decl_pool.get(entry.decl, .node);
+        const exported = interpreter.export_value(declaration_node, value);
+        const declared_type = resolver.decl_pool.get(entry.decl, .value_type);
+        const retyped = resolver.static_values.retyped(exported, declared_type);
+        resolver.decl_pool.set(entry.decl, .static_value, retyped);
     }
-}
-
-// a static keeps its exported value, retyped to its declared type
-inline fn set_static_value(self: *Variables, declaration: DeclPool.Index, value: Value) void {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    const declaration_node = resolver.decl_pool.get(declaration, .node);
-    const exported = interpreter.export_value(declaration_node, value);
-    const declared_type = resolver.decl_pool.get(declaration, .value_type);
-    const retyped = resolver.static_values.retyped(exported, declared_type);
-    resolver.decl_pool.set(declaration, .static_value, retyped);
 }
 
 fn declaration_of(self: *Variables, node: NodeId) DeclPool.Index {
     const interpreter = self.owning_interpreter();
     if (interpreter.has_body_frame()) return interpreter.node_info(.declaration, node);
     return interpreter.owning_resolver().declarations.use_name(node);
-}
-
-fn stored_value(self: *Variables, node: NodeId, declaration: DeclPool.Index) Value {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    const static_value = resolver.decl_pool.get(declaration, .static_value);
-    if (static_value != .none) return .of(&resolver.static_pool, static_value);
-
-    // a failed declaration is already diagnosed
-    if (resolver.decl_pool.get(declaration, .state) == .failed) return .poison;
-    return interpreter.fail(node, .not_static, resolver.name_pool.name_of_node(node), 0);
 }
 
 pub fn peek(self: *Variables, declaration: DeclPool.Index) Value {
@@ -125,26 +110,29 @@ pub fn peek(self: *Variables, declaration: DeclPool.Index) Value {
 
 pub fn load(self: *Variables, node: NodeId) Value {
     const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
     const declaration = self.declaration_of(node);
     if (declaration == .none) {
         if (!interpreter.has_body_frame()) return .poison;
         const name = interpreter.owning_resolver().name_pool.name_of_node(node);
         return interpreter.fail(node, .undefined_name, name, 0);
     }
-    if (interpreter.has_body_frame() and self.is_local_function(declaration)) {
-        return interpreter.calls.closure(declaration);
-    }
+    // a local function is a value only together with the cells it captures
+    const is_local_function = interpreter.has_body_frame() and
+        resolver.decl_pool.get(declaration, .kind) == .function and
+        !resolver.decl_pool.get(declaration, .flags).is_global;
+    if (is_local_function) return interpreter.calls.closure(declaration);
 
     const value = self.peek(declaration);
-    if (value.is(.none)) return self.stored_value(node, declaration);
-    return value;
-}
+    if (value.is(.none)) {
+        const static_value = resolver.decl_pool.get(declaration, .static_value);
+        if (static_value != .none) return .of(&resolver.static_pool, static_value);
 
-// a local function is a value only together with the cells it captures
-inline fn is_local_function(self: *Variables, declaration: DeclPool.Index) bool {
-    const decl_pool = &self.owning_interpreter().owning_resolver().decl_pool;
-    if (decl_pool.get(declaration, .kind) != .function) return false;
-    return !decl_pool.get(declaration, .flags).is_global;
+        // a failed declaration is already diagnosed
+        if (resolver.decl_pool.get(declaration, .state) == .failed) return .poison;
+        return interpreter.fail(node, .not_static, resolver.name_pool.name_of_node(node), 0);
+    }
+    return value;
 }
 
 pub fn bind(self: *Variables, declaration: DeclPool.Index, value: Value) void {
@@ -169,7 +157,12 @@ pub fn store(self: *Variables, node: NodeId, declaration: DeclPool.Index, value:
     }
 
     if (self.rejects_impure_write(node)) return false;
-    self.set_static_value(declaration, value);
+    // a static keeps its exported value, retyped to its declared type
+    const declaration_node = resolver.decl_pool.get(declaration, .node);
+    const exported = interpreter.export_value(declaration_node, value);
+    const declared_type = resolver.decl_pool.get(declaration, .value_type);
+    const retyped = resolver.static_values.retyped(exported, declared_type);
+    resolver.decl_pool.set(declaration, .static_value, retyped);
     return true;
 }
 
@@ -195,47 +188,44 @@ pub fn cell_of_place(self: *Variables, node: NodeId) ?u32 {
     const resolver = interpreter.owning_resolver();
     const kind = resolver.tree.kind(node);
     if (kind == .capture) return self.cell_of_place(resolver.tree.arg(node, 0));
-    if (resolver.tree.props(node).name) return self.cell_of_name(node);
-    if (kind == .dereference) return self.cell_of_pointee(node);
+    // a static outside the running frames is adopted into a cell until the evaluation ends
+    if (resolver.tree.props(node).name) {
+        const declaration = self.declaration_of(node);
+        if (declaration == .none) return null;
+        if (self.cell_of_declaration(declaration)) |cell| return cell;
+
+        const is_static_parameter = resolver.decl_pool.get(declaration, .kind) == .static_parameter;
+        if (!is_static_parameter and self.rejects_impure_write(node)) return null;
+        const stored_value: Value = blk: {
+            const static_value = resolver.decl_pool.get(declaration, .static_value);
+            if (static_value != .none) break :blk .of(&resolver.static_pool, static_value);
+
+            // a failed declaration is already diagnosed
+            if (resolver.decl_pool.get(declaration, .state) == .failed) break :blk .poison;
+            const name = resolver.name_pool.name_of_node(node);
+            break :blk interpreter.fail(node, .not_static, name, 0);
+        };
+        const adopted_cell = interpreter.push_cell(stored_value);
+        self.adopted.push(.{ .decl = declaration, .cell = adopted_cell });
+        return adopted_cell;
+    }
+    if (kind == .dereference) {
+        const pointer = interpreter.evaluate(resolver.tree.arg(node, 0));
+        if (pointer.is_ref()) return pointer.cell();
+        if (!pointer.is(.poison_type)) _ = interpreter.report(.not_static, node, 0, 0);
+        return null;
+    }
     if (kind == .array_index) return self.cell_of_component(node, kind);
-    if (kind == .member and !self.is_member_of_type(node)) {
-        return self.cell_of_component(node, kind);
+    if (kind == .member) {
+        const parent_type = interpreter.checked_type(resolver.tree.arg(node, 0));
+        const is_member_of_type = resolver.static_pool.tag(parent_type) == .meta_type;
+        if (!is_member_of_type) return self.cell_of_component(node, kind);
     }
 
     // a constant of a type (`Light.Green`) is a value like any other
     const value = interpreter.evaluate(node);
     if (value.is(.poison_type)) return null;
     return interpreter.push_cell(interpreter.owned_copy(value));
-}
-
-inline fn is_member_of_type(self: *Variables, node: NodeId) bool {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    const parent_type = interpreter.checked_type(resolver.tree.arg(node, 0));
-    return resolver.static_pool.tag(parent_type) == .meta_type;
-}
-
-// a static outside the running frames is adopted into a cell until the evaluation ends
-inline fn cell_of_name(self: *Variables, node: NodeId) ?u32 {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    const declaration = self.declaration_of(node);
-    if (declaration == .none) return null;
-    if (self.cell_of_declaration(declaration)) |cell| return cell;
-
-    const is_static_parameter = resolver.decl_pool.get(declaration, .kind) == .static_parameter;
-    if (!is_static_parameter and self.rejects_impure_write(node)) return null;
-    const adopted_cell = interpreter.push_cell(self.stored_value(node, declaration));
-    self.adopted.push(.{ .decl = declaration, .cell = adopted_cell });
-    return adopted_cell;
-}
-
-inline fn cell_of_pointee(self: *Variables, node: NodeId) ?u32 {
-    const interpreter = self.owning_interpreter();
-    const pointer = interpreter.evaluate(interpreter.owning_resolver().tree.arg(node, 0));
-    if (pointer.is_ref()) return pointer.cell();
-    if (!pointer.is(.poison_type)) _ = interpreter.report(.not_static, node, 0, 0);
-    return null;
 }
 
 // an element or field of a place, a pooled aggregate is thawed so it can be written
@@ -246,7 +236,23 @@ fn cell_of_component(self: *Variables, node: NodeId, kind: Kind) ?u32 {
     const through_reference = interpreter.memory.buffer[aggregate_cell].is_ref();
     if (through_reference) aggregate_cell = interpreter.memory.buffer[aggregate_cell].cell();
     const aggregate = interpreter.thaw_cell(aggregate_cell);
-    const position = self.component_position(node, kind, aggregate) orelse return null;
+    // a member of a value that is not a heap block is rejected below
+    const position: u64 = blk: {
+        if (kind == .array_index) {
+            const position = interpreter.evaluate(resolver.tree.arg(node, 1));
+            if (Value.is_int(position.value_type)) break :blk position.bits;
+            // a poisoned index is reported already
+            if (!position.is(.poison_type)) _ = interpreter.report(.not_static, node, 0, 0);
+            return null;
+        }
+        if (!aggregate.is_heap()) break :blk 0;
+
+        const field_name = resolver.name_pool.name_of_node(resolver.tree.arg(node, 1));
+        break :blk switch (resolver.static_pool.lookup_member(aggregate.value_type, field_name)) {
+            .field => |field| field.index,
+            else => return null,
+        };
+    };
 
     if (!aggregate.is_heap()) {
         // a reference to a scalar indexes the cells after it
@@ -268,26 +274,6 @@ fn cell_of_component(self: *Variables, node: NodeId, kind: Kind) ?u32 {
     return aggregate.cell() + @as(u32, @intCast(position));
 }
 
-// a member of a value that is not a heap block is rejected by the caller
-inline fn component_position(self: *Variables, node: NodeId, kind: Kind, aggregate: Value) ?u64 {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    if (kind == .array_index) {
-        const position = interpreter.evaluate(resolver.tree.arg(node, 1));
-        if (Value.is_int(position.value_type)) return position.bits;
-        // a poisoned index is reported already
-        if (!position.is(.poison_type)) _ = interpreter.report(.not_static, node, 0, 0);
-        return null;
-    }
-    if (!aggregate.is_heap()) return 0;
-
-    const field_name = resolver.name_pool.name_of_node(resolver.tree.arg(node, 1));
-    return switch (resolver.static_pool.lookup_member(aggregate.value_type, field_name)) {
-        .field => |field| field.index,
-        else => null,
-    };
-}
-
 pub fn declare(self: *Variables, node: NodeId) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
@@ -297,25 +283,17 @@ pub fn declare(self: *Variables, node: NodeId) Value {
     }
 
     const statement = Declarations.Stmt.from_node(resolver, node);
-    if (statement.kind != .variable) return self.declare_type(statement);
-    return self.declare_variables(statement);
-}
+    if (statement.kind != .variable) {
+        if (!statement.kind.is_type_declaration()) return .unit;
 
-inline fn declare_type(self: *Variables, statement: Declarations.Stmt) Value {
-    const interpreter = self.owning_interpreter();
-    if (!statement.kind.is_type_declaration()) return .unit;
-
-    const declared_type = interpreter.evaluate(statement.values[0]);
-    for (statement.assignees) |assignee| {
-        _ = self.store(assignee, interpreter.node_info(.declaration, assignee), declared_type);
+        const declared_type = interpreter.evaluate(statement.values[0]);
+        for (statement.assignees) |assignee| {
+            _ = self.store(assignee, interpreter.node_info(.declaration, assignee), declared_type);
+        }
+        if (declared_type.is(.poison_type)) return declared_type;
+        return .unit;
     }
-    if (declared_type.is(.poison_type)) return declared_type;
-    return .unit;
-}
 
-inline fn declare_variables(self: *Variables, statement: Declarations.Stmt) Value {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
     const values = statement.values;
     const assignees = statement.assignees;
 
@@ -341,8 +319,13 @@ inline fn declare_variables(self: *Variables, statement: Declarations.Stmt) Valu
         }
     }
 
+    // an annotation the checker left unresolved (the declared type is poisoned) is evaluated now
+    const has_unresolved_annotation = statement.type != 0 and
+        first_declaration != .none and
+        interpreter.node_info(.static_value, statement.type) == .none and
+        resolver.static_pool.is_poisoned(resolver.decl_pool.get(first_declaration, .value_type));
     var evaluated_type: Index = .none;
-    if (self.has_unresolved_annotation(statement, first_declaration)) {
+    if (has_unresolved_annotation) {
         evaluated_type = interpreter.types.type_of_node(statement.type) orelse return .poison;
     }
 
@@ -351,7 +334,13 @@ inline fn declare_variables(self: *Variables, statement: Declarations.Stmt) Valu
         if (declaration == .none) continue;
 
         const value = switch (values.len) {
-            0 => interpreter.zero_value(self.zeroed_type(declaration, evaluated_type)),
+            0 => blk: {
+                const zeroed_type = if (evaluated_type != .none)
+                    evaluated_type
+                else
+                    resolver.decl_pool.get(declaration, .value_type);
+                break :blk interpreter.zero_value(zeroed_type);
+            },
             1 => single_value,
             else => interpreter.argument_values.buffer[mark + i],
         };
@@ -367,24 +356,6 @@ inline fn declare_variables(self: *Variables, statement: Declarations.Stmt) Valu
         if (!self.store(assignee, declaration, coerced)) return .poison;
     }
     return .unit;
-}
-
-// an annotation the checker left unresolved (the declared type is poisoned) is evaluated now
-inline fn has_unresolved_annotation(
-    self: *Variables,
-    statement: Declarations.Stmt,
-    first_declaration: DeclPool.Index,
-) bool {
-    const interpreter = self.owning_interpreter();
-    const resolver = interpreter.owning_resolver();
-    if (statement.type == 0 or first_declaration == .none) return false;
-    if (interpreter.node_info(.static_value, statement.type) != .none) return false;
-    return resolver.static_pool.is_poisoned(resolver.decl_pool.get(first_declaration, .value_type));
-}
-
-inline fn zeroed_type(self: *Variables, declaration: DeclPool.Index, evaluated_type: Index) Index {
-    if (evaluated_type != .none) return evaluated_type;
-    return self.owning_interpreter().owning_resolver().decl_pool.get(declaration, .value_type);
 }
 
 pub fn update(self: *Variables, node: NodeId, kind: Kind) Value {
@@ -415,7 +386,8 @@ pub fn update(self: *Variables, node: NodeId, kind: Kind) Value {
     if (old_value.is(.poison_type) or interpreter.unwind != .none) return old_value;
 
     const operator = operators.assigned_operator_of(kind);
-    const right: Value = if (compound) operand else increment_step(old_value);
+    const step_type = if (Value.is_int(old_value.value_type)) old_value.value_type else .u64_type;
+    const right: Value = if (compound) operand else .int(step_type, 1);
     const new_value = interpreter.evaluate_binary(node, operator, old_value, right);
     if (new_value.is(.poison_type)) return new_value;
 
@@ -429,11 +401,6 @@ pub fn update(self: *Variables, node: NodeId, kind: Kind) Value {
     if (compound) return .unit;
     if (operators.returns_old_value(kind)) return old_value;
     return new_value;
-}
-
-inline fn increment_step(old_value: Value) Value {
-    const step_type = if (Value.is_int(old_value.value_type)) old_value.value_type else .u64_type;
-    return .int(step_type, 1);
 }
 
 pub fn address(self: *Variables, node: NodeId) Value {

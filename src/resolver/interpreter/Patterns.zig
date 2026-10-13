@@ -67,17 +67,6 @@ pub fn case_of(self: *Patterns, value: Value) Index {
     };
 }
 
-// heap values are compared by their interned form
-fn same(self: *Patterns, left: Value, right: Value) bool {
-    const interpreter = self.owning_interpreter();
-    const left_pooled: Value = if (left.is_heap()) .pooled(interpreter.interned(left)) else left;
-    const right_pooled: Value = if (right.is_heap())
-        .pooled(interpreter.interned(right))
-    else
-        right;
-    return Value.eql(left_pooled, right_pooled);
-}
-
 pub fn matches(self: *Patterns, pattern: NodeId, value: Value) bool {
     const interpreter = self.owning_interpreter();
     const tree = interpreter.owning_resolver().tree;
@@ -131,10 +120,14 @@ inline fn matches_typecast(self: *Patterns, pattern: NodeId, value: Value) bool 
     const case = self.case_of(value);
     const value_type = interpreter.value_type(value);
 
-    const matched = if (case != .none)
-        is_case_of(static_pool, case, wanted_type)
-    else
-        value_type == wanted_type or static_pool.implements(value_type, wanted_type);
+    // a case belongs to its variant and to every union holding that variant
+    const matched = if (case != .none) blk: {
+        const variant = static_pool.get(case).variant_case_type.variant;
+        if (variant == wanted_type) break :blk true;
+        if (static_pool.tag(wanted_type) != .variant_union_type) break :blk false;
+        const members = static_pool.get(wanted_type).variant_union_type;
+        break :blk std.mem.indexOfScalar(Index, members, variant) != null;
+    } else value_type == wanted_type or static_pool.implements(value_type, wanted_type);
     if (matched) self.bind_name(tree.arg(pattern, 1), value);
     return matched;
 }
@@ -157,7 +150,12 @@ inline fn matches_fields(self: *Patterns, pattern: NodeId, value: Value) bool {
     if (static_pool.tag(target) == .variant_case_type) {
         if (self.case_of(value) != target) return false;
         record_type = static_pool.get(target).variant_case_type.payload;
-        fields = self.payload_fields(value, record_type);
+        // the payload fields of a case value as an aggregate of the payload type
+        fields = blk: {
+            if (value.is_heap()) break :blk .block(record_type, value.cell(), value.len());
+            if (static_pool.tag(value.index()) != .variant_value) break :blk .empty;
+            break :blk .of(static_pool, static_pool.get(value.index()).variant_value.payload);
+        };
     }
 
     const arguments = tree.arg(pattern, 1);
@@ -171,14 +169,6 @@ inline fn matches_fields(self: *Patterns, pattern: NodeId, value: Value) bool {
         if (!self.matches(tree.arg_value(argument), field)) return false;
     }
     return true;
-}
-
-// the payload fields of a case value as an aggregate of `payload_type`
-inline fn payload_fields(self: *Patterns, value: Value, payload_type: Index) Value {
-    const static_pool = &self.owning_interpreter().owning_resolver().static_pool;
-    if (value.is_heap()) return .block(payload_type, value.cell(), value.len());
-    if (static_pool.tag(value.index()) != .variant_value) return .empty;
-    return .of(static_pool, static_pool.get(value.index()).variant_value.payload);
 }
 
 inline fn matches_range(self: *Patterns, pattern: NodeId, value: Value) bool {
@@ -205,7 +195,17 @@ inline fn matches_value(self: *Patterns, pattern: NodeId, value: Value) bool {
         static_pool.tag(expected.index()) == .variant_case_type;
     if (is_case) return self.case_of(value) == expected.index();
 
-    return !expected.is(.poison_type) and self.same(expected, value);
+    if (expected.is(.poison_type)) return false;
+    // heap values are compared by their interned form
+    const expected_pooled: Value = if (expected.is_heap())
+        .pooled(interpreter.interned(expected))
+    else
+        expected;
+    const value_pooled: Value = if (value.is_heap())
+        .pooled(interpreter.interned(value))
+    else
+        value;
+    return Value.eql(expected_pooled, value_pooled);
 }
 
 pub fn bind_name(self: *Patterns, id: NodeId, value: Value) void {
@@ -258,13 +258,4 @@ pub fn payload_of(self: *Patterns, value: Value) ?Value {
 
     const elements = static_pool.get(payload).aggregate_value.elements;
     return .of(static_pool, if (elements.len == 1) elements[0] else payload);
-}
-
-// a case belongs to its variant and to every union holding that variant
-fn is_case_of(static_pool: *StaticPool, case: Index, wanted_type: Index) bool {
-    const variant = static_pool.get(case).variant_case_type.variant;
-    if (variant == wanted_type) return true;
-    if (static_pool.tag(wanted_type) != .variant_union_type) return false;
-    const members = static_pool.get(wanted_type).variant_union_type;
-    return std.mem.indexOfScalar(Index, members, variant) != null;
 }

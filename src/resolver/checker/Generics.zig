@@ -56,120 +56,86 @@ pub fn realize(
     }
     if (!resolver.interpreter.charge_steps(node, 64)) return .poison_type;
 
+    // a length-generic function: a declaration per tuple of lengths, bound in order of appearance
     if (resolver.decl_pool.get(generic, .kind) != .static_function) {
-        const argument_values = self.copied_arguments(arguments);
-        return self.realize_length_generic(generic, arguments, argument_values, key, node);
-    }
-    return self.realize_static_function(generic, arguments, key);
-}
+        const static_pool = &resolver.static_pool;
+        // copied out of the pool, which may move while realizing interns new entries
+        const length = static_pool.get(arguments).aggregate_value.elements.len;
+        const argument_values = resolver.temporary_slice(StaticPool.Index, length);
+        @memcpy(argument_values, static_pool.get(arguments).aggregate_value.elements);
 
-// copied out of the pool, which may move while realizing interns new entries
-fn copied_arguments(self: *Generics, arguments: StaticPool.Index) []StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const length = static_pool.get(arguments).aggregate_value.elements.len;
-    const argument_values = resolver.temporary_slice(StaticPool.Index, length);
-    @memcpy(argument_values, static_pool.get(arguments).aggregate_value.elements);
-    return argument_values;
-}
+        const decl_pool = &resolver.decl_pool;
+        resolver.declarations.check_body(generic);
+        if (decl_pool.get(generic, .state) == .failed) return .poison_type;
 
-// a length-generic function: a new declaration per tuple of lengths, bound in order of appearance
-fn realize_length_generic(
-    self: *Generics,
-    generic: DeclPool.Index,
-    arguments: StaticPool.Index,
-    argument_values: []const StaticPool.Index,
-    key: AbstractKey,
-    node: NodeId,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const decl_pool = &resolver.decl_pool;
-    resolver.declarations.check_body(generic);
-    if (decl_pool.get(generic, .state) == .failed) return .poison_type;
+        const realization = decl_pool.push(
+            decl_pool.get(generic, .name),
+            node,
+            decl_pool.get(generic, .kind),
+            .none,
+            decl_pool.get(generic, .flags),
+        );
+        self.template_of.put(resolver.allocator, realization, generic) catch @panic("OOM");
+        const function_value = resolver.static_pool.intern(.{ .function_value = realization });
+        self.memo(key, function_value);
 
-    const realization = decl_pool.push(
-        decl_pool.get(generic, .name),
-        node,
-        decl_pool.get(generic, .kind),
-        .none,
-        decl_pool.get(generic, .flags),
-    );
-    self.template_of.put(resolver.allocator, realization, generic) catch @panic("OOM");
-    const function_value = resolver.static_pool.intern(.{ .function_value = realization });
-    self.memo(key, function_value);
-
-    const outer_key = self.static_scope.get(generic);
-    if (outer_key) |outer| {
-        self.static_scope.put(resolver.allocator, realization, outer) catch @panic("OOM");
-        resolver.declarations.open_declaration_scope(true, .none, 0);
-        self.bind_static(outer.generic_tuple, outer.args_tuple);
-    }
-    defer if (outer_key != null) resolver.scopes.close();
-
-    resolver.declarations.ensure_signature(realization);
-    self.realization_arguments.put(resolver.allocator, realization, arguments) catch @panic("OOM");
-    self.specialize_parameters(realization, argument_values);
-    resolver.declarations.check_body(realization);
-    return function_value;
-}
-
-// the generic parameters of the realization's signature take the arguments in order
-fn specialize_parameters(
-    self: *Generics,
-    realization: DeclPool.Index,
-    argument_values: []const StaticPool.Index,
-) void {
-    const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
-    const value_type = resolver.decl_pool.get(realization, .value_type);
-    const function_type = static_pool.get(value_type).function_type;
-    const parameters = resolver.temporary_slice(StaticPool.Index, function_type.parameters.len);
-    @memcpy(parameters, function_type.parameters);
-
-    var bound: usize = 0;
-    for (parameters) |*parameter_slot| {
-        var parameter = parameter_slot.*;
-        if (!static_pool.is_generic_parameter(parameter) or bound >= argument_values.len) continue;
-        const argument = argument_values[bound];
-        bound += 1;
-
-        if (static_pool.template_of(parameter) != .none) {
-            parameter_slot.* = realized_template_parameter(static_pool, parameter, argument);
+        const outer_key = self.static_scope.get(generic);
+        if (outer_key) |outer| {
+            self.static_scope.put(resolver.allocator, realization, outer) catch @panic("OOM");
+            resolver.declarations.open_declaration_scope(true, .none, 0);
+            self.bind_static(outer.generic_tuple, outer.args_tuple);
         }
-        if (static_pool.get(parameter) == .pointer_type) {
-            parameter = static_pool.get(parameter).pointer_type.pointee;
+        defer if (outer_key != null) resolver.scopes.close();
+
+        resolver.declarations.ensure_signature(realization);
+        self.realization_arguments.put(
+            resolver.allocator,
+            realization,
+            arguments,
+        ) catch @panic("OOM");
+
+        // the generic parameters of the realization's signature take the arguments in order
+        const value_type = resolver.decl_pool.get(realization, .value_type);
+        const function_type = static_pool.get(value_type).function_type;
+        const parameters = resolver.temporary_slice(StaticPool.Index, function_type.parameters.len);
+        @memcpy(parameters, function_type.parameters);
+
+        var bound: usize = 0;
+        for (parameters) |*parameter_slot| {
+            var parameter = parameter_slot.*;
+            if (!static_pool.is_generic_parameter(parameter)) continue;
+            if (bound >= argument_values.len) continue;
+            const argument = argument_values[bound];
+            bound += 1;
+
+            // a template parameter `T`, `*T` or `&T` becomes the argument, behind the same pointer
+            if (static_pool.template_of(parameter) != .none) {
+                if (static_pool.get(parameter) != .pointer_type) {
+                    parameter_slot.* = argument;
+                } else {
+                    const is_mutable = static_pool.get(parameter).pointer_type.is_mutable;
+                    parameter_slot.* = static_pool.pointer_to(argument, is_mutable);
+                }
+            }
+            if (static_pool.get(parameter) == .pointer_type) {
+                parameter = static_pool.get(parameter).pointer_type.pointee;
+            }
+            if (static_pool.get(parameter) == .array_type) {
+                _ = static_pool.unify(static_pool.get(parameter).array_type.length, argument);
+            }
         }
-        if (static_pool.get(parameter) == .array_type) {
-            _ = static_pool.unify(static_pool.get(parameter).array_type.length, argument);
-        }
+
+        const specialized = StaticPool.FunctionType{
+            .category = function_type.category,
+            .parameters = parameters,
+            .return_type = function_type.return_type,
+        };
+        const specialized_type = static_pool.intern(.{ .function_type = specialized });
+        resolver.decl_pool.set(realization, .value_type, specialized_type);
+        resolver.declarations.check_body(realization);
+        return function_value;
     }
 
-    const specialized = StaticPool.FunctionType{
-        .category = function_type.category,
-        .parameters = parameters,
-        .return_type = function_type.return_type,
-    };
-    const specialized_type = static_pool.intern(.{ .function_type = specialized });
-    resolver.decl_pool.set(realization, .value_type, specialized_type);
-}
-
-// a template parameter `T`, `*T` or `&T` becomes the argument, behind the same kind of pointer
-fn realized_template_parameter(
-    static_pool: *StaticPool,
-    parameter: StaticPool.Index,
-    argument: StaticPool.Index,
-) StaticPool.Index {
-    if (static_pool.get(parameter) != .pointer_type) return argument;
-    return static_pool.pointer_to(argument, static_pool.get(parameter).pointer_type.is_mutable);
-}
-
-fn realize_static_function(
-    self: *Generics,
-    generic: DeclPool.Index,
-    arguments: StaticPool.Index,
-    key: AbstractKey,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
     var context = FunctionContext{ .declaration = generic, .is_static_context = true };
     resolver.declarations.open_declaration_scope(true, .none, 0);
     defer resolver.scopes.close();
@@ -186,60 +152,46 @@ fn realize_static_function(
 
     const unit = resolver.tree.arg(value_node, 1);
     const kind = resolver.declarations.declared_type_kind(unit);
-    if (kind != .variable) return self.realize_type(&context, generic, arguments, key, unit, kind);
-    if (resolver.tree.kind(unit) == .def_fun) return self.realize_function(generic, key, unit);
-    return self.realize_computed(&context, generic, key, unit, value_node);
-}
+    if (kind != .variable) {
+        // memoized before its body, so the type can mention itself (`Stream(Child)` inside Stream)
+        const decl_pool = &resolver.decl_pool;
+        const realization = decl_pool.push(decl_pool.get(generic, .name), unit, kind, .none, .{});
+        self.realization_arguments.put(
+            resolver.allocator,
+            realization,
+            arguments,
+        ) catch @panic("OOM");
+        self.template_of.put(resolver.allocator, realization, generic) catch @panic("OOM");
 
-// memoized before its body, so the type can mention itself (`Stream(Child)` inside Stream)
-fn realize_type(
-    self: *Generics,
-    context: *FunctionContext,
-    generic: DeclPool.Index,
-    arguments: StaticPool.Index,
-    key: AbstractKey,
-    unit: NodeId,
-    kind: DeclPool.Entry.Kind,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const decl_pool = &resolver.decl_pool;
-    const realization = decl_pool.push(decl_pool.get(generic, .name), unit, kind, .none, .{});
-    self.realization_arguments.put(resolver.allocator, realization, arguments) catch @panic("OOM");
-    self.template_of.put(resolver.allocator, realization, generic) catch @panic("OOM");
+        decl_pool.set(
+            realization,
+            .static_value,
+            resolver.static_pool.reserve_nominal(realization),
+        );
+        self.memo(key, decl_pool.get(realization, .static_value));
+        const diagnostics_mark = resolver.doctor.diagnostics.len();
+        defer resolver.doctor.settle(diagnostics_mark);
+        return resolver.types.check_type_definition(&context, realization, unit);
+    }
+    if (resolver.tree.kind(unit) == .def_fun) {
+        const decl_pool = &resolver.decl_pool;
+        const realization = decl_pool.push(
+            decl_pool.get(generic, .name),
+            unit,
+            .function,
+            .none,
+            .{},
+        );
+        const function_value = resolver.static_pool.intern(.{ .function_value = realization });
+        self.memo(key, function_value);
+        self.static_scope.put(resolver.allocator, realization, key) catch @panic("OOM");
 
-    decl_pool.set(realization, .static_value, resolver.static_pool.reserve_nominal(realization));
-    self.memo(key, decl_pool.get(realization, .static_value));
-    return resolver.types.check_type_definition(context, realization, unit);
-}
+        resolver.declarations.ensure_signature(realization);
+        resolver.declarations.check_body(realization);
+        return function_value;
+    }
 
-fn realize_function(
-    self: *Generics,
-    generic: DeclPool.Index,
-    key: AbstractKey,
-    unit: NodeId,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
-    const decl_pool = &resolver.decl_pool;
-    const realization = decl_pool.push(decl_pool.get(generic, .name), unit, .function, .none, .{});
-    const function_value = resolver.static_pool.intern(.{ .function_value = realization });
-    self.memo(key, function_value);
-    self.static_scope.put(resolver.allocator, realization, key) catch @panic("OOM");
-
-    resolver.declarations.ensure_signature(realization);
-    resolver.declarations.check_body(realization);
-    return function_value;
-}
-
-// any other body is checked as a function and then run by the interpreter for its result
-fn realize_computed(
-    self: *Generics,
-    context: *FunctionContext,
-    generic: DeclPool.Index,
-    key: AbstractKey,
-    unit: NodeId,
-    value_node: NodeId,
-) StaticPool.Index {
-    const resolver = self.owning_resolver();
+    // any other body is checked as a function and then run by the interpreter for its result
     const static_pool = &resolver.static_pool;
     context.is_static_context = false;
     context.is_interpreted = true;
@@ -249,7 +201,8 @@ fn realize_computed(
     const type_variables_before = static_pool.type_variables.count();
     const outer_session = resolver.initialization.enter();
     const diagnostics_mark = resolver.doctor.diagnostics.len();
-    resolver.declarations.check_function_result(context, unit);
+    resolver.declarations.check_function_result(&context, unit);
+    resolver.doctor.settle(diagnostics_mark);
     context.is_interpreted = false;
     resolver.initialization.leave(outer_session);
 
@@ -257,11 +210,23 @@ fn realize_computed(
         self.memo(key, .poison_type);
         return .poison_type;
     }
-    self.bind_loop_lengths_at_runtime(type_variables_before);
+    // a length from a while or loop is only counted when the interpreter runs it
+    const type_variables = &static_pool.type_variables;
+    for (type_variables_before..type_variables.count()) |i| {
+        const origin = type_variables.variables.column(.origin)[i];
+        switch (resolver.tree.kind(origin)) {
+            .@"while", .while_with_repeat_stmt, .loop, .loop_with_repeat_stmt => {
+                if (type_variables.binding_of(@enumFromInt(i)) == .none) {
+                    type_variables.bind(@enumFromInt(i), StaticPool.dyn_len);
+                }
+            },
+            else => {},
+        }
+    }
 
     // a body that gives nothing failed on the way (it called a function with errors)
     const body = resolver.capture_body(generic, value_node, first_local);
-    const ran = resolver.interpreter.run_body(context, unit, body);
+    const ran = resolver.interpreter.run_body(&context, unit, body);
     const result = if (ran == .none) .poison_type else ran;
 
     // a type the body declared itself is a realization of this template
@@ -278,28 +243,14 @@ fn realize_computed(
     return result;
 }
 
-// a length from a while or loop is only counted when the interpreter runs it
-fn bind_loop_lengths_at_runtime(self: *Generics, first_variable: usize) void {
-    const resolver = self.owning_resolver();
-    const type_variables = &resolver.static_pool.type_variables;
-    for (first_variable..type_variables.count()) |i| {
-        const origin = type_variables.variables.column(.origin)[i];
-        switch (resolver.tree.kind(origin)) {
-            .@"while", .while_with_repeat_stmt, .loop, .loop_with_repeat_stmt => {
-                if (type_variables.binding_of(@enumFromInt(i)) == .none) {
-                    type_variables.bind(@enumFromInt(i), StaticPool.dyn_len);
-                }
-            },
-            else => {},
-        }
-    }
-}
-
 // the static parameters of a stcfun as locals holding the arguments of one realization
 fn bind_static(self: *Generics, generic: DeclPool.Index, arguments: StaticPool.Index) void {
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
-    const argument_values = self.copied_arguments(arguments);
+    // copied out of the pool, which may move while realizing interns new entries
+    const length = static_pool.get(arguments).aggregate_value.elements.len;
+    const argument_values = resolver.temporary_slice(StaticPool.Index, length);
+    @memcpy(argument_values, static_pool.get(arguments).aggregate_value.elements);
     const parameter_nodes = resolver.tree.params_of(resolver.declarations.value_node(generic));
 
     for (parameter_nodes, 0..) |parameter_node, i| {
@@ -457,14 +408,28 @@ pub fn template_member(
     else
         return resolver.report(.unknown_member, node, name, template_type);
 
-    for (resolver.tree.manychildren(trait_members(resolver, trait_node))) |statement| {
+    // `!{..}` keeps its members in argument 0, `implof(..) !{..}` in argument 1
+    const is_implof = resolver.tree.kind(trait_node) == .def_trait_implof;
+    const trait_members = resolver.tree.arg(trait_node, if (is_implof) 1 else 0);
+    for (resolver.tree.manychildren(trait_members)) |statement| {
         const parts = Declarations.Stmt.from_node(resolver, statement);
         if (parts.assignees.len != 1) continue;
         if (resolver.name_pool.name_of_node(parts.assignees[0]) != name) continue;
         if (!parts.kind.is_function()) continue;
 
         const function_node = parts.values[0];
-        if (self.signature_mentions(function_node, value_node)) {
+        const signature_mentions = blk: {
+            const header = resolver.tree.arg(function_node, 0);
+            if (resolver.tree.kind(header) != .partial__fun_def_header_ret) break :blk true;
+            if (self.mentions(resolver.tree.arg(header, 1), value_node)) break :blk true;
+
+            for (resolver.tree.params_of(function_node)) |parameter_node| {
+                const parameter = ParseTree.Param.from_node(resolver.tree, parameter_node);
+                if (self.mentions(parameter.ty, value_node)) break :blk true;
+            }
+            break :blk false;
+        };
+        if (signature_mentions) {
             return resolver.report(.generic_member, node, name, template_type);
         }
         return resolver.types.function_type_of(
@@ -478,31 +443,12 @@ pub fn template_member(
     return resolver.report(.unknown_member, node, name, template_type);
 }
 
-// `!{..}` keeps its members in argument 0, `implof(..) !{..}` in argument 1
-fn trait_members(resolver: *Resolver, trait_node: NodeId) NodeId {
-    const is_implof = resolver.tree.kind(trait_node) == .def_trait_implof;
-    return resolver.tree.arg(trait_node, if (is_implof) 1 else 0);
-}
-
 pub fn template_field(self: *Generics, template: DeclPool.Index, name: NamePool.Index) ?NodeId {
     const resolver = self.owning_resolver();
     const unit = resolver.tree.arg(resolver.declarations.value_node(template), 1);
     const fields = resolver.tree.fields_of(ParseTree.Def.from_node(resolver.tree, unit).core);
     const field_index = resolver.declarations.parameter_index(fields, name) orelse return null;
     return fields[field_index];
-}
-
-fn signature_mentions(self: *Generics, function_node: NodeId, value_node: NodeId) bool {
-    const resolver = self.owning_resolver();
-    const header = resolver.tree.arg(function_node, 0);
-    if (resolver.tree.kind(header) != .partial__fun_def_header_ret) return true;
-    if (self.mentions(resolver.tree.arg(header, 1), value_node)) return true;
-
-    for (resolver.tree.params_of(function_node)) |parameter_node| {
-        const parameter = ParseTree.Param.from_node(resolver.tree, parameter_node);
-        if (self.mentions(parameter.ty, value_node)) return true;
-    }
-    return false;
 }
 
 // whether any identifier under `node` names a static parameter of the stcfun `value_node`

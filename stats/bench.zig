@@ -24,7 +24,22 @@ pub fn main(init: std.process.Init) !void {
     else
         default_round_count;
 
-    const programs = try load_programs(io, arena);
+    const programs = blk: {
+        var programs: std.ArrayList(Program) = .empty;
+        for (example_directories) |directory_path| {
+            var directory = try std.Io.Dir.cwd().openDir(io, directory_path, .{ .iterate = true });
+            defer directory.close(io);
+            var entries = directory.iterate();
+            while (try entries.next(io)) |entry| {
+                if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".mn")) continue;
+                const source =
+                    try directory.readFileAlloc(io, entry.name, arena, .limited(50 << 20));
+                const path = try std.fs.path.join(arena, &.{ directory_path, entry.name });
+                try programs.append(arena, .{ .path = path, .source = source });
+            }
+        }
+        break :blk programs.items;
+    };
     const per_program_ns = try arena.alloc(i96, programs.len);
     @memset(per_program_ns, std.math.maxInt(i96));
     var fastest_round_ns: i96 = std.math.maxInt(i96);
@@ -65,22 +80,6 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     try stdout.interface.flush();
-}
-
-fn load_programs(io: std.Io, arena: std.mem.Allocator) ![]const Program {
-    var programs: std.ArrayList(Program) = .empty;
-    for (example_directories) |directory_path| {
-        var directory = try std.Io.Dir.cwd().openDir(io, directory_path, .{ .iterate = true });
-        defer directory.close(io);
-        var entries = directory.iterate();
-        while (try entries.next(io)) |entry| {
-            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".mn")) continue;
-            const source = try directory.readFileAlloc(io, entry.name, arena, .limited(50 << 20));
-            const path = try std.fs.path.join(arena, &.{ directory_path, entry.name });
-            try programs.append(arena, .{ .path = path, .source = source });
-        }
-    }
-    return programs.items;
 }
 
 fn compile(io: std.Io, program: Program) void {

@@ -61,7 +61,12 @@ pub fn print_function(writer: *Writer, lowerer: *HighLowerer, function_index: us
 
     try writer.writeAll("\n");
     try print_type(writer, lowerer, function_type.return_type);
-    const name = function_name(lowerer, function_index);
+    // the module initializer has no declaration
+    const declaration = lowerer.ir.functions.column(.decl)[function_index];
+    const name = if (declaration == .none)
+        "$init"
+    else
+        declaration_name(lowerer.resolver, declaration);
     try writer.print(" " ++ style.function_color ++ "{s}" ++ reset ++ "(", .{name});
 
     // a function without blocks is extern, only the types of its parameters are known
@@ -74,26 +79,8 @@ pub fn print_function(writer: *Writer, lowerer: *HighLowerer, function_index: us
         return writer.print(");" ++ dim ++ "  extern #{d}\n" ++ reset, .{function_index});
     }
 
-    try print_parameters(writer, lowerer, function_index);
-    try writer.print(") " ++ dim ++ "#{d}", .{function_index});
-
-    const capture_count = functions.captures[function_index];
-    if (capture_count > 0) {
-        const plural = if (capture_count == 1) "" else "s";
-        try writer.print(", first {d} capture{s}", .{ capture_count, plural });
-    }
-    try writer.writeAll(reset ++ " {\n");
-
-    for (0..block_count) |block_offset| {
-        try print_block(writer, lowerer, function_index, @intCast(block_offset));
-    }
-    try writer.writeAll("}\n");
-}
-
-// the `param` instructions of the entry block are the parameters
-fn print_parameters(writer: *Writer, lowerer: *HighLowerer, function_index: usize) !void {
+    // the `param` instructions of the entry block are the parameters
     const ir = &lowerer.ir;
-    const functions = ir.functions.columns();
     const entry = ir.blocks.get(functions.first_block[function_index]).?;
 
     var parameter_count: usize = 0;
@@ -107,31 +94,142 @@ fn print_parameters(writer: *Writer, lowerer: *HighLowerer, function_index: usiz
         try writer.print(" %{d}", .{local});
         parameter_count += 1;
     }
-}
+    try writer.print(") " ++ dim ++ "#{d}", .{function_index});
 
-fn print_block(
-    writer: *Writer,
-    lowerer: *HighLowerer,
-    function_index: usize,
-    block_offset: u32,
-) !void {
-    const ir = &lowerer.ir;
-    const first_block = ir.functions.column(.first_block)[function_index];
-    const block = ir.blocks.get(first_block + block_offset).?;
-
-    try writer.print(style.leaf_color ++ "b{d}:" ++ reset, .{block_offset});
-
-    const predecessors = ir.list(block.preds);
-    if (predecessors.len > 0) {
-        try writer.writeAll(dim ++ "  // from");
-        for (predecessors) |predecessor| try writer.print(" b{d}", .{predecessor});
-        try writer.writeAll(reset);
+    const capture_count = functions.captures[function_index];
+    if (capture_count > 0) {
+        const plural = if (capture_count == 1) "" else "s";
+        try writer.print(", first {d} capture{s}", .{ capture_count, plural });
     }
-    try writer.writeAll("\n");
+    try writer.writeAll(reset ++ " {\n");
 
-    for (block.start..block.start + block.len) |local| {
-        try print_instruction(writer, lowerer, function_index, @intCast(local), predecessors);
+    for (0..block_count) |block_offset| {
+        const first_block = ir.functions.column(.first_block)[function_index];
+        const block = ir.blocks.get(first_block + @as(u32, @intCast(block_offset))).?;
+
+        try writer.print(style.leaf_color ++ "b{d}:" ++ reset, .{block_offset});
+
+        const predecessors = ir.list(block.preds);
+        if (predecessors.len > 0) {
+            try writer.writeAll(dim ++ "  // from");
+            for (predecessors) |predecessor| try writer.print(" b{d}", .{predecessor});
+            try writer.writeAll(reset);
+        }
+        try writer.writeAll("\n");
+
+        for (block.start..block.start + block.len) |local| {
+            const first_instruction = lowerer.ir.functions.column(.first_inst)[function_index];
+            const instruction =
+                lowerer.ir.insts.get(first_instruction + @as(u32, @intCast(local))).?;
+            if (instruction.op == .param) continue;
+
+            try writer.writeAll("    ");
+
+            const defines_value = instruction.ty != .unit_type and
+                !instruction.op.is_terminator() and
+                instruction.op != .store;
+            if (defines_value) {
+                try print_type(writer, lowerer, instruction.ty);
+                try writer.print(" %{d} = ", .{local});
+            }
+
+            const context: InstructionContext = .{
+                .writer = writer,
+                .lowerer = lowerer,
+                .function_index = function_index,
+                .instruction = instruction,
+            };
+            switch (instruction.op) {
+                .param => unreachable,
+                .add => try context.print_binary("+"),
+                .sub => try context.print_binary("-"),
+                .mul => try context.print_binary("*"),
+                .div => try context.print_binary("/"),
+                .rem => try context.print_binary("%"),
+                .shl => try context.print_binary("<<"),
+                .shr => try context.print_binary(">>"),
+                .bit_and => try context.print_binary("&"),
+                .bit_or => try context.print_binary("|"),
+                .bit_xor => try context.print_binary("^"),
+                .eq => try context.print_binary("=="),
+                .ne => try context.print_binary("!="),
+                .lt => try context.print_binary("<"),
+                .gt => try context.print_binary(">"),
+                .le => try context.print_binary("<="),
+                .ge => try context.print_binary(">="),
+                .undef => try writer.writeAll(kind_color ++ "undefined" ++ reset),
+                .zeroed => try writer.writeAll("{0}"),
+                .phi => try context.print_phi(predecessors),
+                .bytes_eq => try context.print_bytes_equal(),
+                .type_test => {
+                    try context.reference(instruction.a);
+                    try writer.writeAll(" " ++ kind_color ++ "oftype" ++ reset ++ " ");
+                    try print_type(writer, lowerer, @enumFromInt(instruction.b));
+                },
+                .neg, .not => {
+                    const unary_symbol = if (instruction.op == .neg)
+                        "-"
+                    else if (instruction.ty == .bool_type)
+                        "!"
+                    else
+                        "~";
+                    try writer.writeAll(unary_symbol);
+                    try context.reference(instruction.a);
+                },
+                .convert, .cast => try context.print_conversion(),
+                .alloca => try context.print_alloca(),
+                .load => try print_place(writer, lowerer, instruction.a),
+                .store => {
+                    try print_place(writer, lowerer, instruction.a);
+                    try writer.writeAll(" = ");
+                    try context.reference(instruction.b);
+                },
+                .field_ptr => {
+                    try writer.writeAll("&");
+                    try context.reference(instruction.a);
+                    const record_type = operand_type(lowerer, function_index, instruction.a);
+                    try writer.print("->{s}", .{field_name(lowerer, record_type, instruction.b)});
+                },
+                .index_ptr => {
+                    try writer.writeAll("&");
+                    try context.reference(instruction.a);
+                    try writer.writeAll("[");
+                    try context.reference(instruction.b);
+                    try writer.writeAll("]");
+                },
+                .dyn => try context.print_dynamic_slice(),
+                .len => {
+                    try context.reference(instruction.a);
+                    try writer.writeAll(".len");
+                },
+                .aggregate => try context.print_aggregate(),
+                .extract => try context.print_extract(),
+                .variant_make => try context.print_variant_make(),
+                .variant_tag => {
+                    try context.reference(instruction.a);
+                    try writer.writeAll(".tag");
+                },
+                .variant_payload => {
+                    try context.reference(instruction.a);
+                    const variant_type = operand_type(lowerer, function_index, instruction.a);
+                    try writer.print(".{s}", .{case_name(lowerer, variant_type, instruction.b)});
+                },
+                .call, .call_dyn => try context.print_call(),
+                .closure => try context.print_closure(),
+                .select => try context.print_select(),
+                .@"switch" => {
+                    try context.print_switch();
+                    continue;
+                },
+                .br => try writer.print(kind_color ++ "goto" ++ reset ++ " b{d}", .{instruction.a}),
+                .cond_br => try context.print_conditional_branch(),
+                .ret => try context.print_return(),
+                .@"unreachable" => try writer.writeAll(kind_color ++ "unreachable" ++ reset),
+            }
+            try writer.writeAll(";\n");
+        }
     }
+    try writer.writeAll("}\n");
 }
 
 pub fn print_type_definition(
@@ -231,13 +329,6 @@ fn print_variant_definition(
         try writer.writeAll(";");
     }
     try writer.writeAll("\n}");
-}
-
-// the module initializer has no declaration
-fn function_name(lowerer: *HighLowerer, function_index: usize) []const u8 {
-    const declaration = lowerer.ir.functions.column(.decl)[function_index];
-    if (declaration == .none) return "$init";
-    return declaration_name(lowerer.resolver, declaration);
 }
 
 fn print_type(
@@ -390,7 +481,13 @@ fn print_value(writer: *Writer, lowerer: *HighLowerer, value: StaticPool.Index) 
             try writer.print(style.function_color ++ "{s}" ++ reset, .{name});
         },
         .simple_value => {
-            try writer.print(style.leaf_color ++ "{s}" ++ reset, .{simple_value_text(value)});
+            const simple_value_text = if (value == .unit_value)
+                "void"
+            else if (value == .bool_true)
+                "true"
+            else
+                "false";
+            try writer.print(style.leaf_color ++ "{s}" ++ reset, .{simple_value_text});
         },
         .int_value, .float_value, .string_value, .aggregate_value, .variant_value => {
             try writer.writeAll(style.leaf_color);
@@ -419,17 +516,12 @@ fn print_value(writer: *Writer, lowerer: *HighLowerer, value: StaticPool.Index) 
     }
 }
 
-fn simple_value_text(value: StaticPool.Index) []const u8 {
-    if (value == .unit_value) return "void";
-    if (value == .bool_true) return "true";
-    return "false";
-}
-
 fn print_reference(writer: *Writer, lowerer: *HighLowerer, operand: u32) !void {
     const reference: Ir.Ref = @enumFromInt(operand);
     if (reference == .none) return writer.writeAll(dim ++ "void" ++ reset);
     if (reference.is_global()) {
-        const name = global_name(lowerer, reference);
+        const declaration = lowerer.ir.globals.column(.decl)[reference.index()];
+        const name = declaration_name(lowerer.resolver, declaration);
         return writer.print("&" ++ bold ++ "{s}" ++ reset, .{name});
     }
     if (!reference.is_const()) return writer.print("%{d}", .{operand});
@@ -440,23 +532,12 @@ fn print_reference(writer: *Writer, lowerer: *HighLowerer, operand: u32) !void {
 fn print_place(writer: *Writer, lowerer: *HighLowerer, operand: u32) !void {
     const reference: Ir.Ref = @enumFromInt(operand);
     if (reference.is_global()) {
-        const name = global_name(lowerer, reference);
+        const declaration = lowerer.ir.globals.column(.decl)[reference.index()];
+        const name = declaration_name(lowerer.resolver, declaration);
         return writer.print(bold ++ "{s}" ++ reset, .{name});
     }
     try writer.writeAll("*");
     try print_reference(writer, lowerer, operand);
-}
-
-fn global_name(lowerer: *HighLowerer, reference: Ir.Ref) []const u8 {
-    const declaration = lowerer.ir.globals.column(.decl)[reference.index()];
-    return declaration_name(lowerer.resolver, declaration);
-}
-
-fn print_references(writer: *Writer, lowerer: *HighLowerer, list_start: u32) !void {
-    for (lowerer.ir.list(list_start), 0..) |operand, i| {
-        if (i > 0) try writer.writeAll(", ");
-        try print_reference(writer, lowerer, operand);
-    }
 }
 
 fn operand_type(lowerer: *HighLowerer, function_index: usize, operand: u32) StaticPool.Index {
@@ -474,19 +555,20 @@ fn operand_type(lowerer: *HighLowerer, function_index: usize, operand: u32) Stat
     return lowerer.ir.insts.column(.ty)[first_instruction + operand];
 }
 
-// the type a field or case is looked up in: through a pointer, and from a case to its variant
-fn lookup_type(lowerer: *HighLowerer, type_index: StaticPool.Index) StaticPool.Index {
-    if (type_index == .none) return type_index;
-    const pool = lowerer.static_pool;
-    if (pool.get(type_index) == .pointer_type) return pool.get(type_index).pointer_type.pointee;
-    if (pool.tag(type_index) == .variant_case_type) {
-        return pool.get(type_index).variant_case_type.variant;
-    }
-    return type_index;
-}
-
 fn field_name(lowerer: *HighLowerer, record_or_pointer: StaticPool.Index, field: u32) []const u8 {
-    const record = lookup_type(lowerer, record_or_pointer);
+    // the type a field or case is looked up in: through a pointer, and from a case to its variant
+    const record = blk: {
+        const type_index = record_or_pointer;
+        if (type_index == .none) break :blk type_index;
+        const pool = lowerer.static_pool;
+        if (pool.get(type_index) == .pointer_type) {
+            break :blk pool.get(type_index).pointer_type.pointee;
+        }
+        if (pool.tag(type_index) == .variant_case_type) {
+            break :blk pool.get(type_index).variant_case_type.variant;
+        }
+        break :blk type_index;
+    };
     if (record == .none or lowerer.static_pool.tag(record) != .record_type) return "?";
 
     const names = lowerer.static_pool.get(record).record_type.field_names;
@@ -495,127 +577,25 @@ fn field_name(lowerer: *HighLowerer, record_or_pointer: StaticPool.Index, field:
 }
 
 fn case_name(lowerer: *HighLowerer, variant_or_pointer: StaticPool.Index, case: u32) []const u8 {
-    const variant = lookup_type(lowerer, variant_or_pointer);
+    // the type a field or case is looked up in: through a pointer, and from a case to its variant
+    const variant = blk: {
+        const type_index = variant_or_pointer;
+        if (type_index == .none) break :blk type_index;
+        const pool = lowerer.static_pool;
+        if (pool.get(type_index) == .pointer_type) {
+            break :blk pool.get(type_index).pointer_type.pointee;
+        }
+        if (pool.tag(type_index) == .variant_case_type) {
+            break :blk pool.get(type_index).variant_case_type.variant;
+        }
+        break :blk type_index;
+    };
     if (variant == .none or lowerer.static_pool.tag(variant) != .variant_type) return "?";
 
     const cases = lowerer.static_pool.get(variant).variant_type.cases;
     if (case >= cases.len) return "?";
     const case_type = lowerer.static_pool.get(cases[case]).variant_case_type;
     return lowerer.resolver.name_pool.text_of(case_type.name);
-}
-
-fn print_instruction(
-    writer: *Writer,
-    lowerer: *HighLowerer,
-    function_index: usize,
-    local: u32,
-    predecessors: []const u32,
-) !void {
-    const first_instruction = lowerer.ir.functions.column(.first_inst)[function_index];
-    const instruction = lowerer.ir.insts.get(first_instruction + local).?;
-    if (instruction.op == .param) return;
-
-    try writer.writeAll("    ");
-
-    const defines_value = instruction.ty != .unit_type and
-        !instruction.op.is_terminator() and
-        instruction.op != .store;
-    if (defines_value) {
-        try print_type(writer, lowerer, instruction.ty);
-        try writer.print(" %{d} = ", .{local});
-    }
-
-    const context: InstructionContext = .{
-        .writer = writer,
-        .lowerer = lowerer,
-        .function_index = function_index,
-        .instruction = instruction,
-    };
-    switch (instruction.op) {
-        .param => unreachable,
-        .add => return context.print_binary("+"),
-        .sub => return context.print_binary("-"),
-        .mul => return context.print_binary("*"),
-        .div => return context.print_binary("/"),
-        .rem => return context.print_binary("%"),
-        .shl => return context.print_binary("<<"),
-        .shr => return context.print_binary(">>"),
-        .bit_and => return context.print_binary("&"),
-        .bit_or => return context.print_binary("|"),
-        .bit_xor => return context.print_binary("^"),
-        .eq => return context.print_binary("=="),
-        .ne => return context.print_binary("!="),
-        .lt => return context.print_binary("<"),
-        .gt => return context.print_binary(">"),
-        .le => return context.print_binary("<="),
-        .ge => return context.print_binary(">="),
-        .undef => try writer.writeAll(kind_color ++ "undefined" ++ reset),
-        .zeroed => try writer.writeAll("{0}"),
-        .phi => try context.print_phi(predecessors),
-        .bytes_eq => try context.print_bytes_equal(),
-        .type_test => {
-            try context.reference(instruction.a);
-            try writer.writeAll(" " ++ kind_color ++ "oftype" ++ reset ++ " ");
-            try print_type(writer, lowerer, @enumFromInt(instruction.b));
-        },
-        .neg, .not => {
-            try writer.writeAll(unary_symbol(instruction));
-            try context.reference(instruction.a);
-        },
-        .convert, .cast => try context.print_conversion(),
-        .alloca => try context.print_alloca(),
-        .load => try print_place(writer, lowerer, instruction.a),
-        .store => {
-            try print_place(writer, lowerer, instruction.a);
-            try writer.writeAll(" = ");
-            try context.reference(instruction.b);
-        },
-        .field_ptr => {
-            try writer.writeAll("&");
-            try context.reference(instruction.a);
-            const record_type = operand_type(lowerer, function_index, instruction.a);
-            try writer.print("->{s}", .{field_name(lowerer, record_type, instruction.b)});
-        },
-        .index_ptr => {
-            try writer.writeAll("&");
-            try context.reference(instruction.a);
-            try writer.writeAll("[");
-            try context.reference(instruction.b);
-            try writer.writeAll("]");
-        },
-        .dyn => try context.print_dynamic_slice(),
-        .len => {
-            try context.reference(instruction.a);
-            try writer.writeAll(".len");
-        },
-        .aggregate => try context.print_aggregate(),
-        .extract => try context.print_extract(),
-        .variant_make => try context.print_variant_make(),
-        .variant_tag => {
-            try context.reference(instruction.a);
-            try writer.writeAll(".tag");
-        },
-        .variant_payload => {
-            try context.reference(instruction.a);
-            const variant_type = operand_type(lowerer, function_index, instruction.a);
-            try writer.print(".{s}", .{case_name(lowerer, variant_type, instruction.b)});
-        },
-        .call, .call_dyn => try context.print_call(),
-        .closure => try context.print_closure(),
-        .select => try context.print_select(),
-        .@"switch" => return context.print_switch(),
-        .br => try writer.print(kind_color ++ "goto" ++ reset ++ " b{d}", .{instruction.a}),
-        .cond_br => try context.print_conditional_branch(),
-        .ret => try context.print_return(),
-        .@"unreachable" => try writer.writeAll(kind_color ++ "unreachable" ++ reset),
-    }
-    try writer.writeAll(";\n");
-}
-
-fn unary_symbol(instruction: Ir.Inst) []const u8 {
-    if (instruction.op == .neg) return "-";
-    if (instruction.ty == .bool_type) return "!";
-    return "~";
 }
 
 // the printing state of one instruction, so its helpers take no long parameter lists
@@ -637,7 +617,6 @@ const InstructionContext = struct {
         try context.reference(context.instruction.a);
         try context.writer.print(" {s} ", .{symbol});
         try context.reference(context.instruction.b);
-        return context.writer.writeAll(";\n");
     }
 
     // an incoming value per predecessor, in the order of the predecessors
@@ -668,14 +647,11 @@ const InstructionContext = struct {
         try print_type(writer, context.lowerer, instruction.ty);
         try writer.writeAll(") ");
         try context.reference(instruction.a);
-        try writer.print(dim ++ "  /* {s} */" ++ reset, .{conversion_name(instruction)});
-    }
-
-    fn conversion_name(instruction: Ir.Inst) []const u8 {
-        if (instruction.op == .convert) {
-            return @tagName(@as(StaticPool.CoercionKind, @enumFromInt(instruction.b)));
-        }
-        return @tagName(@as(StaticPool.CastKind, @enumFromInt(instruction.b)));
+        const conversion_name = if (instruction.op == .convert)
+            @tagName(@as(StaticPool.CoercionKind, @enumFromInt(instruction.b)))
+        else
+            @tagName(@as(StaticPool.CastKind, @enumFromInt(instruction.b)));
+        try writer.print(dim ++ "  /* {s} */" ++ reset, .{conversion_name});
     }
 
     fn print_alloca(context: InstructionContext) !void {
@@ -758,7 +734,10 @@ const InstructionContext = struct {
         const writer = context.writer;
         try context.reference(context.instruction.a);
         try writer.writeAll("(");
-        try print_references(writer, context.lowerer, context.instruction.b);
+        for (context.lowerer.ir.list(context.instruction.b), 0..) |operand, i| {
+            if (i > 0) try writer.writeAll(", ");
+            try print_reference(writer, context.lowerer, operand);
+        }
         try writer.writeAll(")");
         if (context.instruction.op != .call_dyn) return;
         try writer.writeAll(dim ++ "  /* dynamic */" ++ reset);
@@ -769,13 +748,21 @@ const InstructionContext = struct {
         const lowerer = context.lowerer;
         const instruction = context.instruction;
 
-        const name = function_name(lowerer, instruction.a);
+        // the module initializer has no declaration
+        const declaration = lowerer.ir.functions.column(.decl)[instruction.a];
+        const name = if (declaration == .none)
+            "$init"
+        else
+            declaration_name(lowerer.resolver, declaration);
         const closure_format = kind_color ++ "closure" ++ reset ++ "(" ++
             style.function_color ++ "{s}" ++ reset;
         try writer.print(closure_format, .{name});
 
         if (context.operand_list().len > 0) try writer.writeAll(", ");
-        try print_references(writer, lowerer, instruction.b);
+        for (lowerer.ir.list(instruction.b), 0..) |operand, i| {
+            if (i > 0) try writer.writeAll(", ");
+            try print_reference(writer, lowerer, operand);
+        }
         try writer.writeAll(")");
     }
 

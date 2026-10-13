@@ -145,7 +145,11 @@ pub fn offer(
                 for (view_entries) |entry| try items.append(allocator, item_of(entry, replaced));
                 const kind = shape.kind orelse return items.items;
                 const field_names = Node.nk_field_names[@intFromEnum(kind)];
-                const named_children = named_child_count(Node.nk_childc[@intFromEnum(kind)]);
+                const named_children: usize = switch (Node.nk_childc[@intFromEnum(kind)]) {
+                    .one => 1,
+                    .two => 2,
+                    .none, .data, .many => 0,
+                };
                 for (field_names[0..named_children]) |field_name| {
                     const child: Entry = .{ .label = field_name, .ty = "ast", .class = .field };
                     try items.append(allocator, item_of(child, replaced));
@@ -163,14 +167,6 @@ pub fn offer(
         }
     }
     return items.items;
-}
-
-fn named_child_count(child_count: @TypeOf(Node.nk_childc[0])) usize {
-    return switch (child_count) {
-        .one => 1,
-        .two => 2,
-        .none, .data, .many => 0,
-    };
 }
 
 fn item_of(entry: Entry, replaced: Analysis.Range) Item {
@@ -196,7 +192,30 @@ fn shape_before_dot(
     var end = dot;
     const root = while (part_count < parts.len) {
         if (end > 0 and (source[end - 1] == ']' or source[end - 1] == ')')) {
-            const open = opening_bracket(source, end - 1) orelse return .{};
+            // the bracket opening `end - 1`, each closer must meet its own kind of opener
+            const open = blk: {
+                var expected: [64]u8 = undefined;
+                var depth: usize = 0;
+                var i = end;
+                while (i > 0) {
+                    i -= 1;
+                    switch (source[i]) {
+                        ')', ']' => {
+                            if (depth == expected.len) return .{};
+                            expected[depth] = if (source[i] == ')') '(' else '[';
+                            depth += 1;
+                        },
+                        '(', '[' => {
+                            if (depth == 0 or expected[depth - 1] != source[i]) return .{};
+                            depth -= 1;
+                            if (depth == 0) break :blk i;
+                        },
+                        '\n', ';', '{', '}' => return .{},
+                        else => {},
+                    }
+                }
+                return .{};
+            };
             const is_group = open == 0 or !is_word_byte(source[open - 1]);
             if (source[end - 1] == ')' and is_group) break source[open + 1 .. end - 1];
             parts[part_count] = source[open .. open + 1];
@@ -247,36 +266,32 @@ fn shape_of_root(
     for ([_][]const u8{ "refl", "quote", "include" }) |keyword| {
         if (std.mem.startsWith(u8, root, keyword)) return .{ .holds = .tree };
     }
-    return shape_of_type(type_of_name(source, root, cursor, names));
-}
 
-// what a member (`$params`, `lhs`), an index or a call of `shape` makes
-fn shape_after_step(shape: Shape, step: []const u8) Shape {
-    switch (shape.holds) {
-        .list => {
-            if (step[0] == '[') return .{ .holds = .tree, .kind = shape.kind };
-            return .{};
-        },
-        .tree => {
-            if (step[0] == '[' or step[0] == '(') return .{};
-            // a child by its field name
-            if (step[0] != '$') return .{ .holds = .tree };
-            for (Macros.views) |view| {
-                if (!std.mem.eql(u8, step[1..], @tagName(view.name))) continue;
-                return switch (view.gives) {
-                    .tree => .{ .holds = .tree },
-                    .list => .{ .holds = .list },
-                    .text, .flag => .{},
-                };
+    // the type of the nearest `root` before the cursor, of an untyped one what is written before it
+    const written = blk: {
+        var best: ?Analysis.Symbol = null;
+        for (names) |declaration| {
+            const name_range = declaration.selectionRange orelse continue;
+            if (!std.mem.eql(u8, declaration.name, root)) continue;
+            if (Analysis.before(cursor, name_range.start)) continue;
+            if (best) |nearer| {
+                if (!Analysis.before(nearer.selectionRange.?.start, name_range.start)) continue;
             }
-            return .{};
-        },
-        .none, .kinds => return .{},
-    }
-}
+            best = declaration;
+        }
 
-// a type as the analysis wrote it (`*ast(fun)`, `[]ast.Identifier`) or as written (`mut ast`)
-fn shape_of_type(written: []const u8) Shape {
+        const declaration = best orelse break :blk "";
+        if (declaration.detail.len > 0) break :blk declaration.detail;
+        const name_start =
+            @min(byte_offset(source, declaration.selectionRange.?.start), source.len);
+        var start = name_start;
+        while (start > 0 and std.mem.indexOfScalar(u8, "\n;{(,:", source[start - 1]) == null) {
+            start -= 1;
+        }
+        break :blk source[start..name_start];
+    };
+
+    // a type as the analysis wrote it (`*ast(fun)`, `[]ast.Identifier`) or as written (`mut ast`)
     var text = std.mem.trim(u8, written, " ");
     for ([_][]const u8{ "pub ", "mut ", "stc " }) |modifier| {
         if (std.mem.startsWith(u8, text, modifier)) {
@@ -306,58 +321,29 @@ fn shape_of_type(written: []const u8) Shape {
     return .{ .holds = if (is_list) .list else .tree, .kind = kind };
 }
 
-// the type of the nearest `name` before the cursor, of an untyped one what is written before it
-fn type_of_name(
-    source: []const u8,
-    name: []const u8,
-    cursor: Analysis.Position,
-    names: []const Analysis.Symbol,
-) []const u8 {
-    var best: ?Analysis.Symbol = null;
-    for (names) |declaration| {
-        const name_range = declaration.selectionRange orelse continue;
-        if (!std.mem.eql(u8, declaration.name, name)) continue;
-        if (Analysis.before(cursor, name_range.start)) continue;
-        if (best) |nearer| {
-            if (!Analysis.before(nearer.selectionRange.?.start, name_range.start)) continue;
-        }
-        best = declaration;
+// what a member (`$params`, `lhs`), an index or a call of `shape` makes
+fn shape_after_step(shape: Shape, step: []const u8) Shape {
+    switch (shape.holds) {
+        .list => {
+            if (step[0] == '[') return .{ .holds = .tree, .kind = shape.kind };
+            return .{};
+        },
+        .tree => {
+            if (step[0] == '[' or step[0] == '(') return .{};
+            // a child by its field name
+            if (step[0] != '$') return .{ .holds = .tree };
+            for (Macros.views) |view| {
+                if (!std.mem.eql(u8, step[1..], @tagName(view.name))) continue;
+                return switch (view.gives) {
+                    .tree => .{ .holds = .tree },
+                    .list => .{ .holds = .list },
+                    .text, .flag => .{},
+                };
+            }
+            return .{};
+        },
+        .none, .kinds => return .{},
     }
-
-    const declaration = best orelse return "";
-    if (declaration.detail.len > 0) return declaration.detail;
-    const name_start = @min(byte_offset(source, declaration.selectionRange.?.start), source.len);
-    var start = name_start;
-    while (start > 0 and std.mem.indexOfScalar(u8, "\n;{(,:", source[start - 1]) == null) {
-        start -= 1;
-    }
-    return source[start..name_start];
-}
-
-// the `(` or `[` opening the bracket at `close`
-// the bracket opening the one at `close`, each closer must meet its own kind of opener
-fn opening_bracket(source: []const u8, close: usize) ?usize {
-    var expected: [64]u8 = undefined;
-    var depth: usize = 0;
-    var i = close + 1;
-    while (i > 0) {
-        i -= 1;
-        switch (source[i]) {
-            ')', ']' => {
-                if (depth == expected.len) return null;
-                expected[depth] = if (source[i] == ')') '(' else '[';
-                depth += 1;
-            },
-            '(', '[' => {
-                if (depth == 0 or expected[depth - 1] != source[i]) return null;
-                depth -= 1;
-                if (depth == 0) return i;
-            },
-            '\n', ';', '{', '}' => return null,
-            else => {},
-        }
-    }
-    return null;
 }
 
 fn is_word_byte(byte: u8) bool {

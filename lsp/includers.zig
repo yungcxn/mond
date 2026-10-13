@@ -7,8 +7,26 @@ const Lexer = mond.Lexer;
 // the workspace is the nearest directory above `path` holding a `.git` or a `build.zig`
 pub fn is_included(io: std.Io, allocator: std.mem.Allocator, path: []const u8) bool {
     if (path.len == 0) return false;
-    const target = absolute_path(io, allocator, path) orelse return false;
-    const root = workspace_root(io, allocator, target);
+    const target = if (std.fs.path.isAbsolute(path))
+        std.fs.path.resolve(allocator, &.{path}) catch return false
+    else blk: {
+        const current = std.process.currentPathAlloc(io, allocator) catch return false;
+        break :blk std.fs.path.resolve(allocator, &.{ current, path }) catch return false;
+    };
+    // without a marker the directory above the file's own, where a program sits next to its `lib/`
+    const root = blk: {
+        const own_directory = std.fs.path.dirname(target) orelse break :blk target;
+        var directory: ?[]const u8 = own_directory;
+        while (directory) |candidate| : (directory = std.fs.path.dirname(candidate)) {
+            for ([_][]const u8{ ".git", "build.zig" }) |marker| {
+                const marker_path = std.fs.path.join(allocator, &.{ candidate, marker }) catch
+                    continue;
+                std.Io.Dir.cwd().access(io, marker_path, .{}) catch continue;
+                break :blk candidate;
+            }
+        }
+        break :blk std.fs.path.dirname(own_directory) orelse own_directory;
+    };
 
     const cwd = std.Io.Dir.cwd();
     var root_directory = cwd.openDir(io, root, .{ .iterate = true }) catch return false;
@@ -17,72 +35,43 @@ pub fn is_included(io: std.Io, allocator: std.mem.Allocator, path: []const u8) b
     defer walker.deinit();
 
     while (walker.next(io) catch null) |entry| switch (entry.kind) {
-        .directory => if (!is_skipped(entry.basename)) walker.enter(io, entry) catch {},
+        .directory => {
+            // hidden directories (`.git`, `.zig-cache`) and build outputs hold no sources
+            const name = entry.basename;
+            const is_skipped = (name.len > 0 and name[0] == '.') or
+                std.mem.eql(u8, name, "zig-out") or
+                std.mem.eql(u8, name, "node_modules");
+            if (!is_skipped) walker.enter(io, entry) catch {};
+        },
         .file => {
             if (!std.mem.endsWith(u8, entry.basename, ".mn")) continue;
             const includer = std.fs.path.join(allocator, &.{ root, entry.path }) catch continue;
             if (std.mem.eql(u8, includer, target)) continue;
-            if (includes(io, allocator, includer, target)) return true;
+
+            // an `include "..."` naming `target`, a path relative to the includer as the compiler
+            // reads it. lexed, so an include in a comment does not count
+            const limit: std.Io.Limit = .limited(50 << 20);
+            const source = cwd.readFileAlloc(io, includer, allocator, limit) catch continue;
+            if (std.mem.indexOf(u8, source, "include") == null) continue;
+
+            var lexer = Lexer{ .src_bytes = source, .tokens = .init(allocator, 1024) };
+            defer lexer.tokens.deinit();
+            lexer.gen_tokens() catch {};
+
+            const kinds = lexer.tokens.column(.tk);
+            const spans = lexer.tokens.column(.span);
+            const includer_directory = std.fs.path.dirname(includer) orelse ".";
+            for (kinds, 0..) |kind, i| {
+                if (kind != .kw_include or i + 1 >= kinds.len) continue;
+                if (kinds[i + 1] != .val_string) continue;
+                const written = std.mem.trim(u8, source[spans[i + 1][0]..spans[i + 1][1]], "\"");
+                const parts = [_][]const u8{ includer_directory, written };
+                const included = std.fs.path.resolve(allocator, &parts) catch continue;
+                if (std.mem.eql(u8, included, target)) return true;
+            }
         },
         else => {},
     };
-    return false;
-}
-
-// hidden directories (`.git`, `.zig-cache`) and build outputs hold no sources
-fn is_skipped(directory_name: []const u8) bool {
-    if (directory_name.len > 0 and directory_name[0] == '.') return true;
-    return std.mem.eql(u8, directory_name, "zig-out") or
-        std.mem.eql(u8, directory_name, "node_modules");
-}
-
-fn absolute_path(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ?[]const u8 {
-    if (std.fs.path.isAbsolute(path)) return std.fs.path.resolve(allocator, &.{path}) catch null;
-    const current = std.process.currentPathAlloc(io, allocator) catch return null;
-    return std.fs.path.resolve(allocator, &.{ current, path }) catch null;
-}
-
-// without a marker the directory above the file's own, where a program sits next to its `lib/`
-fn workspace_root(io: std.Io, allocator: std.mem.Allocator, file: []const u8) []const u8 {
-    const own_directory = std.fs.path.dirname(file) orelse return file;
-    var directory: ?[]const u8 = own_directory;
-    while (directory) |candidate| : (directory = std.fs.path.dirname(candidate)) {
-        for ([_][]const u8{ ".git", "build.zig" }) |marker| {
-            const marker_path = std.fs.path.join(allocator, &.{ candidate, marker }) catch continue;
-            std.Io.Dir.cwd().access(io, marker_path, .{}) catch continue;
-            return candidate;
-        }
-    }
-    return std.fs.path.dirname(own_directory) orelse own_directory;
-}
-
-// whether `includer` has an `include "..."` naming `target`, a path relative to the includer as
-// the compiler reads it. lexed, so an include in a comment does not count
-fn includes(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    includer: []const u8,
-    target: []const u8,
-) bool {
-    const limit: std.Io.Limit = .limited(50 << 20);
-    const cwd = std.Io.Dir.cwd();
-    const source = cwd.readFileAlloc(io, includer, allocator, limit) catch return false;
-    if (std.mem.indexOf(u8, source, "include") == null) return false;
-
-    var lexer = Lexer{ .src_bytes = source, .tokens = .init(allocator, 1024) };
-    defer lexer.tokens.deinit();
-    lexer.gen_tokens() catch {};
-
-    const kinds = lexer.tokens.column(.tk);
-    const spans = lexer.tokens.column(.span);
-    const includer_directory = std.fs.path.dirname(includer) orelse ".";
-    for (kinds, 0..) |kind, i| {
-        if (kind != .kw_include or i + 1 >= kinds.len or kinds[i + 1] != .val_string) continue;
-        const written = std.mem.trim(u8, source[spans[i + 1][0]..spans[i + 1][1]], "\"");
-        const parts = [_][]const u8{ includer_directory, written };
-        const included = std.fs.path.resolve(allocator, &parts) catch continue;
-        if (std.mem.eql(u8, included, target)) return true;
-    }
     return false;
 }
 
