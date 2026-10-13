@@ -1,13 +1,13 @@
 const std = @import("std");
-const SoD = @import("ds/dynbuf.zig").SoD;
-const DynBuf = @import("ds/dynbuf.zig").DynBuf;
+const StructOfArrays = @import("containers.zig").StructOfArrays;
+const DynamicBuffer = @import("containers.zig").DynamicBuffer;
 const Lexer = @import("Lexer.zig");
 const ParseTree = @import("ParseTree.zig");
 const Parser = @This();
 const lookahead = @import("parser/lookahead.zig");
 const NodeId = ParseTree.NodeId;
 
-tokens: SoD(Lexer.Token),
+tokens: StructOfArrays(Lexer.Token),
 src_bytes: []const u8,
 alloc: std.mem.Allocator,
 tok_cursor: u32 = 0,
@@ -19,14 +19,14 @@ list: bool = false,
 pattern: bool = false,
 // in a splice `<..>` a `>` closes it, a comparison needs parentheses
 angle: bool = false,
-global_store: DynBuf(NodeId),
+global_store: DynamicBuffer(NodeId),
 // children of the lists being parsed, nested lists stack above their parents
-scratch: DynBuf(NodeId),
+scratch: DynamicBuffer(NodeId),
 tree: ParseTree,
 
 pub fn init(
     alloc: std.mem.Allocator,
-    tokens: SoD(Lexer.Token),
+    tokens: StructOfArrays(Lexer.Token),
     src_bytes: []const u8,
     span_store: []const Lexer.TextSpan,
 ) @This() {
@@ -48,8 +48,8 @@ pub fn deinit(self: *@This()) void {
 
 // the children of `parent` pushed onto `scratch` since `mark`, they leave the scratch
 pub inline fn close(self: *@This(), parent: NodeId, mark: u32) void {
-    self.tree.set_children(parent, self.scratch.buf[mark..self.scratch.head]);
-    self.scratch.head = mark;
+    self.tree.set_children(parent, self.scratch.buffer[mark..self.scratch.len]);
+    self.scratch.len = mark;
 }
 
 pub inline fn peek_tok(self: *@This()) !Lexer.Token.Kind {

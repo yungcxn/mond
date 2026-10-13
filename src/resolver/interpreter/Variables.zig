@@ -1,12 +1,16 @@
 const std = @import("std");
-const DynBuf = @import("../../ds/dynbuf.zig").DynBuf;
+const DynamicBuffer = @import("../../containers.zig").DynamicBuffer;
 const ParseTree = @import("../../ParseTree.zig");
+const StaticPool = @import("../StaticPool.zig");
 const DeclPool = @import("../DeclPool.zig");
-const Decls = @import("../checker/Decls.zig");
+const Declarations = @import("../checker/Declarations.zig");
 const Interpreter = @import("../Interpreter.zig");
 const Value = @import("Value.zig");
+const Index = StaticPool.Index;
 const NodeId = ParseTree.NodeId;
 const Kind = ParseTree.Node.Kind;
+const constructs = @import("../../language/constructs.zig");
+const operators = @import("../../language/operators.zig");
 
 // variables: names mapped to cells, reads and writes of locals and statics
 const Variables = @This();
@@ -14,265 +18,461 @@ const Variables = @This();
 const Adopted = struct { decl: DeclPool.Index, cell: u32 };
 
 // statics written by an evaluation, held in cells until it ends
-adopted: DynBuf(Adopted),
+adopted: DynamicBuffer(Adopted),
 
-pub fn init(a: std.mem.Allocator) Variables {
-    return .{ .adopted = .init(a, 16) };
+pub fn init(allocator: std.mem.Allocator) Variables {
+    return .{ .adopted = .init(allocator, 16) };
 }
 
 pub fn deinit(self: *Variables) void {
     self.adopted.deinit();
 }
 
-pub fn interp(self: *Variables) *Interpreter {
+pub fn owning_interpreter(self: *Variables) *Interpreter {
     return @alignCast(@fieldParentPtr("variables", self));
 }
 
-pub fn slot(self: *Variables, d: DeclPool.Index) ?u32 {
-    const ip = self.interp();
-    const x = @intFromEnum(d);
-    var i = ip.frames.head;
+pub fn cell_of_declaration(self: *Variables, declaration: DeclPool.Index) ?u32 {
+    const interpreter = self.owning_interpreter();
+    const declaration_number = @intFromEnum(declaration);
+    var i = interpreter.frames.len;
     while (i > 0) {
         i -= 1;
-        const f = ip.frames.buf[i];
-        if (f.body.len == 0) break;
-        if (x -% f.body.first < f.body.locals) return f.base + x - f.body.first;
-        if (ip.calls.captured(f, d)) |c| return c;
+        const frame = interpreter.frames.buffer[i];
+        // a frame without a body starts a static evaluation, the frames below are out of reach
+        if (frame.body.node_count == 0) break;
+        if (declaration_number -% frame.body.first_local < frame.body.local_count) {
+            return frame.base + declaration_number - frame.body.first_local;
+        }
+        if (interpreter.calls.captured_cell(frame, declaration)) |cell| return cell;
     }
-    var j = self.adopted.head;
+
+    var j = self.adopted.len;
     while (j > 0) {
         j -= 1;
-        if (self.adopted.buf[j].decl == d) return self.adopted.buf[j].cell;
+        const entry = self.adopted.buffer[j];
+        if (entry.decl == declaration) return entry.cell;
     }
     return null;
 }
 
-fn impure(self: *Variables, n: NodeId) bool {
-    const ip = self.interp();
-    const r = ip.res();
-    var i = ip.frames.head;
+// writing a static outside its own frames is a side effect a `stcfun` may not have
+fn rejects_impure_write(self: *Variables, node: NodeId) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    var i = interpreter.frames.len;
     while (i > 0) {
         i -= 1;
-        const f = ip.frames.buf[i];
-        if (f.body.len == 0) return false;
-        if (f.body.decl != .none and r.decl_pool.get_kind(f.body.decl) == .static_function) {
-            _ = ip.report(.impure_stcfun, n, 0, 0);
-            return true;
-        }
+        const frame = interpreter.frames.buffer[i];
+        if (frame.body.node_count == 0) return false;
+
+        const declaration = frame.body.declaration;
+        if (declaration == .none) continue;
+        if (resolver.decl_pool.get(declaration, .kind) != .static_function) continue;
+        _ = interpreter.report(.impure_stcfun, node, 0, 0);
+        return true;
     }
     return false;
 }
 
 pub fn flush(self: *Variables, mark: u32) void {
-    const ip = self.interp();
-    const r = ip.res();
-    while (self.adopted.head > mark) {
-        self.adopted.head -= 1;
-        const a = self.adopted.buf[self.adopted.head];
-        r.decl_pool.set_value(a.decl, r.statics.retype(ip.export_(r.decl_pool.get_node(a.decl), ip.mem.buf[a.cell]), r.decl_pool.get_ty(a.decl)));
+    const interpreter = self.owning_interpreter();
+    while (self.adopted.len > mark) {
+        self.adopted.len -= 1;
+        const entry = self.adopted.buffer[self.adopted.len];
+        self.set_static_value(entry.decl, interpreter.memory.buffer[entry.cell]);
     }
 }
 
-fn decl_of(self: *Variables, n: NodeId) DeclPool.Index {
-    const ip = self.interp();
-    return if (ip.framed()) ip.info(.decl, n) else ip.res().decls.use(n);
+// a static keeps its exported value, retyped to its declared type
+inline fn set_static_value(self: *Variables, declaration: DeclPool.Index, value: Value) void {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const declaration_node = resolver.decl_pool.get(declaration, .node);
+    const exported = interpreter.export_value(declaration_node, value);
+    const declared_type = resolver.decl_pool.get(declaration, .value_type);
+    const retyped = resolver.static_values.retyped(exported, declared_type);
+    resolver.decl_pool.set(declaration, .static_value, retyped);
 }
 
-fn stored(self: *Variables, n: NodeId, d: DeclPool.Index) Value {
-    const ip = self.interp();
-    const r = ip.res();
-    const v = r.decl_pool.get_value(d);
-    if (v != .none) return .of(&r.static_pool, v);
-    return if (r.decl_pool.get_state(d) == .failed) .poison else ip.fail(n, .not_static, r.name_pool.name_of(n), 0);
+fn declaration_of(self: *Variables, node: NodeId) DeclPool.Index {
+    const interpreter = self.owning_interpreter();
+    if (interpreter.has_body_frame()) return interpreter.node_info(.declaration, node);
+    return interpreter.owning_resolver().declarations.use_name(node);
 }
 
-pub fn peek(self: *Variables, d: DeclPool.Index) Value {
-    const ip = self.interp();
-    if (self.slot(d)) |s| if (!ip.mem.buf[s].is(.none)) return ip.mem.buf[s];
-    return .of(&ip.res().static_pool, ip.res().decl_pool.get_value(d));
+fn stored_value(self: *Variables, node: NodeId, declaration: DeclPool.Index) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_value = resolver.decl_pool.get(declaration, .static_value);
+    if (static_value != .none) return .of(&resolver.static_pool, static_value);
+
+    // a failed declaration is already diagnosed
+    if (resolver.decl_pool.get(declaration, .state) == .failed) return .poison;
+    return interpreter.fail(node, .not_static, resolver.name_pool.name_of_node(node), 0);
 }
 
-pub fn load(self: *Variables, n: NodeId) Value {
-    const ip = self.interp();
-    const d = self.decl_of(n);
-    if (d == .none) return if (ip.framed()) ip.fail(n, .undefined_name, ip.res().name_pool.name_of(n), 0) else .poison;
-    if (ip.framed() and ip.res().decl_pool.get_kind(d) == .function and !ip.res().decl_pool.get_flags(d).is_global) return ip.calls.closure(d);
-    const v = self.peek(d);
-    return if (v.is(.none)) self.stored(n, d) else v;
+pub fn peek(self: *Variables, declaration: DeclPool.Index) Value {
+    const interpreter = self.owning_interpreter();
+    if (self.cell_of_declaration(declaration)) |cell| {
+        const held = interpreter.memory.buffer[cell];
+        if (!held.is(.none)) return held;
+    }
+
+    const resolver = interpreter.owning_resolver();
+    return .of(&resolver.static_pool, resolver.decl_pool.get(declaration, .static_value));
 }
 
-pub fn bind(self: *Variables, d: DeclPool.Index, v: Value) void {
-    const ip = self.interp();
-    const r = ip.res();
-    if (d == .none) return;
-    if (self.slot(d)) |s| return ip.set(s, v);
-    if (r.decl_pool.get_ty(d) == .none) r.decl_pool.set_ty(d, ip.vtype(v));
-    r.decl_pool.set_value(d, ip.pool(v));
+pub fn load(self: *Variables, node: NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const declaration = self.declaration_of(node);
+    if (declaration == .none) {
+        if (!interpreter.has_body_frame()) return .poison;
+        const name = interpreter.owning_resolver().name_pool.name_of_node(node);
+        return interpreter.fail(node, .undefined_name, name, 0);
+    }
+    if (interpreter.has_body_frame() and self.is_local_function(declaration)) {
+        return interpreter.calls.closure(declaration);
+    }
+
+    const value = self.peek(declaration);
+    if (value.is(.none)) return self.stored_value(node, declaration);
+    return value;
 }
 
-pub fn store(self: *Variables, n: NodeId, d: DeclPool.Index, v: Value) bool {
-    const ip = self.interp();
-    const r = ip.res();
-    if (d == .none) return true;
-    if (self.slot(d)) |s| {
-        ip.fill(s, v, r.decl_pool.get_ty(d));
+// a local function is a value only together with the cells it captures
+inline fn is_local_function(self: *Variables, declaration: DeclPool.Index) bool {
+    const decl_pool = &self.owning_interpreter().owning_resolver().decl_pool;
+    if (decl_pool.get(declaration, .kind) != .function) return false;
+    return !decl_pool.get(declaration, .flags).is_global;
+}
+
+pub fn bind(self: *Variables, declaration: DeclPool.Index, value: Value) void {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (declaration == .none) return;
+    if (self.cell_of_declaration(declaration)) |cell| return interpreter.store_cell(cell, value);
+
+    if (resolver.decl_pool.get(declaration, .value_type) == .none) {
+        resolver.decl_pool.set(declaration, .value_type, interpreter.value_type(value));
+    }
+    resolver.decl_pool.set(declaration, .static_value, interpreter.interned(value));
+}
+
+pub fn store(self: *Variables, node: NodeId, declaration: DeclPool.Index, value: Value) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (declaration == .none) return true;
+    if (self.cell_of_declaration(declaration)) |cell| {
+        interpreter.store_converted(cell, value, resolver.decl_pool.get(declaration, .value_type));
         return true;
     }
-    if (self.impure(n)) return false;
-    r.decl_pool.set_value(d, r.statics.retype(ip.export_(r.decl_pool.get_node(d), v), r.decl_pool.get_ty(d)));
+
+    if (self.rejects_impure_write(node)) return false;
+    self.set_static_value(declaration, value);
     return true;
 }
 
-fn write(self: *Variables, n: NodeId, v: Value) void {
-    const ip = self.interp();
-    const r = ip.res();
-    if (r.tree.macros and ip.trees.write(n, v)) return;
-    if (r.tree.kind(n) == .capture) return self.write(r.tree.arg(n, 0), v);
-    if (r.tree.props(n).name) {
-        _ = self.store(n, self.decl_of(n), v);
+fn write(self: *Variables, node: NodeId, value: Value) void {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (resolver.tree.macros and interpreter.trees.write(node, value)) return;
+    if (resolver.tree.kind(node) == .capture) return self.write(resolver.tree.arg(node, 0), value);
+    if (resolver.tree.props(node).name) {
+        _ = self.store(node, self.declaration_of(node), value);
         return;
     }
-    const mark = self.adopted.head;
-    const c = self.cell(n) orelse return;
-    ip.set(c, ip.own(.fit(v, ip.mem.buf[c].ty)));
+
+    const mark = self.adopted.len;
+    const cell = self.cell_of_place(node) orelse return;
+    const fitted = value.fit(interpreter.memory.buffer[cell].value_type);
+    interpreter.store_cell(cell, interpreter.owned_copy(fitted));
     self.flush(mark);
 }
 
-pub fn cell(self: *Variables, n: NodeId) ?u32 {
-    const ip = self.interp();
-    const r = ip.res();
-    const k = r.tree.kind(n);
-    if (k == .capture) return self.cell(r.tree.arg(n, 0));
-    if (r.tree.props(n).name) {
-        const d = self.decl_of(n);
-        if (d == .none) return null;
-        if (self.slot(d)) |s| return s;
-        if (r.decl_pool.get_kind(d) != .static_parameter and self.impure(n)) return null;
-        const c = ip.put(self.stored(n, d));
-        self.adopted.push(.{ .decl = d, .cell = c });
-        return c;
+pub fn cell_of_place(self: *Variables, node: NodeId) ?u32 {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const kind = resolver.tree.kind(node);
+    if (kind == .capture) return self.cell_of_place(resolver.tree.arg(node, 0));
+    if (resolver.tree.props(node).name) return self.cell_of_name(node);
+    if (kind == .dereference) return self.cell_of_pointee(node);
+    if (kind == .array_index) return self.cell_of_component(node, kind);
+    if (kind == .member and !self.is_member_of_type(node)) {
+        return self.cell_of_component(node, kind);
     }
-    if (k == .dereference) {
-        const p = ip.eval(r.tree.arg(n, 0));
-        if (p.is_ref()) return p.at();
-        if (!p.is(.poison_type)) _ = ip.report(.not_static, n, 0, 0);
-        return null;
-    }
+
     // a constant of a type (`Light.Green`) is a value like any other
-    if (k != .array_index and k != .member or k == .member and r.static_pool.tag(ip.checked(r.tree.arg(n, 0))) == .meta_type) {
-        const v = ip.eval(n);
-        return if (v.is(.poison_type)) null else ip.put(ip.own(v));
-    }
-    var c = self.cell(r.tree.arg(n, 0)) orelse return null;
-    const through = ip.mem.buf[c].is_ref();
-    if (through) c = ip.mem.buf[c].at();
-    const agg = ip.thaw(c);
-    const i: u64 = if (k == .array_index) blk: {
-        const iv = ip.eval(r.tree.arg(n, 1));
-        if (!Value.is_int(iv.ty)) return null;
-        break :blk iv.bits;
-    } else if (agg.is_heap()) switch (r.static_pool.lookup_member(agg.ty, r.name_pool.name_of(r.tree.arg(n, 1)))) {
-        .field => |f| f.index,
-        else => return null,
-    } else 0;
-    if (!agg.is_heap()) {
-        if (through and k == .array_index) return c + @as(u32, @intCast(i));
-        if (!agg.is(.poison_type)) _ = ip.report(.not_static, n, 0, 0);
-        return null;
-    }
-    if (i >= agg.len()) {
-        _ = ip.report(.static_eval_failed, n, @as(u32, @truncate(i)), agg.len());
-        return null;
-    }
-    return agg.at() + @as(u32, @intCast(i));
+    const value = interpreter.evaluate(node);
+    if (value.is(.poison_type)) return null;
+    return interpreter.push_cell(interpreter.owned_copy(value));
 }
 
-pub fn declare(self: *Variables, n0: NodeId) Value {
-    const ip = self.interp();
-    const r = ip.res();
-    if (!ip.framed()) {
-        _ = r.decls.check_stmt(ip.ctx, n0);
-        return .unit;
+inline fn is_member_of_type(self: *Variables, node: NodeId) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const parent_type = interpreter.checked_type(resolver.tree.arg(node, 0));
+    return resolver.static_pool.tag(parent_type) == .meta_type;
+}
+
+// a static outside the running frames is adopted into a cell until the evaluation ends
+inline fn cell_of_name(self: *Variables, node: NodeId) ?u32 {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const declaration = self.declaration_of(node);
+    if (declaration == .none) return null;
+    if (self.cell_of_declaration(declaration)) |cell| return cell;
+
+    const is_static_parameter = resolver.decl_pool.get(declaration, .kind) == .static_parameter;
+    if (!is_static_parameter and self.rejects_impure_write(node)) return null;
+    const adopted_cell = interpreter.push_cell(self.stored_value(node, declaration));
+    self.adopted.push(.{ .decl = declaration, .cell = adopted_cell });
+    return adopted_cell;
+}
+
+inline fn cell_of_pointee(self: *Variables, node: NodeId) ?u32 {
+    const interpreter = self.owning_interpreter();
+    const pointer = interpreter.evaluate(interpreter.owning_resolver().tree.arg(node, 0));
+    if (pointer.is_ref()) return pointer.cell();
+    if (!pointer.is(.poison_type)) _ = interpreter.report(.not_static, node, 0, 0);
+    return null;
+}
+
+// an element or field of a place, a pooled aggregate is thawed so it can be written
+fn cell_of_component(self: *Variables, node: NodeId, kind: Kind) ?u32 {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    var aggregate_cell = self.cell_of_place(resolver.tree.arg(node, 0)) orelse return null;
+    const through_reference = interpreter.memory.buffer[aggregate_cell].is_ref();
+    if (through_reference) aggregate_cell = interpreter.memory.buffer[aggregate_cell].cell();
+    const aggregate = interpreter.thaw_cell(aggregate_cell);
+    const position = self.component_position(node, kind, aggregate) orelse return null;
+
+    if (!aggregate.is_heap()) {
+        // a reference to a scalar indexes the cells after it
+        if (through_reference and kind == .array_index) {
+            const cells_after = interpreter.memory.len - aggregate_cell;
+            if (position < cells_after) return aggregate_cell + @as(u32, @intCast(position));
+            const shown_position: u32 = @truncate(position);
+            _ = interpreter.report(.static_eval_failed, node, shown_position, cells_after);
+            return null;
+        }
+        if (!aggregate.is(.poison_type)) _ = interpreter.report(.not_static, node, 0, 0);
+        return null;
     }
-    const s = Decls.Stmt.from_node(r, n0);
-    if (s.kind != .variable) {
-        if (!s.kind.is_type_decl()) return .unit;
-        const t = ip.eval(s.values[0]);
-        for (s.assignees) |id| _ = self.store(id, ip.info(.decl, id), t);
-        return if (t.is(.poison_type)) t else .unit;
+    if (position >= aggregate.len()) {
+        const shown_position: u32 = @truncate(position);
+        _ = interpreter.report(.static_eval_failed, node, shown_position, aggregate.len());
+        return null;
     }
-    const values = s.values;
-    const shared: Value = if (values.len == 1) ip.eval(values[0]) else .empty;
-    if (ip.unwind != .none or shared.is(.poison_type)) return shared;
-    if (s.assignees.len == 1 and !r.tree.props(s.assignees[0]).name) {
-        self.write(s.assignees[0], shared);
-        return .unit;
+    return aggregate.cell() + @as(u32, @intCast(position));
+}
+
+// a member of a value that is not a heap block is rejected by the caller
+inline fn component_position(self: *Variables, node: NodeId, kind: Kind, aggregate: Value) ?u64 {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (kind == .array_index) {
+        const position = interpreter.evaluate(resolver.tree.arg(node, 1));
+        if (Value.is_int(position.value_type)) return position.bits;
+        // a poisoned index is reported already
+        if (!position.is(.poison_type)) _ = interpreter.report(.not_static, node, 0, 0);
+        return null;
     }
-    const d0 = if (s.assignees.len > 0) ip.info(.decl, s.assignees[0]) else .none;
-    const mark = ip.list.head;
-    defer ip.list.head = mark;
-    if (values.len > 1) for (values) |v| {
-        const x = ip.eval(v);
-        if (ip.unwind != .none or x.is(.poison_type)) return x;
-        ip.list.push(x);
+    if (!aggregate.is_heap()) return 0;
+
+    const field_name = resolver.name_pool.name_of_node(resolver.tree.arg(node, 1));
+    return switch (resolver.static_pool.lookup_member(aggregate.value_type, field_name)) {
+        .field => |field| field.index,
+        else => null,
     };
-    const dyn = if (s.type != 0 and d0 != .none and ip.info(.value, s.type) == .none and r.static_pool.poisoned(r.decl_pool.get_ty(d0))) ip.types.of(s.type) orelse return .poison else .none;
-    for (s.assignees, 0..) |id, i| {
-        const d = ip.info(.decl, id);
-        if (d == .none) continue;
-        const x = if (values.len > 1) ip.list.buf[mark + i] else if (values.len == 1) shared else ip.zero(if (dyn != .none) dyn else r.decl_pool.get_ty(d));
-        if (x.is(.poison_type)) return x;
-        if (dyn != .none and values.len > 0 and !ip.types.admits(x, dyn)) return ip.fail(values[@min(i, values.len - 1)], .type_mismatch, ip.vtype(x), dyn);
-        if (!self.store(id, d, ip.coerce(x, dyn))) return .poison;
+}
+
+pub fn declare(self: *Variables, node: NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (!interpreter.has_body_frame()) {
+        _ = resolver.declarations.check_statement(interpreter.function_context, node);
+        return .unit;
+    }
+
+    const statement = Declarations.Stmt.from_node(resolver, node);
+    if (statement.kind != .variable) return self.declare_type(statement);
+    return self.declare_variables(statement);
+}
+
+inline fn declare_type(self: *Variables, statement: Declarations.Stmt) Value {
+    const interpreter = self.owning_interpreter();
+    if (!statement.kind.is_type_declaration()) return .unit;
+
+    const declared_type = interpreter.evaluate(statement.values[0]);
+    for (statement.assignees) |assignee| {
+        _ = self.store(assignee, interpreter.node_info(.declaration, assignee), declared_type);
+    }
+    if (declared_type.is(.poison_type)) return declared_type;
+    return .unit;
+}
+
+inline fn declare_variables(self: *Variables, statement: Declarations.Stmt) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const values = statement.values;
+    const assignees = statement.assignees;
+
+    // one value is given to every assignee
+    const single_value: Value = if (values.len == 1) interpreter.evaluate(values[0]) else .empty;
+    if (interpreter.unwind != .none or single_value.is(.poison_type)) return single_value;
+    if (assignees.len == 1 and !resolver.tree.props(assignees[0]).name) {
+        self.write(assignees[0], single_value);
+        return .unit;
+    }
+
+    const first_declaration = if (assignees.len > 0)
+        interpreter.node_info(.declaration, assignees[0])
+    else
+        .none;
+    const mark = interpreter.argument_values.len;
+    defer interpreter.argument_values.len = mark;
+    if (values.len > 1) {
+        for (values) |value_node| {
+            const value = interpreter.evaluate(value_node);
+            if (interpreter.unwind != .none or value.is(.poison_type)) return value;
+            interpreter.argument_values.push(value);
+        }
+    }
+
+    var evaluated_type: Index = .none;
+    if (self.has_unresolved_annotation(statement, first_declaration)) {
+        evaluated_type = interpreter.types.type_of_node(statement.type) orelse return .poison;
+    }
+
+    for (assignees, 0..) |assignee, i| {
+        const declaration = interpreter.node_info(.declaration, assignee);
+        if (declaration == .none) continue;
+
+        const value = switch (values.len) {
+            0 => interpreter.zero_value(self.zeroed_type(declaration, evaluated_type)),
+            1 => single_value,
+            else => interpreter.argument_values.buffer[mark + i],
+        };
+        if (value.is(.poison_type)) return value;
+
+        const checks_evaluated_type = evaluated_type != .none and values.len > 0;
+        if (checks_evaluated_type and !interpreter.types.admits(value, evaluated_type)) {
+            const value_node = values[@min(i, values.len - 1)];
+            const found_type = interpreter.value_type(value);
+            return interpreter.fail(value_node, .type_mismatch, found_type, evaluated_type);
+        }
+        const coerced = interpreter.coerce(value, evaluated_type);
+        if (!self.store(assignee, declaration, coerced)) return .poison;
     }
     return .unit;
 }
 
-pub fn update(self: *Variables, n: NodeId, k: Kind) Value {
-    const ip = self.interp();
-    const r = ip.res();
-    const target = r.tree.arg(n, 0);
-    if (k == .assign_add and r.tree.macros) if (ip.trees.append(n)) |x| return x;
-    const compound = @intFromEnum(k) >= @intFromEnum(Kind.assign_add);
-    const operand: Value = if (compound) ip.eval(r.tree.arg(n, 1)) else .empty;
-    if (operand.is(.poison_type) or ip.unwind != .none) return operand;
-    const mark = self.adopted.head;
-    const c: ?u32 = if (r.tree.props(target).name) null else self.cell(target) orelse return .poison;
-    const old = if (c) |i| ip.mem.buf[i] else ip.eval(target);
-    if (old.is(.poison_type) or ip.unwind != .none) return old;
-    const op: Kind = switch (k) {
-        .inc_prefix, .inc_postfix, .assign_add => .binary_add,
-        .dec_prefix, .dec_postfix, .assign_sub => .binary_sub,
-        .assign_mul => .binary_mul,
-        .assign_div => .binary_div,
-        else => .binary_mod,
-    };
-    const new = ip.arith(n, op, old, if (compound) operand else .int(if (Value.is_int(old.ty)) old.ty else .u64_type, 1));
-    if (new.is(.poison_type)) return new;
-    if (c) |i| {
-        ip.set(i, ip.own(.fit(new, old.ty)));
+// an annotation the checker left unresolved (the declared type is poisoned) is evaluated now
+inline fn has_unresolved_annotation(
+    self: *Variables,
+    statement: Declarations.Stmt,
+    first_declaration: DeclPool.Index,
+) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (statement.type == 0 or first_declaration == .none) return false;
+    if (interpreter.node_info(.static_value, statement.type) != .none) return false;
+    return resolver.static_pool.is_poisoned(resolver.decl_pool.get(first_declaration, .value_type));
+}
+
+inline fn zeroed_type(self: *Variables, declaration: DeclPool.Index, evaluated_type: Index) Index {
+    if (evaluated_type != .none) return evaluated_type;
+    return self.owning_interpreter().owning_resolver().decl_pool.get(declaration, .value_type);
+}
+
+pub fn update(self: *Variables, node: NodeId, kind: Kind) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const target = resolver.tree.arg(node, 0);
+    if (kind == .assign_add and resolver.tree.macros) {
+        if (interpreter.trees.append(node)) |appended| return appended;
+    }
+
+    const compound = constructs.construct_of(kind) == .compound_assignment;
+    const operand: Value = if (compound)
+        interpreter.evaluate(resolver.tree.arg(node, 1))
+    else
+        .empty;
+    if (operand.is(.poison_type) or interpreter.unwind != .none) return operand;
+
+    // a name is updated through its declaration, any other place through its cell
+    const mark = self.adopted.len;
+    const target_cell: ?u32 = if (resolver.tree.props(target).name)
+        null
+    else
+        self.cell_of_place(target) orelse return .poison;
+    const old_value = if (target_cell) |cell|
+        interpreter.memory.buffer[cell]
+    else
+        interpreter.evaluate(target);
+    if (old_value.is(.poison_type) or interpreter.unwind != .none) return old_value;
+
+    const operator = operators.assigned_operator_of(kind);
+    const right: Value = if (compound) operand else increment_step(old_value);
+    const new_value = interpreter.evaluate_binary(node, operator, old_value, right);
+    if (new_value.is(.poison_type)) return new_value;
+
+    if (target_cell) |cell| {
+        interpreter.store_cell(cell, interpreter.owned_copy(new_value.fit(old_value.value_type)));
         self.flush(mark);
-    } else self.write(target, new);
-    return if (compound) .unit else if (k == .inc_postfix or k == .dec_postfix) old else new;
+    } else {
+        self.write(target, new_value);
+    }
+
+    if (compound) return .unit;
+    if (operators.returns_old_value(kind)) return old_value;
+    return new_value;
 }
 
-pub fn address(self: *Variables, n: NodeId) Value {
-    const ip = self.interp();
-    if (ip.res().tree.macros) if (ip.trees.address(n)) |x| return x;
-    const c = self.cell(ip.res().tree.arg(n, 0)) orelse return .poison;
-    return .ref(if (ip.framed()) ip.info(.ty, n) else ip.res().static_pool.ptr_of(ip.vtype(ip.mem.buf[c]), true), c);
+inline fn increment_step(old_value: Value) Value {
+    const step_type = if (Value.is_int(old_value.value_type)) old_value.value_type else .u64_type;
+    return .int(step_type, 1);
 }
 
-pub fn dereference(self: *Variables, n: NodeId) Value {
-    const ip = self.interp();
-    const p = ip.eval(ip.res().tree.arg(n, 0));
-    if (ip.res().tree.macros) if (ip.trees.node_of(p)) |x| return ip.trees.value(ip.res().static_pool.pointee(ip.vtype(p)), x);
-    return if (p.is_ref()) ip.mem.buf[p.at()] else if (p.is(.poison_type)) p else ip.fail(n, .not_static, ip.pool(p), 0);
+pub fn address(self: *Variables, node: NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (resolver.tree.macros) {
+        if (interpreter.trees.address(node)) |tree_address| return tree_address;
+    }
+
+    const cell = self.cell_of_place(resolver.tree.arg(node, 0)) orelse return .poison;
+    if (interpreter.has_body_frame()) return .ref(interpreter.node_info(.node_type, node), cell);
+    const pointee_type = interpreter.value_type(interpreter.memory.buffer[cell]);
+    return .ref(resolver.static_pool.pointer_to(pointee_type, true), cell);
 }
 
-pub fn deinit_assignable(self: *Variables, n: NodeId) Value {
-    const ip = self.interp();
-    const c = self.cell(ip.res().tree.arg(n, 0)) orelse return .poison;
-    ip.calls.deinit_cell(n, if (ip.mem.buf[c].is_ref()) ip.mem.buf[c].at() else c);
+pub fn dereference(self: *Variables, node: NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const pointer = interpreter.evaluate(resolver.tree.arg(node, 0));
+    if (resolver.tree.macros) {
+        if (interpreter.trees.node_of(pointer)) |tree_node| {
+            const pointee_type = resolver.static_pool.pointee(interpreter.value_type(pointer));
+            return interpreter.trees.tree_value(pointee_type, tree_node);
+        }
+    }
+
+    if (pointer.is_ref()) return interpreter.memory.buffer[pointer.cell()];
+    if (pointer.is(.poison_type)) return pointer;
+    return interpreter.fail(node, .not_static, interpreter.interned(pointer), 0);
+}
+
+pub fn deinit_place(self: *Variables, node: NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const cell = self.cell_of_place(resolver.tree.arg(node, 0)) orelse return .poison;
+
+    // a place holding a reference deinitializes what it points to
+    const held = interpreter.memory.buffer[cell];
+    const target_cell = if (held.is_ref()) held.cell() else cell;
+    interpreter.calls.deinit_cell(node, target_cell);
     return .unit;
 }

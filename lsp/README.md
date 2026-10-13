@@ -6,6 +6,7 @@ The mond language server and its editor plugins: highlighting (semantic tokens),
 - `main.zig`: `mond-lsp` serves the editor, `mond-lsp analyze` is its worker
 - `Server.zig`: json-rpc on stdio, the open documents, one worker per analysis
 - `Analysis.zig`: the worker, runs the compiler on a source and turns its tokens, resolved names and diagnostics into lsp results
+- `includers.zig`: whether another file of the workspace (up to the nearest `.git` or `build.zig`) includes a file: such a library is shown without `missing_main`, compiling it on its own still reports it
 - `Completion.zig`: what the editor offers after `x.`, `ast.` and `$`: the api of trees (views, children, kinds, builtins), by the types the last analysis that knew the names found
 - the compiler comes in as the module `mond` (`src/main.zig`)
 

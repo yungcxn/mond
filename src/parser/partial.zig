@@ -40,7 +40,7 @@ pub fn ee_fun_param_tuple(p: *Parser, early_node0: ?NodeId) anyerror!NodeId {
         return parent;
     }
 
-    const params = p.scratch.head;
+    const params = p.scratch.len;
     p.scratch.push(try ee_fun_param(p, early_node0 orelse return error.IllegalFunParamTuple));
     while (try p.peek_eq_tok(.@"pct_,")) {
         p.tok_cursor += 1;
@@ -101,7 +101,7 @@ pub fn ee_fun_param(p: *Parser, early_node0: NodeId) anyerror!NodeId {
 pub fn match_body(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__match_body);
     try p.eat_assert_tok(.@"pct_{");
-    const match_cases = p.scratch.head;
+    const match_cases = p.scratch.len;
     while (true) {
         // `@..arms` spreads arms a macro made
         const spread = try p.peek_eq_tok(.@"xpct_@") and (p.tokens.get_field(.tk, p.tok_cursor + 1) orelse .none) == .@"xpct_..";
@@ -144,7 +144,7 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
             def.pattern = typecast_node;
         },
         .@"xpct_|" => {
-            const or_patterns = p.scratch.head;
+            const or_patterns = p.scratch.len;
             p.scratch.push(def.pattern);
             while (try p.peek_eq_tok(.@"xpct_|")) {
                 p.tok_cursor += 1;
@@ -172,7 +172,7 @@ pub fn fun_call_param_tuple(p: *Parser) anyerror!NodeId {
     defer p.list = outer;
 
     if (!try p.peek_eq_tok(.@"pct_)")) {
-        const params = p.scratch.head;
+        const params = p.scratch.len;
         while (true) {
             const expr_i = try eval.any(p, .forbid_assign, 0);
             switch (try p.peek_tok()) {
@@ -221,7 +221,7 @@ pub fn destructure(p: *Parser, early_identifier0: NodeId) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__destructure);
 
     // , identifier , identifier [,]
-    const identifiers = p.scratch.head;
+    const identifiers = p.scratch.len;
     p.scratch.push(early_identifier0);
     outer: while (true) {
         switch (try p.pop_tok()) {
@@ -251,7 +251,7 @@ pub fn assign_multival(p: *Parser, early_value0: NodeId) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__assign_multival);
 
     // , value , value [NO TRAILING COMMA ALLOWED - TODO]
-    const values = p.scratch.head;
+    const values = p.scratch.len;
     p.scratch.push(early_value0);
     outer: while (true) {
         switch (try p.pop_tok()) {
@@ -271,14 +271,14 @@ pub fn assign_multival(p: *Parser, early_value0: NodeId) anyerror!NodeId {
 pub fn type_param_tuple(p: *Parser) anyerror!NodeId {
     const parent = p.tree.push_node(.partial__type_def_param_tuple);
 
-    const params = p.scratch.head;
+    const params = p.scratch.len;
     while (!try p.peek_eq_tok(.@"pct_)")) {
         p.scratch.push(try type_param(p));
         if (!try p.peek_eq_tok(.@"pct_,")) break;
         p.tok_cursor += 1;
     }
     try p.eat_assert_tok(.@"pct_)");
-    if (p.scratch.head == params) return error.IllegalTypeParamList;
+    if (p.scratch.len == params) return error.IllegalTypeParamList;
 
     p.close(parent, params);
     return parent;

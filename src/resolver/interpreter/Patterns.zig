@@ -1,3 +1,4 @@
+const std = @import("std");
 const ParseTree = @import("../../ParseTree.zig");
 const StaticPool = @import("../StaticPool.zig");
 const Interpreter = @import("../Interpreter.zig");
@@ -8,127 +9,262 @@ const NodeId = ParseTree.NodeId;
 // match: arms tried in order, patterns tested against values and their binders bound
 const Patterns = @This();
 
-pub fn interp(self: *Patterns) *Interpreter {
+pub fn owning_interpreter(self: *Patterns) *Interpreter {
     return @alignCast(@fieldParentPtr("patterns", self));
 }
 
-pub fn match(self: *Patterns, n: NodeId) Value {
-    const ip = self.interp();
-    const r = ip.res();
-    const x = ip.eval(r.tree.arg(n, 0));
-    const t = if (ip.framed()) ip.info(.ty, r.tree.arg(n, 0)) else x.ty;
-    const v = if (x.is_ref() and r.static_pool.deref(&r.abstract_pool, t) != t) ip.deref(x) else x;
-    if (v.is(.poison_type) or ip.unwind != .none) return v;
-    const scoped = !ip.framed();
-    if (scoped) r.scopes.push();
-    defer if (scoped) r.scopes.pop();
-    if (!scoped) for (r.tree.manychildren(r.tree.arg(n, 1))) |arm| if (ip.info(.value, arm) == .bool_true) return ip.eval(r.tree.arg(arm, 1));
-    for (r.tree.manychildren(r.tree.arg(n, 1))) |arm| if (self.matches(r.tree.arg(arm, 0), v)) return ip.eval(r.tree.arg(arm, 1));
-    return ip.fail(n, .non_exhaustive_match, ip.pool(v), .none);
+pub fn match(self: *Patterns, node: NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const tree = resolver.tree;
+    const scrutinee = tree.arg(node, 0);
+    const arms = tree.arg(node, 1);
+
+    const evaluated = interpreter.evaluate(scrutinee);
+    const scrutinee_type = if (interpreter.has_body_frame())
+        interpreter.node_info(.node_type, scrutinee)
+    else
+        evaluated.value_type;
+    const through_reference = evaluated.is_ref() and
+        resolver.static_pool.through_pointer(scrutinee_type) != scrutinee_type;
+    const value = if (through_reference) interpreter.dereference(evaluated) else evaluated;
+    if (value.is(.poison_type) or interpreter.unwind != .none) return value;
+
+    // a body frame already holds the binders of the arms
+    const scoped = !interpreter.has_body_frame();
+    if (scoped) resolver.scopes.open();
+    defer if (scoped) resolver.scopes.close();
+
+    // the checker matched a static scrutinee itself and checked only the arm it took
+    if (!scoped) {
+        for (tree.manychildren(arms)) |arm| {
+            if (interpreter.node_info(.static_value, arm) == .bool_true) {
+                return interpreter.evaluate(tree.arg(arm, 1));
+            }
+        }
+    }
+
+    // by index: a value pattern may evaluate a quote, which grows the tree and moves child lists
+    for (0..tree.manychildren(arms).len) |arm_index| {
+        const arm = tree.manychildren(arms)[arm_index];
+        if (self.matches(tree.arg(arm, 0), value)) return interpreter.evaluate(tree.arg(arm, 1));
+    }
+    return interpreter.fail(node, .non_exhaustive_match, interpreter.interned(value), .none);
 }
 
 // a case value is pooled, or a block of its payload fields when they hold references
-pub fn case_of(self: *Patterns, v: Value) Index {
-    const ip = self.interp();
-    const sp = &ip.res().static_pool;
-    if (v.is_heap() and sp.tag(v.ty) == .variant_case_type) return v.ty;
-    if (!v.is_pool() or v.is(.none)) return .none;
-    return switch (sp.tag(v.index())) {
-        .variant_value => sp.get(v.index()).variant_value.case,
-        .variant_case_type => v.index(),
+pub fn case_of(self: *Patterns, value: Value) Index {
+    const static_pool = &self.owning_interpreter().owning_resolver().static_pool;
+    const is_case_block = value.is_heap() and
+        static_pool.tag(value.value_type) == .variant_case_type;
+    if (is_case_block) return value.value_type;
+    if (!value.is_pooled() or value.is(.none)) return .none;
+
+    return switch (static_pool.tag(value.index())) {
+        .variant_value => static_pool.get(value.index()).variant_value.case,
+        .variant_case_type => value.index(),
         else => .none,
     };
 }
 
-fn same(self: *Patterns, a: Value, b: Value) bool {
-    const ip = self.interp();
-    return Value.eql(if (a.is_heap()) .pooled(ip.pool(a)) else a, if (b.is_heap()) .pooled(ip.pool(b)) else b);
+// heap values are compared by their interned form
+fn same(self: *Patterns, left: Value, right: Value) bool {
+    const interpreter = self.owning_interpreter();
+    const left_pooled: Value = if (left.is_heap()) .pooled(interpreter.interned(left)) else left;
+    const right_pooled: Value = if (right.is_heap())
+        .pooled(interpreter.interned(right))
+    else
+        right;
+    return Value.eql(left_pooled, right_pooled);
 }
 
-pub fn matches(self: *Patterns, p: NodeId, v: Value) bool {
-    const ip = self.interp();
-    const r = ip.res();
-    const sp = &r.static_pool;
-    const framed = ip.framed();
-    if (r.tree.macros and ip.trees.node_of(v) != null) return ip.trees.matches(p, v);
-    switch (r.tree.kind(p)) {
+pub fn matches(self: *Patterns, pattern: NodeId, value: Value) bool {
+    const interpreter = self.owning_interpreter();
+    const tree = interpreter.owning_resolver().tree;
+    if (tree.macros and interpreter.trees.node_of(value) != null) {
+        return interpreter.trees.matches(pattern, value);
+    }
+
+    switch (tree.kind(pattern)) {
         .identifier => {
-            self.name(p, v);
+            self.bind_name(pattern, value);
             return true;
         },
-        .partial__match_case_pattern_or => {
-            for (r.tree.manychildren(p)) |alt| if (self.matches(alt, v)) return true;
-            return false;
-        },
-        .partial__match_case_pattern_typecast => {
-            const t = if (framed) ip.info(.ty, r.tree.arg(p, 1)) else r.types.lower(ip.ctx, r.tree.arg(p, 0));
-            const c = self.case_of(v);
-            const vt = ip.vtype(v);
-            const ok = if (c != .none) sp.get(c).variant_case_type.variant == t or sp.tag(t) == .variant_union_type else vt == t or sp.implements(vt, t);
-            if (ok) self.name(r.tree.arg(p, 1), v);
-            return ok;
-        },
+        .partial__match_case_pattern_or => return self.matches_any(pattern, value),
+        .partial__match_case_pattern_typecast => return self.matches_typecast(pattern, value),
         .labelarrow => {
-            if (!self.matches(r.tree.arg(p, 0), v)) return false;
-            self.label(r.tree.arg(p, 1), self.payload(v) orelse v);
+            if (!self.matches(tree.arg(pattern, 0), value)) return false;
+            self.bind_label(tree.arg(pattern, 1), self.payload_of(value) orelse value);
             return true;
         },
-        .fun_call => {
-            const h = ip.info(.ty, p);
-            const target = if (h != .none) h else ip.pool(ip.eval(r.tree.arg(p, 0)));
-            var rec = target;
-            var fields = v;
-            if (sp.tag(target) == .variant_case_type) {
-                if (self.case_of(v) != target) return false;
-                rec = sp.get(target).variant_case_type.payload;
-                fields = if (v.is_heap()) .block(rec, v.at(), v.len()) else if (sp.tag(v.index()) == .variant_value) .of(sp, sp.get(v.index()).variant_value.payload) else .empty;
-            }
-            for (r.tree.manychildren(r.tree.arg(p, 1)), 0..) |a, i| {
-                const fi = r.calls.field_of(rec, a, i) orelse return false;
-                if (fi >= (ip.span(fields) orelse 0) or !self.matches(r.tree.arg_value(a), ip.elem(fields, @intCast(fi)))) return false;
-            }
-            return true;
-        },
-        .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => {
-            const g = ParseTree.Range.from_node(r.tree, p);
-            if (!Value.is_int(v.ty) or g.lo != 0 and Value.less(v, ip.eval(g.lo))) return false;
-            if (g.hi == 0) return true;
-            const hi = ip.eval(g.hi);
-            return if (g.incl) !Value.less(hi, v) else Value.less(v, hi);
-        },
-        else => {
-            const pv = ip.eval(p);
-            if (pv.is_pool() and !pv.is(.none) and sp.tag(pv.index()) == .variant_case_type) return self.case_of(v) == pv.index();
-            return !pv.is(.poison_type) and self.same(pv, v);
-        },
+        .fun_call => return self.matches_fields(pattern, value),
+        .gen_incl,
+        .gen_excl,
+        .gen_lowerbound,
+        .gen_upperbound_incl,
+        .gen_upperbound_excl,
+        => return self.matches_range(pattern, value),
+        else => return self.matches_value(pattern, value),
     }
 }
 
-pub fn name(self: *Patterns, id: NodeId, v: Value) void {
-    const ip = self.interp();
-    const r = ip.res();
-    if (ip.framed()) return ip.variables.bind(ip.info(.decl, id), v);
-    const nm = r.name_pool.name_of(id);
-    if (nm == .underscore) return;
-    const d = r.decls.declare_local(nm, id, .pattern_binder, ip.vtype(v));
-    r.node_decl[id] = d;
-    ip.variables.bind(d, v);
+inline fn matches_any(self: *Patterns, alternatives: NodeId, value: Value) bool {
+    const tree = self.owning_interpreter().owning_resolver().tree;
+    for (0..tree.manychildren(alternatives).len) |alternative_index| {
+        const alternative = tree.manychildren(alternatives)[alternative_index];
+        if (self.matches(alternative, value)) return true;
+    }
+    return false;
 }
 
-pub fn label(self: *Patterns, l: NodeId, v: Value) void {
-    const ip = self.interp();
-    const r = ip.res();
-    if (r.tree.kind(l) != .partial__destructure) return self.name(l, v);
-    for (r.tree.manychildren(l), 0..) |id, i| self.name(id, if (i < (ip.span(v) orelse 0)) ip.elem(v, @intCast(i)) else .poison);
+// `T x`: a case matches its variant and any union of variants, other values their type or trait
+inline fn matches_typecast(self: *Patterns, pattern: NodeId, value: Value) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const tree = resolver.tree;
+
+    const wanted_type = if (interpreter.has_body_frame())
+        interpreter.node_info(.node_type, tree.arg(pattern, 1))
+    else
+        resolver.types.type_from_node(interpreter.function_context, tree.arg(pattern, 0));
+    const case = self.case_of(value);
+    const value_type = interpreter.value_type(value);
+
+    const matched = if (case != .none)
+        is_case_of(static_pool, case, wanted_type)
+    else
+        value_type == wanted_type or static_pool.implements(value_type, wanted_type);
+    if (matched) self.bind_name(tree.arg(pattern, 1), value);
+    return matched;
 }
 
-pub fn payload(self: *Patterns, v: Value) ?Value {
-    const ip = self.interp();
-    const sp = &ip.res().static_pool;
-    if (v.is_heap() and sp.tag(v.ty) == .variant_case_type) return if (v.len() == 1) ip.mem.buf[v.at()] else .block(sp.get(v.ty).variant_case_type.payload, v.at(), v.len());
-    if (!v.is_pool() or v.is(.none) or sp.tag(v.index()) != .variant_value) return null;
-    const pv = sp.get(v.index()).variant_value.payload;
-    if (pv == .none) return null;
-    const elems = sp.get(pv).aggregate.elems;
-    return .of(sp, if (elems.len == 1) elems[0] else pv);
+// `T(a, b = ..)`: a record or variant case whose fields match the argument patterns
+inline fn matches_fields(self: *Patterns, pattern: NodeId, value: Value) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const tree = resolver.tree;
+
+    const checked_target = interpreter.node_info(.node_type, pattern);
+    const target = if (checked_target != .none)
+        checked_target
+    else
+        interpreter.interned(interpreter.evaluate(tree.arg(pattern, 0)));
+
+    var record_type = target;
+    var fields = value;
+    if (static_pool.tag(target) == .variant_case_type) {
+        if (self.case_of(value) != target) return false;
+        record_type = static_pool.get(target).variant_case_type.payload;
+        fields = self.payload_fields(value, record_type);
+    }
+
+    const arguments = tree.arg(pattern, 1);
+    for (0..tree.manychildren(arguments).len) |i| {
+        const argument = tree.manychildren(arguments)[i];
+        const field_index = resolver.calls.field_index_of(record_type, argument, i) orelse
+            return false;
+        if (field_index >= (interpreter.aggregate_length(fields) orelse 0)) return false;
+
+        const field = interpreter.element(fields, @intCast(field_index));
+        if (!self.matches(tree.arg_value(argument), field)) return false;
+    }
+    return true;
+}
+
+// the payload fields of a case value as an aggregate of `payload_type`
+inline fn payload_fields(self: *Patterns, value: Value, payload_type: Index) Value {
+    const static_pool = &self.owning_interpreter().owning_resolver().static_pool;
+    if (value.is_heap()) return .block(payload_type, value.cell(), value.len());
+    if (static_pool.tag(value.index()) != .variant_value) return .empty;
+    return .of(static_pool, static_pool.get(value.index()).variant_value.payload);
+}
+
+inline fn matches_range(self: *Patterns, pattern: NodeId, value: Value) bool {
+    const interpreter = self.owning_interpreter();
+    const range = ParseTree.Range.from_node(interpreter.owning_resolver().tree, pattern);
+
+    if (!Value.is_int(value.value_type)) return false;
+    if (range.lo != 0 and Value.less(value, interpreter.evaluate(range.lo))) return false;
+    if (range.hi == 0) return true;
+
+    const end = interpreter.evaluate(range.hi);
+    if (range.incl) return !Value.less(end, value);
+    return Value.less(value, end);
+}
+
+// any other pattern is a value: a case without payload tests the case, the rest equality
+inline fn matches_value(self: *Patterns, pattern: NodeId, value: Value) bool {
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
+
+    const expected = interpreter.evaluate(pattern);
+    const is_case = expected.is_pooled() and
+        !expected.is(.none) and
+        static_pool.tag(expected.index()) == .variant_case_type;
+    if (is_case) return self.case_of(value) == expected.index();
+
+    return !expected.is(.poison_type) and self.same(expected, value);
+}
+
+pub fn bind_name(self: *Patterns, id: NodeId, value: Value) void {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (interpreter.has_body_frame()) {
+        return interpreter.variables.bind(interpreter.node_info(.declaration, id), value);
+    }
+
+    const name = resolver.name_pool.name_of_node(id);
+    if (name == .underscore) return;
+
+    const binder_type = interpreter.value_type(value);
+    const declaration = resolver.declarations.declare_local(name, id, .pattern_binder, binder_type);
+    resolver.node_declarations[id] = declaration;
+    interpreter.variables.bind(declaration, value);
+}
+
+// a destructuring label binds each name to an element, missing elements to poison
+pub fn bind_label(self: *Patterns, label: NodeId, value: Value) void {
+    const interpreter = self.owning_interpreter();
+    const tree = interpreter.owning_resolver().tree;
+    if (tree.kind(label) != .partial__destructure) return self.bind_name(label, value);
+
+    for (tree.manychildren(label), 0..) |id, i| {
+        const present = i < (interpreter.aggregate_length(value) orelse 0);
+        const element = if (present) interpreter.element(value, @intCast(i)) else Value.poison;
+        self.bind_name(id, element);
+    }
+}
+
+// a payload of one field is that field
+pub fn payload_of(self: *Patterns, value: Value) ?Value {
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
+
+    if (value.is_heap() and static_pool.tag(value.value_type) == .variant_case_type) {
+        if (value.len() == 1) return interpreter.memory.buffer[value.cell()];
+        const payload_type = static_pool.get(value.value_type).variant_case_type.payload;
+        return .block(payload_type, value.cell(), value.len());
+    }
+
+    const is_variant_value = value.is_pooled() and
+        !value.is(.none) and
+        static_pool.tag(value.index()) == .variant_value;
+    if (!is_variant_value) return null;
+
+    const payload = static_pool.get(value.index()).variant_value.payload;
+    if (payload == .none) return null;
+
+    const elements = static_pool.get(payload).aggregate_value.elements;
+    return .of(static_pool, if (elements.len == 1) elements[0] else payload);
+}
+
+// a case belongs to its variant and to every union holding that variant
+fn is_case_of(static_pool: *StaticPool, case: Index, wanted_type: Index) bool {
+    const variant = static_pool.get(case).variant_case_type.variant;
+    if (variant == wanted_type) return true;
+    if (static_pool.tag(wanted_type) != .variant_union_type) return false;
+    const members = static_pool.get(wanted_type).variant_union_type;
+    return std.mem.indexOfScalar(Index, members, variant) != null;
 }

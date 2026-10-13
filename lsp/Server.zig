@@ -2,30 +2,32 @@ const std = @import("std");
 const Analysis = @import("Analysis.zig");
 const Completion = @import("Completion.zig");
 
-// the language server: json-rpc on stdin and stdout. documents are analyzed by a worker, a child process
-// running the compiler, so a compiler crash costs that analysis but never the server
+// the language server: json-rpc on stdin and stdout, documents are analyzed by a worker, a child
+// process running the compiler, so a compiler crash costs that analysis but never the server
 
 const Server = @This();
 
 io: std.Io,
 gpa: std.mem.Allocator,
 // this executable, it is its own worker
-exe: []const u8,
-out: *std.Io.Writer,
+executable_path: []const u8,
+output: *std.Io.Writer,
 // uri -> its document
-docs: std.StringHashMapUnmanaged(Doc) = .empty,
+documents: std.StringHashMapUnmanaged(Document) = .empty,
 // the lifecycle: requests come after `initialize`, after `shutdown` only `exit`
 phase: enum { new, running, shut } = .new,
 
-// `text` waits for its analysis, `result` is the last one of `src` and lives in `arena`. completion goes by `known`, the
-// last result that knew the names (the text being typed rarely parses), in `result`'s arena or, when older, in its own
-const Doc = struct {
-    text: ?[]u8 = null,
-    src: []const u8 = "",
+// `result` is the last analysis of `source` and lives in `arena`
+// completion goes by the last names known, the text being typed rarely parses
+// older known names than the result's live in `known_names_arena`
+const Document = struct {
+    // the text waiting for its analysis
+    pending_text: ?[]u8 = null,
+    source: []const u8 = "",
     result: Analysis.Result = .{},
     arena: std.heap.ArenaAllocator.State = .{},
-    known: []const Analysis.Symbol = &.{},
-    known_arena: ?std.heap.ArenaAllocator.State = null,
+    known_names: []const Analysis.Symbol = &.{},
+    known_names_arena: ?std.heap.ArenaAllocator.State = null,
 };
 
 const Method = enum {
@@ -57,218 +59,400 @@ const Params = struct {
     context: struct { includeDeclaration: bool = true } = .{},
 };
 
-const timeout: std.Io.Timeout = .{ .duration = .{ .raw = .fromSeconds(5), .clock = .awake } };
+const Location = struct { uri: []const u8, range: Analysis.Range };
 
-const crashed = Analysis.Diagnostic{
+const worker_timeout: std.Io.Timeout = .{
+    .duration = .{ .raw = .fromSeconds(5), .clock = .awake },
+};
+
+const crash_diagnostic = Analysis.Diagnostic{
     .range = .{ .start = .{ .line = 0, .character = 0 }, .end = .{ .line = 0, .character = 0 } },
     .severity = 1,
     .message = "mond crashed or hung on this file",
 };
 
-pub fn run(io: std.Io, gpa: std.mem.Allocator, exe: []const u8) !void {
-    var in_buf: [1 << 16]u8 = undefined;
-    var out_buf: [1 << 16]u8 = undefined;
-    var in = std.Io.File.stdin().readerStreaming(io, &in_buf);
-    var out = std.Io.File.stdout().writerStreaming(io, &out_buf);
-    var s = Server{ .io = io, .gpa = gpa, .exe = exe, .out = &out.interface };
+pub fn run(io: std.Io, gpa: std.mem.Allocator, executable_path: []const u8) !void {
+    var input_buffer: [1 << 16]u8 = undefined;
+    var output_buffer: [1 << 16]u8 = undefined;
+    var input = std.Io.File.stdin().readerStreaming(io, &input_buffer);
+    var output = std.Io.File.stdout().writerStreaming(io, &output_buffer);
+    var server = Server{
+        .io = io,
+        .gpa = gpa,
+        .executable_path = executable_path,
+        .output = &output.interface,
+    };
+
     var arena = std.heap.ArenaAllocator.init(gpa);
     while (true) : (_ = arena.reset(.retain_capacity)) {
-        const a = arena.allocator();
-        // the client closing stdin ends the server
-        const body = read(&in.interface, a) catch return;
-        if (std.json.parseFromSliceLeaky(Message, a, body, .{ .ignore_unknown_fields = true })) |m| {
-            try s.handle(a, m);
-        } else |_| try s.fail(a, .null, -32700, "parse error");
+        const allocator = arena.allocator();
+        const body = read_message(&input.interface, allocator) catch |err| switch (err) {
+            // the header is answered, the next message may still be read
+            error.InvalidContentLength => {
+                try server.fail(allocator, .null, -32700, "invalid content-length");
+                continue;
+            },
+            // the client closing stdin ends the server
+            else => return,
+        };
+        const options: std.json.ParseOptions = .{ .ignore_unknown_fields = true };
+        if (std.json.parseFromSliceLeaky(Message, allocator, body, options)) |message| {
+            try server.handle(allocator, message);
+        } else |_| try server.fail(allocator, .null, -32700, "parse error");
+
         // the client is quiet, what it changed gets analyzed
-        if (in.interface.bufferedLen() == 0) {
-            var docs = s.docs.iterator();
-            while (docs.next()) |d| try s.analyze(a, d.key_ptr.*, d.value_ptr);
+        if (input.interface.bufferedLen() == 0) {
+            var documents = server.documents.iterator();
+            while (documents.next()) |entry| {
+                try server.analyze(allocator, entry.key_ptr.*, entry.value_ptr);
+            }
         }
-        try out.interface.flush();
+        try output.interface.flush();
     }
 }
 
-fn read(in: *std.Io.Reader, a: std.mem.Allocator) ![]u8 {
-    var len: usize = 0;
+fn read_message(input: *std.Io.Reader, allocator: std.mem.Allocator) ![]u8 {
+    var content_length: usize = 0;
     while (true) {
-        const line = std.mem.trimEnd(u8, try in.takeDelimiterInclusive('\n'), "\r\n");
-        if (line.len == 0) return in.readAlloc(a, len);
-        if (std.ascii.startsWithIgnoreCase(line, "content-length:")) len = try std.fmt.parseInt(usize, std.mem.trim(u8, line[15..], " "), 10);
+        const line = std.mem.trimEnd(u8, try input.takeDelimiterInclusive('\n'), "\r\n");
+        if (line.len == 0) return input.readAlloc(allocator, content_length);
+
+        const header = "content-length:";
+        if (!std.ascii.startsWithIgnoreCase(line, header)) continue;
+        const value = std.mem.trim(u8, line[header.len..], " ");
+        content_length = std.fmt.parseInt(usize, value, 10) catch return error.InvalidContentLength;
     }
 }
 
-fn handle(s: *Server, a: std.mem.Allocator, m: Message) !void {
-    const p = m.params orelse Params{};
-    const uri = p.textDocument.uri;
-    const method = std.meta.stringToEnum(Method, m.method) orelse return s.fail(a, m.id, -32601, "unknown method");
-    if (method != .exit and (s.phase == .shut or (s.phase == .new) != (method == .initialize))) {
-        return if (s.phase == .new) s.fail(a, m.id, -32002, "not initialized") else s.fail(a, m.id, -32600, "invalid request");
+fn handle(server: *Server, allocator: std.mem.Allocator, message: Message) !void {
+    const params = message.params orelse Params{};
+    const uri = params.textDocument.uri;
+    const method = std.meta.stringToEnum(Method, message.method) orelse {
+        return server.fail(allocator, message.id, -32601, "unknown method");
+    };
+    if (method != .exit and !server.accepts(method)) {
+        if (server.phase == .new) {
+            return server.fail(allocator, message.id, -32002, "not initialized");
+        }
+        return server.fail(allocator, message.id, -32600, "invalid request");
     }
+
     switch (method) {
         .initialize => {
-            s.phase = .running;
-            try s.respond(a, m.id, .{
-                .capabilities = .{
-                    .positionEncoding = "utf-16",
-                    .textDocumentSync = 1,
-                    .semanticTokensProvider = .{
-                        .legend = .{ .tokenTypes = std.meta.fieldNames(Analysis.Type), .tokenModifiers = std.meta.fieldNames(Analysis.Modifier) },
-                        .full = true,
-                    },
-                    .definitionProvider = true,
-                    .referencesProvider = true,
-                    .documentSymbolProvider = true,
-                    .hoverProvider = true,
-                    .completionProvider = .{ .triggerCharacters = &[_][]const u8{ ".", "$" } },
-                },
-                .serverInfo = .{ .name = "mond-lsp" },
-            });
+            server.phase = .running;
+            try server.respond(allocator, message.id, capabilities);
         },
         .shutdown => {
-            s.phase = .shut;
-            try s.respond(a, m.id, null);
+            server.phase = .shut;
+            try server.respond(allocator, message.id, null);
         },
-        .exit => std.process.exit(@intFromBool(s.phase != .shut)),
-        .@"textDocument/didOpen" => try s.change(uri, p.textDocument.text),
-        .@"textDocument/didChange" => if (p.contentChanges.len > 0) try s.change(uri, p.contentChanges[p.contentChanges.len - 1].text),
+        .exit => std.process.exit(@intFromBool(server.phase != .shut)),
+        .@"textDocument/didOpen" => try server.change(uri, params.textDocument.text),
+        .@"textDocument/didChange" => {
+            const changes = params.contentChanges;
+            if (changes.len > 0) try server.change(uri, changes[changes.len - 1].text);
+        },
         .@"textDocument/didClose" => {
-            if (s.docs.fetchRemove(uri)) |d| {
-                s.gpa.free(d.key);
-                if (d.value.text) |text| s.gpa.free(text);
-                d.value.arena.promote(s.gpa).deinit();
-                if (d.value.known_arena) |k| k.promote(s.gpa).deinit();
-            }
-            try s.notify(a, "textDocument/publishDiagnostics", .{ .uri = uri, .diagnostics = &[_]Analysis.Diagnostic{} });
+            server.close(uri);
+            const no_diagnostics = &[_]Analysis.Diagnostic{};
+            const closed = .{ .uri = uri, .diagnostics = no_diagnostics };
+            try server.notify(allocator, "textDocument/publishDiagnostics", closed);
         },
-        // the questions about a document are answered by its analysis of the current text
-        else => {
-            const d = s.docs.getPtr(uri) orelse return s.respond(a, m.id, null);
-            try s.analyze(a, uri, d);
-            const r = d.result;
-            const link = at(r.links, p.position);
-            switch (method) {
-                .@"textDocument/semanticTokens/full" => try s.respond(a, m.id, .{ .data = r.data }),
-                .@"textDocument/documentSymbol" => try s.respond(a, m.id, try symbols(a, r.decls, r.outline)),
-                .@"textDocument/definition" => try s.respond(a, m.id, if (link) |l| if (r.decls[l[3]].selectionRange) |sel| Location{ .uri = uri, .range = sel } else null else null),
-                .@"textDocument/hover" => try s.respond(a, m.id, if (link) |l| .{
-                    .contents = .{ .kind = "markdown", .value = try hover(a, r.decls[l[3]]) },
-                    .range = range(l),
-                } else null),
-                .@"textDocument/completion" => try s.respond(a, m.id, try Completion.offer(a, d.src, p.position, d.known)),
-                .@"textDocument/references" => {
-                    var refs: std.ArrayList(Location) = .empty;
-                    if (link) |l| for (r.links) |x| if (x[3] == l[3] and (p.context.includeDeclaration or !std.meta.eql(@as(?Analysis.Range, range(x)), r.decls[l[3]].selectionRange))) {
-                        try refs.append(a, .{ .uri = uri, .range = range(x) });
-                    };
-                    try s.respond(a, m.id, refs.items);
-                },
-                else => unreachable,
-            }
-        },
+        .@"textDocument/semanticTokens/full",
+        .@"textDocument/documentSymbol",
+        .@"textDocument/definition",
+        .@"textDocument/hover",
+        .@"textDocument/completion",
+        .@"textDocument/references",
+        => try server.answer(allocator, message, method, params),
     }
 }
 
-const Location = struct { uri: []const u8, range: Analysis.Range };
-
-// the name at `p`, a cursor right behind a name is on it too
-fn at(links: []const Analysis.Link, p: Analysis.Position) ?Analysis.Link {
-    const i = std.sort.partitionPoint(Analysis.Link, links, p, struct {
-        fn ends_before(q: Analysis.Position, l: Analysis.Link) bool {
-            return Analysis.before(range(l).end, q);
-        }
-    }.ends_before);
-    return if (i < links.len and !Analysis.before(p, range(links[i]).start)) links[i] else null;
+// only `initialize` before it, nothing after `shutdown`
+fn accepts(server: *Server, method: Method) bool {
+    if (server.phase == .shut) return false;
+    return (server.phase == .new) == (method == .initialize);
 }
 
-fn range(l: Analysis.Link) Analysis.Range {
-    return .{ .start = .{ .line = l[0], .character = l[1] }, .end = .{ .line = l[0], .character = l[2] } };
+const capabilities = .{
+    .capabilities = .{
+        .positionEncoding = "utf-16",
+        .textDocumentSync = 1,
+        .semanticTokensProvider = .{
+            .legend = .{
+                .tokenTypes = std.meta.fieldNames(Analysis.Type),
+                .tokenModifiers = std.meta.fieldNames(Analysis.Modifier),
+            },
+            .full = true,
+        },
+        .definitionProvider = true,
+        .referencesProvider = true,
+        .documentSymbolProvider = true,
+        .hoverProvider = true,
+        .completionProvider = .{ .triggerCharacters = &[_][]const u8{ ".", "$" } },
+    },
+    .serverInfo = .{ .name = "mond-lsp" },
+};
+
+fn close(server: *Server, uri: []const u8) void {
+    const removed = server.documents.fetchRemove(uri) orelse return;
+    server.gpa.free(removed.key);
+    if (removed.value.pending_text) |text| server.gpa.free(text);
+    removed.value.arena.promote(server.gpa).deinit();
+    if (removed.value.known_names_arena) |known| known.promote(server.gpa).deinit();
 }
 
-fn symbols(a: std.mem.Allocator, decls: []const Analysis.Symbol, outline: []const Analysis.Outline) ![]const Analysis.Symbol {
-    const out = try a.alloc(Analysis.Symbol, outline.len);
-    for (out, outline) |*s, o| {
-        s.* = decls[o.decl];
-        s.children = try symbols(a, decls, o.children);
+// the questions about a document are answered by its analysis of the current text
+fn answer(
+    server: *Server,
+    allocator: std.mem.Allocator,
+    message: Message,
+    method: Method,
+    params: Params,
+) !void {
+    const id = message.id;
+    const uri = params.textDocument.uri;
+    const document = server.documents.getPtr(uri) orelse return server.respond(allocator, id, null);
+    try server.analyze(allocator, uri, document);
+
+    const result = document.result;
+    const link = link_at(result.links, params.position);
+    switch (method) {
+        .@"textDocument/semanticTokens/full" => {
+            try server.respond(allocator, id, .{ .data = result.data });
+        },
+        .@"textDocument/documentSymbol" => {
+            const symbols = try outline_symbols(allocator, result.decls, result.outline);
+            try server.respond(allocator, id, symbols);
+        },
+        .@"textDocument/definition" => {
+            try server.respond(allocator, id, definition(result, link, uri));
+        },
+        .@"textDocument/hover" => {
+            const found = link orelse return server.respond(allocator, id, null);
+            const text = try hover_text(allocator, result.decls[found[3]]);
+            const hover = .{
+                .contents = .{ .kind = "markdown", .value = text },
+                .range = link_range(found),
+            };
+            try server.respond(allocator, id, hover);
+        },
+        .@"textDocument/completion" => {
+            const names = document.known_names;
+            const items = try Completion.offer(allocator, document.source, params.position, names);
+            try server.respond(allocator, id, items);
+        },
+        .@"textDocument/references" => {
+            const include_declaration = params.context.includeDeclaration;
+            const found = try references(allocator, result, link, uri, include_declaration);
+            try server.respond(allocator, id, found);
+        },
+        .initialize,
+        .shutdown,
+        .exit,
+        .@"textDocument/didOpen",
+        .@"textDocument/didChange",
+        .@"textDocument/didClose",
+        => unreachable,
     }
-    return out;
 }
 
-fn hover(a: std.mem.Allocator, d: Analysis.Symbol) ![]const u8 {
-    return std.fmt.allocPrint(a, "```mond\n{s}{s}{s}\n```", .{ d.name, if (d.detail.len > 0) ": " else "", d.detail });
+// the name at `position`, a cursor right behind a name is on it too
+fn link_at(links: []const Analysis.Link, position: Analysis.Position) ?Analysis.Link {
+    const index = std.sort.partitionPoint(Analysis.Link, links, position, ends_before);
+    if (index >= links.len) return null;
+    if (Analysis.before(position, link_range(links[index]).start)) return null;
+    return links[index];
+}
+
+fn ends_before(position: Analysis.Position, link: Analysis.Link) bool {
+    return Analysis.before(link_range(link).end, position);
+}
+
+fn link_range(link: Analysis.Link) Analysis.Range {
+    const line, const start, const end, _ = link;
+    return .{
+        .start = .{ .line = line, .character = start },
+        .end = .{ .line = line, .character = end },
+    };
+}
+
+fn definition(result: Analysis.Result, link: ?Analysis.Link, uri: []const u8) ?Location {
+    const found = link orelse return null;
+    const name_range = result.decls[found[3]].selectionRange orelse return null;
+    return .{ .uri = uri, .range = name_range };
+}
+
+fn references(
+    allocator: std.mem.Allocator,
+    result: Analysis.Result,
+    link: ?Analysis.Link,
+    uri: []const u8,
+    include_declaration: bool,
+) ![]const Location {
+    var found: std.ArrayList(Location) = .empty;
+    const target = link orelse return found.items;
+    const declared_at = result.decls[target[3]].selectionRange;
+    for (result.links) |other| {
+        if (other[3] != target[3]) continue;
+        const is_declaration = std.meta.eql(@as(?Analysis.Range, link_range(other)), declared_at);
+        if (!include_declaration and is_declaration) continue;
+        try found.append(allocator, .{ .uri = uri, .range = link_range(other) });
+    }
+    return found.items;
+}
+
+// the declarations of the outline with their children
+fn outline_symbols(
+    allocator: std.mem.Allocator,
+    declarations: []const Analysis.Symbol,
+    outline: []const Analysis.Outline,
+) ![]const Analysis.Symbol {
+    const symbols = try allocator.alloc(Analysis.Symbol, outline.len);
+    for (symbols, outline) |*symbol, entry| {
+        symbol.* = declarations[entry.decl];
+        symbol.children = try outline_symbols(allocator, declarations, entry.children);
+    }
+    return symbols;
+}
+
+fn hover_text(allocator: std.mem.Allocator, declaration: Analysis.Symbol) ![]const u8 {
+    const separator = if (declaration.detail.len > 0) ": " else "";
+    const parts = .{ declaration.name, separator, declaration.detail };
+    return std.fmt.allocPrint(allocator, "```mond\n{s}{s}{s}\n```", parts);
 }
 
 // a change only keeps the text, typing does not wait for analyses
-fn change(s: *Server, uri: []const u8, text: []const u8) !void {
-    const gop = try s.docs.getOrPut(s.gpa, uri);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = try s.gpa.dupe(u8, uri);
-        gop.value_ptr.* = .{};
+fn change(server: *Server, uri: []const u8, text: []const u8) !void {
+    const entry = try server.documents.getOrPut(server.gpa, uri);
+    if (!entry.found_existing) {
+        entry.key_ptr.* = try server.gpa.dupe(u8, uri);
+        entry.value_ptr.* = .{};
     }
-    if (gop.value_ptr.text) |old| s.gpa.free(old);
-    gop.value_ptr.text = try s.gpa.dupe(u8, text);
+    if (entry.value_ptr.pending_text) |old| server.gpa.free(old);
+    entry.value_ptr.pending_text = try server.gpa.dupe(u8, text);
 }
 
-// publishes the diagnostics and keeps the result until the editor asks, a crash keeps the last result
-fn analyze(s: *Server, a: std.mem.Allocator, uri: []const u8, d: *Doc) !void {
-    const text = d.text orelse return;
+// publishes the diagnostics and keeps the result for the editor, a crash keeps the last result
+fn analyze(
+    server: *Server,
+    allocator: std.mem.Allocator,
+    uri: []const u8,
+    document: *Document,
+) !void {
+    const text = document.pending_text orelse return;
     defer {
-        s.gpa.free(text);
-        d.text = null;
+        server.gpa.free(text);
+        document.pending_text = null;
     }
-    var arena = std.heap.ArenaAllocator.init(s.gpa);
-    const r = s.work(arena.allocator(), uri, text) orelse {
+
+    var arena = std.heap.ArenaAllocator.init(server.gpa);
+    const result = server.run_worker(arena.allocator(), uri, text) orelse {
         arena.deinit();
-        return s.notify(a, "textDocument/publishDiagnostics", .{ .uri = uri, .diagnostics = &[_]Analysis.Diagnostic{crashed} });
+        const crashed = .{ .uri = uri, .diagnostics = &[_]Analysis.Diagnostic{crash_diagnostic} };
+        return server.notify(allocator, "textDocument/publishDiagnostics", crashed);
     };
-    const src = try arena.allocator().dupe(u8, text);
-    if (r.decls.len > 0) {
-        if (d.known_arena) |k| k.promote(s.gpa).deinit();
-        d.arena.promote(s.gpa).deinit();
-        d.* = .{ .src = src, .result = r, .arena = arena.state, .known = r.decls };
+
+    const source = try arena.allocator().dupe(u8, text);
+    if (result.decls.len > 0) {
+        if (document.known_names_arena) |known| known.promote(server.gpa).deinit();
+        document.arena.promote(server.gpa).deinit();
+        document.* = .{
+            .source = source,
+            .result = result,
+            .arena = arena.state,
+            .known_names = result.decls,
+        };
     } else {
         // the names known stay, with the arena they are in
-        if (d.known_arena == null) d.known_arena = d.arena else d.arena.promote(s.gpa).deinit();
-        d.src, d.result, d.arena = .{ src, r, arena.state };
+        if (document.known_names_arena == null) {
+            document.known_names_arena = document.arena;
+        } else {
+            document.arena.promote(server.gpa).deinit();
+        }
+        document.source = source;
+        document.result = result;
+        document.arena = arena.state;
     }
-    try s.notify(a, "textDocument/publishDiagnostics", .{ .uri = uri, .diagnostics = r.diagnostics });
+
+    const analyzed = .{ .uri = uri, .diagnostics = result.diagnostics };
+    try server.notify(allocator, "textDocument/publishDiagnostics", analyzed);
 }
 
-// the worker reads the source on stdin and answers on stdout, its panics go to stderr (the editor's log),
-// a worker that hangs is killed after `timeout`. it gets the document's file for `include`
-fn work(s: *Server, a: std.mem.Allocator, uri: []const u8, text: []const u8) ?Analysis.Result {
-    // the path of the uri, also of a remote one (`vscode-remote://ssh-remote+host/..`): a folder shared under the same path
-    const scheme = std.mem.indexOf(u8, uri, "://");
-    const slash = if (scheme) |i| std.mem.indexOfScalarPos(u8, uri, i + 3, '/') else null;
-    const path = if (slash) |i| std.Uri.percentDecodeInPlace(a.dupe(u8, uri[i..]) catch return null) else "";
-    var child = std.process.spawn(s.io, .{ .argv = &.{ s.exe, "analyze", path }, .stdin = .pipe, .stdout = .pipe }) catch return null;
-    defer child.kill(s.io);
-    child.stdin.?.writeStreamingAll(s.io, text) catch return null;
-    child.stdin.?.close(s.io);
+// the worker reads the source on stdin and answers on stdout, its panics go to the editor's log
+// a worker that hangs is killed after `worker_timeout`
+fn run_worker(
+    server: *Server,
+    allocator: std.mem.Allocator,
+    uri: []const u8,
+    text: []const u8,
+) ?Analysis.Result {
+    const io = server.io;
+    // it gets the document's file for `include`
+    const path = path_of_uri(allocator, uri) catch return null;
+    const argv: []const []const u8 = &.{ server.executable_path, "analyze", path };
+    var child = std.process.spawn(io, .{ .argv = argv, .stdin = .pipe, .stdout = .pipe }) catch {
+        return null;
+    };
+    defer child.kill(io);
+
+    child.stdin.?.writeStreamingAll(io, text) catch return null;
+    child.stdin.?.close(io);
     child.stdin = null;
+
     var streams: std.Io.File.MultiReader.Buffer(1) = undefined;
-    var out: std.Io.File.MultiReader = undefined;
-    out.init(a, s.io, streams.toStreams(), &.{child.stdout.?});
-    defer out.deinit();
-    out.fillRemaining(timeout.toDeadline(s.io)) catch return null;
-    const term = child.wait(s.io) catch return null;
-    if (term != .exited or term.exited != 0) return null;
-    return std.json.parseFromSliceLeaky(Analysis.Result, a, out.reader(0).buffered(), .{ .allocate = .alloc_always }) catch null;
+    var output: std.Io.File.MultiReader = undefined;
+    output.init(allocator, io, streams.toStreams(), &.{child.stdout.?});
+    defer output.deinit();
+    output.fillRemaining(worker_timeout.toDeadline(io)) catch return null;
+
+    const termination = child.wait(io) catch return null;
+    if (termination != .exited or termination.exited != 0) return null;
+    const answer_text = output.reader(0).buffered();
+    const options: std.json.ParseOptions = .{ .allocate = .alloc_always };
+    const parsed = std.json.parseFromSliceLeaky(Analysis.Result, allocator, answer_text, options);
+    return parsed catch null;
 }
 
-fn respond(s: *Server, a: std.mem.Allocator, id: ?std.json.Value, result: anytype) !void {
-    try s.send(a, .{ .jsonrpc = "2.0", .id = id, .result = result });
+// also of a remote uri (`vscode-remote://ssh-remote+host/..`): a folder shared under one path
+fn path_of_uri(allocator: std.mem.Allocator, uri: []const u8) ![]const u8 {
+    const scheme_end = std.mem.indexOf(u8, uri, "://") orelse return "";
+    const path_start = std.mem.indexOfScalarPos(u8, uri, scheme_end + 3, '/') orelse return "";
+    return std.Uri.percentDecodeInPlace(try allocator.dupe(u8, uri[path_start..]));
+}
+
+fn respond(
+    server: *Server,
+    allocator: std.mem.Allocator,
+    id: ?std.json.Value,
+    result: anytype,
+) !void {
+    try server.send(allocator, .{ .jsonrpc = "2.0", .id = id, .result = result });
 }
 
 // notifications get no answer, not even an error
-fn fail(s: *Server, a: std.mem.Allocator, id: ?std.json.Value, code: i32, message: []const u8) !void {
-    if (id) |i| try s.send(a, .{ .jsonrpc = "2.0", .id = i, .@"error" = .{ .code = code, .message = message } });
+fn fail(
+    server: *Server,
+    allocator: std.mem.Allocator,
+    id: ?std.json.Value,
+    code: i32,
+    message: []const u8,
+) !void {
+    const request_id = id orelse return;
+    const failure = .{ .code = code, .message = message };
+    try server.send(allocator, .{ .jsonrpc = "2.0", .id = request_id, .@"error" = failure });
 }
 
-fn notify(s: *Server, a: std.mem.Allocator, comptime method: []const u8, params: anytype) !void {
-    try s.send(a, .{ .jsonrpc = "2.0", .method = method, .params = params });
+fn notify(
+    server: *Server,
+    allocator: std.mem.Allocator,
+    comptime method: []const u8,
+    params: anytype,
+) !void {
+    try server.send(allocator, .{ .jsonrpc = "2.0", .method = method, .params = params });
 }
 
-fn send(s: *Server, a: std.mem.Allocator, msg: anytype) !void {
-    const body = try std.json.Stringify.valueAlloc(a, msg, .{});
-    try s.out.print("Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
+fn send(server: *Server, allocator: std.mem.Allocator, message: anytype) !void {
+    const body = try std.json.Stringify.valueAlloc(allocator, message, .{});
+    try server.output.print("Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
 }

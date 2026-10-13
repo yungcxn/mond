@@ -1,0 +1,10 @@
+# diagnostics of past bugs: each repeated case reported once, names in a range index checked,
+# a size asserted as something that is no size
+variant Twice = +(A, B, A, A); #! duplicate_declaration duplicate_declaration
+type Sized = *(u8 a) assertsize true; #! type_mismatch
+
+fun ranges = ([6]u8 arr) {
+    u8 e = arr[missing..]; #! undefined_name genexpr_index
+}
+
+$main = () {}

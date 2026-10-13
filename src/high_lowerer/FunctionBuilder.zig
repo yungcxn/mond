@@ -1,0 +1,696 @@
+const std = @import("std");
+const containers = @import("../containers.zig");
+const StaticPool = @import("../resolver/StaticPool.zig");
+const HighIr = @import("HighIr.zig");
+const Ref = HighIr.Ref;
+const Op = HighIr.Op;
+const Index = StaticPool.Index;
+
+// builds one function of `HighIr` in ssa form without knowing the language, phis on demand as in
+// braun et al., "simple and efficient construction of static single assignment form", 2013
+const FunctionBuilder = @This();
+
+pub const none: u32 = std.math.maxInt(u32);
+
+// constants and globals have the top bit of a ref set, instructions never
+const constant_bit: u32 = 1 << 31;
+
+const Instruction = struct { op: Op, result_type: Index, a: u32, b: u32, block: u32 };
+
+const BlockState = struct {
+    // all predecessors are known, reading a variable may complete its phis right away
+    sealed: bool,
+    // head of the block's predecessor edge list
+    predecessors: u32,
+    // head of the phis waiting for the block to be sealed
+    pending_phis: u32,
+    predecessor_count: u32,
+};
+
+const Edge = struct { from_block: u32, next_edge: u32 };
+const PendingPhi = struct { variable: u32, phi: u32, next_pending: u32 };
+const ValueKey = struct { op: Op, result_type: Index, a: u32, b: u32 };
+
+// where `freeze` places an instruction inside its block
+const Placement = enum(u32) {
+    phi_or_param,
+    // allocas the lowerer adds to the entry block late must still come before its code
+    undef_or_entry_alloca,
+    other,
+};
+
+const placement_count: u32 = @typeInfo(Placement).@"enum".fields.len;
+
+allocator: std.mem.Allocator,
+pool: *StaticPool,
+instructions: containers.StructOfArrays(Instruction),
+blocks: containers.StructOfArrays(BlockState),
+edges: containers.StructOfArrays(Edge),
+pending_phis: containers.StructOfArrays(PendingPhi),
+// operand lists of instructions: a length, then the items
+operand_lists: containers.DynamicBuffer(u32),
+scratch: containers.DynamicBuffer(u32),
+// for each instruction: the instruction it turned out to equal (trivial phis), or `none`
+aliases: containers.DynamicBuffer(u32),
+// old block and instruction numbers to their frozen ones
+renumbering: containers.DynamicBuffer(u32),
+// the value of a variable at the end of a block, keyed by `variable << 32 | block`
+definitions: std.AutoHashMapUnmanaged(u64, Ref) = .empty,
+// pure instructions already emitted in the current block, for local value numbering
+value_numbers: std.AutoHashMapUnmanaged(ValueKey, Ref) = .empty,
+current_block: u32 = 0,
+// the current block ended in a terminator, anything emitted now would be dead
+is_unreachable: bool = false,
+
+pub fn init(allocator: std.mem.Allocator, pool: *StaticPool) FunctionBuilder {
+    return .{
+        .allocator = allocator,
+        .pool = pool,
+        .instructions = .init(allocator, 1024),
+        .blocks = .init(allocator, 128),
+        .edges = .init(allocator, 256),
+        .pending_phis = .init(allocator, 64),
+        .operand_lists = .init(allocator, 1024),
+        .scratch = .init(allocator, 256),
+        .aliases = .init(allocator, 1024),
+        .renumbering = .init(allocator, 1024),
+    };
+}
+
+pub fn deinit(self: *FunctionBuilder) void {
+    self.definitions.deinit(self.allocator);
+    self.value_numbers.deinit(self.allocator);
+    self.instructions.deinit();
+    self.blocks.deinit();
+    self.edges.deinit();
+    self.pending_phis.deinit();
+    self.operand_lists.deinit();
+    self.scratch.deinit();
+    self.aliases.deinit();
+    self.renumbering.deinit();
+}
+
+// forgets the previous function, keeping the memory
+pub fn reset(self: *FunctionBuilder) void {
+    self.instructions.truncate(0);
+    self.blocks.truncate(0);
+    self.edges.truncate(0);
+    self.pending_phis.truncate(0);
+    self.operand_lists.len = 0;
+    self.scratch.len = 0;
+    self.aliases.len = 0;
+    self.renumbering.len = 0;
+    self.definitions.clearRetainingCapacity();
+    self.value_numbers.clearRetainingCapacity();
+    self.is_unreachable = false;
+}
+
+// instructions
+
+pub fn constant_int(self: *FunctionBuilder, int_type: Index, bits: u64) Ref {
+    return Ref.of(self.pool.intern(.{ .int_value = .{ .value_type = int_type, .bits = bits } }));
+}
+
+pub fn result_type_of(self: *const FunctionBuilder, instruction: Ref) Index {
+    return self.instructions.column(.result_type)[@intFromEnum(instruction)];
+}
+
+pub fn block_count(self: *const FunctionBuilder) u32 {
+    return self.blocks.len();
+}
+
+pub fn list(self: *FunctionBuilder, items: []const u32) u32 {
+    const list_start = self.operand_lists.len;
+    self.operand_lists.push(@intCast(items.len));
+    self.operand_lists.append(items);
+    return list_start;
+}
+
+pub fn list_items(self: *const FunctionBuilder, list_start: u32) []const u32 {
+    const length = self.operand_lists.buffer[list_start];
+    return self.operand_lists.buffer[list_start + 1 ..][0..length];
+}
+
+// appends to `block` without folding or numbering, for phis, `undef` and `alloca`
+pub fn emit_raw(
+    self: *FunctionBuilder,
+    op: Op,
+    result_type: Index,
+    a: u32,
+    b: u32,
+    block: u32,
+) Ref {
+    self.instructions.push(.{
+        .op = op,
+        .result_type = result_type,
+        .a = a,
+        .b = b,
+        .block = block,
+    });
+    return @enumFromInt(self.instructions.len() - 1);
+}
+
+pub fn emit(self: *FunctionBuilder, op: Op, result_type: Index, a: u32, b: u32) Ref {
+    if (self.is_unreachable) return .none;
+    if (self.fold(op, result_type, a, b)) |constant| return constant;
+
+    const swap = op.is_commutative() and b < a;
+    const key = ValueKey{
+        .op = op,
+        .result_type = result_type,
+        .a = if (swap) b else a,
+        .b = if (swap) a else b,
+    };
+    if (op.is_pure()) if (self.value_numbers.get(key)) |known| return known;
+
+    const instruction = self.emit_raw(op, result_type, key.a, key.b, self.current_block);
+    if (op.is_pure()) self.value_numbers.put(self.allocator, key, instruction) catch @panic("OOM");
+    if (op.is_terminator()) self.is_unreachable = true;
+    return instruction;
+}
+
+pub fn emit_refs(self: *FunctionBuilder, op: Op, result_type: Index, a: Ref, b: Ref) Ref {
+    return self.emit(op, result_type, @intFromEnum(a), @intFromEnum(b));
+}
+
+// constant operands of integer and boolean operators give a constant, nothing is emitted
+fn fold(self: *FunctionBuilder, op: Op, result_type: Index, a: u32, b: u32) ?Ref {
+    const folding = op.folding();
+    if (folding == .none) return null;
+    const unary = folding == .unary;
+
+    const left: Ref = @enumFromInt(a);
+    const right: Ref = if (unary) Ref.of(.unit_value) else @enumFromInt(b);
+    if (!left.is_const() or !right.is_const()) return null;
+
+    const left_value = left.value();
+    const right_value = right.value();
+    if (left_value == .bool_true or left_value == .bool_false) {
+        const right_is_bool = right_value == .bool_true or right_value == .bool_false;
+        if (!unary and !right_is_bool) return null;
+        return fold_booleans(op, left_value == .bool_true, right_value == .bool_true);
+    }
+    return self.fold_integers(op, result_type, folding, left_value, right_value);
+}
+
+fn fold_booleans(op: Op, left: bool, right: bool) ?Ref {
+    const result = switch (op) {
+        .not => !left,
+        .bit_and => left and right,
+        .bit_or => left or right,
+        .bit_xor, .ne => left != right,
+        .eq => left == right,
+        else => return null,
+    };
+    return Ref.of(if (result) .bool_true else .bool_false);
+}
+
+fn fold_integers(
+    self: *FunctionBuilder,
+    op: Op,
+    result_type: Index,
+    folding: Op.Folding,
+    left_value: Index,
+    right_value: Index,
+) ?Ref {
+    const pool = self.pool;
+    const unary = folding == .unary;
+    if (pool.tag(left_value) != .int_value) return null;
+    if (!unary and pool.tag(right_value) != .int_value) return null;
+
+    const operand_type = pool.get(left_value).int_value.value_type;
+    if (pool.get(operand_type) != .int_type) return null;
+    if (folding != .comparison and pool.get(result_type) != .int_type) return null;
+
+    const int_type = pool.get(operand_type).int_type;
+    const left = normalize(pool.get(left_value).int_value.bits, int_type);
+    const right = if (unary) 0 else normalize(pool.get(right_value).int_value.bits, int_type);
+
+    if (folding == .comparison) {
+        const holds = compare_integers(op, int_type.signedness == .signed, left, right);
+        return Ref.of(if (holds) .bool_true else .bool_false);
+    }
+    const result = compute_integers(op, int_type, left, right) orelse return null;
+    return self.constant_int(result_type, normalize(result, pool.get(result_type).int_type));
+}
+
+// null when the result is not defined: division by zero, overflowing division, oversized shifts
+fn compute_integers(op: Op, int_type: StaticPool.IntType, left: u64, right: u64) ?u64 {
+    const signed = int_type.signedness == .signed;
+    const signed_left: i64 = @bitCast(left);
+    const signed_right: i64 = @bitCast(right);
+    return switch (op) {
+        .add => left +% right,
+        .sub => left -% right,
+        .mul => left *% right,
+        .bit_and => left & right,
+        .bit_or => left | right,
+        .bit_xor => left ^ right,
+        .neg => 0 -% left,
+        .not => ~left,
+        .div, .rem => {
+            if (right == 0 or signed and signed_right == -1) return null;
+            if (!signed) return if (op == .div) left / right else left % right;
+            const quotient = if (op == .div)
+                @divTrunc(signed_left, signed_right)
+            else
+                @rem(signed_left, signed_right);
+            return @bitCast(quotient);
+        },
+        .shl, .shr => {
+            if (right >= int_type.bits) return null;
+            const shift: u6 = @intCast(right);
+            if (op == .shl) return left << shift;
+            return if (signed) @bitCast(signed_left >> shift) else left >> shift;
+        },
+        else => null,
+    };
+}
+
+fn compare_integers(op: Op, signed: bool, left: u64, right: u64) bool {
+    const signed_left: i64 = @bitCast(left);
+    const signed_right: i64 = @bitCast(right);
+    return switch (op) {
+        .eq => left == right,
+        .ne => left != right,
+        .lt => if (signed) signed_left < signed_right else left < right,
+        .gt => if (signed) signed_left > signed_right else left > right,
+        .le => if (signed) signed_left <= signed_right else left <= right,
+        else => if (signed) signed_left >= signed_right else left >= right,
+    };
+}
+
+// the bits of an integer of `int_type`, wrapped to its width and sign-extended to 64 bits
+fn normalize(value: u64, int_type: StaticPool.IntType) u64 {
+    if (int_type.bits == 0 or int_type.bits >= 64) return value;
+    const shift: u6 = @intCast(64 - int_type.bits);
+    if (int_type.signedness == .unsigned) return value << shift >> shift;
+    const shifted_up: i64 = @bitCast(value << shift);
+    return @bitCast(shifted_up >> shift);
+}
+
+// blocks and control flow
+
+pub fn new_block(self: *FunctionBuilder) u32 {
+    self.blocks.push(.{
+        .sealed = false,
+        .predecessors = none,
+        .pending_phis = none,
+        .predecessor_count = 0,
+    });
+    return self.blocks.len() - 1;
+}
+
+pub fn add_edge(self: *FunctionBuilder, to: u32) void {
+    const predecessors = self.blocks.column(.predecessors);
+    self.edges.push(.{ .from_block = self.current_block, .next_edge = predecessors[to] });
+    predecessors[to] = self.edges.len() - 1;
+    self.blocks.column(.predecessor_count)[to] += 1;
+}
+
+pub fn branch(self: *FunctionBuilder, to: u32) void {
+    if (self.is_unreachable) return;
+    self.add_edge(to);
+    _ = self.emit(.br, .unit_type, to, 0);
+}
+
+pub fn branch_if(self: *FunctionBuilder, condition: Ref, then_block: u32, else_block: u32) void {
+    if (self.is_unreachable) return;
+
+    const is_true = condition.is_const() and condition.value() == .bool_true;
+    const is_false = condition.is_const() and condition.value() == .bool_false;
+    if (is_true) return self.branch(then_block);
+    if (is_false) return self.branch(else_block);
+
+    self.add_edge(then_block);
+    self.add_edge(else_block);
+    const targets = self.list(&.{ then_block, else_block });
+    _ = self.emit(.cond_br, .unit_type, @intFromEnum(condition), targets);
+}
+
+// continues in `block`, which may still get predecessors
+pub fn enter(self: *FunctionBuilder, block: u32) void {
+    self.current_block = block;
+    self.value_numbers.clearRetainingCapacity();
+    const has_no_predecessor = self.blocks.column(.predecessor_count)[block] == 0;
+    const has_no_way_in = has_no_predecessor and self.blocks.column(.sealed)[block];
+    self.is_unreachable = block != 0 and has_no_way_in;
+}
+
+// seals `block` and continues there, or merges it into its one predecessor just branching to it
+pub fn go_to(self: *FunctionBuilder, block: u32) void {
+    if (self.merges_into_predecessor(block)) return;
+    self.seal(block);
+    self.enter(block);
+}
+
+fn merges_into_predecessor(self: *FunctionBuilder, block: u32) bool {
+    const blocks = self.blocks.columns();
+    const instructions = self.instructions.columns();
+    const last_instruction = self.instructions.len() -% 1;
+    if (!self.is_unreachable or last_instruction == none) return false;
+    if (blocks.predecessor_count[block] != 1 or blocks.pending_phis[block] != none) return false;
+
+    const ends_in_branch_here = instructions.op[last_instruction] == .br and
+        instructions.a[last_instruction] == block;
+    if (!ends_in_branch_here) return false;
+    const only_predecessor = self.edges.column(.from_block)[blocks.predecessors[block]];
+    if (instructions.block[last_instruction] != only_predecessor) return false;
+
+    self.instructions.truncate(last_instruction);
+    if (self.current_block != only_predecessor) self.value_numbers.clearRetainingCapacity();
+    self.current_block = only_predecessor;
+    blocks.predecessor_count[block] = 0;
+    blocks.predecessors[block] = none;
+    blocks.sealed[block] = true;
+    self.is_unreachable = false;
+    return true;
+}
+
+// variables
+
+pub fn write_variable(self: *FunctionBuilder, variable: u32, block: u32, value: Ref) void {
+    const key = definition_key(variable, block);
+    self.definitions.put(self.allocator, key, value) catch @panic("OOM");
+}
+
+pub fn read_variable(self: *FunctionBuilder, variable: u32, variable_type: Index, block: u32) Ref {
+    if (self.definitions.get(definition_key(variable, block))) |value| return value;
+    const value = self.read_variable_from_predecessors(variable, variable_type, block);
+    self.write_variable(variable, block, value);
+    return value;
+}
+
+fn definition_key(variable: u32, block: u32) u64 {
+    return @as(u64, variable) << 32 | block;
+}
+
+fn read_variable_from_predecessors(
+    self: *FunctionBuilder,
+    variable: u32,
+    variable_type: Index,
+    block: u32,
+) Ref {
+    const state = self.blocks.get(block).?;
+    if (!state.sealed) return self.add_pending_phi(variable, variable_type, block, state);
+    if (state.predecessor_count == 0) return self.emit_raw(.undef, variable_type, 0, 0, block);
+    if (state.predecessor_count == 1) {
+        const only_predecessor = self.edges.column(.from_block)[state.predecessors];
+        return self.read_variable(variable, variable_type, only_predecessor);
+    }
+
+    // the phi is the variable's value before its operands are read, so a cycle back here ends
+    const phi = self.emit_raw(.phi, variable_type, 0, 0, block);
+    self.write_variable(variable, block, phi);
+    self.fill_phi_operands(variable, phi);
+    return phi;
+}
+
+fn add_pending_phi(
+    self: *FunctionBuilder,
+    variable: u32,
+    variable_type: Index,
+    block: u32,
+    state: BlockState,
+) Ref {
+    const phi = self.emit_raw(.phi, variable_type, 0, 0, block);
+    self.pending_phis.push(.{
+        .variable = variable,
+        .phi = @intFromEnum(phi),
+        .next_pending = state.pending_phis,
+    });
+    self.blocks.column(.pending_phis)[block] = self.pending_phis.len() - 1;
+    return phi;
+}
+
+fn fill_phi_operands(self: *FunctionBuilder, variable: u32, phi: Ref) void {
+    const phi_type = self.result_type_of(phi);
+    const phi_block = self.instructions.column(.block)[@intFromEnum(phi)];
+    const mark = self.scratch.len;
+
+    var edge = self.blocks.column(.predecessors)[phi_block];
+    while (edge != none) : (edge = self.edges.column(.next_edge)[edge]) {
+        const predecessor = self.edges.column(.from_block)[edge];
+        const operand = self.read_variable(variable, phi_type, predecessor);
+        self.scratch.push(@intFromEnum(operand));
+    }
+
+    const operands = self.list(self.scratch.buffer[mark..self.scratch.len]);
+    self.instructions.column(.b)[@intFromEnum(phi)] = operands;
+    self.scratch.len = mark;
+}
+
+// every predecessor of `block` is known now, its waiting phis get their operands
+pub fn seal(self: *FunctionBuilder, block: u32) void {
+    if (self.blocks.column(.sealed)[block]) return;
+    var pending = self.blocks.column(.pending_phis)[block];
+    while (pending != none) : (pending = self.pending_phis.column(.next_pending)[pending]) {
+        const phi: Ref = @enumFromInt(self.pending_phis.column(.phi)[pending]);
+        self.fill_phi_operands(self.pending_phis.column(.variable)[pending], phi);
+    }
+    self.blocks.column(.sealed)[block] = true;
+}
+
+// freezing into the ir
+
+// positions of the tables `freeze` keeps in `renumbering`, after the frozen block numbers
+const FreezeTables = struct {
+    // per kept block and placement: first the count, then the start, then the end of its range
+    placement_slots: u32,
+    // per built instruction: its frozen index
+    frozen_index: u32,
+    // per frozen index: the built instruction
+    order: u32,
+};
+
+// trivial phis become their one value, unreachable blocks go, blocks are ordered by `Placement`
+pub fn freeze(self: *FunctionBuilder, ir: *HighIr, function_index: u32) void {
+    const built_count = self.instructions.len();
+    self.replace_trivial_phis(built_count);
+
+    const first_frozen_block = ir.blocks.len();
+    const kept_blocks = self.renumber_blocks();
+
+    var tables: FreezeTables = undefined;
+    tables.placement_slots = self.renumbering.len;
+    self.count_placements(kept_blocks, built_count);
+
+    const slots_end = tables.placement_slots + kept_blocks * placement_count;
+    const frozen_count = self.renumbering.buffer[slots_end];
+    self.order_instructions(&tables, built_count, frozen_count);
+
+    const first_frozen_instruction = ir.insts.len();
+    self.write_instructions(ir, tables, frozen_count);
+    self.freeze_blocks(ir, tables.placement_slots);
+
+    const functions = ir.functions.columns();
+    functions.first_block[function_index] = first_frozen_block;
+    functions.blocks[function_index] = kept_blocks;
+    functions.first_inst[function_index] = first_frozen_instruction;
+    functions.insts[function_index] = frozen_count;
+}
+
+// a phi whose operands are only itself and one other value is that value, until nothing changes
+fn replace_trivial_phis(self: *FunctionBuilder, built_count: u32) void {
+    self.aliases.push_repeated(built_count, none);
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (0..built_count) |i| {
+            // read anew each time: emitting an undef below may move the columns
+            const instructions = self.instructions.columns();
+            if (instructions.op[i] != .phi or self.aliases.buffer[i] != none) continue;
+
+            var same = self.only_other_operand(i, instructions.b[i]) orelse continue;
+            if (same == none) {
+                const result_type = instructions.result_type[i];
+                const undef = self.emit_raw(.undef, result_type, 0, 0, instructions.block[i]);
+                same = @intFromEnum(undef);
+            }
+            self.aliases.buffer[i] = same;
+            changed = true;
+        }
+    }
+}
+
+// the one value other than `phi` its operands resolve to, `none` if there is none, null for two
+fn only_other_operand(self: *const FunctionBuilder, phi: usize, operands: u32) ?u32 {
+    var same: u32 = none;
+    for (self.list_items(operands)) |operand| {
+        const resolved = self.resolve_alias(operand);
+        if (resolved == phi or resolved == same) continue;
+        if (same != none) return null;
+        same = resolved;
+    }
+    return same;
+}
+
+// numbers the blocks with predecessors in order, the entry block is always kept
+fn renumber_blocks(self: *FunctionBuilder) u32 {
+    const predecessor_counts = self.blocks.column(.predecessor_count);
+    self.renumbering.len = 0;
+    var kept_blocks: u32 = 0;
+    for (0..predecessor_counts.len) |block| {
+        const kept = block == 0 or predecessor_counts[block] > 0;
+        self.renumbering.push(if (kept) kept_blocks else none);
+        if (kept) kept_blocks += 1;
+    }
+    return kept_blocks;
+}
+
+// counts the instructions of each block and placement, then turns the counts into start offsets
+fn count_placements(self: *FunctionBuilder, kept_blocks: u32, built_count: u32) void {
+    const all = self.instructions.columns();
+    const slots_at = self.renumbering.len;
+    const slot_count = kept_blocks * placement_count;
+    self.renumbering.push_repeated(slot_count + 1, 0);
+
+    for (0..all.op.len) |i| {
+        if (!self.is_frozen(i, built_count)) continue;
+        const block = self.renumbering.buffer[all.block[i]];
+        const slot = placement_slot(slots_at, block, placement_of(all.op[i], all.a[i]));
+        self.renumbering.buffer[slot + 1] += 1;
+    }
+    for (1..slot_count + 1) |k| {
+        self.renumbering.buffer[slots_at + k] += self.renumbering.buffer[slots_at + k - 1];
+    }
+}
+
+// fills the frozen index and order tables, leaving each placement slot at its range's end
+fn order_instructions(
+    self: *FunctionBuilder,
+    tables: *FreezeTables,
+    built_count: u32,
+    frozen_count: u32,
+) void {
+    const all = self.instructions.columns();
+    tables.frozen_index = self.renumbering.len;
+    self.renumbering.push_repeated(@intCast(all.op.len), none);
+    tables.order = self.renumbering.len;
+    self.renumbering.push_repeated(frozen_count, 0);
+
+    for (0..all.op.len) |i| {
+        if (!self.is_frozen(i, built_count)) continue;
+        const block = self.renumbering.buffer[all.block[i]];
+        const placement = placement_of(all.op[i], all.a[i]);
+        const slot_index = placement_slot(tables.placement_slots, block, placement);
+        const slot = &self.renumbering.buffer[slot_index];
+        self.renumbering.buffer[tables.frozen_index + i] = slot.*;
+        self.renumbering.buffer[tables.order + slot.*] = @intCast(i);
+        slot.* += 1;
+    }
+}
+
+fn write_instructions(
+    self: *FunctionBuilder,
+    ir: *HighIr,
+    tables: FreezeTables,
+    frozen_count: u32,
+) void {
+    const all = self.instructions.columns();
+    for (self.renumbering.buffer[tables.order..][0..frozen_count]) |i| {
+        const shape = all.op[i].shape();
+        ir.insts.push(.{
+            .op = all.op[i],
+            .ty = all.result_type[i],
+            .a = self.frozen_operand(ir, shape[0], all.a[i], tables.frozen_index),
+            .b = self.frozen_operand(ir, shape[1], all.b[i], tables.frozen_index),
+        });
+    }
+}
+
+fn placement_slot(slots_at: u32, block: u32, placement: Placement) u32 {
+    return slots_at + block * placement_count + @intFromEnum(placement);
+}
+
+fn is_frozen(self: *const FunctionBuilder, i: usize, built_count: u32) bool {
+    const block = self.renumbering.buffer[self.instructions.column(.block)[i]];
+    if (block == none) return false;
+    return !(i < built_count and self.aliases.buffer[i] != none);
+}
+
+fn freeze_blocks(self: *FunctionBuilder, ir: *HighIr, slots_at: u32) void {
+    const blocks = self.blocks.columns();
+    var start: u32 = 0;
+    for (0..blocks.predecessor_count.len) |block| {
+        const frozen_block = self.renumbering.buffer[block];
+        if (frozen_block == none) continue;
+
+        const end = self.renumbering.buffer[placement_slot(slots_at, frozen_block, .other)];
+        const length = end - start;
+        const predecessors_at = ir.extra.len;
+        ir.extra.push(0);
+        var edge = blocks.predecessors[block];
+        while (edge != none) : (edge = self.edges.column(.next_edge)[edge]) {
+            ir.extra.push(self.renumbering.buffer[self.edges.column(.from_block)[edge]]);
+            ir.extra.buffer[predecessors_at] += 1;
+        }
+
+        ir.blocks.push(.{ .start = start, .len = length, .preds = predecessors_at });
+        start += length;
+    }
+}
+
+// the lowerer marks the allocas of the entry block with no length (`none`)
+fn placement_of(op: Op, a: u32) Placement {
+    return switch (op) {
+        .phi, .param => .phi_or_param,
+        .undef => .undef_or_entry_alloca,
+        .alloca => if (a == none) .undef_or_entry_alloca else .other,
+        else => .other,
+    };
+}
+
+fn resolve_alias(self: *const FunctionBuilder, instruction: u32) u32 {
+    var current = instruction;
+    while (self.has_alias(current)) current = self.aliases.buffer[current];
+    return current;
+}
+
+fn has_alias(self: *const FunctionBuilder, operand: u32) bool {
+    if (operand == none or operand & constant_bit != 0) return false;
+    return operand < self.aliases.len and self.aliases.buffer[operand] != none;
+}
+
+fn frozen_operand(
+    self: *FunctionBuilder,
+    ir: *HighIr,
+    kind: Op.Operand,
+    operand: u32,
+    frozen_index_at: u32,
+) u32 {
+    return switch (kind) {
+        .none, .imm => operand,
+        .block => self.renumbering.buffer[operand],
+        .ref => self.frozen_ref(operand, frozen_index_at),
+        .refs, .blocks, .cases => self.frozen_list(ir, kind, operand, frozen_index_at),
+    };
+}
+
+// a `cases` list is the default block, then pairs of a constant and the block it leads to
+fn frozen_list(
+    self: *FunctionBuilder,
+    ir: *HighIr,
+    kind: Op.Operand,
+    operand: u32,
+    frozen_index_at: u32,
+) u32 {
+    const list_start = ir.extra.len;
+    const items = self.list_items(operand);
+    ir.extra.push(@intCast(items.len));
+    for (items, 0..) |item, k| {
+        const is_block = kind == .blocks or kind == .cases and k % 2 == 0;
+        const frozen = if (is_block)
+            self.renumbering.buffer[item]
+        else
+            self.frozen_ref(item, frozen_index_at);
+        ir.extra.push(frozen);
+    }
+    return list_start;
+}
+
+fn frozen_ref(self: *const FunctionBuilder, instruction: u32, frozen_index_at: u32) u32 {
+    const resolved = self.resolve_alias(instruction);
+    if (resolved == none or resolved & constant_bit != 0) return resolved;
+    return self.renumbering.buffer[frozen_index_at + resolved];
+}

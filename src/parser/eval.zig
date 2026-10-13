@@ -94,7 +94,7 @@ pub fn block(p: *Parser) anyerror!NodeId {
     p.angle = false;
     defer p.head, p.list, p.angle = outer;
     const parent = p.tree.push_node(.block);
-    const children = p.scratch.head;
+    const children = p.scratch.len;
     while (!try p.peek_eq_tok(.@"pct_}")) {
         p.scratch.push(try any(p, .allow_assign, 0));
         try p.eat_stmt_end();
@@ -173,7 +173,7 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
         switch (try p.peek_tok()) {
             .@"pct_," => {
                 p.tok_cursor += 1;
-                const children = p.scratch.head;
+                const children = p.scratch.len;
                 p.scratch.push(parent);
                 while (true) {
                     if (try p.peek_eq_tok(.@"pct_]")) break;
@@ -512,14 +512,14 @@ pub fn variant(p: *Parser) anyerror!NodeId {
         else => return error.IllegalVariantStart,
     };
 
-    const params = p.scratch.head;
+    const params = p.scratch.len;
     while (!try p.peek_eq_tok(.@"pct_)")) {
         p.scratch.push(try partial.variant_param(p));
         if (!try p.peek_eq_tok(.@"pct_,")) break;
         p.tok_cursor += 1;
     }
     try p.eat_assert_tok(.@"pct_)");
-    if (p.scratch.head == params) return error.IllegalVariantParamList;
+    if (p.scratch.len == params) return error.IllegalVariantParamList;
 
     const param_tuple = p.tree.push_node(.partial__variant_def_param_tuple);
     p.close(param_tuple, params);
@@ -560,7 +560,7 @@ pub fn trait(p: *Parser) anyerror!NodeId {
 
     if (try p.peek_eq_tok(.kw_implof)) {
         p.tok_cursor += 1;
-        const impls = p.scratch.head;
+        const impls = p.scratch.len;
         while (true) {
             p.scratch.push(try any(p, .forbid_assign, 0));
             switch (try p.peek_tok()) {
@@ -578,7 +578,7 @@ pub fn trait(p: *Parser) anyerror!NodeId {
     }
 
     try p.eat_assert_tok(.@"xpct_!{");
-    const members = p.scratch.head;
+    const members = p.scratch.len;
     while (!try p.peek_eq_tok(.@"pct_}")) {
         p.scratch.push(try any(p, .allow_assign, 0));
         try p.eat_stmt_end();
@@ -753,8 +753,8 @@ pub fn identifier_self(p: *Parser) anyerror!NodeId {
 pub fn identifier(p: *Parser) anyerror!NodeId {
     const n = p.tree.push_data_node(.identifier, p.tok_cursor - 1);
     // `get_@(x)`: the name pasted with the one `x` is, as `##` in c
-    const spans = p.tokens.pool.span.buf;
-    if (p.tok_cursor >= p.tokens.len() or p.tokens.pool.tk.buf[p.tok_cursor] != .@"xpct_@" or spans[p.tok_cursor][0] != spans[p.tok_cursor - 1][1]) return n;
+    const spans = p.tokens.column(.span);
+    if (p.tok_cursor >= p.tokens.len() or p.tokens.column(.tk)[p.tok_cursor] != .@"xpct_@" or spans[p.tok_cursor][0] != spans[p.tok_cursor - 1][1]) return n;
     p.tok_cursor += 1;
     return p.tree.push_node_with(.paste, .{ .prefix = n, .hole = try unquote(p) });
 }

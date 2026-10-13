@@ -2,33 +2,33 @@ const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const StaticPool = @import("../StaticPool.zig");
 const NamePool = @import("../NamePool.zig");
-const Decls = @import("Decls.zig");
-const FnCtx = Resolver.FnCtx;
+const Declarations = @import("Declarations.zig");
+const DeclPool = @import("../DeclPool.zig");
+const FunctionContext = Resolver.FunctionContext;
 const NodeId = ParseTree.NodeId;
 const Index = StaticPool.Index;
 
-// macros: code as a value (`quote`), put back as code where it stands (`<x>`), the program read and written (`refl`),
-// other files (`include`). a tree is a value of type `ast(T)`: code producing T, `ast` for any, `ast.Kind` for a root of
-// that kind, evaluated by the interpreter (see interpreter/Trees.zig)
-//
-// how a program changes: a pass evaluates the splices it meets and keeps each expansion in its splice node. a pass that
-// expanded anything ends with the tree rebuilt and resolving starts over, the last pass compiles a program no macro
-// changes anymore and has no trace of them. the splices at the top run first and in order, before anything is resolved,
-// a declaration may be written until it is resolved
+// macros: code as a value (`quote`), put back as code (`<x>`), the program read and written
+// (`refl`), other files (`include`); trees are `ast(T)` values run by interpreter/Trees.zig
 const Macros = @This();
 
+// a pass keeps each expansion in its splice node; one that expanded anything rebuilds the tree
+// and resolving starts over, so the last pass compiles a program without a trace of macros
 pub const max_passes = 64;
 
 // nodes from here on were made in this pass
 pass_len: NodeId,
-// splices expanded and declarations written in this pass, whether a splice failed, the splice evaluated last and the token of
-// the one evaluated now: code landing in the program is written there (its errors are at the splice that made it)
+// splices expanded in this pass
 expanded: u32 = 0,
+// declarations written in this pass
 edited: bool = false,
+// a splice failed in this pass, its errors end the pass
 failed: bool = false,
+// the splice evaluated last
 last: NodeId = 0,
+// the token of the splice evaluated now: landing code is written there, so its errors are at it
 at: u32 = 0,
-// the splices at the top run: quotes are not typed, typing would resolve what the splices may still write
+// the top splices run: quotes stay untyped, typing would resolve what the splices may still write
 top: bool = false,
 // a quote's code is checked for its type only
 quoting: u32 = 0,
@@ -36,210 +36,395 @@ quoting: u32 = 0,
 splicing: u32 = 0,
 // the node `refl $file` reads, made on demand
 file: NodeId = 0,
-// names made by macros, over all passes
-fresh: u32 = 0,
 // where the subtree of each root starts, made once a pass by the first write into the program
 starts: []NodeId = &.{},
 
-pub fn res(self: *Macros) *Resolver {
+pub fn owning_resolver(self: *Macros) *Resolver {
     return @alignCast(@fieldParentPtr("macros", self));
 }
 
-// `@` outside the code of a quote (what an unquote takes is no code of it): there is nothing to unquote. it is reported
-// before anything is resolved, a name written with it (`a@b`, `x.@y`, `f(@x = 1)`) would be read as none
-pub fn strays(self: *Macros, n: NodeId, quoted: bool) void {
-    const r = self.res();
-    const k = r.tree.kind(n);
-    if (!quoted and (k == .unquote or k == .unquote_list or k == .paste)) {
-        r.doc.report(.stray_unquote, n, 0, 0);
+// `@` outside the code of a quote has nothing to unquote (what an unquote takes is no code of it)
+// reported before resolving: a name written with it (`a@b`, `x.@y`, `f(@x = 1)`) would read as none
+pub fn report_stray_unquotes(self: *Macros, node: NodeId, quoted: bool) void {
+    const resolver = self.owning_resolver();
+    const kind = resolver.tree.kind(node);
+    const is_unquote = kind == .unquote or kind == .unquote_list or kind == .paste;
+    if (!quoted and is_unquote) {
+        resolver.doctor.report(.stray_unquote, node, 0, 0);
         return;
     }
-    for (r.tree.children(n)) |c| if (c != 0) self.strays(c, k == .quote or quoted and k != .unquote and k != .unquote_list);
+
+    const children_quoted = kind == .quote or
+        quoted and kind != .unquote and kind != .unquote_list;
+    for (resolver.tree.children(node)) |child| {
+        if (child != 0) self.report_stray_unquotes(child, children_quoted);
+    }
 }
 
-// the splices at the top, in order. true when there are any
+// the splices at the top run first and in order, before anything is resolved: a declaration may
+// be written until it is resolved. true when there are any
 pub fn expand_roots(self: *Macros) bool {
-    const r = self.res();
-    var ctx = FnCtx{};
+    const resolver = self.owning_resolver();
+    var context = FunctionContext{};
     var any = false;
     self.top = true;
     defer self.top = false;
-    for (r.roots) |root| if (r.tree.kind(root) == .splice) {
+    for (resolver.roots) |root| {
+        if (resolver.tree.kind(root) != .splice) continue;
         any = true;
-        _ = r.exprs.infer(&ctx, root, .none);
-    };
+        _ = resolver.expressions.infer(&context, root, .none);
+    }
     return any;
 }
 
-pub fn infer(self: *Macros, ctx: *FnCtx, n: NodeId, expected: Index) Index {
-    const r = self.res();
-    const sp = &r.static_pool;
-    return switch (r.tree.kind(n)) {
-        .quote => blk: {
-            const body = r.tree.arg(n, 0);
-            // the owner of the names the quote declares, for its hygiene
-            r.node_decl[n] = ctx.decl;
-            self.holes(ctx, body);
-            const want = sp.apply_vars(&r.abstract_pool, expected);
-            break :blk sp.ast_of(self.produces(ctx, body, if (want != .none and sp.tag(want) == .ast_type) sp.get(want).ast.of else .none), 0);
-        },
-        .splice => self.splice(ctx, n),
-        .refl => self.refl(n),
-        .include => blk: {
-            if (r.tree.kind(r.tree.arg(n, 0)) != .string) break :blk r.report(.type_mismatch, r.tree.arg(n, 0), r.exprs.infer(ctx, r.tree.arg(n, 0), .none), self.string());
-            break :blk .ast_type;
-        },
+pub fn infer(self: *Macros, context: *FunctionContext, node: NodeId, expected: Index) Index {
+    const resolver = self.owning_resolver();
+    return switch (resolver.tree.kind(node)) {
+        .quote => self.infer_quote(context, node, expected),
+        .splice => self.splice(context, node),
+        .refl => self.refl(node),
+        .include => self.infer_include(context, node),
         // a hole is typed by the quote around it, anywhere else it means nothing
-        else => if (self.quoting > 0) r.node_type[n] else r.report(.stray_unquote, n, 0, 0),
+        .unquote, .unquote_list, .paste => {
+            if (self.quoting > 0) return resolver.node_types[node];
+            return resolver.report(.stray_unquote, node, 0, 0);
+        },
+        // the construct table sends only macro kinds here
+        else => unreachable,
     };
 }
 
-// the holes of a quote are checked where it is written: `@x` is what `x` holds when `x` is declared here,
-// else the name `x` where the quote lands. a quote within has holes of its own
-fn holes(self: *Macros, ctx: *FnCtx, n: NodeId) void {
-    const r = self.res();
-    const sp = &r.static_pool;
-    switch (r.tree.kind(n)) {
+fn infer_quote(self: *Macros, context: *FunctionContext, node: NodeId, expected: Index) Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const body = resolver.tree.arg(node, 0);
+    // the owner of the names the quote declares, for its hygiene
+    resolver.node_declarations[node] = context.declaration;
+    self.holes(context, body);
+
+    const wanted = static_pool.substitute_type_variables(expected);
+    const produces_hint = if (wanted != .none and static_pool.tag(wanted) == .ast_type)
+        static_pool.get(wanted).ast_type.produces
+    else
+        .none;
+    return static_pool.ast_type_of(self.produces(context, body, produces_hint), 0);
+}
+
+fn infer_include(self: *Macros, context: *FunctionContext, node: NodeId) Index {
+    const resolver = self.owning_resolver();
+    const path = resolver.tree.arg(node, 0);
+    if (resolver.tree.kind(path) == .string) return .ast_type;
+    const path_type = resolver.expressions.infer(context, path, .none);
+    return resolver.report(.type_mismatch, path, path_type, self.string_type());
+}
+
+// the holes of a quote are checked where it is written: `@x` is what `x` holds when `x` is declared
+// here, else the name `x` where the quote lands. a quote within has holes of its own
+fn holes(self: *Macros, context: *FunctionContext, node: NodeId) void {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    switch (tree.kind(node)) {
         .quote => return,
-        .paste => return self.holes(ctx, r.tree.arg(n, 1)),
-        .unquote, .unquote_list => {
-            const x = r.tree.arg(n, 0);
-            var root = x;
-            while (r.tree.kind(root) == .member or r.tree.kind(root) == .array_index) root = r.tree.arg(root, 0);
-            if (r.tree.kind(root) == .identifier and r.scopes.lookup(&r.decl_pool, r.name_pool.name_of(root)) == .none) {
-                r.node_type[n] = .poison_type;
-                return;
-            }
-            const t = sp.apply_vars(&r.abstract_pool, r.exprs.infer(ctx, x, .none));
-            r.node_type[n] = if (sp.tag(t) == .ast_type and sp.get(t).ast.of != .none) sp.get(t).ast.of else if (sp.holds_trees(t)) .poison_type else t;
-        },
-        else => switch (ParseTree.Node.nk_childc[@intFromEnum(r.tree.kind(n))]) {
-            .one => self.holes(ctx, r.tree.arg(n, 0)),
-            .two => for (0..2) |i| if (r.tree.arg(n, @intCast(i)) != 0) self.holes(ctx, r.tree.arg(n, @intCast(i))),
+        .paste => return self.holes(context, tree.arg(node, 1)),
+        .unquote, .unquote_list => self.type_hole(context, node),
+        else => switch (ParseTree.Node.nk_childc[@intFromEnum(tree.kind(node))]) {
+            .one => self.holes(context, tree.arg(node, 0)),
+            .two => for (0..2) |i| {
+                const child = tree.arg(node, @intCast(i));
+                if (child != 0) self.holes(context, child);
+            },
             // by index: checking a hole may grow the lists of the tree
-            .many => for (0..r.tree.arg(n, 1)) |i| self.holes(ctx, r.tree.extra_childrefs.buf[r.tree.arg(n, 0) + i]),
-            else => {},
+            .many => for (0..tree.arg(node, 1)) |i| {
+                self.holes(context, tree.extra_childrefs.buffer[tree.arg(node, 0) + i]);
+            },
+            .none, .data => {},
         },
     }
 }
 
-// what a quote's code produces as far as it is known where it is written: declarations by their kind, statements
-// nothing, an expression is checked with its holes as what they hold. none when that fails (a name only where it lands)
-fn produces(self: *Macros, ctx: *FnCtx, body: NodeId, hint: Index) Index {
-    const r = self.res();
-    const sp = &r.static_pool;
-    switch (r.tree.kind(body)) {
+fn type_hole(self: *Macros, context: *FunctionContext, node: NodeId) void {
+    const resolver = self.owning_resolver();
+    const held = resolver.tree.arg(node, 0);
+    var root = held;
+    while (resolver.tree.kind(root) == .member or resolver.tree.kind(root) == .array_index) {
+        root = resolver.tree.arg(root, 0);
+    }
+
+    const is_landing_name = resolver.tree.kind(root) == .identifier and
+        resolver.scopes.lookup(&resolver.decl_pool, resolver.name_pool.name_of_node(root)) == .none;
+    if (is_landing_name) {
+        resolver.node_types[node] = .poison_type;
+        return;
+    }
+
+    const held_type = resolver.static_pool.substitute_type_variables(
+        resolver.expressions.infer(context, held, .none),
+    );
+    resolver.node_types[node] = self.hole_type(held_type);
+}
+
+// a tree stands for the code it produces; other values holding trees have no code to stand for
+fn hole_type(self: *Macros, held_type: Index) Index {
+    const static_pool = &self.owning_resolver().static_pool;
+    const is_tree = static_pool.tag(held_type) == .ast_type;
+    if (is_tree and static_pool.get(held_type).ast_type.produces != .none) {
+        return static_pool.get(held_type).ast_type.produces;
+    }
+    if (static_pool.contains_trees(held_type)) return .poison_type;
+    return held_type;
+}
+
+// what a quote's code produces as far as it is known where it is written: declarations by their
+// kind, statements nothing, an expression is checked with its holes as what they hold
+// none when that fails (a name only where it lands)
+fn produces(self: *Macros, context: *FunctionContext, body: NodeId, hint: Index) Index {
+    const resolver = self.owning_resolver();
+    switch (resolver.tree.kind(body)) {
         .block => return .unit_type,
         .def_fun => return .fun_type,
         .partial__match_case => return .none,
         else => {},
     }
-    if (r.decls.type_kind(body) != .variable) return r.decls.type_kind(body).meta(.type_type);
-    if (r.tree.props(body).declares) return switch (Decls.Stmt.from_node(r, body).kind) {
-        .variable => .unit_type,
-        .record, .type_alias, .variant, .trait => |k| k.meta(.type_type),
-        else => .fun_type,
-    };
+
+    const declared_type_kind = resolver.declarations.declared_type_kind(body);
+    if (declared_type_kind != .variable) return declared_type_kind.meta_type(.type_type);
+    if (resolver.tree.props(body).declares) {
+        return declaration_produces(Declarations.Stmt.from_node(resolver, body).kind);
+    }
+
     if (self.top or !self.typable(body)) return .none;
-    const mark = r.doc.diagnostics.len();
+    return self.type_of_quoted_expression(context, body, hint);
+}
+
+fn declaration_produces(kind: DeclPool.Entry.Kind) Index {
+    return switch (kind) {
+        .variable => .unit_type,
+        .record, .type_alias, .variant, .trait => kind.meta_type(.type_type),
+        .parameter,
+        .static_parameter,
+        .field,
+        .function,
+        .static_function,
+        .inlined_function,
+        .variant_case,
+        .trait_member,
+        .pattern_binder,
+        .arrow_binder,
+        .loop_variable,
+        .self,
+        .autoins_arg,
+        .autoins_it,
+        => .fun_type,
+    };
+}
+
+// the type is kept only when checking it reported nothing and left nothing open
+fn type_of_quoted_expression(
+    self: *Macros,
+    context: *FunctionContext,
+    body: NodeId,
+    hint: Index,
+) Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const mark = resolver.doctor.diagnostics.len();
     self.quoting += 1;
-    r.scopes.push();
-    const t = sp.apply_vars(&r.abstract_pool, r.exprs.infer(ctx, body, hint));
-    r.scopes.pop();
+    resolver.scopes.open();
+    const body_type = static_pool.substitute_type_variables(
+        resolver.expressions.infer(context, body, hint),
+    );
+    resolver.scopes.close();
     self.quoting -= 1;
-    const ok = r.doc.diagnostics.len() == mark and t != .poison_type and !sp.has_vars(t);
-    r.doc.rewind(mark);
-    return if (ok) t else .none;
+
+    const is_known = resolver.doctor.diagnostics.len() == mark and
+        body_type != .poison_type and
+        !static_pool.has_type_variables(body_type);
+    resolver.doctor.rewind(mark);
+    return if (is_known) body_type else .none;
 }
 
 // an expression checked without leaving a trace: nothing in it declares or jumps
-fn typable(self: *Macros, n: NodeId) bool {
-    const r = self.res();
-    switch (r.tree.kind(n)) {
+fn typable(self: *Macros, node: NodeId) bool {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    switch (tree.kind(node)) {
         .quote => return true,
-        .def_fun, .def_fun_declaration, .block, .unquote_list, .paste, .ret, .ret_void, .brk, .cont, .@"defer", .deinit, .inlined_defer_deinit, .inc_prefix, .dec_prefix, .inc_postfix, .dec_postfix, .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => return false,
-        else => if (r.tree.props(n).declares or r.decls.type_kind(n) != .variable) return false,
+        .def_fun,
+        .def_fun_declaration,
+        .block,
+        .unquote_list,
+        .paste,
+        .ret,
+        .ret_void,
+        .brk,
+        .cont,
+        .@"defer",
+        .deinit,
+        .inlined_defer_deinit,
+        .inc_prefix,
+        .dec_prefix,
+        .inc_postfix,
+        .dec_postfix,
+        .assign_add,
+        .assign_sub,
+        .assign_mul,
+        .assign_div,
+        .assign_mod,
+        => return false,
+        else => {
+            if (tree.props(node).declares) return false;
+            if (resolver.declarations.declared_type_kind(node) != .variable) return false;
+        },
     }
-    return switch (ParseTree.Node.nk_childc[@intFromEnum(r.tree.kind(n))]) {
-        .one => self.typable(r.tree.arg(n, 0)),
-        .two => (r.tree.arg(n, 0) == 0 or self.typable(r.tree.arg(n, 0))) and (r.tree.arg(n, 1) == 0 or self.typable(r.tree.arg(n, 1))),
-        .many => for (r.tree.manychildren(n)) |c| {
-            if (!self.typable(c)) break false;
-        } else true,
-        else => true,
-    };
+
+    switch (ParseTree.Node.nk_childc[@intFromEnum(tree.kind(node))]) {
+        .one => return self.typable(tree.arg(node, 0)),
+        .two => {
+            if (!self.absent_or_typable(tree.arg(node, 0))) return false;
+            return self.absent_or_typable(tree.arg(node, 1));
+        },
+        .many => {
+            for (tree.manychildren(node)) |child| {
+                if (!self.typable(child)) return false;
+            }
+            return true;
+        },
+        .none, .data => return true,
+    }
 }
 
-// `<x>`: what the tree `x` produces. it is expanded right away unless the code around is only checked, in a stcfun the
-// interpreter expands it when it runs. the program may be written while `x` is checked too: a stcfun call is evaluated then
-fn splice(self: *Macros, ctx: *FnCtx, n: NodeId) Index {
-    const r = self.res();
-    const sp = &r.static_pool;
-    const x = r.tree.arg(n, 0);
-    const live = self.quoting == 0 and !ctx.abstract and !ctx.interpreted;
-    const outer = self.at;
-    if (live) {
+fn absent_or_typable(self: *Macros, node: NodeId) bool {
+    return node == 0 or self.typable(node);
+}
+
+// `<x>`: what the tree `x` produces. it is expanded right away unless the code around is only
+// checked, in a stcfun the interpreter expands it when it runs
+// the program may be written while `x` is checked too: a stcfun call is evaluated then
+fn splice(self: *Macros, context: *FunctionContext, node: NodeId) Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const spliced = resolver.tree.arg(node, 0);
+    const is_live = self.quoting == 0 and !context.is_abstract and !context.is_interpreted;
+    const outer_at = self.at;
+    if (is_live) {
         self.splicing += 1;
-        self.at = r.tree.first_token(n);
+        self.at = resolver.tree.first_token(node);
     }
-    defer if (live) {
+    defer if (is_live) {
         self.splicing -= 1;
-        self.at = outer;
+        self.at = outer_at;
     };
-    const mark = r.doc.diagnostics.len();
-    const t = sp.apply_vars(&r.abstract_pool, r.exprs.infer(ctx, x, .none));
-    if (t == .poison_type) return self.ended(live, mark, t);
-    if (sp.tag(t) != .ast_type and t != .unit_type) return self.ended(live, mark, r.report(.type_mismatch, x, t, .ast_type));
-    const of: Index = if (t == .unit_type) .unit_type else if (sp.get(t).ast.of == .none) .poison_type else sp.get(t).ast.of;
-    if (!live) return self.ended(live, mark, of);
+
+    const mark = resolver.doctor.diagnostics.len();
+    const tree_type = static_pool.substitute_type_variables(
+        resolver.expressions.infer(context, spliced, .none),
+    );
+    if (tree_type == .poison_type) return self.end_splice(is_live, mark, tree_type);
+    if (static_pool.tag(tree_type) != .ast_type and tree_type != .unit_type) {
+        const mismatch = resolver.report(.type_mismatch, spliced, tree_type, .ast_type);
+        return self.end_splice(is_live, mark, mismatch);
+    }
+
+    const produced_type = self.spliced_type(tree_type);
+    if (!is_live) return self.end_splice(is_live, mark, produced_type);
+
     // a stcfun call has its value from being checked, it runs once
-    const v = if (r.node_value[x] != .none) r.node_value[x] else r.interpreter.eval_static(ctx, x);
-    if (r.doc.diagnostics.len() == mark) r.interpreter.trees.expand(n, v);
-    return self.ended(live, mark, of);
+    const checked_value = resolver.node_static_values[spliced];
+    const value = if (checked_value != .none)
+        checked_value
+    else
+        resolver.interpreter.evaluate_static(context, spliced);
+    if (resolver.doctor.diagnostics.len() == mark) resolver.interpreter.trees.expand(node, value);
+    return self.end_splice(is_live, mark, produced_type);
 }
 
-// after a splice: nodes made while it was checked have rows in the node tables, the errors of one expanded end the pass
-pub fn ended(self: *Macros, live: bool, mark: usize, t: Index) Index {
-    const r = self.res();
-    r.fit();
-    if (live) self.failed = self.failed or r.doc.diagnostics.len() > mark;
-    return t;
+// a unit splice puts nothing back, a tree of unknown code anything
+fn spliced_type(self: *Macros, tree_type: Index) Index {
+    if (tree_type == .unit_type) return .unit_type;
+    const produced = self.owning_resolver().static_pool.get(tree_type).ast_type.produces;
+    if (produced == .none) return .poison_type;
+    return produced;
 }
 
-// `refl x`: the declaration of `x` as a tree to read and write, `refl $file` the program. nothing gets resolved by it
-fn refl(self: *Macros, n: NodeId) Index {
-    const r = self.res();
-    const sp = &r.static_pool;
-    const x = r.tree.arg(n, 0);
-    const name = r.name_pool.name_of(x);
-    if (name == .file) return sp.ptr_of(.ast_type, true);
-    const d = if (name == .none) .none else r.scopes.lookup(&r.decl_pool, name);
-    if (d == .none) return r.report(.undefined_name, x, name, 0);
-    r.node_decl[n] = d;
-    r.node_decl[x] = d;
-    const of: Index = switch (r.decl_pool.get_kind(d)) {
+// after a splice: nodes made while it was checked have rows in the node tables, the errors of
+// one expanded end the pass
+pub fn end_splice(self: *Macros, live: bool, mark: usize, result_type: Index) Index {
+    const resolver = self.owning_resolver();
+    resolver.grow_node_tables();
+    if (live) self.failed = self.failed or resolver.doctor.diagnostics.len() > mark;
+    return result_type;
+}
+
+// `refl x`: the declaration of `x` as a tree to read and write, `refl $file` the program
+// nothing gets resolved by it
+fn refl(self: *Macros, node: NodeId) Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const reflected = resolver.tree.arg(node, 0);
+    const name = resolver.name_pool.name_of_node(reflected);
+    if (name == .file) return static_pool.pointer_to(.ast_type, true);
+
+    const declaration = if (name == .none)
+        .none
+    else
+        resolver.scopes.lookup(&resolver.decl_pool, name);
+    if (declaration == .none) return resolver.report(.undefined_name, reflected, name, 0);
+    resolver.node_declarations[node] = declaration;
+    resolver.node_declarations[reflected] = declaration;
+    const produced = reflected_produces(resolver.decl_pool.get(declaration, .kind));
+    return static_pool.pointer_to(static_pool.ast_type_of(produced, 0), true);
+}
+
+fn reflected_produces(kind: DeclPool.Entry.Kind) Index {
+    return switch (kind) {
         .function, .static_function, .inlined_function, .trait_member => .fun_type,
         .record, .type_alias => .type_type,
         .variant => .variant_type,
         .trait => .trait_type,
-        else => .none,
+        .variable,
+        .parameter,
+        .static_parameter,
+        .field,
+        .variant_case,
+        .pattern_binder,
+        .arrow_binder,
+        .loop_variable,
+        .self,
+        .autoins_arg,
+        .autoins_it,
+        => .none,
     };
-    return sp.ptr_of(sp.ast_of(of, 0), true);
 }
 
 // `ast.Identifier`: the type of trees with a root of that kind
-pub fn case(self: *Macros, node: NodeId, name: NamePool.Index) Index {
-    const r = self.res();
-    const k = ParseTree.Node.named.get(r.name_pool.get(name)) orelse return r.report(.unknown_member, node, name, .ast_type);
-    return r.static_pool.ast_of(.none, @as(u16, @intFromEnum(k)) + 1);
+pub fn tree_kind_member(self: *Macros, node: NodeId, name: NamePool.Index) Index {
+    const resolver = self.owning_resolver();
+    const kind = ParseTree.Node.named.get(resolver.name_pool.text_of(name)) orelse {
+        return resolver.report(.unknown_member, node, name, .ast_type);
+    };
+    return resolver.static_pool.ast_type_of(.none, root_kind_code(kind));
 }
 
-// the views of trees (`x.$name`), what each gives and is: the checker types them by it, the language server offers them
-pub const View = struct { name: NamePool.Index, gives: enum { tree, list, text, flag }, doc: []const u8 };
+// a root kind is stored shifted by one, 0 is a tree of any kind
+fn root_kind_code(kind: ParseTree.Node.Kind) u16 {
+    return @as(u16, @intFromEnum(kind)) + 1;
+}
+
+// the views of trees (`x.$name`), what each gives and is: the checker types them by it, the
+// language server offers them
+pub const View = struct {
+    name: NamePool.Index,
+    gives: enum { tree, list, text, flag },
+    doc: []const u8,
+};
 pub const views = [_]View{
     .{ .name = .src, .gives = .text, .doc = "the source it was written as" },
     .{ .name = .children, .gives = .list, .doc = "its children, of any node" },
-    .{ .name = .name, .gives = .tree, .doc = "the name of a declaration, parameter, field or case" },
+    .{
+        .name = .name,
+        .gives = .tree,
+        .doc = "the name of a declaration, parameter, field or case",
+    },
     .{ .name = .type, .gives = .tree, .doc = "the type of a declaration, parameter or field" },
     .{ .name = .value, .gives = .tree, .doc = "what a declaration declares" },
     .{ .name = .params, .gives = .list, .doc = "the parameters of a function" },
@@ -252,113 +437,208 @@ pub const views = [_]View{
     .{ .name = .default, .gives = .tree, .doc = "the default of a parameter or field" },
     .{ .name = .where, .gives = .tree, .doc = "the condition of a parameter or field" },
     .{ .name = .mut, .gives = .flag, .doc = "whether a parameter or field is mut" },
-    .{ .name = .decls, .gives = .list, .doc = "the declarations of a block, an include or `refl $file`" },
+    .{
+        .name = .decls,
+        .gives = .list,
+        .doc = "the declarations of a block, an include or `refl $file`",
+    },
 };
 
-// a member of a tree: a view or a child by its field name (`cond`, `lhs`). it is written when the tree is reached
-// through a `*ast` (as a field through a `*T`), the elements of a list view of one are `*ast`
-pub fn member(self: *Macros, base: Index, name: NamePool.Index) Index {
-    const r = self.res();
-    const sp = &r.static_pool;
-    const elem = if (sp.tag(sp.apply_vars(&r.abstract_pool, base)) == .ptr_mut_type) sp.ptr_of(.ast_type, true) else Index.ast_type;
-    for (views) |v| if (v.name == name) return switch (v.gives) {
-        .tree => .ast_type,
-        .list => sp.intern(.{ .array_type = .{ .len = StaticPool.dyn_len, .elem = elem } }),
-        .text => self.string(),
-        .flag => .bool_type,
-    };
+// a member of a tree: a view or a child by its field name (`cond`, `lhs`). it is written when the
+// tree is reached through a `*ast` (as a field through a `*T`), the elements of a list view of one
+// are `*ast`
+pub fn tree_member(self: *Macros, base: Index, name: NamePool.Index) Index {
+    const static_pool = &self.owning_resolver().static_pool;
+    const base_type = static_pool.substitute_type_variables(base);
+    const is_writable = static_pool.tag(base_type) == .mutable_pointer_type;
+    const element: Index = if (is_writable) static_pool.pointer_to(.ast_type, true) else .ast_type;
+    for (views) |view| {
+        if (view.name != name) continue;
+        return switch (view.gives) {
+            .tree => .ast_type,
+            .list => static_pool.intern(.{
+                .array_type = .{ .length = StaticPool.dyn_len, .element = element },
+            }),
+            .text => self.string_type(),
+            .flag => .bool_type,
+        };
+    }
     return .ast_type;
 }
 
-// what is written into an element of a list view (`t.$fields[0] = x`): a tree, the element is replaced by it
-pub fn place(self: *Macros, n: NodeId, t: Index) Index {
-    const r = self.res();
-    const sp = &r.static_pool;
-    if (r.tree.kind(n) != .array_index or r.tree.kind(r.tree.arg(n, 0)) != .member or !sp.is_tree(r.node_type[r.tree.arg(r.tree.arg(n, 0), 0)])) return t;
-    return if (sp.is_tree(t)) .ast_type else t;
+// what is written into an element of a list view (`t.$fields[0] = x`): a tree, the element is
+// replaced by it
+pub fn tree_place_type(self: *Macros, node: NodeId, value_type: Index) Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    if (resolver.tree.kind(node) != .array_index) return value_type;
+    const list = resolver.tree.arg(node, 0);
+    if (resolver.tree.kind(list) != .member) return value_type;
+    if (!static_pool.is_tree(resolver.node_types[resolver.tree.arg(list, 0)])) return value_type;
+    return if (static_pool.is_tree(value_type)) .ast_type else value_type;
 }
 
-// `ast(T)`, `ast.Kind(..)` making a node of that kind from its children (a name or literal from its text)
-pub fn call(self: *Macros, ctx: *FnCtx, node: NodeId, target: Index, args: []const NodeId) Index {
-    const r = self.res();
-    const a = r.static_pool.get(target).ast;
-    if (a.case == 0) {
-        if (target != .ast_type or args.len != 1) return r.report(.wrong_arity, node, args.len, 1);
-        if (r.tree.kind(r.tree.arg_value(args[0])) != .def_fun_declaration) _ = r.types.lower(ctx, r.tree.arg_value(args[0]));
-        return .type_type;
+// `ast(T)`, `ast.Kind(..)` making a node of that kind from its children (a name or literal from
+// its text)
+pub fn check_tree_call(
+    self: *Macros,
+    context: *FunctionContext,
+    node: NodeId,
+    target: Index,
+    arguments: []const NodeId,
+) Index {
+    const resolver = self.owning_resolver();
+    const tree_type = resolver.static_pool.get(target).ast_type;
+    if (tree_type.root_kind == 0) {
+        return self.check_ast_type_call(context, node, target, arguments);
     }
-    const childc = ParseTree.Node.nk_childc[a.case - 1];
-    const want: usize = switch (childc) {
+
+    const child_count = ParseTree.Node.nk_childc[tree_type.root_kind - 1];
+    const wanted: usize = switch (child_count) {
         .data, .one => 1,
         .two => 2,
         .none => 0,
-        .many => args.len,
+        .many => arguments.len,
     };
-    if (args.len != want) return r.report(.wrong_arity, node, args.len, want);
-    for (args) |x| _ = r.exprs.check(ctx, r.tree.arg_value(x), if (childc == .data) self.string() else .ast_type);
+    if (arguments.len != wanted) {
+        return resolver.report(.wrong_arity, node, arguments.len, wanted);
+    }
+
+    for (arguments) |argument| {
+        const child_type = if (child_count == .data) self.string_type() else Index.ast_type;
+        _ = resolver.expressions.check(context, resolver.tree.arg_value(argument), child_type);
+    }
     return target;
 }
 
-// `$fresh("tmp")`: a name no other name is, `$error(tree, "..")` stops the expansion with an error at the tree
-pub fn builtin(self: *Macros, ctx: *FnCtx, node: NodeId, name: NamePool.Index, args: []const NodeId) Index {
-    const r = self.res();
-    const want: usize = if (name == .fresh) 1 else 2;
-    if (args.len != want) return r.report(.wrong_arity, node, args.len, want);
-    if (name == .fresh) {
-        _ = r.exprs.check(ctx, r.tree.arg_value(args[0]), self.string());
-        return r.static_pool.ast_of(.none, @as(u16, @intFromEnum(ParseTree.Node.Kind.identifier)) + 1);
+// `ast(T)`: the type of trees producing T
+fn check_ast_type_call(
+    self: *Macros,
+    context: *FunctionContext,
+    node: NodeId,
+    target: Index,
+    arguments: []const NodeId,
+) Index {
+    const resolver = self.owning_resolver();
+    if (target != .ast_type or arguments.len != 1) {
+        return resolver.report(.wrong_arity, node, arguments.len, 1);
     }
-    _ = r.exprs.check(ctx, r.tree.arg_value(args[0]), .ast_type);
-    _ = r.exprs.check(ctx, r.tree.arg_value(args[1]), self.string());
+    const produced = resolver.tree.arg_value(arguments[0]);
+    if (resolver.tree.kind(produced) != .def_fun_declaration) {
+        _ = resolver.types.type_from_node(context, produced);
+    }
+    return .type_type;
+}
+
+// `$fresh("tmp")`: a name no other name is, `$error(tree, "..")` stops the expansion with an error
+// at the tree
+pub fn check_builtin(
+    self: *Macros,
+    context: *FunctionContext,
+    node: NodeId,
+    name: NamePool.Index,
+    arguments: []const NodeId,
+) Index {
+    const resolver = self.owning_resolver();
+    const wanted: usize = if (name == .fresh) 1 else 2;
+    if (arguments.len != wanted) return resolver.report(.wrong_arity, node, arguments.len, wanted);
+
+    const tree = resolver.tree;
+    if (name == .fresh) {
+        _ = resolver.expressions.check(context, tree.arg_value(arguments[0]), self.string_type());
+        return resolver.static_pool.ast_type_of(.none, root_kind_code(.identifier));
+    }
+    _ = resolver.expressions.check(context, tree.arg_value(arguments[0]), .ast_type);
+    _ = resolver.expressions.check(context, tree.arg_value(arguments[1]), self.string_type());
     return .never_type;
 }
 
 // `list += x` of a `[]ast` (or `[]*ast`): a tree or the trees of a list appended
-pub fn grows(self: *Macros, ctx: *FnCtx, lt: Index, value: NodeId) bool {
-    const r = self.res();
-    const sp = &r.static_pool;
-    const t = sp.apply_vars(&r.abstract_pool, lt);
-    if (t == .none or sp.tag(t) != .array_type or !sp.is_tree(sp.get(t).array_type.elem)) return false;
-    const vt = sp.apply_vars(&r.abstract_pool, r.exprs.infer(ctx, value, .none));
-    if (vt != .poison_type and !sp.is_tree(vt) and !(sp.tag(vt) == .array_type and sp.is_tree(sp.get(vt).array_type.elem))) _ = r.report(.type_mismatch, value, vt, t);
+pub fn checks_list_append(
+    self: *Macros,
+    context: *FunctionContext,
+    list_type: Index,
+    value: NodeId,
+) bool {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const resolved_list_type = static_pool.substitute_type_variables(list_type);
+    if (resolved_list_type == .none) return false;
+    if (static_pool.tag(resolved_list_type) != .array_type) return false;
+    if (!static_pool.is_tree(static_pool.get(resolved_list_type).array_type.element)) return false;
+
+    const value_type = static_pool.substitute_type_variables(
+        resolver.expressions.infer(context, value, .none),
+    );
+    if (value_type != .poison_type and !self.is_tree_or_tree_list(value_type)) {
+        _ = resolver.report(.type_mismatch, value, value_type, resolved_list_type);
+    }
     return true;
 }
 
+fn is_tree_or_tree_list(self: *Macros, value_type: Index) bool {
+    const static_pool = &self.owning_resolver().static_pool;
+    if (static_pool.is_tree(value_type)) return true;
+    if (static_pool.tag(value_type) != .array_type) return false;
+    return static_pool.is_tree(static_pool.get(value_type).array_type.element);
+}
+
 // the binders of a quote pattern: `@x` takes the tree where it stands, `@_` any tree
-pub fn quote_pattern(self: *Macros, n: NodeId) void {
-    const r = self.res();
-    switch (r.tree.kind(n)) {
-        .unquote, .unquote_list => {
-            const x = r.tree.arg(n, 0);
-            const name = r.name_pool.name_of(x);
-            if (name == .none or name == .underscore) return;
-            r.decls.redeclared(name, x);
-            const t = if (r.tree.kind(n) == .unquote) Index.ast_type else r.static_pool.intern(.{ .array_type = .{ .len = StaticPool.dyn_len, .elem = .ast_type } });
-            r.node_decl[x] = r.decls.declare_local(name, x, .pattern_binder, t);
-            _ = r.set(x, t);
-        },
-        else => switch (ParseTree.Node.nk_childc[@intFromEnum(r.tree.kind(n))]) {
-            .one => self.quote_pattern(r.tree.arg(n, 0)),
-            .two => for ([_]NodeId{ r.tree.arg(n, 0), r.tree.arg(n, 1) }) |c| if (c != 0) self.quote_pattern(c),
-            .many => for (r.tree.manychildren(n)) |c| self.quote_pattern(c),
-            else => {},
+pub fn quote_pattern(self: *Macros, node: NodeId) void {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    switch (tree.kind(node)) {
+        .unquote, .unquote_list => self.bind_quote_hole(node),
+        else => switch (ParseTree.Node.nk_childc[@intFromEnum(tree.kind(node))]) {
+            .one => self.quote_pattern(tree.arg(node, 0)),
+            .two => for ([_]NodeId{ tree.arg(node, 0), tree.arg(node, 1) }) |child| {
+                if (child != 0) self.quote_pattern(child);
+            },
+            .many => for (tree.manychildren(node)) |child| self.quote_pattern(child),
+            .none, .data => {},
         },
     }
 }
 
-// the root whose subtree holds `n`, 0 for none: subtrees of roots are in order and contiguous until the pass writes
-pub fn root_of(self: *Macros, n: NodeId) NodeId {
-    const r = self.res();
-    if (self.starts.len != r.roots.len) {
-        self.starts = r.alloc.alloc(NodeId, r.roots.len) catch @panic("OOM");
-        for (r.roots, self.starts) |root, *s| s.* = r.tree.subtree(root)[0];
+fn bind_quote_hole(self: *Macros, node: NodeId) void {
+    const resolver = self.owning_resolver();
+    const binder = resolver.tree.arg(node, 0);
+    const name = resolver.name_pool.name_of_node(binder);
+    if (name == .none or name == .underscore) return;
+
+    resolver.declarations.report_redeclaration(name, binder);
+    const bound_type = if (resolver.tree.kind(node) == .unquote)
+        Index.ast_type
+    else
+        resolver.static_pool.intern(.{
+            .array_type = .{ .length = StaticPool.dyn_len, .element = .ast_type },
+        });
+    resolver.node_declarations[binder] =
+        resolver.declarations.declare_local(name, binder, .pattern_binder, bound_type);
+    _ = resolver.set_node_type(binder, bound_type);
+}
+
+// the root whose subtree holds `node`, 0 for none: subtrees of roots are in order and contiguous
+// until the pass writes
+pub fn root_of(self: *Macros, node: NodeId) NodeId {
+    const resolver = self.owning_resolver();
+    if (self.starts.len != resolver.roots.len) {
+        // the old table is replaced, only the last one is freed when the resolver ends
+        resolver.allocator.free(self.starts);
+        self.starts = resolver.allocator.alloc(NodeId, resolver.roots.len) catch @panic("OOM");
+        for (resolver.roots, self.starts) |root, *start| start.* = resolver.tree.subtree(root)[0];
     }
+
     var i = self.starts.len;
-    while (i > 0) : (i -= 1) if (self.starts[i - 1] <= n) return r.roots[i - 1];
+    while (i > 0) : (i -= 1) {
+        if (self.starts[i - 1] <= node) return resolver.roots[i - 1];
+    }
     return 0;
 }
 
 // `[]u8`: what `$src` is and builtins take
-pub fn string(self: *Macros) Index {
-    return self.res().static_pool.intern(.{ .array_type = .{ .len = StaticPool.dyn_len, .elem = .u8_type } });
+pub fn string_type(self: *Macros) Index {
+    return self.owning_resolver().static_pool.intern(.{
+        .array_type = .{ .length = StaticPool.dyn_len, .element = .u8_type },
+    });
 }

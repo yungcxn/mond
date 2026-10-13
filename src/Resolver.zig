@@ -1,284 +1,352 @@
 const std = @import("std");
 const ParseTree = @import("ParseTree.zig");
-const DynBuf = @import("ds/dynbuf.zig").DynBuf;
+const DynamicBuffer = @import("containers.zig").DynamicBuffer;
 
 const NamePool = @import("resolver/NamePool.zig");
 const StaticPool = @import("resolver/StaticPool.zig");
-const AbstractPool = @import("resolver/AbstractPool.zig");
 const DeclPool = @import("resolver/DeclPool.zig");
 const BodyPool = @import("resolver/BodyPool.zig");
 const Scopes = @import("resolver/Scopes.zig");
 const Doctor = @import("resolver/Doctor.zig");
 const Interpreter = @import("resolver/Interpreter.zig");
-const Inits = @import("resolver/checker/Inits.zig");
-const Decls = @import("resolver/checker/Decls.zig");
-const Exprs = @import("resolver/checker/Exprs.zig");
+const Initialization = @import("resolver/checker/Initialization.zig");
+const Declarations = @import("resolver/checker/Declarations.zig");
+const Expressions = @import("resolver/checker/Expressions.zig");
 const Mutability = @import("resolver/checker/Mutability.zig");
 const Calls = @import("resolver/checker/Calls.zig");
 const Flow = @import("resolver/checker/Flow.zig");
 const Patterns = @import("resolver/checker/Patterns.zig");
 const Types = @import("resolver/checker/Types.zig");
 const Generics = @import("resolver/checker/Generics.zig");
-const Statics = @import("resolver/checker/Statics.zig");
+const StaticValues = @import("resolver/checker/StaticValues.zig");
 pub const Macros = @import("resolver/checker/Macros.zig");
 
 const Resolver = @This();
 
-// the resolver answers two questions for every ast node:
-//   1. which declaration does this identifier mean?   -> node_decl
-//   2. what type does this expression have?           -> node_type
-//
-// how it works:
-//   - one recursive walk per declaration body does everything at once: scoping, name lookup,
-//     type checking + inference, mutability, loop context, runit. every node is visited about
-//     once while its data is still in cache.
-//   - global declarations are resolved lazily: when a body uses a global that is not resolved
-//     yet, it is resolved right there and memoized. a state per declaration detects real cycles.
-//   - types never have to be written: most are known on the spot (the value's type), and where
-//     they are not (induced return types in recursion, `x = []`), a type var stands in and is
-//     filled by unification later (see AbstractPool.zig). one final sweep replaces
-//     every var by its result, and is skipped entirely when no var was ever created.
-//   - nothing the parse tree already has is copied (defaults, where-clauses, field names are
-//     read from the tree when needed). side tables only hold what is computed.
-//   - macros change the program before it is compiled: a pass that expands a splice (`<x>`) rebuilds the
-//     tree and starts over, the last pass compiles what no macro changes anymore (see checker/Macros.zig)
-//
-// who does what:
-//   - the resolver holds the parts below and runs the phases in order, the node tables are its own
-//   - data: `ParseTree` decodes its own node layouts, the pools hold names, declarations, static values and types,
-//     type vars and checked bodies, `Scopes` maps names to declarations, `Doctor` collects the reports
-//   - roles: the checker is one role per part of the language (`decls`, `exprs`, `mutability`, ..) reaching
-//     the rest through `res()`, the interpreter evaluates what is static whenever a role asks and is built
-//     the same way (`variables`, `flow`, ..) through `interp()`, every role owns the state of its work
-//
-// future:
-//   - multithreading: bodies are independent once signatures are ready - check them on worker
-//     threads with their own type vars and diagnostics, decl states become atomics
-//   - incremental: hash every top-level declaration's tokens, reuse results of unchanged ones
+// the resolver answers for every ast node which declaration it means and what type it has
+// one recursive walk per body does scoping, lookup, inference and checks while nodes are in cache
+// globals resolve lazily on first use and are memoized, a state per declaration detects cycles
+// unknown types are type variables filled by unification, the final sweep only runs if any exist
+// nothing the parse tree already holds is copied, the side tables only hold what is computed
+// a macro pass that expands a splice rebuilds the tree and starts over (see checker/Macros.zig)
+// checker roles reach the rest through `owning_resolver()`, interpreter roles through
+// `owning_interpreter()`
 
-pub const Watch = struct { ctx: *anyopaque, pass: *const fn (*anyopaque, *Resolver) void };
+// lets the language server see every expanding pass, the last pass keeps no trace of the splices
+pub const Watch = struct { observer: *anyopaque, pass: *const fn (*anyopaque, *Resolver) void };
 
-pub const FnCtx = struct {
-    decl: DeclPool.Index = .none,
-    ret_type: StaticPool.Index = .none,
-    self_type: StaticPool.Index = .none,
-    loop_depth: u16 = 0,
-    in_static: bool = false,
-    interpreted: bool = false,
-    abstract: bool = false,
+// what outlives a macro pass: everything else is built anew on the rebuilt tree (see `restart`)
+pub const Session = struct {
+    // where `include` reads, the file of `src_bytes`
+    io: ?std.Io = null,
+    path: []const u8 = "",
+    // called before the tree is rebuilt
+    watch: ?Watch = null,
+    // names `$fresh` and hygiene made so far, so no later pass makes one again
+    fresh_name_count: u32 = 0,
 };
 
-alloc: std.mem.Allocator,
+pub const FunctionContext = struct {
+    declaration: DeclPool.Index = .none,
+    return_type: StaticPool.Index = .none,
+    self_type: StaticPool.Index = .none,
+    loop_depth: u16 = 0,
+    is_static_context: bool = false,
+    is_interpreted: bool = false,
+    is_abstract: bool = false,
+};
+
+allocator: std.mem.Allocator,
 tree: *ParseTree,
 src_bytes: []const u8,
 // emitted by `Parser`, or by the last rebuild of the tree
 roots: []const ParseTree.NodeId,
-// the roots once a pass rebuilt the tree, kept over passes
-rebuilt: ?DynBuf(ParseTree.NodeId) = null,
-// where `include` reads, the file of `src_bytes`
-io: ?std.Io = null,
-path: []const u8 = "",
-// sees every pass that expanded something before the tree is rebuilt: the language server, the last pass has no trace of
-// what the splices spelled
-watch: ?Watch = null,
+// owns the roots once a pass rebuilt the tree, kept over passes
+rebuilt: ?DynamicBuffer(ParseTree.NodeId) = null,
+session: Session = .{},
 
-// identifier string -> NamePool.Index. names are interned when a node is resolved (visited)
+// names are interned when their node is resolved, not when it is parsed
 name_pool: NamePool,
-
-// where every static (non-runtime) value (from integer values to types) is stored.
+// every static (compile time) value, from integers to types
 static_pool: StaticPool,
-
-// placeholders for types not known yet and what they turned out to be
-abstract_pool: AbstractPool,
-
 decl_pool: DeclPool,
 
-// the two results, one slot per parse tree node, indexed by ParseTree.NodeId.
-// plain arrays of u32: 8 bytes per node in total, and the lowerer reads them with no indirection.
-node_type: []StaticPool.Index,
-node_decl: []DeclPool.Index,
-node_value: []StaticPool.Index,
-// their copies for every checked body, the interpreter and the lowerer read them
+// one slot per parse tree node: plain arrays, so the lowerer reads them without indirection
+node_types: []StaticPool.Index,
+node_declarations: []DeclPool.Index,
+node_static_values: []StaticPool.Index,
+// copies of the node tables of every checked body, the interpreter and the lowerer read them
 bodies: BodyPool,
 
-// which declaration a name means
 scopes: Scopes,
 // which locals are not written yet
-inits: Inits,
+initialization: Initialization,
 
-// the checker, a role per part of the language
-decls: Decls = .{},
-exprs: Exprs = .{},
+// the checker, one role per part of the language
+declarations: Declarations = .{},
+expressions: Expressions = .{},
 mutability: Mutability = .{},
 calls: Calls = .{},
 flow: Flow,
 patterns: Patterns = .{},
 types: Types = .{},
 generics: Generics = .{},
-statics: Statics = .{},
+static_values: StaticValues = .{},
 macros: Macros,
 
-// stores which nodes have something to report (e.g. warning or error)
-// - a single report does not stop resolving
-doc: Doctor,
-
-// "static" (compiletime) evaluation of what's static
+// a single report never stops resolving
+doctor: Doctor,
 interpreter: Interpreter,
 
 // buffers that live while one top-level declaration is checked
-temp: std.heap.ArenaAllocator,
+temporary_arena: std.heap.ArenaAllocator,
 
-pub inline fn init(alloc: std.mem.Allocator, tree: *ParseTree, src_bytes: []const u8, roots: []const ParseTree.NodeId) Resolver {
-    const r = Resolver{
-        .alloc = alloc,
+pub inline fn init(
+    alloc: std.mem.Allocator,
+    tree: *ParseTree,
+    src_bytes: []const u8,
+    roots: []const ParseTree.NodeId,
+) Resolver {
+    const node_count = tree.ast_nodes.len();
+    const resolver = Resolver{
+        .allocator = alloc,
         .tree = tree,
         .src_bytes = src_bytes,
         .roots = roots,
         .name_pool = .init(alloc, tree, src_bytes),
         .static_pool = .init(alloc),
-        .abstract_pool = .init(alloc),
         .decl_pool = .init(alloc, 4096),
-        .node_type = alloc.alloc(StaticPool.Index, tree.ast_nodes.len()) catch @panic("OOM"),
-        .node_decl = alloc.alloc(DeclPool.Index, tree.ast_nodes.len()) catch @panic("OOM"),
-        .node_value = alloc.alloc(StaticPool.Index, tree.ast_nodes.len()) catch @panic("OOM"),
+        .node_types = alloc.alloc(StaticPool.Index, node_count) catch @panic("OOM"),
+        .node_declarations = alloc.alloc(DeclPool.Index, node_count) catch @panic("OOM"),
+        .node_static_values = alloc.alloc(StaticPool.Index, node_count) catch @panic("OOM"),
         .bodies = .init(alloc),
         .scopes = .init(alloc),
-        .inits = .init(alloc),
+        .initialization = .init(alloc),
         .flow = .init(alloc),
-        .macros = .{ .pass_len = tree.ast_nodes.len() },
-        .doc = .{ .diagnostics = .init(alloc, 16) },
+        .macros = .{ .pass_len = node_count },
+        .doctor = .{ .diagnostics = .init(alloc, 16) },
         .interpreter = .init(alloc),
-        .temp = .init(alloc),
+        .temporary_arena = .init(alloc),
     };
-    @memset(r.node_type, .none);
-    @memset(r.node_decl, .none);
-    @memset(r.node_value, .none);
-    return r;
+
+    @memset(resolver.node_types, .none);
+    @memset(resolver.node_declarations, .none);
+    @memset(resolver.node_static_values, .none);
+    return resolver;
 }
 
 pub inline fn deinit(self: *Resolver) void {
     self.name_pool.deinit();
     self.static_pool.deinit();
-    self.abstract_pool.deinit();
     self.decl_pool.deinit();
     self.bodies.deinit();
-    self.scopes.deinit(self.alloc);
-    self.inits.deinit();
+    self.scopes.deinit(self.allocator);
+    self.initialization.deinit();
     self.interpreter.deinit();
-    self.doc.diagnostics.deinit();
+    self.doctor.diagnostics.deinit();
     self.flow.deinit();
-    self.generics.deinit(self.alloc);
-    self.temp.deinit();
-    if (self.rebuilt) |*b| b.deinit();
-    self.alloc.free(self.macros.starts);
+    self.generics.deinit(self.allocator);
+    self.temporary_arena.deinit();
+    if (self.rebuilt) |*rebuilt_roots| rebuilt_roots.deinit();
+    self.allocator.free(self.macros.starts);
 
-    self.alloc.free(self.node_type);
-    self.alloc.free(self.node_decl);
-    self.alloc.free(self.node_value);
+    self.allocator.free(self.node_types);
+    self.allocator.free(self.node_declarations);
+    self.allocator.free(self.node_static_values);
 }
 
 pub fn resolve(self: *Resolver) !void {
-    // the nodes made in the last pass (quotes, `refl $file`) have rows in the node tables too, for whoever walks the tree
-    defer self.fit();
+    // nodes made in the last pass (quotes, `refl $file`) need rows too, for whoever walks the tree
+    defer self.grow_node_tables();
+
     var passes: u32 = 0;
     while (true) : (passes += 1) {
-        self.decls.collect_globals();
-        // the source has no `@` outside a quote, later passes have only what landed in it too (see `Trees.land`)
-        if (self.tree.macros and passes == 0) for (self.roots) |root| self.macros.strays(root, false);
-        if (self.doc.diagnostics.len() > 0) return error.ResolveFailed;
-        // the splices at the top run first, in order, before anything they could change is resolved. a pass in which a splice
-        // failed is the last, everything is checked for its errors
-        const top = self.tree.macros and self.macros.expand_roots();
-        if (!top or self.macros.expanded == 0 or self.macros.failed) self.check_globals();
-        if (self.macros.failed or self.macros.expanded == 0 and !self.macros.edited) break;
+        self.declarations.collect_globals();
+
+        // the source has no `@` outside a quote, later passes hold only what landed in it
+        // (see `Trees.land`)
+        if (self.tree.macros and passes == 0) {
+            for (self.roots) |root| self.macros.report_stray_unquotes(root, false);
+        }
+        try self.fail_on_errors();
+
+        // top-level splices run first, in order, before anything they could change is resolved
+        const has_top_splices = self.tree.macros and self.macros.expand_roots();
+        // a pass in which a splice failed is the last, so everything is checked for its errors
+        const will_rebuild = has_top_splices and
+            self.macros.expanded != 0 and
+            !self.macros.failed;
+        if (!will_rebuild) self.check_globals();
+
+        const nothing_changed = self.macros.expanded == 0 and !self.macros.edited;
+        if (self.macros.failed or nothing_changed) break;
+
         if (passes == Macros.max_passes) {
             _ = self.report(.endless_expansion, self.macros.last, 0, 0);
             return error.ResolveFailed;
         }
         self.restart();
     }
-    if (self.doc.diagnostics.len() > 0) return error.ResolveFailed;
+    try self.fail_on_errors();
 
-    self.types.apply_inferred();
-    if (self.doc.diagnostics.len() > 0) return error.ResolveFailed;
+    self.types.finish_inference();
+    try self.fail_on_errors();
 
-    self.decls.check_main();
-    if (self.doc.diagnostics.len() > 0) return error.ResolveFailed;
+    self.declarations.check_main();
+    try self.fail_on_errors();
+}
+
+inline fn fail_on_errors(self: *const Resolver) error{ResolveFailed}!void {
+    if (self.doctor.has_errors()) return error.ResolveFailed;
 }
 
 fn check_globals(self: *Resolver) void {
-    const count = self.decl_pool.entries.len();
-    for (0..count) |i| {
-        self.decls.ensure_signature(@enumFromInt(i));
-        self.decls.check_body(@enumFromInt(i));
-        _ = self.temp.reset(.retain_capacity);
+    const declaration_count = self.decl_pool.entries.len();
+    for (0..declaration_count) |i| {
+        const declaration: DeclPool.Index = @enumFromInt(i);
+        self.declarations.ensure_signature(declaration);
+        self.declarations.check_body(declaration);
+        _ = self.temporary_arena.reset(.retain_capacity);
     }
-    var ctx = FnCtx{};
-    for (self.roots) |root| if (self.node_decl[root] == .none and self.tree.kind(root) != .splice) {
-        _ = self.exprs.infer(&ctx, root, .none);
-    };
-    self.calls.check_groups();
+
+    var context = FunctionContext{};
+    for (self.roots) |root| {
+        const declares_nothing = self.node_declarations[root] == .none;
+        if (declares_nothing and self.tree.kind(root) != .splice) {
+            _ = self.expressions.infer(&context, root, .none);
+        }
+    }
+
+    self.calls.check_dispatch_groups();
 }
 
 // the next pass: the tree rebuilt with what this one expanded, everything resolved anew on it
 fn restart(self: *Resolver) void {
-    if (self.watch) |w| {
-        self.fit();
-        w.pass(w.ctx, self);
+    if (self.session.watch) |watch| {
+        self.grow_node_tables();
+        watch.pass(watch.observer, self);
     }
-    var roots = self.rebuilt orelse DynBuf(ParseTree.NodeId).init(self.alloc, @max(16, @as(u32, @intCast(self.roots.len))));
-    self.rebuilt = null;
-    // the roots a pass ends with: those of `refl $file` when a macro read or wrote them, else the ones it began with
-    const from = if (self.macros.file != 0) self.tree.manychildren(self.macros.file) else self.roots;
-    if (from.ptr != roots.buf.ptr) {
-        roots.head = 0;
-        roots.append(from);
+
+    var roots = self.take_root_buffer();
+    // a pass ends with the roots of `refl $file` when a macro read or wrote them
+    const final_roots = if (self.macros.file != 0)
+        self.tree.manychildren(self.macros.file)
+    else
+        self.roots;
+    // the roots of the last rebuild already live in the buffer, copying would alias
+    if (final_roots.ptr != roots.buffer.ptr) {
+        roots.len = 0;
+        roots.append(final_roots);
     }
-    self.tree.rebuild(self.alloc, &roots, self.src_bytes);
-    const keep = .{ self.io, self.path, self.watch, self.macros.fresh };
-    const alloc, const tree, const src = .{ self.alloc, self.tree, self.src_bytes };
+    self.tree.rebuild(self.allocator, &roots, self.src_bytes);
+
+    // the session and the fresh name counter outlive the pass, everything else starts anew
+    const session = self.session;
+    const alloc, const tree, const src_bytes = .{ self.allocator, self.tree, self.src_bytes };
     self.deinit();
-    self.* = init(alloc, tree, src, roots.sliced());
+    self.* = init(alloc, tree, src_bytes, roots.items());
     self.rebuilt = roots;
-    self.io, self.path, self.watch, self.macros.fresh = keep;
+    self.session = session;
 }
 
-// rows in the node tables for the nodes macros added to the tree
-pub fn fit(self: *Resolver) void {
-    const n = self.tree.ast_nodes.len();
-    if (n <= self.node_type.len) return;
-    inline for (.{ "node_type", "node_decl", "node_value" }) |f| {
-        const old = @field(self, f).len;
-        @field(self, f) = self.alloc.realloc(@field(self, f), n) catch @panic("OOM");
-        @memset(@field(self, f)[old..], .none);
+// the buffer of the last rebuild is reused, the first rebuild makes one
+fn take_root_buffer(self: *Resolver) DynamicBuffer(ParseTree.NodeId) {
+    const reused = self.rebuilt;
+    self.rebuilt = null;
+    if (reused) |buffer| return buffer;
+
+    const capacity = @max(16, @as(u32, @intCast(self.roots.len)));
+    return .init(self.allocator, capacity);
+}
+
+// macros add nodes to the tree, they need rows in the node tables too
+pub fn grow_node_tables(self: *Resolver) void {
+    const node_count = self.tree.ast_nodes.len();
+    if (node_count <= self.node_types.len) return;
+
+    inline for (.{ "node_types", "node_declarations", "node_static_values" }) |table_name| {
+        const table = &@field(self, table_name);
+        const old_length = table.len;
+        table.* = self.allocator.realloc(table.*, node_count) catch @panic("OOM");
+        @memset(table.*[old_length..], .none);
     }
 }
 
-pub fn scratch(self: *Resolver, comptime T: type, n: usize) []T {
-    return self.temp.allocator().alloc(T, n) catch @panic("OOM");
+pub fn temporary_slice(self: *Resolver, comptime T: type, count: usize) []T {
+    return self.temporary_arena.allocator().alloc(T, count) catch @panic("OOM");
 }
 
-pub inline fn set(self: *Resolver, n: ParseTree.NodeId, t: StaticPool.Index) StaticPool.Index {
-    self.node_type[n] = t;
-    return t;
+pub inline fn set_node_type(
+    self: *Resolver,
+    node: ParseTree.NodeId,
+    node_type: StaticPool.Index,
+) StaticPool.Index {
+    self.node_types[node] = node_type;
+    return node_type;
 }
 
-pub fn report(self: *Resolver, code: Doctor.Disorder, n: ParseTree.NodeId, a: anytype, b: anytype) StaticPool.Index {
-    self.doc.report(code, n, a, b);
-    return self.set(n, .poison_type);
+pub fn report(
+    self: *Resolver,
+    code: Doctor.Disorder,
+    node: ParseTree.NodeId,
+    first_operand: anytype,
+    second_operand: anytype,
+) StaticPool.Index {
+    self.doctor.report(code, node, first_operand, second_operand);
+    return self.set_node_type(node, .poison_type);
 }
 
-pub fn mismatch(self: *Resolver, n: ParseTree.NodeId, t: StaticPool.Index, want: StaticPool.Index) StaticPool.Index {
-    return if (t == .poison_type) t else self.report(.type_mismatch, n, t, want);
+pub fn report_mismatch(
+    self: *Resolver,
+    node: ParseTree.NodeId,
+    found_type: StaticPool.Index,
+    expected_type: StaticPool.Index,
+) StaticPool.Index {
+    // a poisoned type was reported where it came from
+    if (found_type == .poison_type) return found_type;
+    return self.report(.type_mismatch, node, found_type, expected_type);
 }
 
-// the node tables of `root` as they are now, a body whose locals are the declarations from `first` on
-pub fn capture(self: *Resolver, decl: DeclPool.Index, root: ParseTree.NodeId, first: u32) BodyPool.Body {
-    const lo, const hi = self.tree.subtree(root);
-    return self.bodies.capture(.{ .decl = decl, .lo = lo, .len = hi - lo, .first = first, .locals = self.decl_pool.entries.len() - first }, self.node_type, self.node_decl, self.node_value);
+// the node tables of `root` as they are now, a body whose locals are the declarations from
+// `first_local` on
+pub fn capture_body(
+    self: *Resolver,
+    declaration: DeclPool.Index,
+    root: ParseTree.NodeId,
+    first_local: u32,
+) BodyPool.Body {
+    const first_node, const end_node = self.tree.subtree(root);
+    const body: BodyPool.Body = .{
+        .declaration = declaration,
+        .first_node = first_node,
+        .node_count = end_node - first_node,
+        .first_local = first_local,
+        .local_count = self.decl_pool.entries.len() - first_local,
+    };
+    return self.bodies.copy_node_tables(
+        body,
+        self.node_types,
+        self.node_declarations,
+        self.node_static_values,
+    );
 }
 
-pub fn node_info(self: *const Resolver, b: BodyPool.Body, comptime field: @EnumLiteral(), n: ParseTree.NodeId) @FieldType(BodyPool.NodeInfo, @tagName(field)) {
-    if (n -% b.lo < b.len) return @field(self.bodies.nodes.pool, @tagName(field)).buf[b.start + n - b.lo];
-    return @field(self, if (field == .ty) "node_type" else "node_" ++ @tagName(field))[n];
+// nodes outside the body (globals, its surroundings) are read from the live node tables
+pub fn node_info(
+    self: *const Resolver,
+    body: BodyPool.Body,
+    comptime field: @EnumLiteral(),
+    node: ParseTree.NodeId,
+) @FieldType(BodyPool.NodeInfo, @tagName(field)) {
+    if (node -% body.first_node < body.node_count) {
+        const row = body.first_row + node - body.first_node;
+        return self.bodies.node_rows.column(field)[row];
+    }
+
+    return @field(self, switch (field) {
+        .node_type => "node_types",
+        .declaration => "node_declarations",
+        .static_value => "node_static_values",
+        else => @compileError("no node table for " ++ @tagName(field)),
+    })[node];
 }

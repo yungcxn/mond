@@ -1,5 +1,5 @@
 const std = @import("std");
-const SoD = @import("ds/dynbuf.zig").SoD;
+const StructOfArrays = @import("containers.zig").StructOfArrays;
 
 const anywspace = [_]u8{ ' ', '\t', '\r', '\n' };
 
@@ -200,7 +200,7 @@ pub const Token = struct {
 src_bytes: []u8,
 cursor: u32 = 0,
 
-tokens: SoD(Token),
+tokens: StructOfArrays(Token),
 
 // -> `null`: outside of `src_bytes`
 inline fn at_set(self: *@This(), comptime charset: anytype) ?bool {

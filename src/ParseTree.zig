@@ -1,6 +1,6 @@
 const std = @import("std");
-const SoD = @import("ds/dynbuf.zig").SoD;
-const DynBuf = @import("ds/dynbuf.zig").DynBuf;
+const StructOfArrays = @import("containers.zig").StructOfArrays;
+const DynamicBuffer = @import("containers.zig").DynamicBuffer;
 const Lexer = @import("Lexer.zig");
 
 const ParseTree = @This();
@@ -475,14 +475,14 @@ pub const Range = struct {
 // `owner`: the function its quote was written in + 1 (0 for none), `binds`: it declares the name (`x = ..`, a parameter)
 pub const Word = struct { at: u32, len: u32, owner: u32, binds: bool };
 
-ast_nodes: SoD(Node),
-extra_childrefs: DynBuf(NodeId), // children of node i must be contiguous here
+ast_nodes: StructOfArrays(Node),
+extra_childrefs: DynamicBuffer(NodeId), // children of node i must be contiguous here
 span_store: []const Lexer.TextSpan,
 // the texts that are in no source, a data node made from one keeps its token of origin in args[0] for positions
-text_bytes: DynBuf(u8),
-words: SoD(Word),
+text_bytes: DynamicBuffer(u8),
+words: StructOfArrays(Word),
 // children of the lists being copied, nested lists stack above their parents
-scratch: DynBuf(NodeId),
+scratch: DynamicBuffer(NodeId),
 // the program has macros (a quote, splice, `refl`, `include` or `ast`): without, nothing of them is looked for
 macros: bool = false,
 
@@ -511,7 +511,7 @@ pub inline fn set_children(
     parent_idx: NodeId,
     childrefs: anytype,
 ) void {
-    const args_ptr = self.ast_nodes.field_ptr(.args, parent_idx) orelse unreachable;
+    const args_ptr = &self.ast_nodes.column(.args)[parent_idx];
     const ti = @typeInfo(@TypeOf(childrefs));
 
     if (@TypeOf(childrefs) == NodeId or @TypeOf(childrefs) == comptime_int) {
@@ -525,7 +525,7 @@ pub inline fn set_children(
             args_ptr.*[i] = @field(childrefs, field.name);
         }
     } else {
-        args_ptr.*[0] = self.extra_childrefs.head;
+        args_ptr.*[0] = self.extra_childrefs.len;
         args_ptr.*[1] = @intCast(childrefs.len);
         self.extra_childrefs.append(childrefs);
     }
@@ -559,23 +559,23 @@ pub inline fn push_data_node(self: *@This(), nodekind: Node.Kind, span_idx: u32)
 // utility for navigating the tree structure, we assume n to be valid //
 
 pub inline fn kind(self: *const @This(), n: NodeId) Node.Kind {
-    return self.ast_nodes.pool.nk.buf[n];
+    return self.ast_nodes.column(.nk)[n];
 }
 
 pub inline fn arg(self: *const @This(), n: NodeId, i: u1) NodeId {
-    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.pool.args.buf[n]);
+    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.column(.args)[n]);
     return slots[i];
 }
 
 pub inline fn arg_ptr(self: *const @This(), n: NodeId, i: u1) *const NodeId {
-    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.pool.args.buf[n]);
+    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.column(.args)[n]);
     return &slots[i];
 }
 
 // we assert for this, that `n` is an id for a node that has "many" children
 pub inline fn manychildren(self: *const @This(), n: NodeId) []const NodeId {
-    const a = self.ast_nodes.pool.args.buf[n];
-    return self.extra_childrefs.buf[a[0]..][0..a[1]];
+    const a = self.ast_nodes.column(.args)[n];
+    return self.extra_childrefs.buffer[a[0]..][0..a[1]];
 }
 
 pub inline fn laidout_children(self: *const @This(), comptime nk: Node.Kind, n: NodeId) Node.LayoutStruct(nk) {
@@ -606,7 +606,7 @@ pub inline fn span(self: *const @This(), n: NodeId) Lexer.TextSpan {
 }
 
 pub fn children(self: *const @This(), n: NodeId) []const NodeId {
-    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.pool.args.buf[n]);
+    const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.column(.args)[n]);
     return switch (Node.nk_childc[@intFromEnum(self.kind(n))]) {
         .one => slots[0..1],
         .two => slots,
@@ -653,15 +653,15 @@ pub fn text(self: *const @This(), n: NodeId, src: []const u8) []const u8 {
         const s = self.span(n);
         return src[s[0]..s[1]];
     }
-    return self.text_bytes.buf[self.words.pool.at.buf[w - 1]..][0..self.words.pool.len.buf[w - 1]];
+    return self.text_bytes.buffer[self.words.column(.at)[w - 1]..][0..self.words.column(.len)[w - 1]];
 }
 
 // a data node of a text of its own, written where the token `origin` is. `str` must not point into `text_bytes`
 pub fn push_word(self: *@This(), nk: Node.Kind, origin: u32, str: []const u8, owner: u32, binds: bool) NodeId {
-    self.words.push(.{ .at = self.text_bytes.head, .len = @intCast(str.len), .owner = owner, .binds = binds });
+    self.words.push(.{ .at = self.text_bytes.len, .len = @intCast(str.len), .owner = owner, .binds = binds });
     self.text_bytes.append(str);
     const n = self.push_data_node(nk, origin);
-    self.ast_nodes.pool.args.buf[n][1] = self.words.len();
+    self.ast_nodes.column(.args)[n][1] = self.words.len();
     return n;
 }
 
@@ -686,31 +686,31 @@ pub fn copy(self: *@This(), src: *const ParseTree, n0: NodeId, src_bytes: []cons
             if (w == 0 or self != src) return self.push_word(nk, tok, src.text(n, src_bytes), 0, false);
             self.words.push(self.words.get(w - 1).?);
             const c = self.push_data_node(nk, tok);
-            self.ast_nodes.pool.args.buf[c][1] = self.words.len();
+            self.ast_nodes.column(.args)[c][1] = self.words.len();
             return c;
         },
         .one, .two => {
             const a = self.copy(src, src.arg(n, 0), src_bytes, expand, at);
             const b = if (Node.nk_childc[@intFromEnum(nk)] == .two) self.copy(src, src.arg(n, 1), src_bytes, expand, at) else 0;
             const c = self.push_node(nk);
-            self.ast_nodes.pool.args.buf[c] = .{ a, b };
+            self.ast_nodes.column(.args)[c] = .{ a, b };
             return c;
         },
         .many => {
-            const mark = self.scratch.head;
-            const a = src.ast_nodes.pool.args.buf[n];
+            const mark = self.scratch.len;
+            const a = src.ast_nodes.column(.args)[n];
             const statements = nk == .block or nk == .partial__trait_def_body;
             for (0..a[1]) |i| {
-                const k = src.extra_childrefs.buf[a[0] + i];
+                const k = src.extra_childrefs.buffer[a[0] + i];
                 const e = if (expand and statements and src.kind(k) == .splice and src.arg(k, 1) != 0) src.arg(k, 1) - 1 else 0;
                 if (e != 0 and src.kind(e) == .block) {
-                    const ea = src.ast_nodes.pool.args.buf[e];
-                    for (0..ea[1]) |j| self.scratch.push(self.copy(src, src.extra_childrefs.buf[ea[0] + j], src_bytes, expand, at));
+                    const ea = src.ast_nodes.column(.args)[e];
+                    for (0..ea[1]) |j| self.scratch.push(self.copy(src, src.extra_childrefs.buffer[ea[0] + j], src_bytes, expand, at));
                 } else self.scratch.push(self.copy(src, k, src_bytes, expand, at));
             }
             const c = self.push_node(nk);
-            self.set_children(c, self.scratch.buf[mark..self.scratch.head]);
-            self.scratch.head = mark;
+            self.set_children(c, self.scratch.buffer[mark..self.scratch.len]);
+            self.scratch.len = mark;
             return c;
         },
     }
@@ -718,19 +718,19 @@ pub fn copy(self: *@This(), src: *const ParseTree, n0: NodeId, src_bytes: []cons
 
 // `dst` becomes what `src` is, its children shared. a written data node keeps the position of the one it replaces
 pub fn overwrite(self: *@This(), dst: NodeId, src: NodeId) void {
-    var a = self.ast_nodes.pool.args.buf[src];
+    var a = self.ast_nodes.column(.args)[src];
     if (Node.nk_childc[@intFromEnum(self.kind(src))] == .data and a[1] != 0 and Node.nk_childc[@intFromEnum(self.kind(dst))] == .data) a[0] = self.arg(dst, 0);
-    self.ast_nodes.pool.nk.buf[dst] = self.kind(src);
-    self.ast_nodes.pool.args.buf[dst] = a;
+    self.ast_nodes.column(.nk)[dst] = self.kind(src);
+    self.ast_nodes.column(.args)[dst] = a;
 }
 
 // `items` after the children of the list `n`, which move to the end of `extra_childrefs` for that
 pub fn grow_list(self: *@This(), n: NodeId, items: []const NodeId) void {
-    const a = self.ast_nodes.pool.args.buf[n];
-    const at = self.extra_childrefs.head;
-    for (0..a[1]) |i| self.extra_childrefs.push(self.extra_childrefs.buf[a[0] + i]);
+    const a = self.ast_nodes.column(.args)[n];
+    const at = self.extra_childrefs.len;
+    for (0..a[1]) |i| self.extra_childrefs.push(self.extra_childrefs.buffer[a[0] + i]);
     for (items) |x| self.extra_childrefs.push(x);
-    self.ast_nodes.pool.args.buf[n] = .{ at, a[1] + @as(u32, @intCast(items.len)) };
+    self.ast_nodes.column(.args)[n] = .{ at, a[1] + @as(u32, @intCast(items.len)) };
 }
 
 // hygiene of a tree landing in a program (spliced or written into it): each name a quote declares (`temp = ..`, parameters,
@@ -738,26 +738,26 @@ pub fn grow_list(self: *@This(), n: NodeId, items: []const NodeId) void {
 // it neither captures nor is captured, names free in the quote stay what they mean where it lands. `fresh` counts names made
 pub fn land(self: *@This(), n: NodeId, fresh: *u32) void {
     const s = self.subtree(n);
-    const mark = self.scratch.head;
-    defer self.scratch.head = mark;
+    const mark = self.scratch.len;
+    defer self.scratch.len = mark;
     for (s[0]..s[1]) |i| {
         const x = self.binder(@intCast(i)) orelse continue;
-        if (!self.words.pool.binds.buf[x]) continue;
-        for (self.scratch.buf[mark..self.scratch.head]) |y| {
+        if (!self.words.column(.binds)[x]) continue;
+        for (self.scratch.buffer[mark..self.scratch.len]) |y| {
             if (self.same_word(x, y)) break;
         } else self.scratch.push(x);
     }
-    const binders = self.scratch.buf[mark..self.scratch.head];
+    const binders = self.scratch.buffer[mark..self.scratch.len];
     var buf: [256]u8 = undefined;
     for (s[0]..s[1]) |i| {
         const x = self.binder(@intCast(i)) orelse continue;
         const k = for (binders, 0..) |y, j| {
             if (self.same_word(x, y)) break j;
         } else continue;
-        const str = std.fmt.bufPrint(&buf, "{s}`{d}", .{ self.text_bytes.buf[self.words.pool.at.buf[x]..][0..self.words.pool.len.buf[x]], fresh.* + k }) catch continue;
-        self.words.push(.{ .at = self.text_bytes.head, .len = @intCast(str.len), .owner = 0, .binds = false });
+        const str = std.fmt.bufPrint(&buf, "{s}`{d}", .{ self.text_bytes.buffer[self.words.column(.at)[x]..][0..self.words.column(.len)[x]], fresh.* + k }) catch continue;
+        self.words.push(.{ .at = self.text_bytes.len, .len = @intCast(str.len), .owner = 0, .binds = false });
         self.text_bytes.append(str);
-        self.ast_nodes.pool.args.buf[i][1] = self.words.len();
+        self.ast_nodes.column(.args)[i][1] = self.words.len();
     }
     fresh.* += @intCast(binders.len);
 }
@@ -766,30 +766,30 @@ pub fn land(self: *@This(), n: NodeId, fresh: *u32) void {
 fn binder(self: *const @This(), n: NodeId) ?u32 {
     if (self.kind(n) != .identifier or self.arg(n, 1) == 0) return null;
     const x = self.arg(n, 1) - 1;
-    return if (self.words.pool.owner.buf[x] == 0) null else x;
+    return if (self.words.column(.owner)[x] == 0) null else x;
 }
 
 fn same_word(self: *const @This(), x: u32, y: u32) bool {
-    const w = self.words.sliced();
-    return w.owner[x] == w.owner[y] and std.mem.eql(u8, self.text_bytes.buf[w.at[x]..][0..w.len[x]], self.text_bytes.buf[w.at[y]..][0..w.len[y]]);
+    const w = self.words.columns();
+    return w.owner[x] == w.owner[y] and std.mem.eql(u8, self.text_bytes.buffer[w.at[x]..][0..w.len[x]], self.text_bytes.buffer[w.at[y]..][0..w.len[y]]);
 }
 
 // the tree once more from `roots` (which are rewritten), every node in order and every expanded splice replaced:
 // subtrees are contiguous again and what nothing reaches is gone. a root expanded to a block spreads into the roots
-pub fn rebuild(self: *@This(), alloc: std.mem.Allocator, roots: *DynBuf(NodeId), src_bytes: []const u8) void {
+pub fn rebuild(self: *@This(), alloc: std.mem.Allocator, roots: *DynamicBuffer(NodeId), src_bytes: []const u8) void {
     var t = ParseTree.init(alloc, self.span_store);
     t.macros = self.macros;
     _ = t.push_node(.none);
-    const old = roots.head;
+    const old = roots.len;
     for (0..old) |i| {
-        const r = roots.buf[i];
+        const r = roots.buffer[i];
         const e = if (self.kind(r) == .splice and self.arg(r, 1) != 0) self.arg(r, 1) - 1 else 0;
         if (e != 0 and self.kind(e) == .block) {
             for (self.manychildren(e)) |c| roots.push(c);
         } else roots.push(r);
     }
-    for (roots.buf[old..roots.head], 0..) |r, i| roots.buf[i] = t.copy(self, r, src_bytes, true, null);
-    roots.head -= old;
+    for (roots.buffer[old..roots.len], 0..) |r, i| roots.buffer[i] = t.copy(self, r, src_bytes, true, null);
+    roots.len -= old;
     self.deinit();
     self.* = t;
 }

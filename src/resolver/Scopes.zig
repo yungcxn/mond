@@ -1,68 +1,85 @@
 const std = @import("std");
-const DynBuf = @import("../ds/dynbuf.zig").DynBuf;
+const DynamicBuffer = @import("../containers.zig").DynamicBuffer;
 const NamePool = @import("NamePool.zig");
 const DeclPool = @import("DeclPool.zig");
 
-// which declaration a name means: the globals by name and the locals of the scopes open around the checked node
+// which declaration a name means: globals by name, the locals of the scopes open around the node
 const Scopes = @This();
 
-// global names -> first declaration with that name
-// - overloads of the same name handled by `DeclPool.next_overloads` for single per-name entry
-// - solves: using global before declaring it in a file
+// the first declaration of every global name, its overloads follow `next_overload`
+// filled before any body is checked, so a global can be used above its declaration
 globals: std.AutoHashMapUnmanaged(NamePool.Index, DeclPool.Index) = .empty,
 
-// the local scope stack. declaring a local pushes (name, decl); a lookup scans `names`
-// backwards, so the innermost declaration wins and shadowing works for free.
-// names and decls are two parallel arrays so the scan reads only a dense run of u32 names -
-// for the few dozen locals a body has, that beats any hash map and vectorizes well.
-names: DynBuf(NamePool.Index),
-decls: DynBuf(DeclPool.Index),
-// where each open scope starts in the local stack. leaving a scope just truncates the stack
-// back to its mark - freeing all its locals at once costs one store.
-marks: DynBuf(u32),
+// the local stack: a lookup scans it backwards, so the innermost declaration shadows the others
+// names apart from declarations: the scan reads dense u32s, beating a map for a few dozen locals
+local_names: DynamicBuffer(NamePool.Index),
+local_declarations: DynamicBuffer(DeclPool.Index),
+// where each open scope starts in the local stack, closing one frees its locals in one store
+scope_starts: DynamicBuffer(u32),
 
 pub fn init(alloc: std.mem.Allocator) Scopes {
-    return .{ .names = .init(alloc, 256), .decls = .init(alloc, 256), .marks = .init(alloc, 16) };
+    return .{
+        .local_names = .init(alloc, 256),
+        .local_declarations = .init(alloc, 256),
+        .scope_starts = .init(alloc, 16),
+    };
 }
 
 pub fn deinit(self: *Scopes, alloc: std.mem.Allocator) void {
     self.globals.deinit(alloc);
-    self.names.deinit();
-    self.decls.deinit();
-    self.marks.deinit();
+    self.local_names.deinit();
+    self.local_declarations.deinit();
+    self.scope_starts.deinit();
 }
 
-pub fn lookup(self: *const Scopes, decls: *const DeclPool, name: NamePool.Index) DeclPool.Index {
-    const names = self.names.sliced();
+pub fn lookup(
+    self: *const Scopes,
+    decl_pool: *const DeclPool,
+    name: NamePool.Index,
+) DeclPool.Index {
+    const names = self.local_names.items();
     var i = names.len;
     var walled = false;
     while (i > 0) {
         i -= 1;
-        if (names[i] == name and (!walled or decls.get_kind(self.decls.buf[i]).is_type_decl() or decls.get_kind(self.decls.buf[i]) == .static_function)) return self.decls.buf[i];
-        if (names[i] == .none) break; // barrier: a declaration body never sees its user's locals
-        walled = walled or names[i] == .wall; // a local type sees only the types and stcfuns of its function
+        if (names[i] == name) {
+            const declaration = self.local_declarations.buffer[i];
+            if (!walled or is_seen_through_wall(decl_pool, declaration)) return declaration;
+        }
+        // a declaration body never sees the locals of its user
+        if (names[i] == .none) break;
+        // a local type sees only the types and stcfuns of its function
+        walled = walled or names[i] == .wall;
     }
     return self.globals.get(name) orelse .none;
 }
 
-pub fn bind(self: *Scopes, name: NamePool.Index, d: DeclPool.Index) void {
-    self.names.push(name);
-    self.decls.push(d);
+fn is_seen_through_wall(decl_pool: *const DeclPool, declaration: DeclPool.Index) bool {
+    const kind = decl_pool.get(declaration, .kind);
+    return kind.is_type_declaration() or kind == .static_function;
 }
 
-pub fn push(self: *Scopes) void {
-    self.marks.push(self.names.head);
+pub fn bind(self: *Scopes, name: NamePool.Index, declaration: DeclPool.Index) void {
+    self.local_names.push(name);
+    self.local_declarations.push(declaration);
 }
 
-pub fn pop(self: *Scopes) void {
-    self.marks.head -= 1;
-    self.names.head = self.marks.buf[self.marks.head];
-    self.decls.head = self.names.head;
+pub fn open(self: *Scopes) void {
+    self.scope_starts.push(self.local_names.len);
+}
+
+pub fn close(self: *Scopes) void {
+    self.scope_starts.len -= 1;
+    self.local_names.len = self.scope_starts.buffer[self.scope_starts.len];
+    self.local_declarations.len = self.local_names.len;
 }
 
 // the declaration of a name in the innermost scope
-pub fn in_scope(self: *const Scopes, name: NamePool.Index) DeclPool.Index {
-    const from = self.marks.buf[self.marks.head - 1];
-    const i = std.mem.indexOfScalar(NamePool.Index, self.names.buf[from..self.names.head], name) orelse return .none;
-    return if (name == .underscore) .none else self.decls.buf[from + i];
+pub fn in_innermost_scope(self: *const Scopes, name: NamePool.Index) DeclPool.Index {
+    const scope_start = self.scope_starts.buffer[self.scope_starts.len - 1];
+    const scope_names = self.local_names.buffer[scope_start..self.local_names.len];
+    const offset = std.mem.indexOfScalar(NamePool.Index, scope_names, name) orelse return .none;
+    // `_` may be bound any number of times in one scope
+    if (name == .underscore) return .none;
+    return self.local_declarations.buffer[scope_start + offset];
 }

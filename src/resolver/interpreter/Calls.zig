@@ -11,338 +11,791 @@ const NodeId = ParseTree.NodeId;
 // calls: functions and methods invoked, closures, values built by constructors and `with`
 const Calls = @This();
 
-pub fn interp(self: *Calls) *Interpreter {
+pub fn owning_interpreter(self: *Calls) *Interpreter {
     return @alignCast(@fieldParentPtr("calls", self));
 }
 
-pub fn member(self: *Calls, n: NodeId) Value {
-    const ip = self.interp();
-    const r = ip.res();
-    const sp = &r.static_pool;
-    const parent = r.tree.arg(n, 0);
-    const name = r.name_pool.name_of(r.tree.arg(n, 1));
-    if (name == .len and !ip.framed()) {
-        const t = sp.pointee(sp.apply_vars(&r.abstract_pool, r.exprs.infer(ip.ctx, parent, .none)));
-        if (sp.static_len(t)) |len| return .int(.u64_type, len);
+pub fn member(self: *Calls, node: NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const parent = resolver.tree.arg(node, 0);
+    const name = resolver.name_pool.name_of_node(resolver.tree.arg(node, 1));
+
+    // a static length is known without evaluating the parent
+    if (name == .len and !interpreter.has_body_frame()) {
+        const inferred = resolver.expressions.infer(interpreter.function_context, parent, .none);
+        const parent_type = static_pool.pointee(static_pool.substitute_type_variables(inferred));
+        if (static_pool.static_length(parent_type)) |length| return .int(.u64_type, length);
     }
-    const pv = ip.deref(ip.eval(parent));
-    if (pv.is(.poison_type)) return pv;
-    if (r.tree.macros and ip.trees.node_of(pv) != null) return ip.trees.member(n, pv);
-    if (r.tree.macros and pv.is(.ast_type)) return ip.trees.case(n);
-    if (name == .len) if (ip.count(pv)) |c| return .int(.u64_type, c);
-    if (name == .tag) {
-        const c = ip.patterns.case_of(pv);
-        if (c == .none) return ip.fail(n, .not_static, 0, 0);
-        const st = sp.deref(&r.abstract_pool, ip.checked(parent));
-        const v = sp.get(c).variant_case_type;
-        return .int(sp.tag_type_of(st), sp.get(v.tag).int.bits + if (sp.tag(st) == .variant_union_type) sp.union_offset(st, v.variant) else 0);
+
+    const parent_value = interpreter.dereference(interpreter.evaluate(parent));
+    if (parent_value.is(.poison_type)) return parent_value;
+    if (resolver.tree.macros) {
+        if (interpreter.trees.node_of(parent_value) != null) {
+            return interpreter.trees.member(node, parent_value);
+        }
+        if (parent_value.is(.ast_type)) return interpreter.trees.case(node);
     }
-    const pt = ip.vtype(pv);
-    const fields = if (pv.is_pool() and sp.tag(pt) == .variant_case_type and sp.tag(pv.index()) == .variant_value) Value.of(sp, sp.get(pv.index()).variant_value.payload) else pv;
-    if (pv.is_heap() or sp.tag(pt) == .record_type or sp.tag(pt) == .variant_case_type) switch (sp.lookup_member(pt, name)) {
-        .field => |f| return ip.elem(fields, f.index),
+    if (name == .len) {
+        if (interpreter.element_count(parent_value)) |count| return .int(.u64_type, count);
+    }
+    if (name == .tag) return self.case_tag(node, parent, parent_value);
+
+    const parent_type = interpreter.value_type(parent_value);
+    const fields = self.fields_of(parent_value, parent_type);
+    const parent_tag = static_pool.tag(parent_type);
+    const has_fields = parent_value.is_heap() or
+        parent_tag == .record_type or
+        parent_tag == .variant_case_type;
+    if (has_fields) switch (static_pool.lookup_member(parent_type, name)) {
+        .field => |field| return interpreter.element(fields, field.index),
         else => {},
     };
-    if (!pv.is_pool() or !sp.get_tag_prop(pv.index()).is_type) return ip.fail(n, .not_static, 0, 0);
-    return switch (sp.lookup_member(pv.index(), name)) {
-        .case => |c| .pooled(c),
-        .method => |m| blk: {
-            r.decls.ensure_signature(m);
-            break :blk .of(sp, r.decl_pool.get_value(m));
+
+    if (!parent_value.is_pooled() or !static_pool.properties(parent_value.index()).is_type) {
+        return interpreter.fail(node, .not_static, 0, 0);
+    }
+    const parent_type_value = parent_value.index();
+    switch (static_pool.lookup_member(parent_type_value, name)) {
+        .case => |case| return .pooled(case),
+        .method => |method| {
+            resolver.declarations.ensure_signature(method);
+            return .of(static_pool, resolver.decl_pool.get(method, .static_value));
         },
-        else => ip.fail(n, .unknown_member, name, pv.index()),
-    };
+        else => return interpreter.fail(node, .unknown_member, name, parent_type_value),
+    }
 }
 
-pub fn call(self: *Calls, n: NodeId) Value {
-    const ip = self.interp();
-    const r = ip.res();
-    const sp = &r.static_pool;
-    const callee = r.tree.arg(n, 0);
-    const args = r.tree.manychildren(r.tree.arg(n, 1));
-    if (r.tree.macros and r.tree.kind(callee) == .identifier and r.tree.text(callee, r.src_bytes)[0] == '$') switch (r.name_pool.name_of(callee)) {
-        .fresh, .@"error" => return ip.trees.builtin(n, r.name_pool.name_of(callee), args),
-        else => {},
-    };
-    const d = ip.info(.decl, n);
-    const cd = ip.info(.decl, callee);
-    if (d != .none and r.decl_pool.get_kind(d).is_fn() and (cd == .none or r.decl_pool.get_kind(cd) != .static_function)) {
-        if (r.decl_pool.self_off(r.decls.real(d)) == 0 or r.tree.kind(callee) != .member or sp.tag(ip.info(.ty, r.tree.arg(callee, 0))) == .meta_type) return self.invoke(n, d, args, .empty, .empty);
-        const c = ip.variables.cell(r.tree.arg(callee, 0)) orelse return .poison;
-        return self.invoke(n, d, args, if (ip.mem.buf[c].is_ref()) ip.mem.buf[c] else .ref(sp.ptr_of(ip.vtype(ip.mem.buf[c]), true), c), .empty);
+// a union of variants numbers its cases after the cases of the variants before them
+inline fn case_tag(self: *Calls, node: NodeId, parent: NodeId, parent_value: Value) Value {
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
+    const case = interpreter.patterns.case_of(parent_value);
+    if (case == .none) return interpreter.fail(node, .not_static, 0, 0);
+
+    const variant_type = static_pool.through_pointer(interpreter.checked_type(parent));
+    const case_type = static_pool.get(case).variant_case_type;
+    const tag_type = static_pool.tag_type_of(variant_type);
+    const case_number = static_pool.get(case_type.tag).int_value.bits;
+    const offset = if (static_pool.tag(variant_type) == .variant_union_type)
+        static_pool.union_offset(variant_type, case_type.variant)
+    else
+        0;
+    return .int(tag_type, case_number + offset);
+}
+
+// a pooled variant value holds its fields in its payload
+inline fn fields_of(self: *Calls, parent_value: Value, parent_type: Index) Value {
+    const static_pool = &self.owning_interpreter().owning_resolver().static_pool;
+    if (!parent_value.is_pooled()) return parent_value;
+    if (static_pool.tag(parent_type) != .variant_case_type) return parent_value;
+    if (static_pool.tag(parent_value.index()) != .variant_value) return parent_value;
+    return .of(static_pool, static_pool.get(parent_value.index()).variant_value.payload);
+}
+
+pub fn call(self: *Calls, node: NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const callee = resolver.tree.arg(node, 0);
+    const arguments = resolver.tree.manychildren(resolver.tree.arg(node, 1));
+    if (resolver.tree.macros) {
+        if (self.macro_builtin(node, callee, arguments)) |result| return result;
     }
-    if (d == .none and r.tree.kind(callee) == .member) switch (r.calls.builtin_of(callee, ip.info(.ty, r.tree.arg(callee, 0)), ip.info(.ty, n))) {
-        .builtin_init => return ip.zero(ip.info(.ty, n)),
-        .builtin_deinit => return .unit,
-        else => {},
-    };
-    const cv = ip.eval(callee);
-    if (cv.is_heap() and sp.tag(cv.ty) == .function_type) return self.invoke(n, sp.get(ip.mem.buf[cv.at()].index()).function, args, .empty, cv);
-    if (!cv.is_pool() or cv.is(.poison_type)) return if (cv.is(.poison_type)) cv else ip.fail(n, .not_static, 0, 0);
-    const c = cv.index();
-    if (!ip.framed() and ip.ctx.interpreted and sp.tag(c) == .generic and sp.get(c).static_fun.decl == ip.ctx.decl) return .poison;
-    return switch (sp.tag(c)) {
-        .record_type, .variant_case_type => self.construct(c, args),
-        .ast_type => ip.trees.call(n, c, args),
-        .function_value => self.invoke(n, sp.get(c).function, args, .empty, .empty),
-        .generic => blk: {
-            const g = sp.get(c).static_fun.decl;
-            const params = sp.get(r.decl_pool.get_ty(g)).function_type.params;
-            if (args.len != params.len) break :blk ip.fail(n, .wrong_arity, args.len, params.len);
-            const mark = ip.ids.head;
-            defer ip.ids.head = mark;
-            for (args, params) |a, p| {
-                const x = ip.eval(r.tree.arg_value(a));
-                if (x.is(.poison_type)) break :blk x;
-                if (ip.escapes(x)) break :blk ip.fail(r.tree.arg_value(a), .not_static, 0, 0);
-                const i = ip.pool(x);
-                const ok = if (sp.tag(p) == .meta_type) p == .type_type and sp.get_tag_prop(i).is_type or sp.type_of(i) == p else if (sp.get_tag_prop(p).is_integer or sp.get_tag_prop(p).is_float) sp.fits(i, p) else (p != .bool_type and sp.tag(p) != .record_type or sp.type_of(i) == p) and (!r.tree.macros or ip.trees.admits(.of(sp, i), p));
-                if (!ok) break :blk ip.fail(r.tree.arg_value(a), .type_mismatch, if (r.tree.macros) ip.trees.kind_of(i) else sp.type_of(i), p);
-                ip.ids.push(r.statics.retype(i, p));
-            }
-            const tuple = sp.intern(.{ .aggregate = .{ .ty = .none, .elems = ip.ids.buf[mark..ip.ids.head] } });
-            break :blk .of(sp, r.generics.instantiate(g, tuple));
+
+    const declaration = interpreter.node_info(.declaration, node);
+    const callee_declaration = interpreter.node_info(.declaration, callee);
+    if (self.is_declared_call(declaration, callee_declaration)) {
+        return self.call_declaration(node, declaration, callee, arguments);
+    }
+    if (declaration == .none and resolver.tree.kind(callee) == .member) {
+        if (self.builtin_member_call(node, callee)) |result| return result;
+    }
+
+    const callee_value = interpreter.evaluate(callee);
+    // a closure is a heap block whose first cell holds the function
+    if (callee_value.is_heap() and static_pool.tag(callee_value.value_type) == .function_type) {
+        const function_index = interpreter.memory.buffer[callee_value.cell()].index();
+        const function = static_pool.get(function_index).function_value;
+        return self.invoke(node, function, arguments, .empty, callee_value);
+    }
+    if (callee_value.is(.poison_type)) return callee_value;
+    if (!callee_value.is_pooled()) return interpreter.fail(node, .not_static, 0, 0);
+
+    const callee_index = callee_value.index();
+    if (self.is_recursive_static_call(callee_index)) return .poison;
+    switch (static_pool.tag(callee_index)) {
+        .record_type, .variant_case_type => return self.construct(callee_index, arguments),
+        .ast_type => return interpreter.trees.call(node, callee_index, arguments),
+        .function_value => {
+            const function = static_pool.get(callee_index).function_value;
+            return self.invoke(node, function, arguments, .empty, .empty);
         },
-        else => ip.fail(n, .not_static, 0, 0),
+        .static_function => return self.call_static_function(node, callee_index, arguments),
+        .int_type, .float_type, .simple_type, .meta_type, .array_type => {},
+        .pointer_type, .mutable_pointer_type, .function_type, .variant_type => {},
+        .variant_union_type, .trait_type, .template_type, .type_variable => {},
+        .int_value, .float_value, .simple_value, .string_value => {},
+        .aggregate_value, .variant_value, .tree_value => {},
+    }
+    return interpreter.fail(node, .not_static, 0, 0);
+}
+
+// `$fresh` and `$error` are builtins of macro bodies
+inline fn macro_builtin(
+    self: *Calls,
+    node: NodeId,
+    callee: NodeId,
+    arguments: []const NodeId,
+) ?Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (resolver.tree.kind(callee) != .identifier) return null;
+    if (resolver.tree.text(callee, resolver.src_bytes)[0] != '$') return null;
+
+    const name = resolver.name_pool.name_of_node(callee);
+    return switch (name) {
+        .fresh, .@"error" => interpreter.trees.builtin(node, name, arguments),
+        else => null,
     };
 }
 
-pub fn method(self: *Calls, n: NodeId, t: Index, name: NamePool.Index, selfvalue: Value) Value {
-    const ip = self.interp();
-    return switch (ip.res().static_pool.lookup_member(t, name)) {
-        .method => |m| self.invoke(n, m, &.{}, selfvalue, .empty),
-        else => ip.fail(n, .not_static, 0, 0),
+// a call the checker resolved to a function, unless the callee is a `stcfun` value
+inline fn is_declared_call(
+    self: *Calls,
+    declaration: DeclPool.Index,
+    callee_declaration: DeclPool.Index,
+) bool {
+    const decl_pool = &self.owning_interpreter().owning_resolver().decl_pool;
+    if (declaration == .none) return false;
+    if (!decl_pool.get(declaration, .kind).is_function()) return false;
+    if (callee_declaration == .none) return true;
+    return decl_pool.get(callee_declaration, .kind) != .static_function;
+}
+
+inline fn call_declaration(
+    self: *Calls,
+    node: NodeId,
+    declaration: DeclPool.Index,
+    callee: NodeId,
+    arguments: []const NodeId,
+) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const realized = resolver.declarations.realized(declaration);
+    const self_count = resolver.decl_pool.implicit_self_count(realized);
+    if (self_count == 0 or !self.is_method_call_on_value(callee)) {
+        return self.invoke(node, declaration, arguments, .empty, .empty);
+    }
+
+    // the receiver is passed by reference, so the method can change it in place
+    const cell = interpreter.variables.cell_of_place(resolver.tree.arg(callee, 0)) orelse {
+        return .poison;
+    };
+    const held = interpreter.memory.buffer[cell];
+    const receiver: Value = if (held.is_ref())
+        held
+    else
+        .ref(resolver.static_pool.pointer_to(interpreter.value_type(held), true), cell);
+    return self.invoke(node, declaration, arguments, receiver, .empty);
+}
+
+// `value.method(..)` passes the value as `self`, `Type.method(value, ..)` as an argument
+inline fn is_method_call_on_value(self: *Calls, callee: NodeId) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (resolver.tree.kind(callee) != .member) return false;
+    const receiver_type = interpreter.node_info(.node_type, resolver.tree.arg(callee, 0));
+    return resolver.static_pool.tag(receiver_type) != .meta_type;
+}
+
+inline fn builtin_member_call(self: *Calls, node: NodeId, callee: NodeId) ?Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const receiver_type = interpreter.node_info(.node_type, resolver.tree.arg(callee, 0));
+    const result_type = interpreter.node_info(.node_type, node);
+    return switch (resolver.calls.builtin_member_of(callee, receiver_type, result_type)) {
+        .builtin_init => interpreter.zero_value(result_type),
+        .builtin_deinit => .unit,
+        else => null,
     };
 }
 
-pub fn deinit_cell(self: *Calls, n: NodeId, c: u32) void {
-    const ip = self.interp();
-    const r = ip.res();
-    const t = ip.vtype(ip.mem.buf[c]);
-    switch (r.static_pool.lookup_member(t, .deinit)) {
-        .method => |m| _ = self.invoke(n, m, &.{}, .ref(r.static_pool.ptr_of(t, true), c), .empty),
+// a `stcfun` met while interpreting its own declaration has no value yet
+inline fn is_recursive_static_call(self: *Calls, callee_index: Index) bool {
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
+    if (interpreter.has_body_frame() or !interpreter.function_context.is_interpreted) return false;
+    if (static_pool.tag(callee_index) != .static_function) return false;
+    const callee = static_pool.get(callee_index).static_function.declaration;
+    return callee == interpreter.function_context.declaration;
+}
+
+// a `stcfun` is realized for the interned values of its arguments
+fn call_static_function(
+    self: *Calls,
+    node: NodeId,
+    callee_index: Index,
+    arguments: []const NodeId,
+) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const declaration = static_pool.get(callee_index).static_function.declaration;
+    const function_type = resolver.decl_pool.get(declaration, .value_type);
+    const parameter_count = static_pool.get(function_type).function_type.parameters.len;
+    if (arguments.len != parameter_count) {
+        return interpreter.fail(node, .wrong_arity, arguments.len, parameter_count);
+    }
+
+    const mark = interpreter.pool_indices.len;
+    defer interpreter.pool_indices.len = mark;
+    for (arguments, 0..) |argument, i| {
+        // read per argument: evaluating interns, which may move the pool's parameter lists
+        const parameter_type = static_pool.get(function_type).function_type.parameters[i];
+        const value_node = resolver.tree.arg_value(argument);
+        const value = interpreter.evaluate(value_node);
+        if (value.is(.poison_type)) return value;
+        if (interpreter.escapes(value)) return interpreter.fail(value_node, .not_static, 0, 0);
+
+        const argument_index = interpreter.interned(value);
+        if (!self.admits_static_argument(argument_index, parameter_type)) {
+            const found = if (resolver.tree.macros)
+                interpreter.trees.kind_of(argument_index)
+            else
+                static_pool.type_of(argument_index);
+            return interpreter.fail(value_node, .type_mismatch, found, parameter_type);
+        }
+        const retyped = resolver.static_values.retyped(argument_index, parameter_type);
+        interpreter.pool_indices.push(retyped);
+    }
+    return .of(static_pool, resolver.generics.realize(declaration, self.interned_tuple(mark)));
+}
+
+fn admits_static_argument(self: *Calls, argument: Index, parameter_type: Index) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    if (static_pool.tag(parameter_type) == .meta_type) {
+        if (parameter_type == .type_type and static_pool.properties(argument).is_type) return true;
+        return static_pool.type_of(argument) == parameter_type;
+    }
+
+    const parameter_properties = static_pool.properties(parameter_type);
+    if (parameter_properties.is_integer or parameter_properties.is_float) {
+        return static_pool.fits(argument, parameter_type);
+    }
+    const needs_exact_type = parameter_type == .bool_type or
+        static_pool.tag(parameter_type) == .record_type;
+    if (needs_exact_type and static_pool.type_of(argument) != parameter_type) return false;
+    if (!resolver.tree.macros) return true;
+    return interpreter.trees.admits(.of(static_pool, argument), parameter_type);
+}
+
+// the ids pushed since `mark` as one pooled tuple
+fn interned_tuple(self: *Calls, mark: u32) Index {
+    const interpreter = self.owning_interpreter();
+    return interpreter.owning_resolver().static_pool.intern(.{ .aggregate_value = .{
+        .value_type = .none,
+        .elements = interpreter.pool_indices.buffer[mark..interpreter.pool_indices.len],
+    } });
+}
+
+pub fn call_method(
+    self: *Calls,
+    node: NodeId,
+    receiver_type: Index,
+    name: NamePool.Index,
+    self_value: Value,
+) Value {
+    const interpreter = self.owning_interpreter();
+    return switch (interpreter.owning_resolver().static_pool.lookup_member(receiver_type, name)) {
+        .method => |method| self.invoke(node, method, &.{}, self_value, .empty),
+        else => interpreter.fail(node, .not_static, 0, 0),
+    };
+}
+
+pub fn deinit_cell(self: *Calls, node: NodeId, cell: u32) void {
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
+    const held_type = interpreter.value_type(interpreter.memory.buffer[cell]);
+    switch (static_pool.lookup_member(held_type, .deinit)) {
+        .method => |method| {
+            const receiver: Value = .ref(static_pool.pointer_to(held_type, true), cell);
+            _ = self.invoke(node, method, &.{}, receiver, .empty);
+        },
         else => {},
     }
 }
 
-fn invoke(self: *Calls, n: NodeId, d0: DeclPool.Index, all: []const NodeId, self0: Value, env: Value) Value {
-    const ip = self.interp();
-    const r = ip.res();
-    const sp = &r.static_pool;
-    if (ip.frames.head > Interpreter.max_depth) return ip.fail(ip.origin(n), .static_eval_failed, 0, 0);
-    const mark = ip.list.head;
-    defer ip.list.head = mark;
-    for (all) |a| {
-        const x = ip.eval(r.tree.arg_value(a));
-        if (x.is(.poison_type) or ip.unwind != .none) return x;
-        ip.list.push(x);
+fn invoke(
+    self: *Calls,
+    node: NodeId,
+    declaration: DeclPool.Index,
+    all_arguments: []const NodeId,
+    given_self: Value,
+    environment: Value,
+) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    if (interpreter.frames.len > Interpreter.max_depth) {
+        return interpreter.fail(interpreter.failure_origin(node), .static_eval_failed, 0, 0);
     }
-    var d = r.decls.real(d0);
-    var selfvalue0 = self0;
-    var args = all;
-    var base = mark;
-    if (selfvalue0.is(.none) and r.decl_pool.self_off(d) == 1) {
-        if (args.len == 0) return ip.fail(n, .wrong_arity, 0, 1);
-        selfvalue0 = ip.list.buf[mark];
-        args = args[1..];
-        base += 1;
+
+    const mark = interpreter.argument_values.len;
+    defer interpreter.argument_values.len = mark;
+    for (all_arguments) |argument| {
+        const value = interpreter.evaluate(resolver.tree.arg_value(argument));
+        if (value.is(.poison_type) or interpreter.unwind != .none) return value;
+        interpreter.argument_values.push(value);
     }
-    if (r.decl_pool.get_kind(d) == .trait_member and selfvalue0.is_ref()) d = switch (sp.lookup_member(ip.vtype(ip.mem.buf[selfvalue0.at()]), r.decl_pool.get_name(d))) {
-        .method => |m| m,
-        else => d,
-    };
-    r.decls.ensure_signature(d);
-    if (sp.length_generic(&r.abstract_pool, r.decl_pool.get_ty(d))) d = self.realize(n, d, args, base) orelse return .poison;
-    var c = d;
-    while (c != .none) : (c = r.decl_pool.get_next_overload(c)) {
-        if (c != d and !r.calls.same_params(c, d)) continue;
-        if (self.attempt(n, r.decls.real(c), args, base, selfvalue0, env)) |v| return v;
+
+    var target = resolver.declarations.realized(declaration);
+    var self_value = given_self;
+    var arguments = all_arguments;
+    // where the values of `arguments` start in `list`
+    var values_start = mark;
+    // without a receiver the first argument is `self`
+    if (self_value.is(.none) and resolver.decl_pool.implicit_self_count(target) == 1) {
+        if (arguments.len == 0) return interpreter.fail(node, .wrong_arity, 0, 1);
+        self_value = interpreter.argument_values.buffer[mark];
+        arguments = arguments[1..];
+        values_start += 1;
     }
-    return ip.fail(n, .no_matching_overload, args.len, 0);
+
+    // a trait member called on a reference runs the method of the referenced value's type
+    if (resolver.decl_pool.get(target, .kind) == .trait_member and self_value.is_ref()) {
+        target = self.trait_implementation(target, self_value);
+    }
+    resolver.declarations.ensure_signature(target);
+    if (static_pool.is_length_generic(resolver.decl_pool.get(target, .value_type))) {
+        target = self.realize(node, target, arguments, values_start) orelse return .poison;
+    }
+
+    // overloads with the same parameters are tried in order, the first whose `where` holds runs
+    var overload = target;
+    while (overload != .none) : (overload = resolver.decl_pool.get(overload, .next_overload)) {
+        if (overload != target and !resolver.calls.has_same_parameters(overload, target)) continue;
+        const realized = resolver.declarations.realized(overload);
+        const attempted = self.attempt(
+            node,
+            realized,
+            arguments,
+            values_start,
+            self_value,
+            environment,
+        );
+        if (attempted) |result| return result;
+    }
+    return interpreter.fail(node, .no_matching_overload, arguments.len, 0);
 }
 
-fn realize(self: *Calls, n: NodeId, d: DeclPool.Index, args: []const NodeId, base: u32) ?DeclPool.Index {
-    const ip = self.interp();
-    const r = ip.res();
-    const sp = &r.static_pool;
-    const pnodes = r.tree.params_of(r.decls.value_node(d));
-    const map = r.scratch(u32, args.len);
-    if (!r.calls.bind_args(pnodes, args, map, false)) return null;
-    const mark = ip.ids.head;
-    defer ip.ids.head = mark;
-    for (0..pnodes.len) |j| {
-        const p = sp.get(r.decl_pool.get_ty(d)).function_type.params[j + r.decl_pool.self_off(d)];
-        if (!sp.generic_slot(p)) continue;
-        for (0..args.len) |i| if (map[i] == j) {
-            const v = ip.list.buf[base + i];
-            const x = if (sp.templated(p) != .none) ip.vtype(ip.deref(v)) else if (sp.tag(p) == .meta_type) ip.pool(v) else sp.intern(.{ .int = .{ .ty = .u64_type, .bits = ip.count(ip.deref(v)) orelse return null } });
-            ip.ids.push(x);
-        };
-    }
-    const f = r.generics.instantiate(d, sp.intern(.{ .aggregate = .{ .ty = .none, .elems = ip.ids.buf[mark..ip.ids.head] } }));
-    if (sp.tag(f) != .function_value) {
-        _ = ip.fail(n, .not_static, 0, 0);
+inline fn trait_implementation(
+    self: *Calls,
+    trait_member: DeclPool.Index,
+    receiver: Value,
+) DeclPool.Index {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const receiver_type = interpreter.value_type(interpreter.memory.buffer[receiver.cell()]);
+    const name = resolver.decl_pool.get(trait_member, .name);
+    return switch (resolver.static_pool.lookup_member(receiver_type, name)) {
+        .method => |method| method,
+        else => trait_member,
+    };
+}
+
+// a function generic over lengths is realized for the types, values and lengths of its arguments
+fn realize(
+    self: *Calls,
+    node: NodeId,
+    declaration: DeclPool.Index,
+    arguments: []const NodeId,
+    values_start: u32,
+) ?DeclPool.Index {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const parameter_nodes = resolver.tree.params_of(resolver.declarations.value_node(declaration));
+    const parameter_of_argument = resolver.temporary_slice(u32, arguments.len);
+    if (!resolver.calls.bind_arguments(parameter_nodes, arguments, parameter_of_argument, false)) {
         return null;
     }
-    return sp.get(f).function;
+
+    const mark = interpreter.pool_indices.len;
+    defer interpreter.pool_indices.len = mark;
+    for (0..parameter_nodes.len) |j| {
+        const function_type = resolver.decl_pool.get(declaration, .value_type);
+        const parameters = static_pool.get(function_type).function_type.parameters;
+        const self_count = resolver.decl_pool.implicit_self_count(declaration);
+        const parameter_type = parameters[j + self_count];
+        if (!static_pool.is_generic_parameter(parameter_type)) continue;
+
+        for (0..arguments.len) |i| {
+            if (parameter_of_argument[i] != j) continue;
+            const argument_value = interpreter.argument_values.buffer[values_start + i];
+            const generic = self.generic_argument_of(parameter_type, argument_value) orelse {
+                return null;
+            };
+            interpreter.pool_indices.push(generic);
+        }
+    }
+
+    const realized = resolver.generics.realize(declaration, self.interned_tuple(mark));
+    if (static_pool.tag(realized) != .function_value) {
+        _ = interpreter.fail(node, .not_static, 0, 0);
+        return null;
+    }
+    return static_pool.get(realized).function_value;
 }
 
-fn attempt(self: *Calls, n: NodeId, d: DeclPool.Index, args: []const NodeId, base: u32, valueself: Value, env: Value) ?Value {
-    const ip = self.interp();
-    const r = ip.res();
-    r.decls.ensure_signature(d);
-    r.decls.check_body(d);
-    const body = r.bodies.get(d) orelse return ip.fail(n, .not_static, 0, 0);
-    const v = r.decls.value_node(d);
-    if (r.decl_pool.get_state(d) == .failed) return Value.poison;
-    const pnodes = r.tree.params_of(v);
-    const map = r.scratch(u32, args.len);
-    if (!r.calls.bind_args(pnodes, args, map, false)) return ip.fail(n, .wrong_arity, args.len, pnodes.len);
-    const caller = ip.frames.buf[ip.frames.head - 1].body.decl;
-    const unchecked = caller != .none and r.decl_pool.get_kind(caller) == .static_function;
-    ip.enter(body);
-    ip.frames.buf[ip.frames.head - 1].env = env;
-    var keep = false;
-    defer ip.leave(keep);
-    if (r.decl_pool.self_off(d) == 1) ip.variables.bind(@enumFromInt(body.first), valueself);
-    const ft = r.types.sig(d);
-    for (0..args.len) |i| {
-        const pt = ft.params[map[i] + r.decl_pool.self_off(d)];
-        if (r.tree.macros and !ip.trees.admits(ip.list.buf[base + i], pt)) return ip.fail(r.tree.arg_value(args[i]), .type_mismatch, ip.trees.kind_of(ip.pool(ip.list.buf[base + i])), pt);
-        _ = ip.variables.store(pnodes[map[i]], ip.info(.decl, pnodes[map[i]]), ip.list.buf[base + i]);
+// a template takes the argument's type, a meta type the argument, a length its element count
+inline fn generic_argument_of(self: *Calls, parameter_type: Index, argument_value: Value) ?Index {
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
+    if (static_pool.template_of(parameter_type) != .none) {
+        return interpreter.value_type(interpreter.dereference(argument_value));
     }
-    for (pnodes, 0..) |pn, j| if (std.mem.indexOfScalar(u32, map, @intCast(j)) == null) {
-        _ = ip.variables.store(pn, ip.info(.decl, pn), ip.eval(ParseTree.Param.from_node(r.tree, pn).default));
+    if (static_pool.tag(parameter_type) == .meta_type) return interpreter.interned(argument_value);
+
+    const length = interpreter.element_count(interpreter.dereference(argument_value)) orelse {
+        return null;
     };
-    for (pnodes) |pn| {
-        const p = ParseTree.Param.from_node(r.tree, pn);
-        if (p.where == 0) continue;
-        const w = ip.eval(p.where);
-        if (w.ty != .bool_type) return Value.poison;
-        if (w.bits != 0) continue;
-        if (p.stc) return if (unchecked) ip.fail(n, .stcwhere_violated, d, .none) else Value.poison;
-        if (p.@"else" == 0) return null;
-        const e = ip.eval(p.@"else");
-        if (ip.unwind == .ret) return ip.result(e);
-        if (r.tree.kind(p.@"else") != .assign) _ = ip.variables.store(pn, ip.info(.decl, pn), e);
+    return static_pool.intern(.{ .int_value = .{ .value_type = .u64_type, .bits = length } });
+}
+
+// one overload run on the argument values, null when a `where` without `else` rejects them
+fn attempt(
+    self: *Calls,
+    node: NodeId,
+    declaration: DeclPool.Index,
+    arguments: []const NodeId,
+    values_start: u32,
+    self_value: Value,
+    environment: Value,
+) ?Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    resolver.declarations.ensure_signature(declaration);
+    resolver.declarations.check_body(declaration);
+    const body = resolver.bodies.body_of(declaration) orelse {
+        return interpreter.fail(node, .not_static, 0, 0);
+    };
+    const function_node = resolver.declarations.value_node(declaration);
+    if (resolver.decl_pool.get(declaration, .state) == .failed) return Value.poison;
+
+    const parameter_nodes = resolver.tree.params_of(function_node);
+    const parameter_of_argument = resolver.temporary_slice(u32, arguments.len);
+    if (!resolver.calls.bind_arguments(parameter_nodes, arguments, parameter_of_argument, false)) {
+        return interpreter.fail(node, .wrong_arity, arguments.len, parameter_nodes.len);
     }
-    const out = ip.coerce(ip.result(ip.eval(r.tree.arg(v, 1))), ft.ret);
-    keep = out.is_boxed();
-    return out;
-}
+    // calls inside a `stcfun` are not checked, so a violated `stcwhere` is diagnosed here
+    const caller = interpreter.frames.buffer[interpreter.frames.len - 1].body.declaration;
+    const caller_unchecked = caller != .none and
+        resolver.decl_pool.get(caller, .kind) == .static_function;
 
-pub fn construct(self: *Calls, target: Index, args: []const NodeId) Value {
-    const ip = self.interp();
-    const r = ip.res();
-    const sp = &r.static_pool;
-    const is_case = sp.tag(target) == .variant_case_type;
-    const rec = if (is_case) sp.get(target).variant_case_type.payload else target;
-    if (rec == .none) return .pooled(target);
-    const fields = r.types.fields_of(rec);
-    const len: u32 = @intCast(fields.len);
-    const at = ip.alloc(len);
-    if (self.fill_args(rec, at, args)) |x| return x;
-    if (!self.complete(rec, at)) return .poison;
-    const agg: Value = .block(rec, at, len);
-    if (!is_case) return agg;
-    if (ip.escapes(agg)) return .block(target, at, len);
-    return .pooled(sp.intern(.{ .variant_value = .{ .case = target, .payload = ip.pool(agg) } }));
-}
+    interpreter.enter_frame(body);
+    interpreter.frames.buffer[interpreter.frames.len - 1].env = environment;
+    var keep = false;
+    defer interpreter.leave_frame(keep);
 
-pub fn with(self: *Calls, n: NodeId) Value {
-    const ip = self.interp();
-    const r = ip.res();
-    const sp = &r.static_pool;
-    const base = ip.deref(ip.eval(r.tree.arg(n, 0)));
-    if (base.is(.poison_type)) return base;
-    if (r.tree.macros and ip.trees.node_of(base) != null) return ip.trees.with(n, base);
-    const t = ip.vtype(base);
-    const len = ip.span(base) orelse return ip.fail(n, .not_static, 0, 0);
-    if (sp.tag(t) != .record_type) return ip.fail(n, .not_static, 0, 0);
-    const at = ip.alloc(len);
-    for (0..len) |i| {
-        const x = ip.own(ip.elem(base, @intCast(i)));
-        ip.mem.buf[at + i] = x;
+    if (resolver.decl_pool.implicit_self_count(declaration) == 1) {
+        interpreter.variables.bind(@enumFromInt(body.first_local), self_value);
     }
-    if (self.fill_args(t, at, r.tree.manychildren(r.tree.arg(n, 1)))) |x| return x;
-    return if (self.complete(t, at)) .block(t, at, len) else .poison;
+    const signature = resolver.types.signature(declaration);
+    const failure = self.bind_parameters(
+        declaration,
+        arguments,
+        values_start,
+        parameter_nodes,
+        parameter_of_argument,
+    );
+    if (failure) |failed| return failed;
+
+    for (parameter_nodes) |parameter_node| {
+        const parameter = ParseTree.Param.from_node(resolver.tree, parameter_node);
+        if (parameter.where == 0) continue;
+        const condition = interpreter.evaluate(parameter.where);
+        if (condition.value_type != .bool_type) return Value.poison;
+        if (condition.bits != 0) continue;
+
+        if (parameter.stc) {
+            if (caller_unchecked) {
+                return interpreter.fail(node, .stcwhere_violated, declaration, .none);
+            }
+            return Value.poison;
+        }
+        if (parameter.@"else" == 0) return null;
+        const replacement = interpreter.evaluate(parameter.@"else");
+        if (interpreter.unwind == .ret) return interpreter.finish_unwind(replacement);
+        // an assignment in `else` writes the parameter itself
+        if (resolver.tree.kind(parameter.@"else") != .assign) {
+            const parameter_declaration = interpreter.node_info(.declaration, parameter_node);
+            _ = interpreter.variables.store(parameter_node, parameter_declaration, replacement);
+        }
+    }
+
+    const function_body = resolver.tree.arg(function_node, 1);
+    const result = interpreter.finish_unwind(interpreter.evaluate(function_body));
+    const coerced = interpreter.coerce(result, signature.return_type);
+    // a boxed result may live in the frame's cells, so they stay
+    keep = coerced.is_boxed();
+    return coerced;
 }
 
-// the arguments of a constructor or `with` written into the fields of `rec` at `at`, a failure is returned
-fn fill_args(self: *Calls, rec: Index, at: u32, args: []const NodeId) ?Value {
-    const ip = self.interp();
-    const r = ip.res();
-    for (args, 0..) |a, i| {
-        const fi = r.calls.field_of(rec, a, i) orelse return ip.fail(a, .unknown_named_argument, r.name_pool.name_of(r.tree.arg_name(a)), rec);
-        const x = ip.eval(r.tree.arg_value(a));
-        if (x.is(.poison_type)) return x;
-        ip.fill(at + fi, x, r.static_pool.field_type(rec, fi));
+// the arguments stored into their parameters, the others take their default, returns a failure
+inline fn bind_parameters(
+    self: *Calls,
+    declaration: DeclPool.Index,
+    arguments: []const NodeId,
+    values_start: u32,
+    parameter_nodes: []const NodeId,
+    parameter_of_argument: []const u32,
+) ?Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const self_count = resolver.decl_pool.implicit_self_count(declaration);
+    for (0..arguments.len) |i| {
+        const parameter_position = parameter_of_argument[i];
+        const parameter_node = parameter_nodes[parameter_position];
+        // read per argument: storing may intern, which may move the pool's parameter lists
+        const signature = resolver.types.signature(declaration);
+        const parameter_type = signature.parameters[parameter_position + self_count];
+        const argument_value = interpreter.argument_values.buffer[values_start + i];
+        if (resolver.tree.macros and !interpreter.trees.admits(argument_value, parameter_type)) {
+            const value_node = resolver.tree.arg_value(arguments[i]);
+            const found = interpreter.trees.kind_of(interpreter.interned(argument_value));
+            return interpreter.fail(value_node, .type_mismatch, found, parameter_type);
+        }
+        const parameter_declaration = interpreter.node_info(.declaration, parameter_node);
+        _ = interpreter.variables.store(parameter_node, parameter_declaration, argument_value);
+    }
+
+    for (parameter_nodes, 0..) |parameter_node, j| {
+        const is_bound = std.mem.indexOfScalar(u32, parameter_of_argument, @intCast(j)) != null;
+        if (is_bound) continue;
+        const parameter_declaration = interpreter.node_info(.declaration, parameter_node);
+        const default_node = ParseTree.Param.from_node(resolver.tree, parameter_node).default;
+        const default_value = interpreter.evaluate(default_node);
+        _ = interpreter.variables.store(parameter_node, parameter_declaration, default_value);
     }
     return null;
 }
 
-// the defaults and `where .. else` of the fields of a value being built, in the frame of the type where the fields are the locals
-fn complete(self: *Calls, rec: Index, at: u32) bool {
-    const ip = self.interp();
-    const r = ip.res();
-    const fields = r.types.fields_of(rec);
-    var framed = false;
-    for (fields, 0..) |f, i| framed = framed or ParseTree.Param.from_node(r.tree, f).@"else" != 0 or ParseTree.Param.from_node(r.tree, f).default != 0 and ip.mem.buf[at + i].is(.none);
-    if (!framed) {
-        for (0..fields.len) |i| if (ip.mem.buf[at + i].is(.none)) ip.fill(at + i, ip.zero(r.static_pool.field_type(rec, i)), r.static_pool.field_type(rec, i));
+pub fn construct(self: *Calls, target: Index, arguments: []const NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const is_case = static_pool.tag(target) == .variant_case_type;
+    const record = if (is_case) static_pool.get(target).variant_case_type.payload else target;
+    // a case without payload is its own value
+    if (record == .none) return .pooled(target);
+
+    const field_count: u32 = @intCast(resolver.types.field_nodes_of(record).len);
+    const first_cell = interpreter.allocate_cells(field_count);
+    if (self.fill_arguments(record, first_cell, arguments)) |failure| return failure;
+    if (!self.complete(record, first_cell)) return .poison;
+
+    const payload: Value = .block(record, first_cell, field_count);
+    if (!is_case) return payload;
+    // a payload that cannot be interned keeps the case value a heap block
+    if (interpreter.escapes(payload)) return .block(target, first_cell, field_count);
+    const payload_index = interpreter.interned(payload);
+    return .pooled(static_pool.intern(.{ .variant_value = .{
+        .case = target,
+        .payload = payload_index,
+    } }));
+}
+
+pub fn with(self: *Calls, node: NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const original = interpreter.dereference(interpreter.evaluate(resolver.tree.arg(node, 0)));
+    if (original.is(.poison_type)) return original;
+    if (resolver.tree.macros and interpreter.trees.node_of(original) != null) {
+        return interpreter.trees.with(node, original);
+    }
+
+    const record = interpreter.value_type(original);
+    const field_count = interpreter.aggregate_length(original) orelse {
+        return interpreter.fail(node, .not_static, 0, 0);
+    };
+    if (resolver.static_pool.tag(record) != .record_type) {
+        return interpreter.fail(node, .not_static, 0, 0);
+    }
+
+    const first_cell = interpreter.allocate_cells(field_count);
+    for (0..field_count) |i| {
+        const field_copy = interpreter.owned_copy(interpreter.element(original, @intCast(i)));
+        interpreter.memory.buffer[first_cell + i] = field_copy;
+    }
+    const arguments = resolver.tree.manychildren(resolver.tree.arg(node, 1));
+    if (self.fill_arguments(record, first_cell, arguments)) |failure| return failure;
+    if (!self.complete(record, first_cell)) return .poison;
+    return .block(record, first_cell, field_count);
+}
+
+// constructor or `with` arguments written into the fields at `first_cell`, returns a failure
+fn fill_arguments(self: *Calls, record: Index, first_cell: u32, arguments: []const NodeId) ?Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    for (arguments, 0..) |argument, i| {
+        const field_index = resolver.calls.field_index_of(record, argument, i) orelse {
+            const argument_name = resolver.name_pool.name_of_node(resolver.tree.arg_name(argument));
+            return interpreter.fail(argument, .unknown_named_argument, argument_name, record);
+        };
+        const value = interpreter.evaluate(resolver.tree.arg_value(argument));
+        if (value.is(.poison_type)) return value;
+        const field_type = resolver.static_pool.field_type(record, field_index);
+        interpreter.store_converted(first_cell + field_index, value, field_type);
+    }
+    return null;
+}
+
+// defaults and `where .. else` of fields run in the frame of the record, whose locals are fields
+fn complete(self: *Calls, record: Index, first_cell: u32) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const field_nodes = resolver.types.field_nodes_of(record);
+    if (!self.needs_record_frame(field_nodes, first_cell)) {
+        for (0..field_nodes.len) |i| {
+            if (!interpreter.memory.buffer[first_cell + i].is(.none)) continue;
+            const zero = interpreter.zero_value(resolver.static_pool.field_type(record, i));
+            const field_type = resolver.static_pool.field_type(record, i);
+            interpreter.store_converted(first_cell + i, zero, field_type);
+        }
         return true;
     }
-    const decl = r.static_pool.get(rec).custom_type.decl;
-    const body = r.bodies.get(decl) orelse {
-        _ = ip.fail(r.decl_pool.get_node(decl), .not_static, 0, 0);
+
+    const record_declaration = resolver.static_pool.get(record).record_type.declaration;
+    const body = resolver.bodies.body_of(record_declaration) orelse {
+        _ = interpreter.fail(resolver.decl_pool.get(record_declaration, .node), .not_static, 0, 0);
         return false;
     };
-    ip.enter(body);
-    defer ip.leave(false);
-    const base = ip.top().base;
-    for (0..fields.len) |i| ip.mem.buf[base + i] = ip.mem.buf[at + i];
-    for (fields, 0..) |f, i| if (ip.mem.buf[base + i].is(.none)) {
-        const d = ParseTree.Param.from_node(r.tree, f).default;
-        const x = if (d != 0) ip.eval(d) else ip.zero(r.static_pool.field_type(rec, i));
-        if (x.is(.poison_type)) return false;
-        ip.fill(base + i, x, r.static_pool.field_type(rec, i));
-    };
-    for (fields, 0..) |f, i| {
-        const p = ParseTree.Param.from_node(r.tree, f);
-        if (p.where == 0 or p.@"else" == 0) continue;
-        const w = ip.eval(p.where);
-        if (w.ty != .bool_type) return false;
-        if (w.bits != 0) continue;
-        const e = ip.eval(p.@"else");
-        if (e.is(.poison_type)) return false;
-        if (r.tree.kind(p.@"else") != .assign) ip.fill(base + i, e, r.static_pool.field_type(rec, i));
+    interpreter.enter_frame(body);
+    defer interpreter.leave_frame(false);
+
+    const frame_base = interpreter.current_frame().base;
+    for (0..field_nodes.len) |i| {
+        interpreter.memory.buffer[frame_base + i] = interpreter.memory.buffer[first_cell + i];
     }
-    for (0..fields.len) |i| ip.fill(at + i, ip.mem.buf[base + i], r.static_pool.field_type(rec, i));
+    if (!self.initialize_fields(record, field_nodes, frame_base)) return false;
+    if (!self.apply_field_conditions(record, field_nodes, frame_base)) return false;
+    for (0..field_nodes.len) |i| {
+        const field_type = resolver.static_pool.field_type(record, i);
+        const field_value = interpreter.memory.buffer[frame_base + i];
+        interpreter.store_converted(first_cell + i, field_value, field_type);
+    }
     return true;
 }
 
-// a function as a value: with captures a block of the function and its environment, like the lowerer's closure
-pub fn closure(self: *Calls, d: DeclPool.Index) Value {
-    const ip = self.interp();
-    const r = ip.res();
-    const f: Value = .of(&r.static_pool, r.decl_pool.get_value(d));
-    const caps = ip.res().bodies.captures(&ip.res().decl_pool, d);
-    if (caps.len == 0) return f;
-    const at = ip.alloc(@intCast(caps.len + 1));
-    ip.mem.buf[at] = f;
-    for (caps, 1..) |c, i| {
-        const s = ip.variables.slot(c);
-        const x: Value = if (s != null and ip.res().decls.by_ref(c)) .ref(r.static_pool.ptr_of(r.decl_pool.get_ty(c), true), s.?) else ip.own(ip.variables.peek(c));
-        ip.mem.buf[at + i] = x;
+// the record's frame is needed when a default or `else` of a field has to run
+fn needs_record_frame(self: *Calls, field_nodes: []const NodeId, first_cell: u32) bool {
+    const interpreter = self.owning_interpreter();
+    const tree = interpreter.owning_resolver().tree;
+    for (field_nodes, 0..) |field_node, i| {
+        const field = ParseTree.Param.from_node(tree, field_node);
+        if (field.@"else" != 0) return true;
+        if (field.default != 0 and interpreter.memory.buffer[first_cell + i].is(.none)) return true;
     }
-    return .block(r.decl_pool.get_ty(d), at, @intCast(caps.len + 1));
+    return false;
+}
+
+inline fn initialize_fields(
+    self: *Calls,
+    record: Index,
+    field_nodes: []const NodeId,
+    frame_base: u32,
+) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    for (field_nodes, 0..) |field_node, i| {
+        if (!interpreter.memory.buffer[frame_base + i].is(.none)) continue;
+        const default_node = ParseTree.Param.from_node(resolver.tree, field_node).default;
+        const value = if (default_node != 0)
+            interpreter.evaluate(default_node)
+        else
+            interpreter.zero_value(resolver.static_pool.field_type(record, i));
+        if (value.is(.poison_type)) return false;
+        const field_type = resolver.static_pool.field_type(record, i);
+        interpreter.store_converted(frame_base + i, value, field_type);
+    }
+    return true;
+}
+
+inline fn apply_field_conditions(
+    self: *Calls,
+    record: Index,
+    field_nodes: []const NodeId,
+    frame_base: u32,
+) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    for (field_nodes, 0..) |field_node, i| {
+        const field = ParseTree.Param.from_node(resolver.tree, field_node);
+        if (field.where == 0 or field.@"else" == 0) continue;
+        const condition = interpreter.evaluate(field.where);
+        if (condition.value_type != .bool_type) return false;
+        if (condition.bits != 0) continue;
+
+        const replacement = interpreter.evaluate(field.@"else");
+        if (replacement.is(.poison_type)) return false;
+        // an assignment in `else` writes the field itself
+        if (resolver.tree.kind(field.@"else") != .assign) {
+            const field_type = resolver.static_pool.field_type(record, i);
+            interpreter.store_converted(frame_base + i, replacement, field_type);
+        }
+    }
+    return true;
+}
+
+// with captures a function value is a block: the function, then its environment, as in the lowerer
+pub fn closure(self: *Calls, declaration: DeclPool.Index) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const function_index = resolver.decl_pool.get(declaration, .static_value);
+    const function: Value = .of(&resolver.static_pool, function_index);
+    const captures = resolver.bodies.captures_of(&resolver.decl_pool, declaration);
+    if (captures.len == 0) return function;
+
+    const first_cell = interpreter.allocate_cells(@intCast(captures.len + 1));
+    interpreter.memory.buffer[first_cell] = function;
+    for (captures, 1..) |capture, i| {
+        const captured = self.captured_value(capture);
+        interpreter.memory.buffer[first_cell + i] = captured;
+    }
+    const function_type = resolver.decl_pool.get(declaration, .value_type);
+    return .block(function_type, first_cell, @intCast(captures.len + 1));
+}
+
+inline fn captured_value(self: *Calls, capture: DeclPool.Index) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const cell = interpreter.variables.cell_of_declaration(capture);
+    if (cell != null and resolver.declarations.is_captured_by_reference(capture)) {
+        const capture_type = resolver.decl_pool.get(capture, .value_type);
+        return .ref(resolver.static_pool.pointer_to(capture_type, true), cell.?);
+    }
+    return interpreter.owned_copy(interpreter.variables.peek(capture));
 }
 
 // the cell of a capture of the closure a frame runs in
-pub fn captured(self: *Calls, f: Interpreter.Frame, d: DeclPool.Index) ?u32 {
-    const ip = self.interp();
-    if (!f.env.is_heap() or f.body.decl == .none) return null;
-    const k = std.mem.indexOfScalar(DeclPool.Index, ip.res().bodies.captures(&ip.res().decl_pool, f.body.decl), d) orelse return null;
-    const c = f.env.at() + 1 + @as(u32, @intCast(k));
-    return if (ip.mem.buf[c].is_ref() and ip.res().decls.by_ref(d)) ip.mem.buf[c].at() else c;
+pub fn captured_cell(self: *Calls, frame: Interpreter.Frame, declaration: DeclPool.Index) ?u32 {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (!frame.env.is_heap() or frame.body.declaration == .none) return null;
+
+    const captures = resolver.bodies.captures_of(&resolver.decl_pool, frame.body.declaration);
+    const capture_position = std.mem.indexOfScalar(DeclPool.Index, captures, declaration) orelse {
+        return null;
+    };
+    // the environment follows the function in the closure's block
+    const cell = frame.env.cell() + 1 + @as(u32, @intCast(capture_position));
+    const held = interpreter.memory.buffer[cell];
+    if (held.is_ref() and resolver.declarations.is_captured_by_reference(declaration)) {
+        return held.cell();
+    }
+    return cell;
 }

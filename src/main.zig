@@ -1,45 +1,51 @@
 const std = @import("std");
-const HighLowerer = @import("HighLowerer.zig");
 
-// the compiler is also the module `mond` for the tools in lsp/
+// the compiler is also the module `mond` for the tools in lsp/ and stats/
 pub const Lexer = @import("Lexer.zig");
 pub const Parser = @import("Parser.zig");
 pub const ParseTree = @import("ParseTree.zig");
 pub const Resolver = @import("Resolver.zig");
+pub const HighLowerer = @import("HighLowerer.zig");
 pub const DeclPool = @import("resolver/DeclPool.zig");
 pub const Doctor = @import("resolver/Doctor.zig");
-pub const DynBuf = @import("ds/dynbuf.zig").DynBuf;
+pub const DynamicBuffer = @import("containers.zig").DynamicBuffer;
 pub const dbg = @import("debug.zig");
 
 inline fn alloc_file_bytes(alloc: std.mem.Allocator, io: std.Io, file: std.Io.File) []u8 {
     const max_file_size = 50 * 1024 * 1024;
 
-    var reader_buf: [4096]u8 = undefined;
-    var freader = file.reader(io, &reader_buf);
-    const reader: *std.Io.Reader = &freader.interface;
+    var reader_buffer: [4096]u8 = undefined;
+    var file_reader = file.reader(io, &reader_buffer);
+    const reader: *std.Io.Reader = &file_reader.interface;
     const result = reader.allocRemaining(
         alloc,
         std.Io.Limit.limited(max_file_size),
-    ) catch |e| @panic(@errorName(e));
+    ) catch |err| @panic(@errorName(err));
     return result;
 }
 
 const debug = true;
-pub const target: struct { pointer_bits: u8 } = .{ .pointer_bits = 64 }; // arch
+pub const target: struct { pointer_bits: u8 } = .{ .pointer_bits = 64 };
+// a panic after parsing prints the tree first, the context a compiler bug needs
 var stage: union(enum) { none, parsed: struct { std.Io, *Parser } } = .none;
 
 pub const panic = std.debug.FullPanic(struct {
-    fn f(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    fn on_panic(message: []const u8, first_trace_address: ?usize) noreturn {
         switch (stage) {
             .none => {},
-            .parsed => |p| dbg.Parser.print_tree(p[0], &p[1].tree, p[1].src_bytes, p[1].global_store.sliced()) catch {},
+            .parsed => |parsed| {
+                const io, const parser = parsed;
+                const roots = parser.global_store.items();
+                dbg.Parser.print_tree(io, &parser.tree, parser.src_bytes, roots) catch {};
+            },
         }
-        std.debug.defaultPanic(msg, first_trace_addr);
+        std.debug.defaultPanic(message, first_trace_address);
     }
-}.f);
+}.on_panic);
 
-// command line flags: the field `dbg_less` is `--dbg-less` or `-d`, a field without default is required
-// bool: set when present, string: takes the next arg, slice: takes all following args
+// command line flags: the field `dbg_less` is `--dbg-less` or `-d`
+// bool: set when present, string: takes the next argument, slice: takes all following arguments
+// a field without a default is required
 const Args = struct {
     build: [:0]const u8,
     dbg_less: bool = false,
@@ -47,24 +53,29 @@ const Args = struct {
 
     const fields = @typeInfo(Args).@"struct".fields;
     const usage = blk: {
-        var u: []const u8 = "usage: mond";
-        for (fields, 0..) |f, i| {
-            for (fields[0..i]) |g| if (g.name[0] == f.name[0]) @compileError(short_arg(f.name) ++ " is taken by " ++ arg(g.name));
-            const flag = arg(f.name) ++ "/" ++ short_arg(f.name) ++ switch (f.type) {
+        var text: []const u8 = "usage: mond";
+        for (fields, 0..) |field, i| {
+            for (fields[0..i]) |other| {
+                if (other.name[0] != field.name[0]) continue;
+                @compileError(short_arg(field.name) ++ " is taken by " ++ arg(other.name));
+            }
+
+            const flag = arg(field.name) ++ "/" ++ short_arg(field.name) ++ switch (field.type) {
                 bool => "",
                 [:0]const u8, ?[:0]const u8 => " <arg>",
                 ?[]const [:0]const u8 => " <args...>",
-                else => @compileError("unsupported flag type " ++ @typeName(f.type)),
+                else => @compileError("unsupported flag type " ++ @typeName(field.type)),
             };
-            u = u ++ if (f.default_value_ptr == null) " " ++ flag else " [" ++ flag ++ "]";
+            const is_required = field.default_value_ptr == null;
+            text = text ++ if (is_required) " " ++ flag else " [" ++ flag ++ "]";
         }
-        break :blk u ++ "\n";
+        break :blk text ++ "\n";
     };
 
     fn arg(comptime name: []const u8) []const u8 {
-        comptime var f = ("--" ++ name).*;
-        std.mem.replaceScalar(u8, &f, '_', '-');
-        const out = f;
+        comptime var flag = ("--" ++ name).*;
+        std.mem.replaceScalar(u8, &flag, '_', '-');
+        const out = flag;
         return &out;
     }
 
@@ -72,81 +83,92 @@ const Args = struct {
         return ("-" ++ name[0..1]);
     }
 
-    fn parse(args: []const [:0]const u8) ?Args {
+    fn parse(arguments: []const [:0]const u8) ?Args {
         var flags = std.mem.zeroInit(Args, .{});
         var i: usize = 1;
-        next: while (i < args.len) : (i += 1) {
-            inline for (fields) |f| if (std.mem.eql(u8, args[i], comptime arg(f.name)) or
-                std.mem.eql(u8, args[i], comptime short_arg(f.name)))
-            {
-                switch (f.type) {
-                    bool => @field(flags, f.name) = true,
+        next: while (i < arguments.len) : (i += 1) {
+            inline for (fields) |field| if (is_flag(arguments[i], field.name)) {
+                switch (field.type) {
+                    bool => @field(flags, field.name) = true,
                     ?[:0]const u8 => {
                         i += 1;
-                        @field(flags, f.name) = if (i < args.len) args[i] else null;
+                        @field(flags, field.name) = if (i < arguments.len) arguments[i] else null;
                     },
                     [:0]const u8 => {
                         i += 1;
-                        @field(flags, f.name) = if (i < args.len) args[i] else return null;
+                        @field(flags, field.name) = if (i < arguments.len)
+                            arguments[i]
+                        else
+                            return null;
                     },
                     ?[]const [:0]const u8 => {
-                        @field(flags, f.name) = args[i + 1 ..];
-                        i = args.len;
+                        @field(flags, field.name) = arguments[i + 1 ..];
+                        i = arguments.len;
                     },
-                    else => @compileError("unsupported flag type " ++ @typeName(f.type)),
+                    else => @compileError("unsupported flag type " ++ @typeName(field.type)),
                 }
                 continue :next;
             };
             return null;
         }
-        // an arg without a default is required
-        inline for (fields) |f| if (f.default_value_ptr == null and @field(flags, f.name).len == 0) return null;
+
+        inline for (fields) |field| {
+            const is_required = field.default_value_ptr == null;
+            if (is_required and @field(flags, field.name).len == 0) return null;
+        }
         return flags;
+    }
+
+    inline fn is_flag(argument: []const u8, comptime field_name: []const u8) bool {
+        return std.mem.eql(u8, argument, comptime arg(field_name)) or
+            std.mem.eql(u8, argument, comptime short_arg(field_name));
     }
 };
 
 pub fn main(init: std.process.Init) void {
     const io = init.io;
     const alloc = init.gpa;
-    const initargs = init.minimal.args.toSlice(init.arena.allocator()) catch |e| @panic(@errorName(e));
-    const args = Args.parse(initargs) orelse return std.debug.print(Args.usage, .{});
+    const arguments = init.minimal.args.toSlice(init.arena.allocator()) catch |err| {
+        @panic(@errorName(err));
+    };
+    const args = Args.parse(arguments) orelse return std.debug.print(Args.usage, .{});
 
-    const in_f = std.Io.Dir.cwd().openFile(io, args.build, .{}) catch {
+    const input_file = std.Io.Dir.cwd().openFile(io, args.build, .{}) catch {
         std.debug.print("Error opening file: {s}\n", .{args.build});
         return;
     };
 
-    const in_bytes = alloc_file_bytes(alloc, io, in_f);
-    defer alloc.free(in_bytes);
+    const source_bytes = alloc_file_bytes(alloc, io, input_file);
+    defer alloc.free(source_bytes);
 
-    var lexer = Lexer{ .src_bytes = in_bytes, .tokens = .init(alloc, 10000) };
+    var lexer = Lexer{ .src_bytes = source_bytes, .tokens = .init(alloc, 10000) };
     defer lexer.tokens.deinit();
-    lexer.gen_tokens() catch |e| return lexer.handle_err(io, e);
+    lexer.gen_tokens() catch |err| return lexer.handle_err(io, err);
 
-    var parser = Parser.init(alloc, lexer.tokens, in_bytes, lexer.tokens.sliced_field(.span));
+    var parser = Parser.init(alloc, lexer.tokens, source_bytes, lexer.tokens.column(.span));
     defer parser.deinit();
-    parser.build_ast() catch |e| parser.handle_err(io, e);
+    parser.build_ast() catch |err| parser.handle_err(io, err);
 
     if (debug) stage = .{ .parsed = .{ io, &parser } };
 
-    var resolver = Resolver.init(alloc, &parser.tree, in_bytes, parser.global_store.sliced());
+    var resolver = Resolver.init(alloc, &parser.tree, source_bytes, parser.global_store.items());
     defer resolver.deinit();
-    resolver.io, resolver.path = .{ io, args.build };
+    resolver.session.io, resolver.session.path = .{ io, args.build };
     const resolved = resolver.resolve() != error.ResolveFailed;
 
     stage = .none;
 
-    if (args.inspect) |q| if (!resolved) {
-        return dbg.Inspector.run(io, &resolver, null, q) catch |e| {
-            @panic(@errorName(e));
+    if (args.inspect) |queries| if (!resolved) {
+        return dbg.Inspector.run(io, &resolver, null, queries) catch |err| {
+            @panic(@errorName(err));
         };
     };
 
     if (debug and args.inspect == null) {
         if (args.dbg_less) {
-            dbg.Resolver.print(io, &resolver) catch |e| @panic(@errorName(e));
+            dbg.Resolver.print(io, &resolver) catch |err| @panic(@errorName(err));
         } else {
-            dbg.Resolver.print_tree(io, &resolver) catch |e| @panic(@errorName(e));
+            dbg.Resolver.print_tree(io, &resolver) catch |err| @panic(@errorName(err));
         }
     }
 
@@ -156,9 +178,11 @@ pub fn main(init: std.process.Init) void {
     defer lowerer.deinit();
     lowerer.lower();
 
-    if (args.inspect) |q| {
-        return dbg.Inspector.run(io, &resolver, &lowerer, q) catch |e| @panic(@errorName(e));
+    if (args.inspect) |queries| {
+        return dbg.Inspector.run(io, &resolver, &lowerer, queries) catch |err| {
+            @panic(@errorName(err));
+        };
     }
 
-    if (debug) dbg.HighLowerer.print(io, &lowerer) catch |e| @panic(@errorName(e));
+    if (debug) dbg.HighLowerer.print(io, &lowerer) catch |err| @panic(@errorName(err));
 }

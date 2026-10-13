@@ -1,0 +1,9 @@
+# macros of past bugs: a fresh name longer than any fixed buffer
+stcfun fresh_long = () -> ast {
+    ast.Identifier x = $fresh("vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv");
+    ret quote { @x = 5; ret @x; };
+}
+fun long_fresh = () -> u32: <fresh_long()>;
+stc u32 lf = long_fresh(); #= lf 5
+
+$main = () {}

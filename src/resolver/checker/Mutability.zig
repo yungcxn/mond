@@ -3,7 +3,7 @@ const Resolver = @import("../../Resolver.zig");
 const NamePool = @import("../NamePool.zig");
 const StaticPool = @import("../StaticPool.zig");
 const DeclPool = @import("../DeclPool.zig");
-const FnCtx = Resolver.FnCtx;
+const FunctionContext = Resolver.FunctionContext;
 const NodeId = ParseTree.NodeId;
 
 // mutability: whether an assignable may be written, which methods write `self`
@@ -15,110 +15,177 @@ const Access = enum {
     through_ptr,
 };
 
-pub fn res(self: *Mutability) *Resolver {
+pub fn owning_resolver(self: *Mutability) *Resolver {
     return @alignCast(@fieldParentPtr("mutability", self));
 }
 
-pub fn check_assignable(self: *Mutability, ctx: *FnCtx, node: NodeId) StaticPool.Index {
-    const r = self.res();
-    // self is mutable in methods; stc locals are compile-time variables and writable too
-    const t = r.exprs.infer(ctx, node, .none);
-    if (t == .poison_type and r.doc.errors_since(r.tree, 0, node)) return t;
-    self.write_access(node, self.writable(node));
-    return t;
+pub fn check_assignable(
+    self: *Mutability,
+    context: *FunctionContext,
+    node: NodeId,
+) StaticPool.Index {
+    const resolver = self.owning_resolver();
+    const mark = resolver.doctor.diagnostics.len();
+    const assignable_type = resolver.expressions.infer(context, node, .none);
+    // a target that failed to check is already reported, its mutability would only add noise
+    const failed = assignable_type == .poison_type and
+        resolver.doctor.errors_since(resolver.tree, mark, node);
+    if (failed) return assignable_type;
+
+    self.record_write_access(node, self.writable(node));
+    return assignable_type;
 }
 
-pub fn write_access(self: *Mutability, node: NodeId, a: Access) void {
-    const r = self.res();
-    switch (a) {
-        .ok => self.wrote(node),
-        .immutable => r.doc.report(.assign_to_immutable, node, 0, 0),
-        .through_ptr => r.doc.report(.write_through_immutable_pointer, node, 0, 0),
+pub fn record_write_access(self: *Mutability, node: NodeId, access: Access) void {
+    const resolver = self.owning_resolver();
+    switch (access) {
+        .ok => self.mark_written_through(node),
+        .immutable => resolver.doctor.report(.assign_to_immutable, node, 0, 0),
+        .through_ptr => resolver.doctor.report(.write_through_immutable_pointer, node, 0, 0),
     }
 }
 
-// a write into an assignable rooted at `self` (not through a pointer it holds) makes its method one that writes self
-pub fn wrote(self: *Mutability, assignable: NodeId) void {
-    const r = self.res();
-    var n = assignable;
-    while (r.tree.kind(n) != .identifier_self) switch (r.tree.kind(n)) {
-        .capture => n = r.tree.arg(n, 0),
+// a write into an assignable rooted at `self` (not through a pointer it holds) writes self
+pub fn mark_written_through(self: *Mutability, assignable: NodeId) void {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+
+    var node = assignable;
+    while (tree.kind(node) != .identifier_self) switch (tree.kind(node)) {
+        .capture => node = tree.arg(node, 0),
         .member, .array_index, .dereference => {
-            const p = r.tree.arg(n, 0);
-            if (r.tree.kind(p) != .identifier_self and (r.tree.kind(n) == .dereference or r.static_pool.is_ptr(r.node_type[p]))) return;
-            n = p;
+            const parent = tree.arg(node, 0);
+            if (tree.kind(parent) != .identifier_self and self.leaves_self(node, parent)) return;
+            node = parent;
         },
         else => return,
     };
-    const d = r.node_decl[n];
-    if (d != .none and r.decl_pool.get_kind(d) == .self) r.decl_pool.flags_ptr(d).writes = true;
+
+    const declaration = resolver.node_declarations[node];
+    if (declaration == .none) return;
+    if (resolver.decl_pool.get(declaration, .kind) != .self) return;
+    resolver.decl_pool.pointer(declaration, .flags).writes = true;
+}
+
+// a dereference or a step through a pointer member writes the pointee, not `self`
+fn leaves_self(self: *Mutability, node: NodeId, parent: NodeId) bool {
+    const resolver = self.owning_resolver();
+    if (resolver.tree.kind(node) == .dereference) return true;
+    return resolver.static_pool.is_pointer(resolver.node_types[parent]);
 }
 
 pub fn writable(self: *Mutability, node: NodeId) Access {
-    const r = self.res();
-    return switch (r.tree.kind(node)) {
-        .capture => self.writable(r.tree.arg(node, 0)),
-        .identifier, .identifier_self => blk: {
-            const d = r.node_decl[node];
-            if (d == .none) break :blk .ok;
-            const f = r.decl_pool.get_flags(d);
-            break :blk if (f.is_mut or f.is_stc or r.decl_pool.get_kind(d) == .self) .ok else .immutable;
-        },
-        .member => blk: {
-            const base = self.through(r.tree.arg(node, 0), true);
-            break :blk if (base != .ok) base else if (self.field_mut(r.node_type[r.tree.arg(node, 0)], r.name_pool.name_of(r.tree.arg(node, 1)))) .ok else .immutable;
-        },
-        .array_index => self.through(r.tree.arg(node, 0), true),
-        .dereference => self.through(r.tree.arg(node, 0), false),
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    return switch (tree.kind(node)) {
+        .capture => self.writable(tree.arg(node, 0)),
+        .identifier, .identifier_self => self.identifier_access(node),
+        .member => self.member_access(node),
+        .array_index => self.access_through_parent(tree.arg(node, 0), true),
+        .dereference => self.access_through_parent(tree.arg(node, 0), false),
         else => .immutable,
     };
 }
 
-// writing through a parent: `*T` allows it, `&T` never, anything else if the parent itself is writable
-fn through(self: *Mutability, parent: NodeId, or_assignable: bool) Access {
-    const r = self.res();
-    const sp = &r.static_pool;
-    const pt = r.node_type[parent];
-    if (pt == .none or pt == .poison_type) return .ok;
-    const t = sp.apply_vars(&r.abstract_pool, pt);
-    if (sp.get(t) == .ptr_type) return if (sp.get(t).ptr_type.mutable) .ok else .through_ptr;
+// self is mutable in methods; stc locals are compile-time variables and writable too
+fn identifier_access(self: *Mutability, node: NodeId) Access {
+    const resolver = self.owning_resolver();
+    const declaration = resolver.node_declarations[node];
+    if (declaration == .none) return .ok;
+
+    const flags = resolver.decl_pool.get(declaration, .flags);
+    const is_self = resolver.decl_pool.get(declaration, .kind) == .self;
+    return if (flags.is_mut or flags.is_stc or is_self) .ok else .immutable;
+}
+
+fn member_access(self: *Mutability, node: NodeId) Access {
+    const resolver = self.owning_resolver();
+    const owner = resolver.tree.arg(node, 0);
+    const owner_access = self.access_through_parent(owner, true);
+    if (owner_access != .ok) return owner_access;
+
+    const field_name = resolver.name_pool.name_of_node(resolver.tree.arg(node, 1));
+    const owner_type = resolver.node_types[owner];
+    return if (self.is_field_mutable(owner_type, field_name)) .ok else .immutable;
+}
+
+// writing through a parent: `*T` allows it, `&T` never, anything else if the parent is writable
+fn access_through_parent(self: *Mutability, parent: NodeId, or_assignable: bool) Access {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const parent_type = resolver.node_types[parent];
+    if (parent_type == .none or parent_type == .poison_type) return .ok;
+
+    const resolved_type = static_pool.substitute_type_variables(parent_type);
+    if (static_pool.get(resolved_type) == .pointer_type) {
+        const is_mutable = static_pool.get(resolved_type).pointer_type.is_mutable;
+        return if (is_mutable) .ok else .through_ptr;
+    }
     return if (or_assignable) self.writable(parent) else .immutable;
 }
 
-fn field_mut(self: *Mutability, pt: StaticPool.Index, name: NamePool.Index) bool {
-    const r = self.res();
-    const sp = &r.static_pool;
-    if (pt == .none or pt == .poison_type) return true;
-    var t = sp.apply_vars(&r.abstract_pool, pt);
-    t = sp.pointee(t);
-    if (r.tree.macros and sp.tag(t) == .ast_type) return true;
-    if (sp.tag(t) == .variant_case_type) t = sp.get(t).variant_case_type.payload;
-    if (t != .none and sp.tag(t) == .template_type) if (r.generics.template_field(sp.get(t).template_type, name)) |f| return ParseTree.Param.from_node(r.tree, f).is_mut;
-    if (t == .none or sp.tag(t) != .record_type) return false;
-    for (sp.get(t).custom_type.field_names, 0..) |n, i| if (n == name) return ParseTree.Param.from_node(r.tree, r.types.fields_of(t)[i]).is_mut;
-    return false;
-}
+fn is_field_mutable(self: *Mutability, owner_type: StaticPool.Index, name: NamePool.Index) bool {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    if (owner_type == .none or owner_type == .poison_type) return true;
 
-fn calls_writer(self: *Mutability, m: DeclPool.Index) bool {
-    const r = self.res();
-    const s = r.tree.subtree(r.decls.value_node(m));
-    for (s[0]..s[1]) |x| {
-        const d = r.node_decl[x];
-        if (r.tree.kind(@intCast(x)) != .fun_call or d == .none or r.tree.kind(r.tree.arg(@intCast(x), 0)) != .member) continue;
-        if (r.tree.kind(r.tree.arg(r.tree.arg(@intCast(x), 0), 0)) == .identifier_self and r.decl_pool.get_flags(r.decls.real(d)).writes) return true;
+    var record_type = static_pool.substitute_type_variables(owner_type);
+    record_type = static_pool.pointee(record_type);
+    if (resolver.tree.macros and static_pool.tag(record_type) == .ast_type) return true;
+    if (static_pool.tag(record_type) == .variant_case_type) {
+        record_type = static_pool.get(record_type).variant_case_type.payload;
     }
+
+    if (record_type != .none and static_pool.tag(record_type) == .template_type) {
+        const template = static_pool.get(record_type).template_type;
+        if (resolver.generics.template_field(template, name)) |field_node| {
+            return ParseTree.Param.from_node(resolver.tree, field_node).is_mut;
+        }
+    }
+
+    if (record_type == .none or static_pool.tag(record_type) != .record_type) return false;
+    const field_names = static_pool.get(record_type).record_type.field_names;
+    for (field_names, 0..) |field_name, i| if (field_name == name) {
+        const field_node = resolver.types.field_nodes_of(record_type)[i];
+        return ParseTree.Param.from_node(resolver.tree, field_node).is_mut;
+    };
     return false;
 }
 
-// a method calling one that writes self writes self too, over the `n` members of a trait body until nothing changes
-pub fn propagate_writes(self: *Mutability, body: DeclPool.Index, n: usize) void {
-    const r = self.res();
+// a method calling one that writes self writes self too, over the `member_count` members of a
+// trait body until nothing changes
+pub fn propagate_writes(self: *Mutability, body: DeclPool.Index, member_count: usize) void {
+    const resolver = self.owning_resolver();
     var grew = true;
     while (grew) {
         grew = false;
-        for (0..n) |i| if (!r.decl_pool.get_flags(body.member(i)).writes and self.calls_writer(body.member(i))) {
-            r.decl_pool.flags_ptr(body.member(i)).writes = true;
+        for (0..member_count) |i| {
+            const member = body.member(i);
+            if (resolver.decl_pool.get(member, .flags).writes) continue;
+            if (!self.calls_self_writer(member)) continue;
+            resolver.decl_pool.pointer(member, .flags).writes = true;
             grew = true;
-        };
+        }
     }
+}
+
+// whether `method` calls a method on `self` that writes self
+fn calls_self_writer(self: *Mutability, method: DeclPool.Index) bool {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    const subtree = tree.subtree(resolver.declarations.value_node(method));
+
+    for (subtree[0]..subtree[1]) |index| {
+        const node: NodeId = @intCast(index);
+        const callee_declaration = resolver.node_declarations[index];
+        if (tree.kind(node) != .fun_call or callee_declaration == .none) continue;
+
+        const callee = tree.arg(node, 0);
+        if (tree.kind(callee) != .member) continue;
+        if (tree.kind(tree.arg(callee, 0)) != .identifier_self) continue;
+
+        const realized = resolver.declarations.realized(callee_declaration);
+        if (resolver.decl_pool.get(realized, .flags).writes) return true;
+    }
+    return false;
 }

@@ -1,0 +1,9 @@
+# macro diagnostics of past bugs: a list view indexed past its end
+stcfun past_end = (ast lib) -> ast {
+    mut ast out = lib;
+    out.$decls[99] = out.$decls[0]; #! static_eval_failed
+    ret out;
+}
+<past_end(include "../lib/strings.mn")>;
+
+$main = () {}

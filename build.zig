@@ -13,7 +13,8 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.use_llvm = true;
-    exe.use_lld = true;
+    // lld cannot link mach-o, darwin keeps the system linker
+    exe.use_lld = !target.result.os.tag.isDarwin();
 
     const i = b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{ .custom = "../" } } });
     b.getInstallStep().dependOn(&i.step);
@@ -28,6 +29,19 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_tests.addArgs(args);
     const test_step = b.step("test", "Run the positive and negative example tests and the lsp tests.");
     test_step.dependOn(&run_tests.step);
+
+    { // the whole pipeline over every compiling example, `zig build bench -- <rounds>`
+        const bench = b.addExecutable(.{ .name = "mond-bench", .root_module = b.createModule(.{
+            .root_source_file = b.path("stats/bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{.{ .name = "mond", .module = exe.root_module }},
+        }) });
+        const run_bench = b.addRunArtifact(bench);
+        run_bench.setCwd(b.path("."));
+        if (b.args) |args| run_bench.addArgs(args);
+        b.step("bench", "Time lexing, parsing, resolving and lowering of all examples.").dependOn(&run_bench.step);
+    }
 
     { // https://zigtools.org/zls/guides/build-on-save/
         const exe_check = b.addExecutable(.{
