@@ -1,0 +1,27 @@
+<include "lib/out.mn">;
+
+fun fib = (u64 n) -> u64: ret if n < 2: n else: fib(n - 1) + fib(n - 2);
+
+fun gcd = (u64 a, u64 b) -> u64 {
+    mut u64 x = a;
+    mut u64 y = b;
+    while y != 0 {
+        t = x % y;
+        x = y;
+        y = t;
+    }
+    ret x;
+}
+
+$main = () {
+    puts("arithmetic");     #> arithmetic
+    line_u64(fib(20));      #> 6765
+    line_u64(gcd(84, 36));  #> 12
+    line_i64(-17 / 5);      #> -3
+    line_i64(-17 % 5);      #> -2
+    u8 wrap = 250;
+    line_u64((wrap + 10) as u64);  #> 4
+    line_u64(1 << 40);      #> 1099511627776
+    i32 shifted = -64;
+    line_i64((shifted >> 3) as i64);  #> -8
+}

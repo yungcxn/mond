@@ -127,8 +127,16 @@ stc u32 TR = call(CAT.&) + call(DOG.&);         #= TR 85
 stc bool IS = CAT oftype Named;                 #= IS true
 ```
 
+```mond
+trait Named = !{ fun id = () -> u32; }
+type Cat = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
+fun first = ([]&Named all) -> u32: ret 0;      #! trait_outside_parameter
+fun pick = () -> Named: ret Cat(1);            #! trait_outside_parameter
+```
+
 - A missing member is `trait_member_missing`, and a different signature is `trait_signature_mismatch`.
-- A trait value (`Named n`, `&Named`, `*Named`) reaches only the trait's members and dispatches to the implementer.
+- A trait is only a parameter type (`Named n`, `&Named n`, `*Named n`). Like a template, the function is realized for each argument type, so calls are static and no trait value exists at run time. Defaults are realized per implementer through `self`. A trait type anywhere else (a local, field, result, array element, or inside a parameter type) is `trait_outside_parameter`; for a closed set of types use a variant.
+- Inside the function the parameter reaches only the trait's members.
 - `T oftype Named` also works on types, which makes it a constraint for generics: `stcfun max_of = (type T where T oftype Cmp(T)): (T a, T b) -> T: ..`.
 - Only declared types implement traits; built-in types like `u32` can't.
 - A generic trait looks like `trait Cmp = (type T): !{ fun cmp = (T o) -> i32; }` and is implemented as `implof Cmp(Money)`.

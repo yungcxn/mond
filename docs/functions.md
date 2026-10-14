@@ -93,6 +93,7 @@ stc i32 SL = sees_later();   #= SL 5
 ```
 
 - Captures: mutable locals, records and arrays are captured by reference, other immutable locals by copy. Globals are not captured.
+- At run time a function value is a function and the environment holding its captures (`sizeof` 16). The environment lives in the frame that made the closure, so a capturing closure must not outlive that call (`make_mul` above works at compile time only).
 - `f = (..): ..` declares a local function from that point on. `fun f = ..` in a body is hoisted to its whole block.
 - `brk` and `cont` don't cross a function boundary.
 - There's no UFCS: `x.f()` works only for methods.

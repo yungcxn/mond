@@ -14,7 +14,7 @@ stc u64 sarr = sizeof [4]u32; #= sarr 16
 stc u64 s2d = sizeof [2][3]u16; #= s2d 12
 stc u64 sb = sizeof bool; #= sb 1
 stc u64 sf = sizeof f64; #= sf 8
-stc u64 sfn = sizeof (i32) -> i32; #= sfn 8
+stc u64 sfn = sizeof (i32) -> i32; #= sfn 16
 stc u64 su8 = sizeof u8; #= su8 1
 
 $main = () {}

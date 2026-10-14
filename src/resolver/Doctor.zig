@@ -64,6 +64,7 @@ const definition_table = .{
     .{ "redundant_ret", .@"error", no_operand, no_operand },
     .{ "redundant_fun", .@"error", no_operand, no_operand },
     .{ "unrealized_template", .@"error", no_operand, no_operand },
+    .{ "trait_outside_parameter", .@"error", operand(.type, "type"), no_operand },
     .{ "impure_stcfun", .@"error", no_operand, no_operand },
     .{ "brk_outside_loop", .@"error", no_operand, no_operand },
     .{ "cont_outside_loop", .@"error", no_operand, no_operand },

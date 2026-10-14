@@ -1,16 +1,33 @@
 # Tooling
 
-The compiler checks and lowers programs. It has no code generation yet: the output is the resolved tree and an SSA IR.
+The compiler checks a program, lowers it to an SSA IR, and builds a native executable of it with LLVM and the linker built in (lld), against the C library.
 
 ```sh
-zig build                         # builds ./mond
-./mond -b app.mn                  # check: the resolved tree, then the lowered IR
-./mond -b app.mn -d               # the declarations instead of the tree
+zig build                         # builds ./mond (needs llvm and lld, see below)
+./mond -b app.mn                  # builds ./app
+./mond -b app.mn -o out -l 2      # builds ./out, optimized
+./mond -b app.mn -p tree,ir,llvm  # also prints stages: tree, decls, ir, llvm
 ./mond -b app.mn -i add '#3' ':12'  # inspect declarations by name, index or line
-zig build test [-- filter]        # examples and docs
-zig build bench -- 10             # time the pipeline over all examples
+zig build test [-- filter]        # examples, docs, then the backend tests
+zig build test-backend [-- filter]  # only the programs of examples/backend
+zig build bench -- 10             # time the front end over all examples
 zig build lsp                     # the language server, into lsp/vscode and lsp/vim
 ```
+
+| flag | |
+|---|---|
+| `-o` `--out` | the executable, by default the source's name without `.mn` |
+| `-l` `--level` | `0` (default) unoptimized, traps on division by zero, oversized shifts and indices past an array's end; `1` `2` `3` optimized without checks; `s` `z` small |
+| `-p` `--print` | `tree` the resolved tree, `decls` the declarations, `ir` the SSA IR, `llvm` the optimized LLVM IR |
+| `-i` `--inspect` | declarations by name, `#index` or `:line`; nothing is built |
+
+Diagnostics go to stderr as `file:line:column: code operands`. `$main` returns the exit code. It may take `(argc, argv)` as integers, pointers, or `&[]&u8` (the arguments with their count).
+
+Records, arrays and variants live in memory: they are passed by address and returned through a pointer the caller gives. LLVM's passes promote small ones to registers from level 1 on.
+
+### Building mond
+
+`build.zig` asks `llvm-config` where LLVM is (LLVM 19 or newer). It takes the first one in `PATH`, or else where Homebrew, Debian and Fedora install it. `-Dllvm-config=/path/to/llvm-config` picks one. lld's headers and libraries are looked for next to LLVM and in Homebrew's `opt/lld`, or `-Dlld-prefix=..`. On Linux, `-Dcrt-dir=..` names where `Scrt1.o` and libc are if they aren't found. `-Doptimize=Debug` builds mond with stack traces for compiler bugs. The language server, bench and example tests don't need LLVM.
 
 ## Tests
 
@@ -21,8 +38,11 @@ Every `.mn` file under `examples/` and every ```` ```mond ```` block in `docs/` 
 | `#! code ..` | this line reports these diagnostics |
 | `#= name value` | the static value of `name`, declared on this line |
 | `#: name type` | the type of `name` |
+| `#> text` | (backend tests) the next line the program prints |
 
 These markers count anywhere in a comment. Values print as they are stored: a variant as `+(..).Case[payload]`, a computed `[]u8` as numbers, a string literal as text. Files in `examples/negative/` must mark at least one diagnostic. The docs must name every keyword, tree kind and diagnostic in backticks, so a new feature fails the tests until it is documented.
+
+The programs in `examples/backend/` are built and run after that, at levels `0` and `2`: each must exit with `0` and print exactly its `#> text` lines, in order. `examples/backend/lib/out.mn` gives them output through the C library.
 
 ## Editor
 
@@ -65,6 +85,7 @@ Lexing and parsing stop at the first error (`LexingError_*`, `Expected*`, `Illeg
 | `missing_ret` / `redundant_ret` | a path doesn't return / `ret` before a template's definition |
 | `redundant_fun` | `fun` on a predefined name (`$main`, `$init`, ...) |
 | `unrealized_template` | a template where a concrete type is needed |
+| `trait_outside_parameter` | a trait type is used other than as a parameter type |
 | `impure_stcfun` | a `stcfun` writes state outside itself |
 | `brk_outside_loop` / `cont_outside_loop` | a jump outside a loop |
 | `ret_type_mismatch` | `ret` disagrees with the result type |

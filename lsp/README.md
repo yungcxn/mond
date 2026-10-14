@@ -8,7 +8,7 @@ The mond language server and its editor plugins: highlighting (semantic tokens),
 - `Analysis.zig`: the worker, runs the compiler on a source and turns its tokens, resolved names and diagnostics into lsp results
 - `includers.zig`: whether another file of the workspace (up to the nearest `.git` or `build.zig`) includes a file: such a library is shown without `missing_main`, compiling it on its own still reports it
 - `Completion.zig`: what the editor offers after `x.`, `ast.` and `$`: the api of trees (views, children, kinds, builtins), by the types the last analysis that knew the names found
-- the compiler comes in as the module `mond` (`src/main.zig`)
+- the compiler's front end comes in as the module `mond` (`src/mond.zig`), without llvm
 
 The compiler runs in the worker process, so a crash or a hang (killed after 5s) of the w.i.p. compiler shows up as a diagnostic and the server lives on.
 Changes are analyzed once the editor is quiet or asks something, a burst of keystrokes is one analysis.

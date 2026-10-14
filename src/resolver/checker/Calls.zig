@@ -506,8 +506,23 @@ fn call_declared(
 
     // the argument lengths, in parameter order, pick the realization
     if (static_pool.is_length_generic(resolver.decl_pool.get(callee, .value_type))) {
-        const generic_buffer = resolver.temporary_slice(StaticPool.Index, arguments.nodes.len);
+        const generic_buffer = resolver.temporary_slice(StaticPool.Index, arguments.nodes.len + 1);
         var generic_count: usize = 0;
+        // a trait's method realizes its `self` for the receiver's type
+        if (self_count == 1) {
+            const self_parameter = resolver.types.signature(callee).parameters[0];
+            if (static_pool.trait_of(self_parameter) != .none) {
+                const self_node = if (receiver != 0)
+                    receiver
+                else
+                    resolver.tree.arg_value(all_arguments[0]);
+                const self_type = static_pool.substitute_type_variables(
+                    resolver.node_types[self_node],
+                );
+                generic_buffer[0] = static_pool.unwrapped(self_type);
+                generic_count = 1;
+            }
+        }
         for (0..parameter_nodes.len) |j| {
             const parameter_index = j + arguments.self_count;
             const parameter_type = resolver.types.signature(callee).parameters[parameter_index];
@@ -519,7 +534,7 @@ fn call_declared(
                 // what a generic parameter takes from its argument
                 const argument_type = arguments.types[i];
                 generic_buffer[generic_count] = blk: {
-                    if (static_pool.template_of(parameter_type) != .none) {
+                    if (static_pool.is_realized_per_type(parameter_type)) {
                         break :blk static_pool.unwrapped(argument_type);
                     }
                     if (static_pool.tag(parameter_type) != .meta_type) {
@@ -542,9 +557,11 @@ fn call_declared(
             if (context.is_interpreted) resolver.node_declarations[node] = callee;
             return .poison_type;
         }
-        // none is ruled out above
+        // none is ruled out above. a template or trait argument comes from an abstract body,
+        // which is checked once
         for (generic_arguments) |generic| {
-            if (static_pool.tag(generic) != .template_type) continue;
+            const tag = static_pool.tag(generic);
+            if (tag != .template_type and tag != .trait_type) continue;
 
             resolver.declarations.check_body(callee);
             return resolver.types.signature(callee).return_type;

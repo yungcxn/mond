@@ -14,8 +14,8 @@ stc u64 SPTR = sizeof *u8; #= SPTR 8
 stc u64 SRPTR = sizeof &u64; #= SRPTR 8
 stc u64 SPP = sizeof **u8; #= SPP 8
 stc u64 SPARR = sizeof *[16]u8; #= SPARR 8
-stc u64 SFN = sizeof () -> (); #= SFN 8
-stc u64 SFN2 = sizeof (i64, u8) -> u8; #= SFN2 8
+stc u64 SFN = sizeof () -> (); #= SFN 16
+stc u64 SFN2 = sizeof (i64, u8) -> u8; #= SFN2 16
 stc u64 SEMPTY = sizeof [0]u64; #= SEMPTY 0
 stc u64 SONE = sizeof [1]u8; #= SONE 1
 stc u64 SBOOLS = sizeof [3]bool; #= SBOOLS 3

@@ -26,6 +26,7 @@ type Stack16 = Stack(i64, 16); #= Stack16 *([16]i64 items, u32 len)
 type OpList = Stack(Op, 64);
 
 trait Eval = !{ fun eval = () -> i64; }
+fun run_eval = (&Eval e) -> i64: ret e.eval();
 
 type Program = *(mut OpList ops) implof Eval !{
     fun eval = () -> i64 {
@@ -90,7 +91,6 @@ $main = (i32 argc, &[]&u8 argv) -> i32 {
     Program prog = compile("12+30".&);
     result = prog.eval(); #: result i64
     print("result %d", result);
-    Eval e = prog;
-    via_trait = e.eval(); #: via_trait i64
+    via_trait = run_eval(prog.&); #: via_trait i64
     ret if result == 42: 0 else: 1;
 }

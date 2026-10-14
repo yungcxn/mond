@@ -335,7 +335,9 @@ fn invoke(
     }
     resolver.declarations.ensure_signature(target);
     if (static_pool.is_length_generic(resolver.decl_pool.get(target, .value_type))) {
-        target = self.realize(node, target, arguments, values_start) orelse return .poison;
+        target = self.realize(node, target, arguments, values_start, self_value) orelse {
+            return .poison;
+        };
     }
 
     // overloads with the same parameters are tried in order, the first whose `where` holds runs
@@ -363,6 +365,7 @@ fn realize(
     declaration: DeclPool.Index,
     arguments: []const NodeId,
     values_start: u32,
+    self_value: Value,
 ) ?DeclPool.Index {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
@@ -375,6 +378,17 @@ fn realize(
 
     const mark = interpreter.pool_indices.len;
     defer interpreter.pool_indices.len = mark;
+    // a trait's method realizes its `self` for the receiver's type, as the checker does
+    if (resolver.decl_pool.implicit_self_count(declaration) == 1) {
+        const function_type = resolver.decl_pool.get(declaration, .value_type);
+        const self_parameter = static_pool.get(function_type).function_type.parameters[0];
+        if (static_pool.trait_of(self_parameter) != .none) {
+            const referenced = interpreter.dereference(self_value);
+            if (referenced.is(.poison_type)) return null;
+            const receiver = interpreter.value_type(referenced);
+            interpreter.pool_indices.push(static_pool.unwrapped(receiver));
+        }
+    }
     for (0..parameter_nodes.len) |j| {
         const function_type = resolver.decl_pool.get(declaration, .value_type);
         const parameters = static_pool.get(function_type).function_type.parameters;
@@ -387,8 +401,11 @@ fn realize(
             const argument_value = interpreter.argument_values.buffer[values_start + i];
             // a template takes the argument's type, a meta type the argument, a length its count
             const generic: Index = blk: {
-                if (static_pool.template_of(parameter_type) != .none) {
-                    break :blk interpreter.value_type(interpreter.dereference(argument_value));
+                if (static_pool.is_realized_per_type(parameter_type)) {
+                    // a value not known yet (a speculative evaluation) realizes nothing
+                    const referenced = interpreter.dereference(argument_value);
+                    if (referenced.is(.poison_type)) return null;
+                    break :blk interpreter.value_type(referenced);
                 }
                 if (static_pool.tag(parameter_type) == .meta_type) {
                     break :blk interpreter.interned(argument_value);

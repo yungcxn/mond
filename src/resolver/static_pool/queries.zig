@@ -52,6 +52,27 @@ pub fn template_of(pool: *const StaticPool, parameter: Index) Index {
     return if (pool.tag(pointee) == .template_type) pointee else .none;
 }
 
+pub fn trait_of(pool: *const StaticPool, parameter: Index) Index {
+    if (parameter == .none or parameter == .poison_type) return .none;
+    const pointee = pool.pointee(parameter);
+    return if (pool.tag(pointee) == .trait_type) pointee else .none;
+}
+
+// a template or a trait as the whole parameter type, `T`, `*T` or `&T`: the function is realized
+// per argument type, so a trait value never exists at run time
+pub fn is_realized_per_type(pool: *const StaticPool, parameter: Index) bool {
+    return pool.template_of(parameter) != .none or pool.trait_of(parameter) != .none;
+}
+
+pub fn contains_trait(pool: *const StaticPool, type_index: Index) bool {
+    return any_component(pool, type_index, struct {
+        fn decide(p: *const StaticPool, t: Index) ?bool {
+            if (t == .none or t == .poison_type) return false;
+            return if (p.tag(t) == .trait_type) true else null;
+        }
+    }.decide);
+}
+
 pub fn contains_template(pool: *const StaticPool, type_index: Index) bool {
     return any_component(pool, type_index, struct {
         fn decide(p: *const StaticPool, t: Index) ?bool {
@@ -101,7 +122,7 @@ pub fn is_length_generic(pool: *StaticPool, function_type: Index) bool {
         // read anew: substituting may intern and move the parameter list
         const parameter = pool.get(function_type).function_type.parameters[i];
         if (pool.has_type_variables(pool.substitute_type_variables(parameter))) return true;
-        if (pool.tag(parameter) == .meta_type or pool.template_of(parameter) != .none) return true;
+        if (pool.tag(parameter) == .meta_type or pool.is_realized_per_type(parameter)) return true;
     }
     return false;
 }
@@ -109,17 +130,17 @@ pub fn is_length_generic(pool: *StaticPool, function_type: Index) bool {
 pub fn has_only_template_parameters(pool: *const StaticPool, function_type: Index) bool {
     for (pool.get(function_type).function_type.parameters) |parameter| {
         const realized_per_value = pool.is_generic_parameter(parameter);
-        if (realized_per_value and pool.template_of(parameter) == .none) return false;
+        if (realized_per_value and !pool.is_realized_per_type(parameter)) return false;
     }
     return true;
 }
 
 // parameters a function is realized for: unlengthed arrays (per length),
 // `type` parameters (per type)
-// and templates (per realization)
+// and templates and traits (per argument type)
 pub fn is_generic_parameter(pool: *const StaticPool, parameter: Index) bool {
     return pool.has_type_variables(parameter) or pool.tag(parameter) == .meta_type or
-        pool.template_of(parameter) != .none;
+        pool.is_realized_per_type(parameter);
 }
 
 // through one pointer, and from a case to its variant

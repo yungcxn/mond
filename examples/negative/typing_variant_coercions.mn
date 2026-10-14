@@ -36,11 +36,9 @@ fun f = (u8 b, u16 w, i32 n, Cat c, Rock r) {
     take_any(d1);
     take_any(Turn.L);
     take_any(o3); #! type_mismatch
-    Named t1 = c;
-    Named t2 = r; #! type_mismatch
+    Named t1 = c; #! trait_outside_parameter
     u8 t3 = take_named(c.&);
     u8 t4 = take_named(r.&); #! type_mismatch
-    Cat t5 = t1; #! type_mismatch
 }
 
 $main = () {}

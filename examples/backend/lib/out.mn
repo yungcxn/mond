@@ -1,0 +1,27 @@
+# output for the backend tests, through the c library
+pub fun putchar = (i32 c) -> i32;
+pub fun puts = (&u8 text) -> i32;
+
+pub fun put_u64 = (u64 n) {
+    if n >= 10: put_u64(n / 10);
+    putchar((n % 10) as i32 + 48);
+}
+
+pub fun put_i64 = (i64 n) {
+    if n < 0 {
+        putchar(45);
+        put_u64((0 - n) as u64);
+    } else {
+        put_u64(n as u64);
+    }
+}
+
+pub fun line_u64 = (u64 n) {
+    put_u64(n);
+    putchar(10);
+}
+
+pub fun line_i64 = (i64 n) {
+    put_i64(n);
+    putchar(10);
+}

@@ -6,6 +6,7 @@ const Low = @import("HighLowerer.zig");
 const TreePrinter = @import("debug/TreePrinter.zig");
 const resolver_dump = @import("debug/resolver_dump.zig");
 const ir_printer = @import("debug/ir_printer.zig");
+const diagnostics = @import("debug/diagnostics.zig");
 const NodeId = ParseTree.NodeId;
 
 pub const Inspector = @import("debug/Inspector.zig");
@@ -30,6 +31,10 @@ pub const Resolver = struct {
 
     pub fn print(io: std.Io, resolver: *Res) !void {
         return resolver_dump.print(io, resolver);
+    }
+
+    pub fn print_diagnostics(io: std.Io, resolver: *Res, path: []const u8) !void {
+        return diagnostics.print(io, resolver, path);
     }
 };
 

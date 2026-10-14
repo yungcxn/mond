@@ -58,8 +58,8 @@ stcfun total_area = () -> u32 {
 }
 
 stcfun by_trait_value = () -> u32 {
-    Shape s = Square(s = 4);
-    Shape t = Tri(a = 6, b = 8, c = 10);
+    Square s = Square(s = 4);
+    Tri t = Tri(a = 6, b = 8, c = 10);
     ret s.area() * 10000 + t.area() * 100 + s.sides() * 10 + t.sides();
 }
 

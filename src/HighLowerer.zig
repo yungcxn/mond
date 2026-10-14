@@ -330,6 +330,19 @@ fn is_aggregate(self: *HighLowerer, value_type: Index) bool {
     return self.static_pool.tag(value_type) == .array_type and !self.is_dynamic_array(value_type);
 }
 
+// records, arrays and tagged variants: a variable of them lives in a stack slot, so a value of
+// them is never carried from one pass of a loop into the next
+fn lives_in_memory(self: *HighLowerer, value_type: Index) bool {
+    if (self.is_aggregate(value_type)) return true;
+    if (value_type == .none) return false;
+    return switch (self.static_pool.get(value_type)) {
+        .variant_union_type => true,
+        .variant_type => |variant| variant.tag_mode != .self,
+        .variant_case_type => |case| self.lives_in_memory(case.variant),
+        else => false,
+    };
+}
+
 fn is_dynamic_array(self: *HighLowerer, value_type: Index) bool {
     if (value_type == .none or self.static_pool.get(value_type) != .array_type) return false;
     return self.static_pool.get(value_type).array_type.length == StaticPool.dyn_len;
@@ -423,7 +436,7 @@ fn declare_variable(self: *HighLowerer, declaration: DeclPool.Index, value: Ref)
     const variable = @intFromEnum(declaration);
     const declared_type = self.resolver.decl_pool.get(declaration, .value_type);
     const needs_memory = self.address_taken.contains(declaration) or
-        self.is_aggregate(self.substituted(declared_type));
+        self.lives_in_memory(self.substituted(declared_type));
     if (needs_memory) {
         const slot = self.alloca(self.variable_type(variable));
         put_entry(self.allocator, &self.stack_slots, declaration, slot);
@@ -836,12 +849,8 @@ fn expression(self: *HighLowerer, node: NodeId) Ref {
         },
         .deferred_deinit => self.deferred_deinit(node, first),
         .unwrap => self.unwrap(node),
-        .type_test => {
-            const value = self.expression(first);
-            const tested_type = self.static_value_of(second) orelse self.type_of(second);
-            const tested = @intFromEnum(tested_type);
-            return self.builder.emit(.type_test, .bool_type, @intFromEnum(value), tested);
-        },
+        // a value's type is known once traits are realized per type, its test was taken above
+        .type_test => unreachable,
         .lambda => self.function_value(self.declaration_of(node)),
         // compile-time only: their value, if any, is static and was taken above
         .range,
@@ -1705,17 +1714,6 @@ fn match_type(
             const variant = self.static_pool.get(target_type).variant_case_type.variant;
             break :blk self.narrow_to_variant(value, value_type, variant);
         }
-
-        if (value_type != .none and self.static_pool.tag(value_type) == .trait_type) {
-            const implements = self.builder.new_block();
-            const target = @intFromEnum(target_type);
-            const test_type =
-                self.builder.emit(.type_test, .bool_type, @intFromEnum(value), target);
-            self.builder.branch_if(test_type, implements, failed);
-            self.builder.go_to(implements);
-            const trait_narrow = @intFromEnum(StaticPool.CastKind.trait_narrow);
-            break :blk self.builder.emit(.cast, target_type, @intFromEnum(value), trait_narrow);
-        }
         // it never is one
         return self.builder.branch(failed);
     };
@@ -2226,7 +2224,6 @@ fn direct_call(
         self.scratch.push(@intFromEnum(value));
     }
     var arguments = all_arguments;
-    var dispatches_dynamically = false;
     if (implicit_self_count == 1) {
         // `value.method()` passes the receiver by address, `Type.method(value)` as first argument
         const tree = self.resolver.tree;
@@ -2241,11 +2238,6 @@ fn direct_call(
             self.place(receiver);
         self.scratch.push(@intFromEnum(value));
         if (!is_bound) arguments = arguments[1..];
-        // a trait method called on a trait object is looked up at run time
-        if (self.resolver.decl_pool.get(realized, .kind) == .trait_member) {
-            const receiver_type = self.static_pool.through_pointer(self.type_of(receiver));
-            dispatches_dynamically = self.static_pool.tag(receiver_type) == .trait_type;
-        }
     }
 
     // where the argument of the first parameter is in scratch, `none` for those not passed
@@ -2264,31 +2256,63 @@ fn direct_call(
     }
 
     // defaults are expressions of the callee's body and may read the parameters before them
+    const needs_defaults = for (0..parameter_nodes.len) |j| {
+        if (self.scratch.buffer[parameters_at + j] == none) break true;
+    } else false;
     const saved_body = self.body;
-    if (self.resolver.bodies.body_of(realized)) |body| self.body = body;
-    for (parameter_nodes, 0..) |parameter_node, j| {
-        const passed = self.scratch.buffer[parameters_at + j];
-        if (passed == none) continue;
-        self.declare_variable(self.declaration_of(parameter_node), @enumFromInt(passed));
+    // a recursive call declares the caller's own parameters, which hold on after the call
+    const saved_parameters = self.scratch.len;
+    const is_recursive = if (self.resolver.bodies.body_of(realized)) |body|
+        body.first_node == saved_body.first_node
+    else
+        false;
+    if (needs_defaults and is_recursive) {
+        for (parameter_nodes) |parameter_node| {
+            const parameter = self.declaration_of(parameter_node);
+            const slot = self.stack_slots.get(parameter) orelse Ref.none;
+            const value = if (slot == .none) self.load_variable(parameter) else Ref.none;
+            self.scratch.push(@intFromEnum(slot));
+            self.scratch.push(@intFromEnum(value));
+        }
     }
-    for (parameter_nodes, 0..) |parameter_node, j| {
-        if (self.scratch.buffer[parameters_at + j] != none) continue;
-        const default = ParseTree.Param.from_node(self.resolver.tree, parameter_node).default;
-        const parameter_position = j + implicit_self_count;
-        const value = if (default != 0)
-            self.expression_as(default, self.parameter_type(function_type, parameter_position))
-        else
-            Ref.none;
-        self.declare_variable(self.declaration_of(parameter_node), value);
-        self.scratch.buffer[parameters_at + j] = @intFromEnum(value);
+    if (needs_defaults) {
+        if (self.resolver.bodies.body_of(realized)) |body| self.body = body;
+        for (parameter_nodes, 0..) |parameter_node, j| {
+            const passed = self.scratch.buffer[parameters_at + j];
+            if (passed == none) continue;
+            self.declare_variable(self.declaration_of(parameter_node), @enumFromInt(passed));
+        }
+        for (parameter_nodes, 0..) |parameter_node, j| {
+            if (self.scratch.buffer[parameters_at + j] != none) continue;
+            const default = ParseTree.Param.from_node(self.resolver.tree, parameter_node).default;
+            const parameter_position = j + implicit_self_count;
+            const value = if (default != 0)
+                self.expression_as(default, self.parameter_type(function_type, parameter_position))
+            else
+                Ref.none;
+            self.declare_variable(self.declaration_of(parameter_node), value);
+            self.scratch.buffer[parameters_at + j] = @intFromEnum(value);
+        }
+    }
+    if (needs_defaults and is_recursive) {
+        for (parameter_nodes, 0..) |parameter_node, j| {
+            const parameter = self.declaration_of(parameter_node);
+            const slot: Ref = @enumFromInt(self.scratch.buffer[saved_parameters + 2 * j]);
+            const value: Ref = @enumFromInt(self.scratch.buffer[saved_parameters + 2 * j + 1]);
+            if (slot != .none) {
+                put_entry(self.allocator, &self.stack_slots, parameter, slot);
+            } else if (value != .none) {
+                self.write_current(@intFromEnum(parameter), value);
+            }
+        }
+        self.scratch.len = saved_parameters;
     }
     self.body = saved_body;
 
     const argument_list = self.builder.list(self.scratch.buffer[mark..self.scratch.len]);
     self.scratch.len = mark;
-    const op: Op = if (dispatches_dynamically) .call_dyn else .call;
     const call_type = if (result_type == .none) self.return_type_of(realized) else result_type;
-    return self.builder.emit(op, call_type, @intFromEnum(function_ref), argument_list);
+    return self.builder.emit(.call, call_type, @intFromEnum(function_ref), argument_list);
 }
 
 // records

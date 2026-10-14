@@ -161,11 +161,6 @@ pub fn print_function(writer: *Writer, lowerer: *HighLowerer, function_index: us
                 .zeroed => try writer.writeAll("{0}"),
                 .phi => try context.print_phi(predecessors),
                 .bytes_eq => try context.print_bytes_equal(),
-                .type_test => {
-                    try context.reference(instruction.a);
-                    try writer.writeAll(" " ++ kind_color ++ "oftype" ++ reset ++ " ");
-                    try print_type(writer, lowerer, @enumFromInt(instruction.b));
-                },
                 .neg, .not => {
                     const unary_symbol = if (instruction.op == .neg)
                         "-"
@@ -214,7 +209,7 @@ pub fn print_function(writer: *Writer, lowerer: *HighLowerer, function_index: us
                     const variant_type = operand_type(lowerer, function_index, instruction.a);
                     try writer.print(".{s}", .{case_name(lowerer, variant_type, instruction.b)});
                 },
-                .call, .call_dyn => try context.print_call(),
+                .call => try context.print_call(),
                 .closure => try context.print_closure(),
                 .select => try context.print_select(),
                 .@"switch" => {
@@ -739,8 +734,6 @@ const InstructionContext = struct {
             try print_reference(writer, context.lowerer, operand);
         }
         try writer.writeAll(")");
-        if (context.instruction.op != .call_dyn) return;
-        try writer.writeAll(dim ++ "  /* dynamic */" ++ reset);
     }
 
     fn print_closure(context: InstructionContext) !void {

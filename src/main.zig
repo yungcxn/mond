@@ -1,18 +1,14 @@
 const std = @import("std");
+const mond = @import("mond");
+const LLVMLowerer = @import("LLVMLowerer.zig");
+const emit = @import("llvm_lowerer/emit.zig");
+const link = @import("llvm_lowerer/link.zig");
+const Lexer = mond.Lexer;
+const Parser = mond.Parser;
+const Resolver = mond.Resolver;
+const HighLowerer = mond.HighLowerer;
+const dbg = mond.dbg;
 
-// the compiler is also the module `mond` for the tools in lsp/ and stats/
-pub const Lexer = @import("Lexer.zig");
-pub const Parser = @import("Parser.zig");
-pub const ParseTree = @import("ParseTree.zig");
-pub const Resolver = @import("Resolver.zig");
-pub const HighLowerer = @import("HighLowerer.zig");
-pub const DeclPool = @import("resolver/DeclPool.zig");
-pub const Doctor = @import("resolver/Doctor.zig");
-pub const DynamicBuffer = @import("containers.zig").DynamicBuffer;
-pub const dbg = @import("debug.zig");
-
-const debug = true;
-pub const target: struct { pointer_bits: u8 } = .{ .pointer_bits = 64 };
 // a panic after parsing prints the tree first, the context a compiler bug needs
 var stage: union(enum) { none, parsed: struct { std.Io, *Parser } } = .none;
 
@@ -30,12 +26,17 @@ pub const panic = std.debug.FullPanic(struct {
     }
 }.on_panic);
 
-// command line flags: the field `dbg_less` is `--dbg-less` or `-d`
+// command line flags: the field `out` is `--out` or `-o`, an underscore in a name becomes a dash
 // bool: set when present, string: takes the next argument, slice: takes all following arguments
 // a field without a default is required
 const Args = struct {
     build: [:0]const u8,
-    dbg_less: bool = false,
+    // the executable, the source's name without `.mn` when not given
+    out: ?[:0]const u8 = null,
+    // the optimization level, see `emit.Level`
+    level: ?[:0]const u8 = null,
+    // the stages to print, comma separated, see `Stages`
+    print: ?[:0]const u8 = null,
     inspect: ?[]const [:0]const u8 = null,
 
     const fields = @typeInfo(Args).@"struct".fields;
@@ -114,17 +115,45 @@ const Args = struct {
     }
 };
 
+// what `--print` shows: the resolved tree, the declarations, `HighIr`, the optimized llvm ir
+const Stages = struct {
+    tree: bool = false,
+    decls: bool = false,
+    ir: bool = false,
+    llvm: bool = false,
+
+    const usage = "stages: tree, decls, ir, llvm (comma separated)\n";
+
+    fn parse(list: ?[]const u8) ?Stages {
+        var stages: Stages = .{};
+        var names = std.mem.tokenizeScalar(u8, list orelse return stages, ',');
+        next: while (names.next()) |name| {
+            inline for (@typeInfo(Stages).@"struct".fields) |field| {
+                if (std.mem.eql(u8, name, field.name)) {
+                    @field(stages, field.name) = true;
+                    continue :next;
+                }
+            }
+            return null;
+        }
+        return stages;
+    }
+};
+
 pub fn main(init: std.process.Init) void {
     const io = init.io;
     const alloc = init.gpa;
-    const arguments = init.minimal.args.toSlice(init.arena.allocator()) catch |err| {
-        @panic(@errorName(err));
-    };
+    const arena = init.arena.allocator();
+    const arguments = init.minimal.args.toSlice(arena) catch |err| @panic(@errorName(err));
     const args = Args.parse(arguments) orelse return std.debug.print(Args.usage, .{});
+    const stages = Stages.parse(args.print) orelse return std.debug.print(Stages.usage, .{});
+    const level = emit.Level.parse(args.level orelse "0") orelse {
+        return std.debug.print(emit.Level.usage, .{});
+    };
 
     const input_file = std.Io.Dir.cwd().openFile(io, args.build, .{}) catch {
         std.debug.print("Error opening file: {s}\n", .{args.build});
-        return;
+        std.process.exit(1);
     };
 
     const max_file_size = 50 * 1024 * 1024;
@@ -146,7 +175,7 @@ pub fn main(init: std.process.Init) void {
     defer parser.deinit();
     parser.build_ast() catch |err| parser.handle_err(io, err);
 
-    if (debug) stage = .{ .parsed = .{ io, &parser } };
+    stage = .{ .parsed = .{ io, &parser } };
 
     var resolver = Resolver.init(alloc, &parser.tree, source_bytes, parser.global_store.items());
     defer resolver.deinit();
@@ -161,15 +190,12 @@ pub fn main(init: std.process.Init) void {
         };
     };
 
-    if (debug and args.inspect == null) {
-        if (args.dbg_less) {
-            dbg.Resolver.print(io, &resolver) catch |err| @panic(@errorName(err));
-        } else {
-            dbg.Resolver.print_tree(io, &resolver) catch |err| @panic(@errorName(err));
-        }
-    }
-
-    if (!resolved) return;
+    if (stages.tree) dbg.Resolver.print_tree(io, &resolver) catch |err| @panic(@errorName(err));
+    if (stages.decls) dbg.Resolver.print(io, &resolver) catch |err| @panic(@errorName(err));
+    dbg.Resolver.print_diagnostics(io, &resolver, args.build) catch |err| {
+        @panic(@errorName(err));
+    };
+    if (!resolved) std.process.exit(1);
 
     var lowerer = HighLowerer.init(alloc, &resolver);
     defer lowerer.deinit();
@@ -181,5 +207,31 @@ pub fn main(init: std.process.Init) void {
         };
     }
 
-    if (debug) dbg.HighLowerer.print(io, &lowerer) catch |err| @panic(@errorName(err));
+    if (stages.ir) dbg.HighLowerer.print(io, &lowerer) catch |err| @panic(@errorName(err));
+
+    var backend = LLVMLowerer.init(alloc, &lowerer, args.build, .{ .checks = level == .@"0" });
+    defer backend.deinit();
+    backend.lower();
+
+    const machine = emit.Machine.init(level);
+    defer machine.deinit();
+    machine.optimize(backend.module);
+    if (stages.llvm) emit.print(io, backend.module) catch |err| @panic(@errorName(err));
+
+    const executable = args.out orelse default_executable(arena, args.build);
+    const object = std.fmt.allocPrintSentinel(arena, "{s}.o", .{executable}, 0) catch {
+        @panic("OOM");
+    };
+    machine.write_object(backend.module, object);
+    const linked = link.executable(arena, object, executable);
+    std.Io.Dir.cwd().deleteFile(io, object) catch {};
+    if (!linked) std.process.exit(1);
+}
+
+// `dir/app.mn` builds `app` in the working directory
+fn default_executable(arena: std.mem.Allocator, source_path: []const u8) [:0]const u8 {
+    const name = std.fs.path.basename(source_path);
+    const stem = if (std.mem.endsWith(u8, name, ".mn")) name[0 .. name.len - ".mn".len] else name;
+    const executable = if (stem.len == name.len) "a.out" else stem;
+    return arena.dupeSentinel(u8, executable, 0) catch @panic("OOM");
 }

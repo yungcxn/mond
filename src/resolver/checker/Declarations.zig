@@ -420,10 +420,17 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
     if (kind == .function and !is_global) resolver.initialization.import_outer(0, outer, 0);
 
     const self_count = decl_pool.implicit_self_count(declaration);
+    // a trait's method realized for an implementing type has `self` of that type
+    const owner = self.owner_of(declaration);
+    const is_trait_method = self_count == 1 and owner != .none and
+        static_pool.tag(owner) == .trait_type;
     var context = FunctionContext{
         .declaration = declaration,
         .return_type = static_pool.get(function_type).function_type.return_type,
-        .self_type = self.owner_of(declaration),
+        .self_type = if (is_trait_method)
+            static_pool.pointee(static_pool.get(function_type).function_type.parameters[0])
+        else
+            owner,
         .is_abstract = abstract,
     };
     const self_type = if (self_count == 1) context.self_type else .none;
@@ -861,7 +868,7 @@ pub fn open_declaration_scope(
 
 // a method's owner is the value of the trait row right before its members
 // realizations ask their template
-fn owner_of(self: *Declarations, declaration: DeclPool.Index) StaticPool.Index {
+pub fn owner_of(self: *Declarations, declaration: DeclPool.Index) StaticPool.Index {
     const resolver = self.owning_resolver();
     const decl_pool = &resolver.decl_pool;
 

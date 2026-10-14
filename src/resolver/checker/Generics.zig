@@ -90,7 +90,7 @@ pub fn realize(
         const function_value = resolver.static_pool.intern(.{ .function_value = realization });
         self.memo(key, function_value);
 
-        const outer_key = self.static_scope.get(generic);
+        const outer_key = self.static_scope.get(generic) orelse self.trait_scope(generic);
         if (outer_key) |outer| {
             self.static_scope.put(resolver.allocator, realization, outer) catch @panic("OOM");
             resolver.declarations.open_declaration_scope(true, .none, 0);
@@ -119,8 +119,9 @@ pub fn realize(
             const argument = argument_values[bound];
             bound += 1;
 
-            // a template parameter `T`, `*T` or `&T` becomes the argument, behind the same pointer
-            if (static_pool.template_of(parameter) != .none) {
+            // a template or trait parameter `T`, `*T` or `&T` becomes the argument, behind the
+            // same pointer
+            if (static_pool.is_realized_per_type(parameter)) {
                 if (static_pool.get(parameter) != .pointer_type) {
                     parameter_slot.* = argument;
                 } else {
@@ -261,6 +262,18 @@ pub fn realize(
 }
 
 // the static parameters of a stcfun as locals holding the arguments of one realization
+// a member of a trait realized from a template (`Cmp(Money)`) sees the template's arguments
+fn trait_scope(self: *Generics, member: DeclPool.Index) ?AbstractKey {
+    const resolver = self.owning_resolver();
+    if (resolver.decl_pool.get(member, .kind) != .trait_member) return null;
+    const trait = resolver.declarations.owner_of(member);
+    if (trait == .none or resolver.static_pool.tag(trait) != .trait_type) return null;
+    const declaration = resolver.static_pool.get(trait).trait_type.declaration;
+    const template = self.template_of.get(declaration) orelse return null;
+    const arguments = self.realization_arguments.get(declaration) orelse return null;
+    return .{ .generic_tuple = template, .args_tuple = arguments };
+}
+
 fn bind_static(self: *Generics, generic: DeclPool.Index, arguments: StaticPool.Index) void {
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;

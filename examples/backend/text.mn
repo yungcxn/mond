@@ -1,0 +1,23 @@
+<include "lib/out.mn">;
+
+fun command = (&u8 word) -> u32: ret match word {
+    "add" => 1,
+    "mul" => 2,
+    _ => 0,
+};
+
+fun count = ([]u8 text, u8 c) -> u64 {
+    mut u64 n = 0;
+    for x in text: if x == c: n += 1;
+    ret n;
+}
+
+$main = () {
+    puts("hello, world");          #> hello, world
+    line_u64(command("mul") as u64);  #> 2
+    line_u64(command("sub") as u64);  #> 0
+    line_u64(count("banana", 'a'));   #> 3
+    [5]u8 word = "abcde";
+    putchar(word[4] as i32);
+    putchar(10);                     #> e
+}

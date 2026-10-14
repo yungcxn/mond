@@ -793,6 +793,12 @@ pub fn function_type_of(
             const reported = resolver.report(.unrealized_template, type_node, parameter_type, 0);
             parameters[i + offset] = reported;
         }
+        const is_nested_trait = static_pool.contains_trait(parameter_type) and
+            static_pool.trait_of(parameter_type) == .none;
+        if (is_nested_trait) {
+            parameters[i + offset] =
+                resolver.report(.trait_outside_parameter, type_node, parameter_type, 0);
+        }
     }
 
     const return_type = blk: {
@@ -869,6 +875,10 @@ pub fn concrete_type_from_node(
     const node_type = self.type_from_node(context, node);
     if (resolver.static_pool.contains_template(node_type)) {
         return resolver.report(.unrealized_template, node, node_type, 0);
+    }
+    // a function taking a trait is realized per argument type, so no value has a trait's type
+    if (resolver.static_pool.contains_trait(node_type)) {
+        return resolver.report(.trait_outside_parameter, node, node_type, 0);
     }
     return node_type;
 }

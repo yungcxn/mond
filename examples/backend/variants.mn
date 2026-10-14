@@ -1,0 +1,53 @@
+<include "lib/out.mn">;
+
+variant Shape = +(Circle(u32 r), Rect(u32 w, u32 h), Dot);
+variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+variant A = +(X, Y(u32));
+variant B = +(Z(u64), W);
+variant AB = A || B;
+
+fun area = (Shape s) -> u32: ret match s {
+    Shape.Circle(r) => 3 * r * r,
+    Shape.Rect(w, h) => w * h,
+    Shape.Dot => 0,
+};
+
+fun which = (AB v) -> u64: ret match v {
+    A.X => 1,
+    A.Y(k) => k as u64 + 10,
+    B.Z(k) => k + 100,
+    B b => 1000,
+};
+
+fun first_some = (Opt8 a, Opt8 b) -> u8: ret match a { Opt8.Some(x) => x, Opt8.None => b ?? 9 };
+
+fun grow = (Shape s) -> Shape: ret match s {
+    Shape.Circle(r) => Shape.Circle(r + 1),
+    _ => s,
+};
+
+$main = () {
+    line_u64(area(Shape.Circle(2)) as u64);           #> 12
+    line_u64(area(Shape.Rect(3, 4)) as u64);          #> 12
+    line_u64(area(Shape.Dot) as u64);                 #> 0
+    line_u64(area(grow(grow(Shape.Circle(1)))) as u64);  #> 27
+    line_u64(which(A.X));                             #> 1
+    line_u64(which(A.Y(5)));                          #> 15
+    line_u64(which(B.Z(7)));                          #> 107
+    line_u64(which(B.W));                             #> 1000
+    line_u64(first_some(Opt8.None, 42) as u64);       #> 42
+    line_u64(first_some(Opt8.None, Opt8.None) as u64);  #> 9
+    line_u64(first_some(7, 1) as u64);                #> 7
+    mut Shape s = Shape.Dot;
+    mut u32 i = 0;
+    while i < 3, i += 1: s = Shape.Rect(i + 1, 2);
+    line_u64(area(s) as u64);                         #> 6
+    line_u64(if Shape.Rect(1, 2) == Shape.Rect(1, 2): 1 else: 0);  #> 1
+    line_u64(if Shape.Rect(1, 2) == Shape.Rect(2, 1): 1 else: 0);  #> 0
+    line_u64(Shape.Dot.$tag as u64);                  #> 2
+    # a case value copied twice keeps its size
+    rect = Shape.Rect(5, 6);
+    Shape copy = rect;
+    Shape again = copy;
+    line_u64(area(again) as u64);                     #> 30
+}

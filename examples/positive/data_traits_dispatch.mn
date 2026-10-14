@@ -56,7 +56,6 @@ stc bool O6 = Num(v = 1) oftype Over; #= O6 false
 
 $main = () {
     Num n = Num(v = 1);
-    &Base b = n.&;
-    t = b.twice(); #: t u32
+    t = via_ref(n.&); #: t u32
     x = n.add(n); #: x u32
 }

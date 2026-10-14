@@ -1,13 +1,13 @@
 const std = @import("std");
 const StaticPool = @import("../StaticPool.zig");
-const target = @import("../../main.zig").target;
+const target = @import("../../mond.zig").target;
 const Index = StaticPool.Index;
 const Layout = StaticPool.Layout;
 const SimpleType = StaticPool.SimpleType;
 const dyn_len = StaticPool.dyn_len;
 
 // the memory layout of types in c order (fields are never reordered), memoized per pool entry.
-// the pointer size comes from `target` in main.zig
+// the pointer size comes from `target` in mond.zig
 
 const pointer_bytes: u64 = target.pointer_bits / 8;
 
@@ -25,6 +25,10 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
     const reserved = type_index != .poison_type and pool.tag(type_index) == .simple_type and
         pool.items.column(.data)[@intFromEnum(type_index)] == @intFromEnum(SimpleType.poison);
     if (reserved) return std.mem.zeroes(Layout);
+    // a case is laid out as its variant, before its own entry is marked in progress
+    if (pool.tag(type_index) == .variant_case_type) {
+        return pool.layout(pool.get(type_index).variant_case_type.variant);
+    }
     const i = @intFromEnum(type_index);
     const state = &pool.layouts.column(.state)[i];
     switch (state.*) {
@@ -49,7 +53,7 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
         .array_type => |array| array_layout(pool, array),
         .record_type => |record| record_layout(pool, record),
         .variant_type => |variant| variant_layout(pool, type_index, variant),
-        .variant_case_type => |case| return pool.layout(case.variant),
+        .variant_case_type => unreachable,
         .variant_union_type => |members| union_layout(pool, type_index, members),
         // static-only entries and values have no memory
         .meta_type, .trait_type, .static_function, .template_type => Partial{},
@@ -83,14 +87,16 @@ fn primitive(bits: u16) Partial {
     return .{ .size = size, .align_log2 = std.math.log2_int(u64, size) };
 }
 
-// a pointer to a runtime-length array carries its length too, the null address is the niche
+// a pointer to a runtime-length array carries its length too, and a function value the
+// environment of its captures. the null address is the niche
 fn pointer_layout(pool: *StaticPool, type_index: Index) Partial {
     const key = pool.get(type_index);
     const pointee = if (key == .pointer_type) pool.get(key.pointer_type.pointee) else key;
     const to_runtime_length = key == .pointer_type and pointee == .array_type and
         pointee.array_type.length == dyn_len;
+    const is_pair = to_runtime_length or key == .function_type;
     return .{
-        .size = pointer_bytes * @as(u64, if (to_runtime_length) 2 else 1),
+        .size = pointer_bytes * @as(u64, if (is_pair) 2 else 1),
         .align_log2 = std.math.log2_int(u64, pointer_bytes),
         .niche = .{ .offset = 0, .bits = target.pointer_bits, .start = 0, .count = 1 },
     };

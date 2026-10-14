@@ -1,0 +1,35 @@
+<include "lib/out.mn">;
+
+trait Base = !{
+    fun id = () -> u32;
+    fun twice = () -> u32: ret self.id() * 2;
+}
+type Num = *(u32 v) implof Base !{ fun id = () -> u32: ret self.v; }
+type Over = *(u32 v) implof Base !{
+    fun id = () -> u32: ret self.v;
+    fun twice = () -> u32: ret 77;
+}
+variant Bit = +(Zero, One) implof Base !{
+    fun id = () -> u32: ret match self.* { Bit.Zero => 0, Bit.One => 1 };
+}
+trait Counter = !{ fun bump = () -> u32; }
+type Clicks = *(mut u32 n) implof Counter !{ fun bump = () -> u32 { self.n += 1; ret self.n; } }
+
+fun via_ref = (&Base b) -> u32: ret b.twice();
+fun via_value = (Base b) -> u32: ret b.id() + 1000;
+fun pump = (*Counter c, u32 times) -> u32 {
+    mut u32 last = 0;
+    for 0..<times: last = c.bump();
+    ret last;
+}
+
+$main = () {
+    Num n = Num(v = 21);
+    line_u64(via_ref(n.&) as u64);            #> 42
+    line_u64(via_ref(Over(v = 1).&) as u64);  #> 77
+    line_u64(via_ref(Bit.One.&) as u64);      #> 2
+    line_u64(via_value(n) as u64);            #> 1021
+    mut Clicks c = Clicks(n = 5);
+    line_u64(pump(c.&, 3) as u64);            #> 8
+    line_u64(c.n as u64);                     #> 8
+}

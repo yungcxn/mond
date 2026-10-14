@@ -1,0 +1,44 @@
+<include "lib/out.mn">;
+
+type Pt = *(mut i32 x, i32 y = 0) !{
+    fun sum = () -> i32: ret self.x + self.y;
+    fun shift = (i32 d) { self.x += d; }
+}
+type Big = *(mut [64]u64 cells, mut u32 used);
+mut u64 counter = 5;
+stc [4]u32 SQUARES = for i in 0..<4: i * i;
+
+fun fill = (u32 n) -> Big {
+    mut Big b = Big.$init();
+    for i in 0..<n: b.cells[i] = (i * i) as u64;
+    b.used = n;
+    ret b;
+}
+
+fun total = (&[]u32 xs) -> u64 {
+    mut u64 s = 0;
+    for x in xs: s += x as u64;
+    ret s;
+}
+
+$main = () {
+    mut Pt p = Pt(3);
+    p.shift(4);
+    line_i64(p.sum() as i64);                 #> 7
+    q = p with (y = 10);
+    line_i64(q.sum() as i64);                 #> 17
+    b = fill(10);
+    line_u64(b.cells[9]);                     #> 81
+    line_u64(b.used as u64);                  #> 10
+    mut [5]u32 xs = [1, 2, 3, 4, 5];
+    xs[2] = 30;
+    line_u64(total(xs.&));                    #> 42
+    line_u64(total(SQUARES.&));               #> 14
+    counter += 2;
+    line_u64(counter);                        #> 7
+    [3]u64 copied = for i in 0..<3: b.cells[i + 1];
+    line_u64(copied[0] + copied[1] + copied[2]);  #> 14
+    &[]u32 view = xs.&;
+    line_u64(view.$len);                      #> 5
+    line_i64(view[4] as i64);                 #> 5
+}

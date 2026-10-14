@@ -29,7 +29,7 @@ stc u64 S1 = sizeof Tail; #= S1 8
 stc u64 S2 = sizeof BoolWide; #= S2 16
 stc u64 S3 = sizeof ArrField; #= S3 8
 stc u64 S4 = sizeof F16s; #= S4 6
-stc u64 S5 = sizeof FnField; #= S5 16
+stc u64 S5 = sizeof FnField; #= S5 24
 stc u64 S6 = sizeof HoldsPk; #= S6 6
 stc u64 S7 = sizeof PkHoldsAl; #= S7 9
 stc u64 S8 = sizeof PkArr; #= S8 9

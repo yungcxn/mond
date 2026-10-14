@@ -551,7 +551,10 @@ fun beats = (Move a, Move b) -> i32 {
     ret if wins: 1 else: -1;
 }
 
-fun duel = (Player a, Player b, u32 rounds) -> i32 {
+fun duel = (Player first, Player second, u32 rounds) -> i32 {
+    # copies, as playing changes a player
+    mut a = first;
+    mut b = second;
     mut Move la = Move.Rock;
     mut Move lb = Move.Rock;
     mut i32 score = 0;
