@@ -193,6 +193,8 @@ pub fn lower(self: *HighLowerer) void {
     while (i < self.function_queue.len) : (i += 1) {
         const declaration = self.function_queue.buffer[i];
         self.reset_function_state();
+        // the parameters come from the definition
+        self.builder.current_origin = decl_pool.get(declaration, .node);
         const function = self.function_of.get(declaration).?;
         const function_type = self.substituted(decl_pool.get(declaration, .value_type));
         self.return_type = self.static_pool.get(function_type).function_type.return_type;
@@ -773,6 +775,9 @@ fn expression_as(self: *HighLowerer, node: NodeId, target_type: Index) Ref {
 }
 
 fn expression(self: *HighLowerer, node: NodeId) Ref {
+    const outer_origin = self.builder.current_origin;
+    self.builder.current_origin = node;
+    defer self.builder.current_origin = outer_origin;
     const value_type = self.type_of(node);
     if (self.static_value_of(node)) |value| return self.constant_of(value, value_type);
     const first = self.resolver.tree.arg(node, 0);

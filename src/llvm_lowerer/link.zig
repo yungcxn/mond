@@ -16,8 +16,14 @@ const macos_version = if (builtin.os.tag == .macos) std.fmt.comptimePrint("{d}.{
     builtin.os.version_range.semver.min.minor,
 }) else "";
 
-pub fn executable(arena: std.mem.Allocator, object: [:0]const u8, output: [:0]const u8) bool {
-    const arguments: []const [*:0]const u8 = switch (builtin.os.tag) {
+// `inputs`: further object files and libraries (`foo.o`, `libbar.a`, `-lm`), the c code mond calls
+pub fn executable(
+    arena: std.mem.Allocator,
+    object: [:0]const u8,
+    output: [:0]const u8,
+    inputs: []const [:0]const u8,
+) bool {
+    const system: []const [*:0]const u8 = switch (builtin.os.tag) {
         .macos => &.{
             "ld64.lld",
             "-arch",
@@ -53,7 +59,11 @@ pub fn executable(arena: std.mem.Allocator, object: [:0]const u8, output: [:0]co
         },
         else => @compileError("mond links only on macos and linux"),
     };
-    return llvm.mond_lld_link(@intCast(arguments.len), @ptrCast(@constCast(arguments.ptr)));
+    var arguments: std.ArrayList([*:0]const u8) = .empty;
+    arguments.appendSlice(arena, system) catch @panic("OOM");
+    for (inputs) |input| arguments.append(arena, input.ptr) catch @panic("OOM");
+    const count: c_int = @intCast(arguments.items.len);
+    return llvm.mond_lld_link(count, @ptrCast(arguments.items.ptr));
 }
 
 fn in_crt_dir(arena: std.mem.Allocator, file: []const u8) [*:0]const u8 {

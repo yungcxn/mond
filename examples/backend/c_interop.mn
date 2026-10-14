@@ -1,0 +1,64 @@
+<include "lib/out.mn">;
+
+# examples/backend/lib/clib.c, linked into every backend test
+type Pair = *(i32 x, i32 y);
+type Point = *(f64 x, f64 y);
+type Triple = *(i64 a, i64 b, i64 c);
+type Color = *(f32 r, f32 g, f32 b);
+type Tagged = *(u8 tag, i32 value);
+type Step = (i64) -> i64;
+
+fun clib_negate8 = (i8 value) -> i8;
+fun clib_double16 = (u16 value) -> u16;
+fun clib_is_even = (u32 value) -> bool;
+fun clib_sum_pair = (Pair pair) -> i64;
+fun clib_make_pair = (i32 x, i32 y) -> Pair;
+fun clib_length2 = (Point point) -> f64;
+fun clib_scale = (Point point, f64 factor) -> Point;
+fun clib_sum_triple = (Triple triple) -> i64;
+fun clib_make_triple = (i64 base) -> Triple;
+fun clib_brightness = (Color color) -> f32;
+fun clib_gray = (f32 level) -> Color;
+fun clib_tagged = (Tagged tagged) -> i32;
+fun clib_count = (&[]u8 bytes, u64 length, u8 wanted) -> u64;
+fun clib_fill = (*i32 out, i32 count);
+fun clib_apply = (Step function, i64 value) -> i64;
+# several parameter lists: one variadic c function, its shared first parameter is fixed
+fun clib_sum = (i32 count, i8 a, u16 b) -> i64;
+fun clib_sum = (i32 count, i32 a, i32 b, i32 c) -> i64;
+fun clib_average = (i32 count, f32 a, f64 b) -> f64;
+fun clib_average = (i32 count, f64 a) -> f64;
+fun printf = (&u8 format, &u8 text, i64 number) -> i32;
+fun printf = (&u8 format, f64 number) -> i32;
+
+fun triple = (i64 x) -> i64: ret x * 3;
+
+$main = () {
+    line_i64(clib_negate8(5) as i64);                         #> -5
+    line_u64(clib_double16(300) as u64);                      #> 600
+    line_u64(if clib_is_even(42): 1 else: 0);                 #> 1
+    line_i64(clib_sum_pair(Pair(20, 22)));                    #> 42
+    made = clib_make_pair(7, -9);
+    line_i64((made.x * 10 + made.y) as i64);                  #> 61
+    line_i64(clib_length2(Point(3.0, 4.0)) as i64);           #> 25
+    scaled = clib_scale(Point(1.5, -2.0), 4.0);
+    line_i64((scaled.x * 100.0 + scaled.y) as i64);           #> 592
+    line_i64(clib_sum_triple(Triple(100, 20, 3)));            #> 123
+    big = clib_make_triple(40);
+    line_i64(big.a + big.b + big.c);                          #> 123
+    line_i64((clib_brightness(Color(0.5, 1.25, 2.25)) * 4.0) as i64);  #> 16
+    gray = clib_gray(1.5);
+    line_i64(((gray.r + gray.g + gray.b) * 2.0) as i64);      #> 9
+    line_i64(clib_tagged(Tagged(7, 31)) as i64);              #> 7031
+    [7]u8 word = "banana!";
+    line_u64(clib_count(word.&, 7, 'a'));                     #> 3
+    mut [4]i32 squares = [0, 0, 0, 0];
+    clib_fill(squares[0].&, 4);
+    line_i64((squares[1] + squares[2] + squares[3]) as i64);  #> 14
+    line_i64(clib_apply(triple, 14));                         #> 42
+    line_i64(clib_sum(2, -3, 1000));                          #> 997
+    line_i64(clib_sum(3, 1, 2, 3));                           #> 6
+    line_i64((clib_average(2, 1.5, 2.5) * 10.0) as i64);      #> 20
+    printf("%s %lld\n", "printf", 64);                        #> printf 64
+    printf("%.2f\n", 0.25);                                   #> 0.25
+}

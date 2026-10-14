@@ -15,7 +15,14 @@ pub const none: u32 = std.math.maxInt(u32);
 // constants and globals have the top bit of a ref set, instructions never
 const constant_bit: u32 = 1 << 31;
 
-const Instruction = struct { op: Op, result_type: Index, a: u32, b: u32, block: u32 };
+const Instruction = struct {
+    op: Op,
+    result_type: Index,
+    a: u32,
+    b: u32,
+    block: u32,
+    origin: u32,
+};
 
 const BlockState = struct {
     // all predecessors are known, reading a variable may complete its phis right away
@@ -59,6 +66,8 @@ definitions: std.AutoHashMapUnmanaged(u64, Ref) = .empty,
 // pure instructions already emitted in the current block, for local value numbering
 value_numbers: std.AutoHashMapUnmanaged(ValueKey, Ref) = .empty,
 current_block: u32 = 0,
+// what the instructions emitted now come from, a tree node for the lowerer, for debug info
+current_origin: u32 = 0,
 // the current block ended in a terminator, anything emitted now would be dead
 is_unreachable: bool = false,
 
@@ -103,6 +112,7 @@ pub fn reset(self: *FunctionBuilder) void {
     self.definitions.clearRetainingCapacity();
     self.value_numbers.clearRetainingCapacity();
     self.is_unreachable = false;
+    self.current_origin = 0;
 }
 
 // instructions
@@ -141,6 +151,7 @@ pub fn emit_raw(
         .a = a,
         .b = b,
         .block = block,
+        .origin = self.current_origin,
     });
     return @enumFromInt(self.instructions.len() - 1);
 }
@@ -524,6 +535,7 @@ pub fn freeze(self: *FunctionBuilder, ir: *HighIr, function_index: u32) void {
             .ty = all.result_type[i],
             .a = self.frozen_operand(ir, shape[0], all.a[i], tables.frozen_index),
             .b = self.frozen_operand(ir, shape[1], all.b[i], tables.frozen_index),
+            .origin = all.origin[i],
         });
     }
 

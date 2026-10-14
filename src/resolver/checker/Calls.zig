@@ -703,6 +703,7 @@ fn check_dispatch_group(self: *Calls, head: DeclPool.Index) void {
 
     var size: u32 = 0;
     var fallback_count: u32 = 0;
+    const head_result = self.result_type_of(head);
     var member = head;
     while (member != .none) : (member = resolver.decl_pool.get(member, .next_overload)) {
         if (!self.has_same_parameters(member, head)) continue;
@@ -715,16 +716,36 @@ fn check_dispatch_group(self: *Calls, head: DeclPool.Index) void {
             if (parameter.where != 0 and parameter.@"else" == 0 and !parameter.stc) break false;
         } else true;
         fallback_count += @intFromBool(is_fallback);
+        const member_node = resolver.decl_pool.get(member, .node);
         if (is_fallback and fallback_count > 1) {
-            const member_node = resolver.decl_pool.get(member, .node);
             const member_name = resolver.decl_pool.get(member, .name);
             resolver.doctor.report(.duplicate_declaration, member_node, member_name, head);
+            continue;
+        }
+
+        // one call runs any of them, so they give the same result type
+        const member_result = self.result_type_of(member);
+        const results_differ = member_result != head_result and
+            member_result != .poison_type and head_result != .poison_type;
+        if (results_differ) {
+            _ = resolver.report(.ret_type_mismatch, member_node, member_result, head_result);
         }
     }
 
     if (size > 1 and fallback_count == 0) {
         _ = resolver.report(.no_matching_overload, resolver.decl_pool.get(head, .node), size, 0);
     }
+}
+
+fn result_type_of(self: *Calls, function: DeclPool.Index) StaticPool.Index {
+    const resolver = self.owning_resolver();
+    const realized = resolver.declarations.realized(function);
+    const function_type = resolver.decl_pool.get(realized, .value_type);
+    if (function_type == .none or resolver.static_pool.tag(function_type) != .function_type) {
+        return .poison_type;
+    }
+    const result = resolver.static_pool.get(function_type).function_type.return_type;
+    return resolver.static_pool.substitute_type_variables(result);
 }
 
 // how well a candidate fits the argument types, -1 when it does not

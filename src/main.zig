@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const mond = @import("mond");
 const LLVMLowerer = @import("LLVMLowerer.zig");
 const emit = @import("llvm_lowerer/emit.zig");
@@ -35,6 +36,10 @@ const Args = struct {
     out: ?[:0]const u8 = null,
     // the optimization level, see `emit.Level`
     level: ?[:0]const u8 = null,
+    // dwarf for a debugger: functions, lines and frame pointers
+    debug: bool = false,
+    // object files and libraries to link with, comma separated (`clib.o,libfoo.a,-lm`)
+    with: ?[:0]const u8 = null,
     // the stages to print, comma separated, see `Stages`
     print: ?[:0]const u8 = null,
     inspect: ?[]const [:0]const u8 = null,
@@ -209,7 +214,16 @@ pub fn main(init: std.process.Init) void {
 
     if (stages.ir) dbg.HighLowerer.print(io, &lowerer) catch |err| @panic(@errorName(err));
 
-    var backend = LLVMLowerer.init(alloc, &lowerer, args.build, .{ .checks = level == .@"0" });
+    const debug_source = if (!args.debug) null else std.Io.Dir.cwd().realPathFileAlloc(
+        io,
+        args.build,
+        arena,
+    ) catch |err| @panic(@errorName(err));
+    var backend = LLVMLowerer.init(alloc, &lowerer, args.build, .{
+        .checks = level == .@"0",
+        .debug_source = debug_source,
+        .optimized = level != .@"0",
+    });
     defer backend.deinit();
     backend.lower();
 
@@ -223,8 +237,16 @@ pub fn main(init: std.process.Init) void {
         @panic("OOM");
     };
     machine.write_object(backend.module, object);
-    const linked = link.executable(arena, object, executable);
-    std.Io.Dir.cwd().deleteFile(io, object) catch {};
+    var inputs: std.ArrayList([:0]const u8) = .empty;
+    var listed = std.mem.tokenizeScalar(u8, args.with orelse "", ',');
+    while (listed.next()) |input| {
+        const terminated = arena.dupeSentinel(u8, input, 0) catch @panic("OOM");
+        inputs.append(arena, terminated) catch @panic("OOM");
+    }
+    const linked = link.executable(arena, object, executable, inputs.items);
+    // on macos the debugger reads the dwarf from the object file the executable names
+    const keeps_object = args.debug and builtin.os.tag.isDarwin();
+    if (!keeps_object) std.Io.Dir.cwd().deleteFile(io, object) catch {};
     if (!linked) std.process.exit(1);
 }
 

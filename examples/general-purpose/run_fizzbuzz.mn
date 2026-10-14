@@ -1,8 +1,8 @@
-fun print = (&u8 fmt);
-fun print = (&u8 fmt, i32 a);
-fun print = (&u8 fmt, u32 a);
-fun print = (&u8 fmt, &u8 a);
-fun print = (&u8 fmt, u32 a, u32 b);
+fun printf = (&u8 fmt);
+fun printf = (&u8 fmt, i32 a);
+fun printf = (&u8 fmt, u32 a);
+fun printf = (&u8 fmt, &u8 a);
+fun printf = (&u8 fmt, u32 a, u32 b);
 
 variant Kind = +(Fizz, Buzz, FizzBuzz, Num(u32)) tagof u8;
 
@@ -29,10 +29,10 @@ fun classify = (u32 n) -> Kind {
 
 fun show = (Kind k) {
     match k {
-        Kind.Fizz => print("Fizz\n"),
-        Kind.Buzz => print("Buzz\n"),
-        Kind.FizzBuzz => print("FizzBuzz\n"),
-        Kind.Num(n) => print("%u\n", n),
+        Kind.Fizz => printf("Fizz\n"),
+        Kind.Buzz => printf("Buzz\n"),
+        Kind.FizzBuzz => printf("FizzBuzz\n"),
+        Kind.Num(n) => printf("%u\n", n),
     }
 }
 
@@ -58,11 +58,11 @@ fun print_primes = (u32 limit) -> u32 {
     mut u32 count = 0;
     for n in 2..=limit {
         if is_prime(n) {
-            print("%u ", n);
+            printf("%u ", n);
             count += 1;
         }
     }
-    print("\n");
+    printf("\n");
     ret count;
 }
 
@@ -72,7 +72,7 @@ fun twin_pairs = (u32 limit) -> u32 {
     for n in 2..=limit {
         if !is_prime(n): cont;
         if prev != 0 and n - prev == 2 {
-            print("(%u, %u)\n", prev, n);
+            printf("(%u, %u)\n", prev, n);
             pairs += 1;
         }
         prev = n;
@@ -100,7 +100,7 @@ fun longest_collatz = (u32 limit) -> u32 {
             best_steps = s;
         }
     }
-    print("longest under %u: %u\n", limit, best);
+    printf("longest under %u: %u\n", limit, best);
     ret best;
 }
 

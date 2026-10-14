@@ -41,6 +41,6 @@ $main = () -> u32 {
 
 ## What a program can do today
 
-The compiler builds native executables through LLVM (see [tooling](tooling.md)). There is no standard library: no I/O, heap, or string functions. A function declared without a body (`fun puts = (&u8 s) -> i32;`) is external and links against the C library; records and arrays go to it by value, and variadic C functions like `printf` aren't supported. Arrays have a fixed length, strings are `[n]u8` (string literals get a hidden terminating zero for C), and only lists of trees grow.
+The compiler builds native executables through LLVM (see [tooling](tooling.md)). There is no standard library: no I/O, heap, or string functions. A function declared without a body (`fun puts = (&u8 s) -> i32;`) is a C function, see [tooling](tooling.md#c-functions). Arrays have a fixed length, strings are `[n]u8` (string literals get a hidden terminating zero for C), and only lists of trees grow.
 
 The code on these pages is compiled by `zig build test`. In the examples, `#= name value` shows a static value, `#: name type` a type, and `#! code` the diagnostic a line reports.

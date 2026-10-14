@@ -1,7 +1,7 @@
-fun print = (&u8 fmt);
-fun print = (&u8 fmt, u32 a);
-fun print = (&u8 fmt, &u8 a);
-fun print = (&u8 fmt, &u8 a, u32 b);
+fun printf = (&u8 fmt);
+fun printf = (&u8 fmt, u32 a);
+fun printf = (&u8 fmt, &u8 a);
+fun printf = (&u8 fmt, &u8 a, u32 b);
 
 fun text_len = (&u8 s) -> u32 {
     mut u32 n = 0;
@@ -72,7 +72,7 @@ type Table = *(mut [16]Entry slots, mut u32 used = 0, mut u32 probes = 0) !{
 
 fun report = (*Table t) {
     for i in 0..<16 {
-        if t.slots[i].taken: print("%s: %u\n", t.slots[i].word, t.slots[i].count);
+        if t.slots[i].taken: printf("%s: %u\n", t.slots[i].word, t.slots[i].count);
     }
 }
 
@@ -87,12 +87,12 @@ $main = (i32 argc, &[]&u8 argv) -> i32 {
     used = table.used; #: used u32
     probes = table.probes; #: probes u32
     if used == 0 {
-        print("no words\n");
+        printf("no words\n");
         ret 1;
     }
     top = table.most_common(); #: top u32
     &u8 winner = table.slots[top].word; #: winner &u8
-    print("most common: %s x %u\n", winner, table.count_of(winner));
+    printf("most common: %s x %u\n", winner, table.count_of(winner));
     report(table.&);
     hello = table.count_of("hello"); #: hello u32
     ret if rejected == 0: 0 else: 2;

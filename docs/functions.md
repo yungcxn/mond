@@ -64,7 +64,7 @@ A tie is `ambiguous_overload`, and no fit at all is `no_matching_overload`. Used
 
 ### `where` dispatch
 
-Overloads with the same parameters form a group. The guarded ones (`where` without `else`) are tried in order, and the unguarded one is the fallback. A static call picks at compile time, a runtime call tests at runtime.
+Overloads with the same parameters form a group. The guarded ones (`where` without `else`) are tried in order, and the unguarded one is the fallback. A static call picks at compile time, a runtime call tests at runtime. They share one result type, a member giving another is `ret_type_mismatch`.
 
 ```mond
 fun sign = (i32 x where x < 0) -> i32: ret -1;
@@ -93,7 +93,7 @@ stc i32 SL = sees_later();   #= SL 5
 ```
 
 - Captures: mutable locals, records and arrays are captured by reference, other immutable locals by copy. Globals are not captured.
-- At run time a function value is a function and the environment holding its captures (`sizeof` 16). The environment lives in the frame that made the closure, so a capturing closure must not outlive that call (`make_mul` above works at compile time only).
+- At run time a function value is a function and the environment holding its captures (`sizeof` 16). The environment lives in the frame that made the closure. A closure that outlives that call (returned, stored, or passed where it may be kept, like `make_mul` above) keeps its environment, and the variables it captures by reference, on the heap; that memory is never freed.
 - `f = (..): ..` declares a local function from that point on. `fun f = ..` in a body is hoisted to its whole block.
 - `brk` and `cont` don't cross a function boundary.
 - There's no UFCS: `x.f()` works only for methods.

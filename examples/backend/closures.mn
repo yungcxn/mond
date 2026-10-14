@@ -1,0 +1,29 @@
+<include "lib/out.mn">;
+
+type IntFn = (i64) -> i64;
+type Counter = () -> i64;
+
+fun make_mul = (i64 n) -> IntFn: ret (i64 x): x * n;
+fun compose = (IntFn f, IntFn g) -> IntFn: ret (i64 x): f(g(x));
+fun apply = (IntFn f, i64 v) -> i64: ret f(v);
+
+# the counted variable is captured by reference and outlives the call making it
+fun make_counter = (i64 start) -> Counter {
+    mut i64 count = start;
+    ret () -> i64 { count += 1; ret count; };
+}
+
+$main = () {
+    triple = make_mul(3);
+    double = make_mul(2);
+    line_i64(triple(7));                        #> 21
+    line_i64(compose(triple, double)(5));       #> 30
+    line_i64(apply((i64 x): x + 1, 41));        #> 42
+    next = make_counter(10);
+    next();
+    next();
+    line_i64(next());                           #> 13
+    mut [3]IntFn made = [triple, triple, triple];
+    for i in 0..<3: made[i] = make_mul(i as i64 + 1);
+    line_i64(made[0](10) + made[1](10) + made[2](10));  #> 60
+}

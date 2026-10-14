@@ -1,6 +1,7 @@
 // the llvm c api the backend uses, translated into the zig module `llvm_c` by build.zig
 #include <llvm-c/Core.h>
 #include <llvm-c/Analysis.h>
+#include <llvm-c/DebugInfo.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 #include <llvm-c/Transforms/PassBuilder.h>

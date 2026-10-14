@@ -32,3 +32,6 @@ fun f = (i32 v, i8 small, u8 ub, f32 x32) {
 }
 
 $main = () {}
+
+fun half = (f32 x where x > 0): ret 1;
+fun half = (f32 x): ret x / 2; #! ret_type_mismatch

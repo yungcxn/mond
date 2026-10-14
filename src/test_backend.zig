@@ -19,13 +19,14 @@ const time_limit: std.Io.Timeout = .{ .duration = .{
     .clock = .awake,
 } };
 
-// `mond-test-backend <mond> [filters..]`
+// `mond-test-backend <mond> <c library> [filters..]`
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const arena = init.arena.allocator();
     const arguments = try init.minimal.args.toSlice(arena);
     const mond = arguments[1];
-    const filters = arguments[2..];
+    const c_library = arguments[2];
+    const filters = arguments[3..];
 
     var buffer: [1 << 16]u8 = undefined;
     var file_writer = std.Io.File.stdout().writerStreaming(io, &buffer);
@@ -34,6 +35,8 @@ pub fn main(init: std.process.Init) !void {
     var directory = try std.Io.Dir.cwd().openDir(io, directory_path, .{ .iterate = true });
     defer directory.close(io);
     try std.Io.Dir.cwd().createDirPath(io, output_path);
+    // the executables are built anew each run, none of them is kept
+    defer std.Io.Dir.cwd().deleteTree(io, output_path) catch {};
 
     // sorted, so the output does not depend on the file system
     var names: std.ArrayList([]const u8) = .empty;
@@ -60,7 +63,7 @@ pub fn main(init: std.process.Init) !void {
         const source = try directory.readFileAlloc(io, name, arena, .limited(50 << 20));
         const expected = try expected_output(arena, source);
         for (levels) |level| {
-            const passed = try check(writer, arena, io, mond, name, level, expected);
+            const passed = try check(writer, arena, io, mond, c_library, name, level, expected);
             counts[@intFromBool(!passed)] += 1;
         }
     }
@@ -90,6 +93,7 @@ fn check(
     arena: std.mem.Allocator,
     io: std.Io,
     mond: []const u8,
+    c_library: []const u8,
     name: []const u8,
     level: []const u8,
     expected: []const u8,
@@ -99,7 +103,7 @@ fn check(
     const executable = try std.fmt.allocPrint(arena, "{s}/{s}-{s}", .{ output_path, stem, level });
 
     const built = try std.process.run(arena, io, .{
-        .argv = &.{ mond, "-b", source_path, "-o", executable, "-l", level },
+        .argv = &.{ mond, "-b", source_path, "-o", executable, "-l", level, "-w", c_library },
         .timeout = time_limit,
     });
     if (!exited_cleanly(built.term)) {
@@ -107,6 +111,7 @@ fn check(
         return false;
     }
 
+    defer std.Io.Dir.cwd().deleteFile(io, executable) catch {};
     const ran = try std.process.run(arena, io, .{ .argv = &.{executable}, .timeout = time_limit });
     if (!exited_cleanly(ran.term)) {
         const status = try std.fmt.allocPrint(arena, "ended with {any}", .{ran.term});

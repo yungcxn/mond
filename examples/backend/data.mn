@@ -41,4 +41,11 @@ $main = () {
     &[]u32 view = xs.&;
     line_u64(view.$len);                      #> 5
     line_i64(view[4] as i64);                 #> 5
+    # a record chosen by a branch, each pass anew
+    mut i64 picked = 0;
+    for i in 0..<4 {
+        chosen = if i % 2 == 0: Pt(i as i32, 1) else: Pt(10, i as i32);
+        picked += chosen.sum() as i64;
+    }
+    line_i64(picked);                         #> 28
 }

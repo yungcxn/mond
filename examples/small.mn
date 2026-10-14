@@ -294,7 +294,7 @@ fun recv_sum = (&[1]u8 arr) -> u32: ret arr.*[0];
 fun recv_sum = (&[0]u8 arr) -> u32: ret 0;
 
 # mighty overloading with "where"
-fun safe_div_ovl = (f32 a where a == 1, f32 b where b == 1): ret 1;
+fun safe_div_ovl = (f32 a where a == 1, f32 b where b == 1) -> f32: ret 1;
 fun safe_div_ovl = (f32 a where a == 1, f32 b): ret b;
 fun safe_div_ovl = (f32 a, f32 b where b == 1): ret a;
 fun safe_div_ovl = (f32 a, f32 b where b != 0.0): ret a / b;

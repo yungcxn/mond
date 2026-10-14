@@ -21,12 +21,12 @@ pub fn operand(lowerer: *LLVMLowerer, value: Index) Value {
     const value_type = pool.type_of(value);
     if (!lowerer.types.is_in_memory(value_type)) return lower(lowerer, value, value_type);
 
-    const entry = lowerer.constant_globals.getOrPut(lowerer.allocator, value) catch @panic("OOM");
-    if (!entry.found_existing) {
+    const slot = &lowerer.value_globals[@intFromEnum(value)];
+    if (slot.* == null) {
         const initializer = lower(lowerer, value, value_type);
-        entry.value_ptr.* = constant_global(lowerer, initializer, lowerer.alignment_of(value_type));
+        slot.* = constant_global(lowerer, initializer, lowerer.alignment_of(value_type));
     }
-    return entry.value_ptr.*;
+    return slot.*;
 }
 
 // a constant where an instruction expects `expected`: a string literal typed as the pointer or
@@ -46,16 +46,12 @@ pub fn operand_as(lowerer: *LLVMLowerer, value: Index, expected: Type) Value {
 
 // the value of `zeroed` in memory: zero bytes in a constant global
 pub fn zeros(lowerer: *LLVMLowerer, zeroed_type: Index) Value {
-    const entry = lowerer.zeros.getOrPut(lowerer.allocator, zeroed_type) catch @panic("OOM");
-    if (!entry.found_existing) {
+    const slot = &lowerer.zero_globals[@intFromEnum(zeroed_type)];
+    if (slot.* == null) {
         const initializer = llvm.LLVMConstNull(lowerer.types.of(zeroed_type));
-        entry.value_ptr.* = constant_global(
-            lowerer,
-            initializer,
-            lowerer.alignment_of(zeroed_type),
-        );
+        slot.* = constant_global(lowerer, initializer, lowerer.alignment_of(zeroed_type));
     }
-    return entry.value_ptr.*;
+    return slot.*;
 }
 
 // `value` as an initializer of `expected` (its own type when none), of bytes when it holds a
@@ -109,7 +105,7 @@ pub fn lower(lowerer: *LLVMLowerer, value: Index, expected: Index) Value {
         },
         .variant_value => |variant| lower_variant(lowerer, variant, into),
         .function_value => |declaration| {
-            const function = lowerer.function_of_declaration.get(declaration).?;
+            const function = lowerer.function_of_declaration[@intFromEnum(declaration)];
             return pair(lowerer, lowerer.thunk(function), llvm.LLVMConstNull(types.pointer));
         },
         // types and trees are static only, and so is what stands for them
@@ -119,12 +115,13 @@ pub fn lower(lowerer: *LLVMLowerer, value: Index, expected: Index) Value {
 
 // the bytes of a string with a zero byte behind, which c functions need
 pub fn string_pointer(lowerer: *LLVMLowerer, value: Index) Value {
-    const entry = lowerer.strings.getOrPut(lowerer.allocator, value) catch @panic("OOM");
-    if (entry.found_existing) return entry.value_ptr.*;
-    const bytes = lowerer.pool.get(value).string_value;
-    const text = llvm.LLVMConstStringInContext2(lowerer.context, bytes.ptr, bytes.len, 0);
-    entry.value_ptr.* = constant_global(lowerer, text, 1);
-    return entry.value_ptr.*;
+    const slot = &lowerer.value_globals[@intFromEnum(value)];
+    if (slot.* == null) {
+        const bytes = lowerer.pool.get(value).string_value;
+        const text = llvm.LLVMConstStringInContext2(lowerer.context, bytes.ptr, bytes.len, 0);
+        slot.* = constant_global(lowerer, text, 1);
+    }
+    return slot.*;
 }
 
 fn constant_global(lowerer: *LLVMLowerer, initializer: Value, alignment: c_uint) Value {

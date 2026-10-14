@@ -18,12 +18,24 @@ zig build lsp                     # the language server, into lsp/vscode and lsp
 |---|---|
 | `-o` `--out` | the executable, by default the source's name without `.mn` |
 | `-l` `--level` | `0` (default) unoptimized, traps on division by zero, oversized shifts and indices past an array's end; `1` `2` `3` optimized without checks; `s` `z` small |
+| `-d` `--debug` | DWARF for a debugger: functions, source lines and frame pointers. On macOS the object file stays next to the executable, lldb reads the DWARF from it. Code from `include` and macros is placed at the line that splices it |
+| `-w` `--with` | object files and libraries to link with, comma separated: `-w clib.o,libfoo.a,-lm` |
 | `-p` `--print` | `tree` the resolved tree, `decls` the declarations, `ir` the SSA IR, `llvm` the optimized LLVM IR |
 | `-i` `--inspect` | declarations by name, `#index` or `:line`; nothing is built |
 
 Diagnostics go to stderr as `file:line:column: code operands`. `$main` returns the exit code. It may take `(argc, argv)` as integers, pointers, or `&[]&u8` (the arguments with their count).
 
 Records, arrays and variants live in memory: they are passed by address and returned through a pointer the caller gives. LLVM's passes promote small ones to registers from level 1 on.
+
+### C functions
+
+A function declared without a body is a C function, linked from the C library or from what `-w` names. Its values cross as C passes them on this machine (aarch64 or x86-64): ints, floats, `bool` and pointers as themselves, records by value in registers or as a copy in memory, a slice (`&[]u8`) as the address of its first element, and a function without captures, named directly, as a C function pointer. A C function declared with several parameter lists is variadic (`printf`): the parameters all lists share are fixed, the others get C's promotions.
+
+```mond
+fun printf = (&u8 format, i64 number) -> i32;
+fun printf = (&u8 format, &u8 text) -> i32;
+fun qsort = (*u8 items, u64 count, u64 size, (&u8, &u8) -> i32 compare);
+```
 
 ### Building mond
 

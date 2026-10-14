@@ -1,7 +1,7 @@
-fun print = (&u8 fmt);
-fun print = (&u8 fmt, u32 a);
-fun print = (&u8 fmt, i64 a);
-fun print = (&u8 fmt, u32 a, u32 b);
+fun printf = (&u8 fmt);
+fun printf = (&u8 fmt, u32 a);
+fun printf = (&u8 fmt, i64 a);
+fun printf = (&u8 fmt, u32 a, u32 b);
 fun read = (i32 fd, *[]u8 buf, u64 n) -> i64;
 fun write = (i32 fd, &[]u8 buf, u64 n) -> i64;
 
@@ -93,9 +93,9 @@ $main = (i32 argc, &[]&u8 argv) -> i32 {
         tokens += scan_line(line.&, stats.&);
         lines += 1;
     }
-    print("lines=%u tokens=%u\n", lines, tokens);
-    print("words=%u nums=%u\n", stats.words, stats.nums);
-    print("sum=%d\n", stats.sum);
+    printf("lines=%u tokens=%u\n", lines, tokens);
+    printf("words=%u nums=%u\n", stats.words, stats.nums);
+    printf("sum=%d\n", stats.sum);
     longest = stats.longest; #: longest u32
     t = next(line.&); #: t +(Word, Num, Sym, Space, End)
     ret if lines > 0: 0 else: 1;

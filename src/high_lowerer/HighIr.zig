@@ -196,7 +196,8 @@ const definitions = blk: {
     break :blk table;
 };
 
-pub const Inst = struct { op: Op, ty: StaticPool.Index, a: u32, b: u32 };
+// `origin`: what the instruction was lowered from, a tree node, 0 for none
+pub const Inst = struct { op: Op, ty: StaticPool.Index, a: u32, b: u32, origin: u32 };
 
 // `preds`: where the block's predecessor list starts in `extra`
 pub const Block = struct { start: u32, len: u32, preds: u32 };

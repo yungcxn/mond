@@ -1,5 +1,5 @@
-fun print = (&u8 fmt);
-fun print = (&u8 fmt, i64 v);
+fun printf = (&u8 fmt);
+fun printf = (&u8 fmt, i64 v);
 
 variant Tok = +(Num(i64 v), Plus, Minus, Star, LParen, RParen, End) tagof u8;
 variant Op = +(Push(i64 v), Add, Sub, Mul) tagof u8;
@@ -90,7 +90,7 @@ fun compile = (&[]u8 src) -> Program {
 $main = (i32 argc, &[]&u8 argv) -> i32 {
     Program prog = compile("12+30".&);
     result = prog.eval(); #: result i64
-    print("result %d", result);
+    printf("result %d", result);
     via_trait = run_eval(prog.&); #: via_trait i64
     ret if result == 42: 0 else: 1;
 }

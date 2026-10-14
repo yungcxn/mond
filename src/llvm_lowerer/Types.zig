@@ -20,7 +20,8 @@ allocator: std.mem.Allocator,
 context: llvm.LLVMContextRef,
 pool: *StaticPool,
 names: *const NamePool,
-memo: std.AutoHashMapUnmanaged(Index, Type) = .empty,
+// per pool entry, null until lowered: the pool is complete once the backend runs
+memo: []Type,
 pointer: Type,
 // a runtime-length array or a pointer to one: the first element and the length
 slice: Type,
@@ -40,11 +41,14 @@ pub fn init(
 ) Types {
     const pointer = llvm.LLVMPointerTypeInContext(context, 0);
     const length = llvm.LLVMInt64TypeInContext(context);
+    const memo = allocator.alloc(Type, pool.items.len()) catch @panic("OOM");
+    @memset(memo, null);
     return .{
         .allocator = allocator,
         .context = context,
         .pool = pool,
         .names = names,
+        .memo = memo,
         .pointer = pointer,
         .slice = llvm.LLVMStructTypeInContext(
             context,
@@ -64,15 +68,14 @@ pub fn init(
 }
 
 pub fn deinit(self: *Types) void {
-    self.memo.deinit(self.allocator);
+    self.allocator.free(self.memo);
 }
 
 pub fn of(self: *Types, type_index: Index) Type {
     if (type_index == .none) return self.unit;
-    if (self.memo.get(type_index)) |known| return known;
-    const lowered = self.lower(type_index);
-    self.memo.put(self.allocator, type_index, lowered) catch @panic("OOM");
-    return lowered;
+    const i = @intFromEnum(type_index);
+    if (self.memo[i] == null) self.memo[i] = self.lower(type_index);
+    return self.memo[i];
 }
 
 // whether values of the type exist at run time: functions returning none of them return void
@@ -174,7 +177,7 @@ fn lower(self: *Types, type_index: Index) Type {
         .function_type => self.closure,
         .record_type => |record| blk: {
             const named = self.named_struct(type_index);
-            self.memo.put(self.allocator, type_index, named) catch @panic("OOM");
+            self.memo[@intFromEnum(type_index)] = named;
             const fields = self.allocator.alloc(Type, record.field_types.len) catch @panic("OOM");
             defer self.allocator.free(fields);
             for (record.field_types, fields) |field_type, *field| field.* = self.of(field_type);
