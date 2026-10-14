@@ -56,8 +56,19 @@ pub fn realize(
     }
     if (!resolver.interpreter.charge_steps(node, 64)) return .poison_type;
 
+    // a `fun` taking only types and making a function (`fun f = (type T): (&[]T x) ..`) is
+    // realized like a `stcfun`: what it makes sees the types, also in its per-length realizations
+    const tree = resolver.tree;
+    const value_node = resolver.declarations.value_node(generic);
+    const makes_function_of_types = tree.kind(tree.arg(value_node, 1)) == .def_fun and
+        for (tree.params_of(value_node)) |parameter_node| {
+            const type_node = ParseTree.Param.from_node(tree, parameter_node).ty;
+            if (type_node == 0 or tree.kind(type_node) != .type_type) break false;
+        } else true;
+
     // a length-generic function: a declaration per tuple of lengths, bound in order of appearance
-    if (resolver.decl_pool.get(generic, .kind) != .static_function) {
+    const is_static = resolver.decl_pool.get(generic, .kind) == .static_function;
+    if (!is_static and !makes_function_of_types) {
         const static_pool = &resolver.static_pool;
         // copied out of the pool, which may move while realizing interns new entries
         const length = static_pool.get(arguments).aggregate_value.elements.len;
@@ -140,7 +151,6 @@ pub fn realize(
     resolver.declarations.open_declaration_scope(true, .none, 0);
     defer resolver.scopes.close();
 
-    const value_node = resolver.declarations.value_node(generic);
     const parameter_nodes = resolver.tree.params_of(value_node);
     self.bind_static(generic, arguments);
     for (parameter_nodes) |parameter_node| {
@@ -195,7 +205,14 @@ pub fn realize(
     const static_pool = &resolver.static_pool;
     context.is_static_context = false;
     context.is_interpreted = true;
-    context.return_type = resolver.types.signature(generic).return_type;
+    // an open length of the result (`-> []u32`) is each realization's own, not the first one's
+    const header = resolver.tree.arg(value_node, 0);
+    const declares_result = resolver.tree.kind(header) == .partial__fun_def_header_ret;
+    const signature_result = resolver.types.signature(generic).return_type;
+    context.return_type = if (declares_result and static_pool.has_type_variables(signature_result))
+        resolver.types.concrete_type_from_node(&context, resolver.tree.arg(header, 1))
+    else
+        signature_result;
 
     const first_local = resolver.decl_pool.entries.len();
     const type_variables_before = static_pool.type_variables.count();
@@ -255,7 +272,10 @@ fn bind_static(self: *Generics, generic: DeclPool.Index, arguments: StaticPool.I
 
     for (parameter_nodes, 0..) |parameter_node, i| {
         const declared_type = resolver.types.signature(generic).parameters[i];
-        const parameter_type = if (static_pool.has_type_variables(declared_type))
+        // an argument that failed is reported already, its parameter is poison in the body
+        const parameter_type = if (argument_values[i] == .poison_type)
+            .poison_type
+        else if (static_pool.has_type_variables(declared_type))
             static_pool.type_of(argument_values[i])
         else
             declared_type;

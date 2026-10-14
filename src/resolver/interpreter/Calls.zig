@@ -106,6 +106,13 @@ pub fn call(self: *Calls, node: NodeId) Value {
 
     const declaration = interpreter.node_info(.declaration, node);
     const callee_declaration = interpreter.node_info(.declaration, callee);
+    // a `fun` taking only types made the function this call is (`f(u32)`), the checker kept it
+    const made = interpreter.node_info(.static_value, node);
+    const is_made_function = made != .none and
+        resolver.static_pool.tag(made) == .function_value and
+        callee_declaration != .none and
+        resolver.decl_pool.get(callee_declaration, .kind) != .static_function;
+    if (is_made_function) return .of(&resolver.static_pool, made);
     // a call the checker resolved to a function, unless the callee is a `stcfun` value
     const is_declared_call = declaration != .none and
         resolver.decl_pool.get(declaration, .kind).is_function() and
@@ -122,9 +129,21 @@ pub fn call(self: *Calls, node: NodeId) Value {
         if (!passes_receiver) return self.invoke(node, declaration, arguments, .empty, .empty);
 
         // the receiver is passed by reference, so the method can change it in place
-        const cell = interpreter.variables.cell_of_place(resolver.tree.arg(callee, 0)) orelse {
-            return .poison;
+        // a method that never writes `self` reads a static outside the frames by its value,
+        // only writing it would be impure (`INV.get()` in a `stcfun`)
+        const receiver_node = resolver.tree.arg(callee, 0);
+        const reads_outer_static = blk: {
+            if (resolver.decl_pool.get(realized, .flags).writes) break :blk false;
+            if (!interpreter.has_body_frame()) break :blk false;
+            if (!resolver.tree.props(receiver_node).name) break :blk false;
+            const receiver_declaration = interpreter.node_info(.declaration, receiver_node);
+            if (receiver_declaration == .none) break :blk false;
+            break :blk interpreter.variables.cell_of_declaration(receiver_declaration) == null;
         };
+        const cell = if (reads_outer_static)
+            interpreter.push_cell(interpreter.evaluate(receiver_node))
+        else
+            interpreter.variables.cell_of_place(receiver_node) orelse return .poison;
         const held = interpreter.memory.buffer[cell];
         const receiver: Value = if (held.is_ref())
             held

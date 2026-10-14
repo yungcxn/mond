@@ -4,6 +4,8 @@ multi-purpose system programming language with functional and oop concepts
 
 w.i.p.
 
+The [docs](docs/README.md) are always in sync with the compiler source and its feature set: their code is compiled by `zig build test`.
+
 ## Philosophy
 
 1. Ideally, features should be used by intuition rather than introducing "cool toy semantics" that are unsatisfying to use for experienced users of other common programming languages. 

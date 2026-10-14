@@ -795,10 +795,23 @@ pub fn function_type_of(
         }
     }
 
-    const return_type = if (resolver.tree.kind(header) == .partial__fun_def_header_ret)
-        self.concrete_type_from_node(context, resolver.tree.arg(header, 1))
-    else
-        default_return_type;
+    const return_type = blk: {
+        if (resolver.tree.kind(header) != .partial__fun_def_header_ret) {
+            break :blk default_return_type;
+        }
+        const declared = self.concrete_type_from_node(context, resolver.tree.arg(header, 1));
+        // a result behind a pointer to an unlengthed array is a runtime slice: any length fits
+        if (category == .static or static_pool.tag(declared) != .pointer_type) break :blk declared;
+        const pointer = static_pool.get(declared).pointer_type;
+        if (static_pool.tag(pointer.pointee) != .array_type) break :blk declared;
+        const array = static_pool.get(pointer.pointee).array_type;
+        if (static_pool.tag(array.length) != .type_variable) break :blk declared;
+        const slice = static_pool.intern(.{ .array_type = .{
+            .length = StaticPool.dyn_len,
+            .element = array.element,
+        } });
+        break :blk static_pool.pointer_to(slice, pointer.is_mutable);
+    };
     return static_pool.intern(.{ .function_type = .{
         .category = category,
         .parameters = parameters,

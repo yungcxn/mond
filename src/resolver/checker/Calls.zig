@@ -86,13 +86,16 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
     }
 
     const callee_type = resolver.expressions.infer(context, callee, .none);
-    // a stcfun call producing a function is called like that function
+    // a call making a function (of a stcfun, or of a `fun` taking only types) is called like it
     const declaration: DeclPool.Index = blk: {
         if (tree.kind(callee) != .fun_call) break :blk resolver.node_declarations[callee];
 
         const inner_callee = resolver.node_declarations[tree.arg(callee, 0)];
-        if (inner_callee == .none) break :blk .none;
-        if (resolver.decl_pool.get(inner_callee, .kind) != .static_function) break :blk .none;
+        const calls_stcfun = inner_callee != .none and
+            resolver.decl_pool.get(inner_callee, .kind) == .static_function;
+        const made = resolver.node_static_values[callee];
+        const made_function = made != .none and static_pool.tag(made) == .function_value;
+        if (!calls_stcfun and !made_function) break :blk .none;
         break :blk resolver.node_declarations[callee];
     };
     // `x.m(..)` binds x as the self argument, `Type.m(x.&, ..)` passes it like any other argument
@@ -327,6 +330,10 @@ fn call_declared(
                 return_type == .poison_type;
             if (produces_type and realization == .poison_type) return .poison_type;
             if (produces_type) return static_pool.type_of(realization);
+            // an open length of the result (`-> []u32`) is this call's own
+            const has_own_length = static_pool.has_type_variables(return_type) and
+                realization != .poison_type;
+            if (has_own_length) return static_pool.type_of(realization);
             return return_type;
         }
 
@@ -552,6 +559,13 @@ fn call_declared(
 
         const realized_callee = static_pool.get(realization).function_value;
         resolver.node_declarations[node] = realized_callee;
+        // a `fun` taking only types made a function: the call is that function, as of a `stcfun`
+        const made_function = resolver.decl_pool.get(realized_callee, .node) ==
+            resolver.tree.arg(resolver.declarations.value_node(callee), 1);
+        if (made_function) {
+            resolver.node_static_values[node] = realization;
+            return resolver.decl_pool.get(realized_callee, .value_type);
+        }
         return resolver.types.signature(realized_callee).return_type;
     }
 

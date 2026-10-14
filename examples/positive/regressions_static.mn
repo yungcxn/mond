@@ -1,0 +1,39 @@
+# compile-time values of past bugs: a stcfun result of open length per call, a string equal to its
+# bytes, slices of any length as results, read-only methods of statics, pointers into a static
+# copied before its first method call, a `fun` taking only types making a length-generic function
+stcfun evens = (u32 n) -> []u32: ret for i in 0..<n: i * 2;
+stc []u32 E2 = evens(2); #= E2 [0, 2]
+stc []u32 E4 = evens(4); #= E4 [0, 2, 4, 6]
+
+stc [2]u8 TEXT = "ab";
+stc [2]u8 BYTES = [97, 98];
+stc bool SAME = TEXT == BYTES; #= SAME true
+stc bool OTHER = TEXT != [97, 99]; #= OTHER true
+
+fun pick = (bool c) -> &[]u8: ret if c: "ab".& else: "other".&;
+
+type Counter = *(u32 n) !{ fun get = () -> u32: ret self.n; }
+stc Counter COUNTER = Counter(5);
+stcfun read = () -> u32: ret COUNTER.get() + COUNTER.get();
+stc u32 READ = read(); #= READ 10
+
+fun first = (&[]u8 a) -> u8: ret a[0];
+type Names = *(mut [2][3]u8 names) !{
+    fun at = (u32 i) -> u8: ret first(self.names[i].&);
+}
+stc Names NAMES = Names(["abc", "xyz"]);
+stcfun twice = () -> u32 {
+    mut Names copy = NAMES;
+    ret copy.at(1) as u32 * 1000 + copy.at(0);
+}
+stc u32 TWICE = twice(); #= TWICE 120097
+
+fun largest = (type T): (&[]T xs) -> T {
+    mut T m = xs[0];
+    for x in xs: if x > m: m = x;
+    ret m;
+}
+stc [3]i16 XS = [4, -9, 7];
+stc i16 MAX = largest(i16)(XS.&); #= MAX 7
+
+$main = () {}

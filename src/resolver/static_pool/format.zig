@@ -47,9 +47,14 @@ fn write_entry(
         .meta_type => |meta| try writer.writeAll(@tagName(meta)),
         .array_type => |array| {
             try writer.writeAll("[");
-            if (pool.tag(array.length) == .int_value) {
-                try write_entry(pool, names, array.length, writer, depth);
-            }
+            // a length inferred already is shown, an open or a runtime one is not
+            const length = if (pool.tag(array.length) == .type_variable) blk: {
+                const variable = pool.get(array.length).type_variable;
+                const root = pool.type_variables.root_of_const(variable);
+                break :blk pool.type_variables.binding_of_const(root);
+            } else array.length;
+            const is_known = length != .none and pool.tag(length) == .int_value;
+            if (is_known) try write_entry(pool, names, length, writer, depth);
             try writer.writeAll("]");
             try write_entry(pool, names, array.element, writer, depth);
         },
@@ -58,6 +63,7 @@ fn write_entry(
             try write_entry(pool, names, pointer.pointee, writer, depth);
         },
         .function_type => |function| {
+            if (function.category == .inlined) try writer.writeAll("inlfun ");
             try writer.writeAll("(");
             try write_list(pool, names, function.parameters, ", ", writer, depth);
             try writer.writeAll(") -> ");

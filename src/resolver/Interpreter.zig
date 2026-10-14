@@ -166,7 +166,9 @@ fn truncate(self: *Interpreter, new_length: u32) void {
 
 pub fn store_cell(self: *Interpreter, cell: usize, value: Value) void {
     self.memory.buffer[cell] = value;
-    if (!value.is_heap() or cell >= self.current_frame().base) return;
+    // a cell of an outer frame, or one kept past its frame below the floor, keeps what it holds
+    const outlives_frame = cell < self.current_frame().base or cell < self.floor;
+    if (!value.is_heap() or !outlives_frame) return;
 
     self.floor = @max(self.floor, self.memory.len);
     self.floor_cell = @min(self.floor_cell, @as(u32, @intCast(cell)));
@@ -569,6 +571,30 @@ pub fn evaluate_binary(
     const left_operand: Value = if (left.is_heap()) .pooled(self.interned(left)) else left;
     const right_operand: Value = if (right.is_heap()) .pooled(self.interned(right)) else right;
     const result_type = self.node_info(.node_type, node);
+
+    // a string and an array of the same bytes are pooled apart, yet equal (`"ab" == [97, 98]`)
+    const static_pool = &self.owning_resolver().static_pool;
+    const is_equality = operator == .equal or operator == .not_equal;
+    const pooled_apart = left_operand.is_pooled() and right_operand.is_pooled() and
+        left_operand.index() != right_operand.index();
+    if (is_equality and pooled_apart) {
+        const left_index, const right_index = .{ left_operand.index(), right_operand.index() };
+        const left_is_text = static_pool.tag(left_index) == .string_value;
+        const text, const other = if (left_is_text)
+            .{ left_index, right_index }
+        else
+            .{ right_index, left_index };
+        const compares_text = static_pool.tag(text) == .string_value and
+            static_pool.tag(other) == .aggregate_value;
+        if (compares_text) {
+            const bytes = static_pool.get(text).string_value;
+            const elements = static_pool.get(other).aggregate_value.elements;
+            const same = bytes.len == elements.len and for (bytes, elements) |byte, element_index| {
+                if (Value.of(static_pool, element_index).bits != byte) break false;
+            } else true;
+            return .boolean(same == (operator == .equal));
+        }
+    }
     return Value.binary(operator, left_operand, right_operand, result_type) catch |err| self.fail(
         node,
         // a division by zero or an oversized shift is invalid, any other failure is not static

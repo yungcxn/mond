@@ -1,6 +1,6 @@
 # diagnostics of past bugs: each repeated case reported once, names in a range index checked,
 # a size asserted as something that is no size, a label bound at the top level, a body first
-# checked inside a condition the checker tries to evaluate
+# checked inside a condition the checker tries to evaluate, a stcfun body after a failed argument
 variant Twice = +(A, B, A, A); #! duplicate_declaration duplicate_declaration
 type Sized = *(u8 a) assertsize true; #! type_mismatch
 
@@ -18,5 +18,9 @@ stcfun probes = () -> u32 {
     ret 0;
 }
 u32 PROBED = probes();
+
+stcfun joined = (&[]u8 a, &[]u8 b) -> u64: ret a.$len + b[0];
+stc [2]u8 AB = "ab";
+stc u64 JOINED = joined(AB.&, "x".&); #! not_static not_static
 
 $main = () {}

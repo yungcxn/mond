@@ -6,6 +6,8 @@ const Resolver = @import("Resolver.zig");
 const HighLowerer = @import("HighLowerer.zig");
 const DeclPool = @import("resolver/DeclPool.zig");
 const HighIr = @import("high_lowerer/HighIr.zig");
+const ParseTree = @import("ParseTree.zig");
+const Doctor = @import("resolver/Doctor.zig");
 const Ref = HighIr.Ref;
 const debug = @import("debug.zig");
 
@@ -59,16 +61,55 @@ pub fn main(init: std.process.Init) !void {
         examples[1] + positive[1] + general_purpose[1],
     };
     const negative_counts = try check_directory(writer, io, "examples/negative", true, filters);
+    // the docs show the language as it is: their code is checked like the examples
+    const docs = try check_directory(writer, io, "docs", false, filters);
 
-    const failed = positive_counts[1] + negative_counts[1];
+    // and they name every keyword, tree kind and diagnostic, so no feature goes undocumented
+    const unnamed = blk: {
+        if (filters.len > 0) break :blk 0;
+        var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var text: std.ArrayList(u8) = .empty;
+        var directory = try std.Io.Dir.cwd().openDir(io, "docs", .{ .iterate = true });
+        defer directory.close(io);
+        var iterator = directory.iterate();
+        while (try iterator.next(io)) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".md")) continue;
+            const limit: std.Io.Limit = .limited(50 << 20);
+            const page = try directory.readFileAlloc(io, entry.name, allocator, limit);
+            try text.appendSlice(allocator, page);
+        }
+
+        var names: std.ArrayList([]const u8) = .empty;
+        for (std.meta.fieldNames(Lexer.Token.Kind)) |name| {
+            if (std.mem.startsWith(u8, name, "kw_")) try names.append(allocator, name["kw_".len..]);
+        }
+        for (ParseTree.Node.case_names) |name| try names.append(allocator, name);
+        for (std.meta.fieldNames(Doctor.Disorder)) |name| try names.append(allocator, name);
+
+        const rule = "\ndocs (must name every keyword, tree kind and diagnostic)\n";
+        try writer.print(bold ++ rule ++ reset, .{});
+        var count: usize = 0;
+        for (names.items) |name| {
+            const quoted = try std.fmt.allocPrint(allocator, "`{s}`", .{name});
+            if (std.mem.indexOf(u8, text.items, quoted) != null) continue;
+            try writer.print("  " ++ red ++ "✗" ++ reset ++ " {s} is not in docs/\n", .{name});
+            count += 1;
+        }
+        break :blk count;
+    };
+
+    const failed = positive_counts[1] + negative_counts[1] + docs[1] + unnamed;
     const summary_format = bold ++ "\n{s}{d} passed, {d} failed" ++ reset ++
-        dim ++ "  ({d} positive, {d} negative files)\n" ++ reset;
+        dim ++ "  ({d} positive, {d} negative files, {d} doc examples)\n" ++ reset;
     try writer.print(summary_format, .{
         if (failed == 0) green else red,
-        positive_counts[0] + negative_counts[0],
+        positive_counts[0] + negative_counts[0] + docs[0],
         failed,
         positive_counts[0] + positive_counts[1],
         negative_counts[0] + negative_counts[1],
+        docs[0] + docs[1],
     });
     try writer.flush();
 
@@ -93,7 +134,9 @@ fn check_directory(
     var names: std.ArrayList([]const u8) = .empty;
     var iterator = directory.iterate();
     while (try iterator.next(io)) |entry| {
-        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".mn")) continue;
+        const is_checked = std.mem.endsWith(u8, entry.name, ".mn") or
+            std.mem.endsWith(u8, entry.name, ".md");
+        if (entry.kind != .file or !is_checked) continue;
         try names.append(allocator, try allocator.dupe(u8, entry.name));
     }
     std.mem.sort([]const u8, names.items, {}, struct {
@@ -121,128 +164,174 @@ fn check_directory(
         if (!matches_filters) continue;
 
         const source = try directory.readFileAlloc(io, name, allocator, .limited(50 << 20));
-        const expected = blk: {
-            var findings: std.ArrayList(Finding) = .empty;
-            var lines = std.mem.splitScalar(u8, source, '\n');
-            var line_number: usize = 0;
-            while (lines.next()) |line| {
-                line_number += 1;
-                const codes_text = marker(line, "#!") orelse continue;
-                var codes = std.mem.tokenizeScalar(u8, codes_text, ' ');
-                while (codes.next()) |code| {
-                    try findings.append(allocator, .{ .line = line_number, .code = code });
-                }
-            }
-            std.mem.sort(Finding, findings.items, {}, Finding.less_than);
-            break :blk findings.items;
-        };
-        const file_path = try std.fs.path.join(allocator, &.{ path, name });
-        const result = try run(allocator, io, file_path, source);
-        var details: Writer.Allocating = .init(allocator);
-
-        // a negative example without any `#!` would pass without testing anything
-        const has_expectations = !negative or expected.len > 0;
-        // both lists are sorted, so one merge pass pairs them up
-        const findings_match = blk: {
-            const found = result.found;
-            var all_match = true;
-            var i: usize = 0;
-            var j: usize = 0;
-            while (i < expected.len or j < found.len) {
-                const both_left = i < expected.len and j < found.len;
-                const is_match = both_left and
-                    expected[i].line == found[j].line and
-                    std.mem.eql(u8, expected[i].code, found[j].code);
-                if (is_match) {
-                    try print_finding(&details.writer, source, green ++ "✓         ", found[j]);
-                    i += 1;
-                    j += 1;
-                    continue;
-                }
-
-                all_match = false;
-                const expected_comes_first = j >= found.len or
-                    (i < expected.len and Finding.less_than({}, expected[i], found[j]));
-                if (expected_comes_first) {
-                    try print_finding(&details.writer, source, red ++ "missing   ", expected[i]);
-                    i += 1;
-                } else {
-                    try print_finding(&details.writer, source, red ++ "unexpected", found[j]);
-                    j += 1;
-                }
-            }
-            break :blk all_match;
-        };
-        var passed = has_expectations and findings_match;
-
-        const checks = blk: {
-            var checks: std.ArrayList(Check) = .empty;
-            var lines = std.mem.splitScalar(u8, source, '\n');
-            var line_number: usize = 0;
-            while (lines.next()) |line| {
-                line_number += 1;
-                for ([_][]const u8{ "#:", "#=" }) |marker_text| {
-                    const content = marker(line, marker_text) orelse continue;
-                    const name_end = std.mem.indexOfScalar(u8, content, ' ') orelse content.len;
-                    try checks.append(allocator, .{
-                        .line = line_number,
-                        .is_value = marker_text[1] == '=',
-                        .name = content[0..name_end],
-                        .expected = std.mem.trim(u8, content[name_end..], " "),
-                    });
-                }
-            }
-            break :blk checks.items;
-        };
-        for (checks) |check| {
-            const actual = if (result.resolver) |resolver|
-                try actual_text(allocator, resolver, check)
-            else
-                "<not resolved>";
-            const same = std.mem.eql(u8, actual, check.expected);
-            passed = passed and same;
-
-            const check_format = "      {s} {s}:{d:<4}" ++ reset ++ " {s}{s:<30}" ++ reset ++ "{s}";
-            try details.writer.print(check_format, .{
-                if (same) green ++ "✓         " else red ++ "wrong     ",
-                dim,
-                check.line,
-                bold,
-                check.name,
-                actual,
-            });
-            if (!same) {
-                try details.writer.print(red ++ "  expected " ++ reset ++ "{s}", .{check.expected});
-            }
-            // the code of a line without its markers
-            var lines = std.mem.splitScalar(u8, source, '\n');
-            for (1..check.line) |_| _ = lines.next();
-            const line = lines.next() orelse "";
-            const comment_start = std.mem.indexOfScalar(u8, line, '#') orelse line.len;
-            const source_line = std.mem.trim(u8, line[0..comment_start], " \t");
-            try details.writer.print("  " ++ dim ++ "{s}" ++ reset ++ "\n", .{source_line});
+        if (!std.mem.endsWith(u8, name, ".md")) {
+            const passed = try check_source(writer, allocator, io, path, name, source, negative);
+            counts[@intFromBool(!passed)] += 1;
+            continue;
         }
 
-        const declaration_count = if (result.resolver) |resolver|
-            resolver.decl_pool.entries.len()
-        else
-            0;
-        const file_format = "  {s}{s}" ++ reset ++ " {s}/{s}  " ++
-            dim ++ "{d} expected, {d} found, {d} checks, {d} declarations" ++ reset ++ "\n{s}";
-        try writer.print(file_format, .{
-            if (passed) green else red,
-            if (passed) "✓" else "✗",
-            path,
-            name,
-            expected.len,
-            result.found.len,
-            checks.len,
-            declaration_count,
-            details.written(),
-        });
-        counts[@intFromBool(!passed)] += 1;
+        // a doc checks each of its ```mond blocks as a file, with an empty `$main` when it has none
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var line_number: usize = 0;
+        var block: ?std.ArrayList(u8) = null;
+        var block_line: usize = 0;
+        while (lines.next()) |line| {
+            line_number += 1;
+            if (block == null) {
+                if (std.mem.eql(u8, std.mem.trimEnd(u8, line, " "), "```mond")) {
+                    block = .empty;
+                    block_line = line_number + 1;
+                }
+                continue;
+            }
+            if (!std.mem.startsWith(u8, line, "```")) {
+                try block.?.appendSlice(allocator, line);
+                try block.?.append(allocator, '\n');
+                continue;
+            }
+            if (std.mem.indexOf(u8, block.?.items, "$main") == null) {
+                try block.?.appendSlice(allocator, "$main = () {}\n");
+            }
+            const label = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ name, block_line });
+            const passed =
+                try check_source(writer, allocator, io, path, label, block.?.items, negative);
+            counts[@intFromBool(!passed)] += 1;
+            block = null;
+        }
     }
     return counts;
+}
+
+// whether `source` reports exactly its `#!` diagnostics and passes its checks, shown as `path/name`
+fn check_source(
+    writer: *Writer,
+    allocator: Allocator,
+    io: std.Io,
+    path: []const u8,
+    name: []const u8,
+    source: []u8,
+    negative: bool,
+) !bool {
+    const expected = blk: {
+        var findings: std.ArrayList(Finding) = .empty;
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var line_number: usize = 0;
+        while (lines.next()) |line| {
+            line_number += 1;
+            const codes_text = marker(line, "#!") orelse continue;
+            var codes = std.mem.tokenizeScalar(u8, codes_text, ' ');
+            while (codes.next()) |code| {
+                try findings.append(allocator, .{ .line = line_number, .code = code });
+            }
+        }
+        std.mem.sort(Finding, findings.items, {}, Finding.less_than);
+        break :blk findings.items;
+    };
+    const file_path = try std.fs.path.join(allocator, &.{ path, name });
+    const result = try run(allocator, io, file_path, source);
+    var details: Writer.Allocating = .init(allocator);
+
+    // a negative example without any `#!` would pass without testing anything
+    const has_expectations = !negative or expected.len > 0;
+    // both lists are sorted, so one merge pass pairs them up
+    const findings_match = blk: {
+        const found = result.found;
+        var all_match = true;
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < expected.len or j < found.len) {
+            const both_left = i < expected.len and j < found.len;
+            const is_match = both_left and
+                expected[i].line == found[j].line and
+                std.mem.eql(u8, expected[i].code, found[j].code);
+            if (is_match) {
+                try print_finding(&details.writer, source, green ++ "✓         ", found[j]);
+                i += 1;
+                j += 1;
+                continue;
+            }
+
+            all_match = false;
+            const expected_comes_first = j >= found.len or
+                (i < expected.len and Finding.less_than({}, expected[i], found[j]));
+            if (expected_comes_first) {
+                try print_finding(&details.writer, source, red ++ "missing   ", expected[i]);
+                i += 1;
+            } else {
+                try print_finding(&details.writer, source, red ++ "unexpected", found[j]);
+                j += 1;
+            }
+        }
+        break :blk all_match;
+    };
+    var passed = has_expectations and findings_match;
+
+    const checks = blk: {
+        var checks: std.ArrayList(Check) = .empty;
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var line_number: usize = 0;
+        while (lines.next()) |line| {
+            line_number += 1;
+            for ([_][]const u8{ "#:", "#=" }) |marker_text| {
+                const content = marker(line, marker_text) orelse continue;
+                const name_end = std.mem.indexOfScalar(u8, content, ' ') orelse content.len;
+                try checks.append(allocator, .{
+                    .line = line_number,
+                    .is_value = marker_text[1] == '=',
+                    .name = content[0..name_end],
+                    .expected = std.mem.trim(u8, content[name_end..], " "),
+                });
+            }
+        }
+        break :blk checks.items;
+    };
+    for (checks) |check| {
+        const actual = if (result.resolver) |resolver|
+            try actual_text(allocator, resolver, check)
+        else
+            "<not resolved>";
+        const same = std.mem.eql(u8, actual, check.expected);
+        passed = passed and same;
+
+        const check_format = "      {s} {s}:{d:<4}" ++ reset ++ " {s}{s:<30}" ++ reset ++ "{s}";
+        try details.writer.print(check_format, .{
+            if (same) green ++ "✓         " else red ++ "wrong     ",
+            dim,
+            check.line,
+            bold,
+            check.name,
+            actual,
+        });
+        if (!same) {
+            try details.writer.print(red ++ "  expected " ++ reset ++ "{s}", .{check.expected});
+        }
+        // the code of a line without its markers
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        for (1..check.line) |_| _ = lines.next();
+        const line = lines.next() orelse "";
+        const comment_start = std.mem.indexOfScalar(u8, line, '#') orelse line.len;
+        const source_line = std.mem.trim(u8, line[0..comment_start], " \t");
+        try details.writer.print("  " ++ dim ++ "{s}" ++ reset ++ "\n", .{source_line});
+    }
+
+    const declaration_count = if (result.resolver) |resolver|
+        resolver.decl_pool.entries.len()
+    else
+        0;
+    const file_format = "  {s}{s}" ++ reset ++ " {s}/{s}  " ++
+        dim ++ "{d} expected, {d} found, {d} checks, {d} declarations" ++ reset ++ "\n{s}";
+    try writer.print(file_format, .{
+        if (passed) green else red,
+        if (passed) "✓" else "✗",
+        path,
+        name,
+        expected.len,
+        result.found.len,
+        checks.len,
+        declaration_count,
+        details.written(),
+    });
+    return passed;
 }
 
 fn print_finding(writer: *Writer, source: []const u8, mark: []const u8, finding: Finding) !void {
