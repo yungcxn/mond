@@ -1,0 +1,83 @@
+# the top splices run in order before anything is resolved: what they write is seen by everything
+fun early = () -> u32: ret 1;
+stc u32 used_early = early(); #= used_early 7
+stcfun rewrite = (*ast(fun) f) { f.$body = quote: ret 2; }
+<rewrite(refl early)>;
+
+# `refl $file`: declarations appended, read and replaced
+stcfun add_two = (*ast file) {
+    file.$decls += [quote: fun one = () -> u32: ret 1, quote: fun two = () -> u32: ret one() + 1];
+}
+<add_two(refl $file)>;
+stc u32 t = two(); #= t 2
+
+stcfun replace_early = (*ast file) {
+    for i in 0..<file.$decls.$len {
+        *ast d = file.$decls[i];
+        if d oftype ast(fun) and d.$name.$src.$len == 5 and d.$name.$src[0] == 'e' {
+            file.$decls[i] = quote: fun early = () -> u32: ret 7;
+        }
+    }
+}
+<replace_early(refl $file)>;
+stc u32 replaced = early(); #= replaced 7
+
+stcfun count_funs = (&ast file) -> u64 {
+    mut u64 n = 0;
+    for d in file.$decls: if d oftype ast(fun): n += 1;
+    ret n;
+}
+stc u64 funs = count_funs(refl $file); #= funs 19
+
+# a splice in an expansion is expanded in the next pass, until there is none
+stcfun gen = (u32 n) -> ast: ret if n == 0: quote: 0 else: quote: 1 + <gen(@(n - 1))>;
+stc u32 g5 = <gen(5)>; #= g5 5
+
+stcfun gen_decl = (u32 i) -> ast: ret quote: fun get_@(ast.Identifier("n")) = () -> u32: ret @i;
+<gen_decl(3)>;
+stc u32 gn = get_n(); #= gn 3
+
+# a top splice of a block declares each of its statements, an empty one nothing
+stcfun no_decls = () -> ast: ret quote {};
+<no_decls()>;
+stcfun many = () -> ast: ret quote { fun m1 = () -> u32: ret 1; fun m2 = () -> u32: ret 2; };
+<many()>;
+stc u32 mm = m1() + m2(); #= mm 3
+
+# nodes made by kind, list kinds from any number of children
+stc []u32 made_array = <ast.Array(quote: 1, quote: 2, quote: 3)>; #= made_array [1, 2, 3]
+fun made_block = () -> u32 {
+    mut u32 n = 1;
+    <ast.CodeBlock(quote: n += 1, quote: n *= 5)>;
+    <ast.CodeBlock()>;
+    ret n;
+}
+stc u32 mb = made_block(); #= mb 10
+stc u64 copied_list = <(quote: [1, 2]) with ()>.$len; #= copied_list 2
+
+# what a root makes, by `oftype`
+stcfun kinds = (ast e) -> u32 {
+    mut u32 r = 0;
+    if e oftype ast(()): r += 1;
+    if e oftype ast(variant): r += 10;
+    if e oftype ast(trait): r += 100;
+    if e oftype ast: r += 1000;
+    ret r;
+}
+stc u32 k1 = kinds(quote: variant V = +(A)); #= k1 1010
+stc u32 k2 = kinds(quote: trait T = !{}); #= k2 1100
+stc u32 k3 = kinds(quote: 1); #= k3 1000
+
+# trees in plain functions are static, a variable's `refl` reads its declaration
+fun plain_function = () -> u32 {
+    ast(u32) code = quote: 20 + 1;
+    ret <code> * 2;
+}
+stc u32 pf = plain_function(); #= pf 42
+stcfun local_refl = () -> u64 {
+    u32 local = 12345;
+    ret (refl local).$value.$src.$len;
+}
+stc u64 lr = local_refl(); #= lr 5
+
+$main = () {}

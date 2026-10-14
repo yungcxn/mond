@@ -1,0 +1,127 @@
+# jumps and defers land in the loop and block they are spliced into
+fun breaker = () -> u32 {
+    mut u32 n = 0;
+    loop {
+        n += 1;
+        if n == 3: <quote { brk; }>;
+    }
+    ret n;
+}
+stc u32 br = breaker(); #= br 3
+fun skipper = () -> u32 {
+    mut u32 sum = 0;
+    for i in 0..<5 {
+        if i == 2: <quote { cont; }>;
+        sum += i;
+    }
+    ret sum;
+}
+stc u32 sk = skipper(); #= sk 8
+stcfun deferred = (ast(()) action) -> ast: ret quote { defer @action; };
+fun with_defer = () -> u32 {
+    mut u32 log = 1;
+    {
+        <deferred(quote { log *= 10; })>;
+        log += 1;
+    }
+    ret log;
+}
+stc u32 wd = with_defer(); #= wd 20
+
+# a splice of a type stands where a type does: fields, parameters, returns, locals, arrays
+stcfun int_type = (u32 bits) -> ast(type): ret if bits == 8: quote: u8 else: quote: u64;
+type Sized = *(<int_type(8)> small, <int_type(64)> big);
+stc u64 sz = sizeof Sized; #= sz 16
+fun typed_param = (<int_type(8)> x) -> <int_type(64)>: ret x as u64 + 1;
+stc u64 tp = typed_param(4); #= tp 5
+fun local_type = () -> u64 {
+    <int_type(64)> v = 9;
+    ret v;
+}
+stc u64 lt = local_type(); #= lt 9
+stc u64 arr = sizeof [3]<int_type(8)>; #= arr 3
+stc <int_type(8)> direct = 200; #= direct 200
+
+# trees of each kind through parameters typed by what they make
+stcfun take_i32 = (ast(i32) e) -> ast(i32): ret e;
+stc i32 ti = <take_i32(quote: 1 + 2)>; #= ti 3
+stcfun take_unit = (ast(()) s) -> ast(()): ret s;
+fun unit_user = () -> u32 {
+    mut u32 n = 1;
+    <take_unit(quote { n += 1; })>;
+    ret n;
+}
+stc u32 uu = unit_user(); #= uu 2
+stcfun take_fun = (ast(fun) f) -> ast(fun): ret f;
+fun made_fun = <take_fun(quote: (u32 a) -> u32: ret a * a)>;
+stc u32 mf = made_fun(7); #= mf 49
+stcfun local_ast = () -> u32 {
+    ast(u32) code = quote: 4;
+    ast(u32) more = quote: @code + @code;
+    ret <more>;
+}
+stc u32 la = local_ast(); #= la 8
+
+# trees held in records, cases and lists are copies of their own
+type Holder = *(mut ast code, u32 tag);
+stcfun holders = () -> ast {
+    Holder h = Holder(code = quote: 1 + 1, tag = 3);
+    mut Holder copy = h;
+    copy.code = quote: 40;
+    ret quote: @(h.code) + @(copy.code) + @(copy.tag);
+}
+stc u32 hd = <holders()>; #= hd 45
+variant MaybeTree = +(Has(ast), Empty);
+stcfun from_variant = (MaybeTree m) -> ast: ret match m {
+    MaybeTree.Has(t) => t,
+    MaybeTree.Empty => quote: 0,
+};
+stc u32 fv = <from_variant(MaybeTree.Has(quote: 6 * 7))>; #= fv 42
+stc u32 fe = <from_variant(MaybeTree.Empty)>; #= fe 0
+stcfun list_of_lists = () -> ast {
+    [][]ast nested = [[quote: 1, quote: 2], [quote: 3]];
+    ret quote: [@..(nested[0]), @..(nested[1])];
+}
+stc []u32 ll = <list_of_lists()>; #= ll [1, 2, 3]
+stcfun self_append = () -> u64 {
+    mut []ast xs = [quote: 1, quote: 2];
+    xs += xs;
+    xs += xs;
+    ret xs.$len;
+}
+stc u64 sa = self_append(); #= sa 8
+
+# generated code compiles like written code, called at runtime too
+stcfun unrolled = (u32 times, ast(()) step) -> ast(()) {
+    mut []ast steps = [];
+    for i in 0..<times: steps += step;
+    ret quote { @..steps; };
+}
+fun run_unrolled = (u32 start) -> u32 {
+    mut u32 x = start;
+    <unrolled(4, quote { @x = @x * 2 + 1; })>;
+    ret x;
+}
+stc u32 ru = run_unrolled(1); #= ru 31
+stcfun clamp_gen = (i32 low, i32 high) -> ast(fun): ret quote: (i32 v) -> i32 {
+    if v < @low: ret @low;
+    if v > @high: ret @high;
+    ret v;
+};
+fun clamp_byte = <clamp_gen(0, 255)>;
+stc i32 cb = clamp_byte(300); #= cb 255
+variant Op = +(Add, Sub, Mul);
+stcfun dispatcher = (&ast(variant) v) -> ast(fun) {
+    mut []ast arms = [];
+    for c in v.$cases: arms += quote: @(v.$name).@(c.$name) => @(c.$name.$src.$len);
+    ret quote: (@(v.$name) op) -> u64: ret match op { @..arms };
+}
+fun op_len = <dispatcher(refl Op)>;
+stc u64 ol = op_len(Op.Mul); #= ol 3
+
+$main = () {
+    u32 a = run_unrolled(2);
+    i32 b = clamp_byte(-4);
+    u64 c = op_len(Op.Sub);
+    u32 d = unit_user() + skipper() + breaker() + with_defer();
+}

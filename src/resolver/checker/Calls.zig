@@ -3,6 +3,7 @@ const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const StaticPool = @import("../StaticPool.zig");
 const DeclPool = @import("../DeclPool.zig");
+const Value = @import("../interpreter/Value.zig");
 const FunctionContext = Resolver.FunctionContext;
 const NodeId = ParseTree.NodeId;
 
@@ -304,8 +305,10 @@ fn call_declared(
                 values[i] != .poison_type and
                 !resolver.interpreter.trees.admits(.of(static_pool, values[i]), parameter_type);
             if (tree_misfits) {
-                const tree_kind = resolver.interpreter.trees.kind_of(values[i]);
-                return resolver.report(.type_mismatch, value_node, tree_kind, parameter_type);
+                const trees = &resolver.interpreter.trees;
+                const misfit: Value = .of(static_pool, values[i]);
+                const found, const wanted = trees.rejection(misfit, parameter_type);
+                return resolver.report(.type_mismatch, value_node, found, wanted);
             }
         }
 
@@ -322,6 +325,7 @@ fn call_declared(
         if (static_pool.tag(realization) != .function_value) {
             const produces_type = static_pool.tag(return_type) == .meta_type or
                 return_type == .poison_type;
+            if (produces_type and realization == .poison_type) return .poison_type;
             if (produces_type) return static_pool.type_of(realization);
             return return_type;
         }

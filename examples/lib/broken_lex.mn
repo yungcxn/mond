@@ -1,0 +1,3 @@
+# a library that does not lex, `include` reports it as failed
+pub fun ok = () -> u32: ret 1;
+pub stc u32 bad = `;

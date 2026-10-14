@@ -1,0 +1,32 @@
+# what a spread, a paste, a `with` or a made node takes are trees and texts
+stcfun spread_int = () -> ast: ret quote: [@..(5)]; #! type_mismatch
+stc []u32 si = <spread_int()>;
+stcfun spread_ints = () -> ast { []u32 xs = [1, 2]; ret quote: [@..xs]; } #! type_mismatch
+stc []u32 sis = <spread_ints()>;
+stcfun paste_int = () -> ast: ret quote: get_@(5); #! type_mismatch
+stc u32 pi = <paste_int()>;
+
+# `with` names fields of the root's kind, a list or a name has none
+stcfun bad_with = () -> ast: ret (quote: 1 + 2) with (nope = quote: 1); #! unknown_named_argument
+stc u32 bw = <bad_with()>;
+stcfun bad_with_value = () -> ast: ret (quote: 1 + 2) with (lhs = 5); #! type_mismatch
+stc u32 bwv = <bad_with_value()>;
+stc ast list_with = (quote: [1, 2]) with (lhs = quote: 1); #! unknown_named_argument
+stc ast name_with = (quote: x) with (rhs = quote: 1); #! unknown_named_argument
+
+# made nodes: a name from a text, children from trees
+stc ast bad_made = ast.Identifier(5); #! type_mismatch
+stc ast bad_made_child = ast.BinaryAdd(quote: 1, 2); #! type_mismatch
+stc ast bad_fresh = $fresh(5); #! type_mismatch
+
+# `$error` takes a tree and a text, an ill-typed one reports only that
+stc ast bad_error = $error(5, "x"); #! type_mismatch
+stc ast bad_error_text = $error(quote: x, 5); #! type_mismatch
+
+# a list of `ast.Kind` reports the element that is not of the kind
+stcfun only_names = ([]ast.Identifier xs) -> u64: ret xs.$len;
+stc u64 on = only_names([quote: a, quote: 1]); #! type_mismatch
+stc ast bad_include = include 5; #! type_mismatch
+stc ast bad_refl = refl 5; #! undefined_name
+
+$main = () {}

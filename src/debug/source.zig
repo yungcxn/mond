@@ -73,7 +73,7 @@ pub fn node_span(tree: *const ParseTree, source: []const u8, node: NodeId) ?Lexe
 
     const kind = kinds[current];
     // the source text of a childless node, null when it is not written as one word
-    const keyword = switch (kind) {
+    const keyword: ?[]const u8 = switch (kind) {
         .brk => "brk",
         .cont => "cont",
         .ret_void => "ret",
@@ -86,7 +86,17 @@ pub fn node_span(tree: *const ParseTree, source: []const u8, node: NodeId) ?Lexe
             if (is_builtin_type) break :blk @tagName(kind)["type_".len..];
             break :blk null;
         },
-    } orelse return if (spans.len == 0) null else spans[token];
+    };
+    if (tree.macros) if (first_token_within(tree, node)) |first| {
+        var earlier = first;
+        while (keyword != null and earlier > 0) : (earlier -= 1) {
+            const span = spans[earlier - 1];
+            if (std.mem.eql(u8, source[span[0]..span[1]], keyword.?)) return span;
+            if (std.mem.eql(u8, source[span[0]..span[1]], ";")) break;
+        }
+        return spans[first];
+    };
+    if (keyword == null) return if (spans.len == 0) null else spans[token];
 
     // the node is the rank-th of its kind after that token, so it is the rank-th such keyword
     var rank: usize = 0;
@@ -94,12 +104,23 @@ pub fn node_span(tree: *const ParseTree, source: []const u8, node: NodeId) ?Lexe
 
     // searched to the end: the keyword may stand far behind the last token (a long run of `brk`s)
     for (spans[token..]) |span| {
-        if (!std.mem.eql(u8, source[span[0]..span[1]], keyword)) continue;
+        if (!std.mem.eql(u8, source[span[0]..span[1]], keyword.?)) continue;
         rank -= 1;
         if (rank == 0) return span;
     }
     if (spans.len == 0) return null;
     return spans[token];
+}
+
+fn first_token_within(tree: *const ParseTree, node: NodeId) ?u32 {
+    if (tree.token(node)) |token| return token;
+    var first: ?u32 = null;
+    for (tree.children(node)) |child| {
+        if (child == 0 or child >= tree.ast_nodes.len()) continue;
+        const token = first_token_within(tree, child) orelse continue;
+        first = @min(first orelse token, token);
+    }
+    return first;
 }
 
 fn child_count_of(kind: Node.Kind) @TypeOf(Node.nk_childc[0]) {

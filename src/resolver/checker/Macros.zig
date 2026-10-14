@@ -1,3 +1,4 @@
+const std = @import("std");
 const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const StaticPool = @import("../StaticPool.zig");
@@ -167,8 +168,8 @@ fn infer_include(self: *Macros, context: *FunctionContext, node: NodeId) Index {
     const resolver = self.owning_resolver();
     const path = resolver.tree.arg(node, 0);
     if (resolver.tree.kind(path) == .string) return .ast_type;
-    const path_type = resolver.expressions.infer(context, path, .none);
-    return resolver.report(.type_mismatch, path, path_type, self.string_type());
+    const path_type = resolver.expressions.check(context, path, self.string_type());
+    return if (path_type == .poison_type) path_type else .ast_type;
 }
 
 // the holes of a quote are checked where it is written: `@x` is what `x` holds when `x` is declared
@@ -557,6 +558,42 @@ pub fn quote_pattern(self: *Macros, node: NodeId) void {
             .none, .data => {},
         },
     }
+}
+
+pub fn report_duplicate_holes(self: *Macros, pattern: NodeId) void {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    switch (tree.kind(pattern)) {
+        .partial__match_case_pattern_or => for (tree.manychildren(pattern)) |alternative| {
+            self.report_duplicate_holes(alternative);
+        },
+        .quote => {
+            var binders: std.ArrayList(NodeId) = .empty;
+            defer binders.deinit(resolver.allocator);
+            self.collect_holes(tree.arg(pattern, 0), &binders);
+        },
+        else => {},
+    }
+}
+
+fn collect_holes(self: *Macros, node: NodeId, binders: *std.ArrayList(NodeId)) void {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    if (tree.kind(node) != .unquote and tree.kind(node) != .unquote_list) {
+        for (tree.children(node)) |child| {
+            if (child != 0) self.collect_holes(child, binders);
+        }
+        return;
+    }
+
+    const binder = tree.arg(node, 0);
+    const name = resolver.name_pool.name_of_node(binder);
+    if (name == .none or name == .underscore) return;
+    for (binders.items) |earlier| {
+        if (resolver.name_pool.name_of_node(earlier) != name) continue;
+        return resolver.doctor.report(.duplicate_declaration, binder, name, DeclPool.Index.none);
+    }
+    binders.append(resolver.allocator, binder) catch @panic("OOM");
 }
 
 fn bind_quote_hole(self: *Macros, node: NodeId) void {

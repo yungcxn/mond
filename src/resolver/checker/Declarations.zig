@@ -942,6 +942,12 @@ pub fn parameter_index(
     for (parameters, 0..) |parameter_node, j| {
         if (self.parameter_name(parameter_node, j) == name) return @intCast(j);
     }
+    const name_pool = &self.owning_resolver().name_pool;
+    for (parameters, 0..) |parameter_node, j| {
+        const text = name_pool.text_of(self.parameter_name(parameter_node, j));
+        const written = text[0 .. std.mem.indexOfScalar(u8, text, '`') orelse continue];
+        if (std.mem.eql(u8, written, name_pool.text_of(name))) return @intCast(j);
+    }
     return null;
 }
 

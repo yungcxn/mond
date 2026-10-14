@@ -1,0 +1,24 @@
+# a declaration resolved before the splice writing it is frozen: a function a body calls first
+fun target = () -> u32: ret 1;
+stcfun rewrite = (*ast(fun) f) { f.$body = quote: ret 2; } #! frozen_declaration
+fun writer = () -> u32 {
+    <rewrite(refl target)>;
+    ret target();
+}
+
+# a view made by writing is a write as well
+fun resolved_ret = (u32 a) { }
+fun calls_it = () { resolved_ret(1); }
+stcfun give_ret = (*ast(fun) f) { f.$ret = quote: u32; } #! frozen_declaration
+fun late = () {
+    <give_ret(refl resolved_ret)>;
+}
+
+# the program is written only while a splice is evaluated, `refl $file` too
+stcfun sneaky = (*ast file) -> u32 {
+    file.$decls += quote: fun extra = () -> u32: ret 3; #! frozen_declaration
+    ret 0;
+}
+stc u32 sn = sneaky(refl $file);
+
+$main = () {}

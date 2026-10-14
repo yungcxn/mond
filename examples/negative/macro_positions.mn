@@ -1,0 +1,18 @@
+# after a pass rebuilt the tree, errors are still at their source lines: a replaced declaration has
+# its landed code at the splice, a loop keeps its variable after its body
+fun first = () -> u32: ret 1;
+stc bool yes = true;
+stc u32 before = true and yes; #! type_mismatch
+stcfun replace_first = (*ast file) {
+    file.$decls[0] = quote: fun first = () -> u32: ret 2;
+}
+<replace_first(refl $file)>;
+fun looped = ([]u32 xs) -> u32 {
+    mut u32 n = 0;
+    for x in xs { u32 y = x; bool b = true and yes; n += y; }
+    ret n;
+}
+stc u32 after = true and yes; #! type_mismatch
+stc bool sum = true + n; #! undefined_name
+
+$main = () {}

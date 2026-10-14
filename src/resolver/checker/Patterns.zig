@@ -42,6 +42,7 @@ pub fn check_match(
         defer resolver.scopes.close();
         for (arms) |arm| {
             const arm_pattern = resolver.tree.arg(arm, 0);
+            resolver.macros.report_duplicate_holes(arm_pattern);
             if (!resolver.interpreter.matches_static(context, arm_pattern, value)) continue;
             resolver.node_static_values[arm] = .bool_true;
             return resolver.flow.check_branch(context, resolver.tree.arg(arm, 1), expected);

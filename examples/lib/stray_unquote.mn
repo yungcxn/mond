@@ -1,0 +1,3 @@
+# a library with an `@` outside a quote (see macro_include_errors.mn): it is stray once included
+pub stc u32 base_value = 1;
+pub fun leaked = () -> u32: ret @base_value;

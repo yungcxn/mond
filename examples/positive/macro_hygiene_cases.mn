@@ -1,0 +1,91 @@
+# the names a quote declares do not capture the code it is given: a loop variable, a lambda's
+# parameter, a pattern binder, a statement's variable
+stcfun sum_below = (ast(u32) n) -> ast: ret quote {
+    mut u32 total = 0;
+    for i in 0..<@n: total += i;
+    ret total;
+};
+fun sums = () -> u32 {
+    u32 total = 1000;
+    u32 i = 7;
+    u32 inner = <sum_below(quote: i)>;
+    ret inner + total;
+}
+stc u32 su = sums(); #= su 21
+
+stcfun lambda_maker = () -> ast: ret quote: (u32 x) -> u32: ret x + 1;
+fun use_lambda = () -> u32 {
+    u32 x = 100;
+    f = <lambda_maker()>;
+    ret f(x);
+}
+stc u32 ul = use_lambda(); #= ul 101
+
+variant Opt = +(Some(u32), Nothing);
+stcfun unwrap_or = (ast(Opt) value, ast(u32) fallback) -> ast(u32): ret quote: match @value {
+    Opt.Some(v) => v,
+    Opt.Nothing => @fallback,
+};
+fun unwrapped = () -> u32 {
+    u32 v = 5;
+    Opt none = Opt.Nothing;
+    Opt some = Opt.Some(9);
+    ret <unwrap_or(quote: none, quote: v)> * 100 + <unwrap_or(quote: some, quote: v)>;
+}
+stc u32 uw = unwrapped(); #= uw 509
+
+stcfun swap_with = () -> ast: ret quote {
+    tmp = @a;
+    @a = @b;
+    @b = tmp;
+};
+fun swapped_around_tmp = () -> u32 {
+    mut u32 a = 1;
+    mut u32 b = 2;
+    mut u32 tmp = 3;
+    <swap_with()>;
+    ret a * 100 + b * 10 + tmp;
+}
+stc u32 sw = swapped_around_tmp(); #= sw 213
+
+# every expansion declares its own names, side by side in one scope
+stcfun counter = () -> ast: ret quote {
+    mut u32 c = 0;
+    while c < 3: c += 1;
+    ret c;
+};
+fun count_twice = () -> u32 {
+    a = (): <counter()>;
+    b = (): <counter()>;
+    ret a() + b();
+}
+stc u32 ct = count_twice(); #= ct 6
+stcfun declares = () -> ast: ret quote { u32 own = 4; };
+fun declared_twice = () -> u32 {
+    <declares()>;
+    <declares()>;
+    ret 1;
+}
+stc u32 dt = declared_twice(); #= dt 1
+
+# a name longer than any fixed buffer is made hygienic as well
+stcfun long_binder = () -> ast: ret quote { wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww = 5; };
+fun long_twice = () -> u32 {
+    <long_binder()>;
+    <long_binder()>;
+    ret 1;
+}
+stc u32 lt = long_twice(); #= lt 1
+
+# a function's parameters are hygienic in its body, its callers name them as they are written
+stcfun maker = (u32 k) -> ast(fun): ret quote: (u32 x) -> u32: ret x * @k;
+fun times3 = <maker(3)>;
+stc u32 nine = times3(x = 3); #= nine 9
+stcfun with_decl = () -> ast: ret quote: fun named_fn = (u32 y, u32 z = 10) -> u32: ret y + z;
+<with_decl()>;
+stc u32 named_args = named_fn(z = 1, y = 2); #= named_args 3
+stc u32 named_default = named_fn(y = 1); #= named_default 11
+fun runtime_named = () -> u32: ret named_fn(z = 5, y = 5);
+stc u32 rn = runtime_named(); #= rn 10
+
+$main = () {}

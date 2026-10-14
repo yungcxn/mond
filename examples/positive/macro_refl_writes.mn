@@ -1,0 +1,122 @@
+# parameters grown and replaced: named by the tree of their name, the callers by the written one
+fun base = (u32 a) -> u32: ret a;
+stcfun add_param = (*ast(fun) f) {
+    f.$params += quote: u32 b = 10;
+    f.$body = quote: ret @(f.$params[0].$name) + @(f.$params[1].$name);
+}
+<add_param(refl base)>;
+stc u32 b1 = base(1); #= b1 11
+stc u32 b2 = base(1, 2); #= b2 3
+stc u32 b3 = base(1, b = 5); #= b3 6
+
+stcfun widen_param = (*ast(fun) f) {
+    f.$params[0] = quote: i64 wide;
+    f.$body = quote: ret @(f.$params[0].$name) * 2;
+    f.$ret = quote: i64;
+}
+fun narrow = (i8 n) -> i8: ret n;
+<widen_param(refl narrow)>;
+stc i64 nw = narrow(-3000000000); #= nw -6000000000
+
+# fields and cases are names of their type, not of the quote that wrote them
+type Rec = *(u32 a);
+stcfun add_field = (*ast(type) t) {
+    t.$fields += quote: mut u8 extra = 7;
+    t.$fields[0] = quote: u16 renamed;
+}
+<add_field(refl Rec)>;
+stc u8 rf = Rec(renamed = 1).extra; #= rf 7
+stc u64 rs = sizeof Rec; #= rs 4
+stc u64 rec_fields = (refl Rec).$fields.$len; #= rec_fields 2
+
+variant Color = +(Red, Green);
+stcfun add_cases = (*ast(variant) v) {
+    v.$cases += quote: Blue;
+    v.$cases += quote: Gray(u8, u8);
+    v.$cases += quote: White = 9;
+}
+<add_cases(refl Color)>;
+stc u64 cc = (refl Color).$cases.$len; #= cc 5
+fun is_blue = (Color c) -> bool: ret match c { Color.Blue => true, _ => false };
+stc bool ib = is_blue(Color.Blue); #= ib true
+stc bool ig = is_blue(Color.Gray(1, 2)); #= ig false
+stc u64 white = Color.White as u64; #= white 9
+
+trait Named = !{
+    fun id = () -> u32;
+}
+stcfun extend_trait = (*ast t) {
+    t.$methods += quote: fun id2 = () -> u32;
+}
+<extend_trait(refl Named)>;
+stc u64 tm = (refl Named).$methods.$len; #= tm 2
+
+# a view that is not there is made by writing it: a return type, a default, a condition
+fun no_ret = (u32 a) { }
+stcfun give_ret = (*ast(fun) f) {
+    f.$ret = quote: u32;
+    f.$body = quote: ret 5;
+}
+<give_ret(refl no_ret)>;
+stc u32 nr = no_ret(1); #= nr 5
+
+fun plain = (u32 a) -> u32: ret a;
+stcfun give_default = (*ast(fun) f) {
+    f.$params[0].$default = quote: 8;
+}
+<give_default(refl plain)>;
+stc u32 pd = plain(); #= pd 8
+
+type Field = *(u32 a, u8 b);
+stcfun give_field_parts = (*ast(type) t) {
+    t.$fields[1].$default = quote: 6;
+    t.$fields[0].$where = quote: a > 2;
+}
+<give_field_parts(refl Field)>;
+stc u8 fb = Field(a = 3).b; #= fb 6
+stc []u8 fw = (refl Field).$fields[0].$where.$src;
+
+fun defaulted = (u32 x = 1) -> u32: ret x + 1;
+stcfun set_default = (*ast(fun) f) {
+    f.$params[0].$default = quote: 41;
+}
+<set_default(refl defaulted)>;
+stc u32 dd = defaulted(); #= dd 42
+
+# walks write through the `*ast`s of `$children`, into what is there after the write
+stcfun bump_literals = (*ast t) {
+    for c in t.$children: bump_literals(c);
+    if t.* oftype ast.IntegerValue: t.* = ast.BinaryAdd(t.*, quote: 1);
+}
+stcfun bumped = () -> ast {
+    mut ast e = quote: 1 * (2 + 3);
+    bump_literals(e.&);
+    ret e;
+}
+stc u32 bl = <bumped()>; #= bl 14
+
+stcfun count_nodes = (ast t) -> u64 {
+    mut u64 n = 1;
+    for c in t.$children: n += count_nodes(c);
+    ret n;
+}
+stc u64 cn = count_nodes(quote: f(a, b + c)); #= cn 7
+
+stcfun rename = (*ast t, []u8 from, []u8 to) {
+    if t.* oftype ast.Identifier and t.$src.$len == from.$len and t.$src[0] == from[0] {
+        t.* = ast.Identifier(to);
+    }
+    for c in t.$children: rename(c, from, to);
+}
+fun old_body = (u32 value) -> u32: ret value * value;
+<rename(refl old_body, "value", "v")>;
+stc u32 ob = old_body(v = 3); #= ob 9
+
+stcfun via_pointer_with = () -> ast {
+    mut ast e = quote: 10 - 3;
+    *ast p = e.&;
+    ret p with (rhs = quote: 4);
+}
+stc u32 vw = <via_pointer_with()>; #= vw 6
+
+$main = () {}

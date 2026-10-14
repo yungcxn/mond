@@ -1,0 +1,9 @@
+# `$error` reports any text, one a macro changed too
+stcfun picky = (ast e) -> ast {
+    mut []u8 text = "abc";
+    text[0] = 'x';
+    ret $error(e, text);
+}
+fun reported = () -> u32: ret <picky(quote: 1)>; #! macro_error
+
+$main = () {}

@@ -1,0 +1,71 @@
+# `@` lifts a static value into code: the literal it is, at the edges of its type
+stc i64 min64 = <quote: @(-9223372036854775807 - 1)>; #= min64 -9223372036854775808
+stc i8 min8 = <quote: @(-128 as i8)>; #= min8 -128
+stc u64 max64 = <quote: @(18446744073709551615 as u64)>; #= max64 18446744073709551615
+stc u8 zero = <quote: @(0 as u8)>; #= zero 0
+stc bool off = <quote: @(1 > 2)>; #= off false
+
+# texts keep every byte, escaped or not
+stc []u8 tab = <quote: @("a\tb")>;
+stc u8 tab_byte = tab[1]; #= tab_byte 9
+stc []u8 nl = <quote: @("a\nb")>;
+stc u64 nl_len = nl.$len; #= nl_len 3
+stc []u8 quoted = <quote: @("\"\\")>; #= quoted ""\"
+stc []u8 empty = <quote: @("")>; #= empty ""
+
+# floats keep their value, the ones without digits too
+stc f64 whole = <quote: @(2.0)>; #= whole 2
+stc f64 negative = <quote: @(-0.5)>; #= negative -0.5
+stc f64 inf = 1.0 / 0.0;
+stc f64 lifted_inf = <quote: @inf>; #= lifted_inf inf
+stc f64 ninf = -1.0 / 0.0;
+stc f64 lifted_ninf = <quote: @ninf>; #= lifted_ninf -inf
+stc f64 nan = 0.0 / 0.0;
+stc f64 lifted_nan = <quote: @nan>;
+stc bool is_nan = lifted_nan != lifted_nan; #= is_nan true
+
+# a type becomes the code naming it: keywords, pointers, arrays, declared types
+type Rec = *(u8 a, u32 b);
+stc u64 ptr = <quote: sizeof @(*u32)>; #= ptr 8
+stc u64 nested_array = <quote: sizeof @([2][3]u8)>; #= nested_array 6
+stc u64 rec = <quote: sizeof @(Rec)>; #= rec 8
+stc u64 rec_list = <quote: sizeof @([4]Rec)>; #= rec_list 32
+
+# a realized template by its template and arguments, a type a stcfun returns by its own name
+type Box = (type T): *(mut T value, mut u32 count);
+stcfun Grid = (u32 n): ret *([n]u8 cells);
+stc u64 box8 = sizeof Box(u8); #= box8 8
+stc u64 lifted_box = <quote: sizeof @(Box(u64))>; #= lifted_box 16
+stc u64 lifted_grid = <quote: sizeof @(Grid(5))>; #= lifted_grid 5
+stc u64 box_of_grid = <quote: sizeof @(Box(Grid(3)))>; #= box_of_grid 8
+stc u64 ptr_box = <quote: sizeof @(*Box(u8))>; #= ptr_box 8
+stcfun pick = (u32 n): ret if n > 0: Rec else: u8;
+stc u64 picked = sizeof pick(1); #= picked 8
+stcfun picked_name = () -> []u8 { ast t = quote: @(pick(1)); ret t.$src; }
+stc []u8 pn = picked_name(); #= pn "Rec"
+
+# names and texts made from texts a macro changed
+stcfun made_from_text = () -> ast {
+    mut []u8 text = "abc";
+    text[0] = 'x';
+    ret ast.Identifier(text);
+}
+fun xbc = () -> u32: ret 4;
+stc u32 made = <made_from_text()>(); #= made 4
+stcfun fresh_from_text = () -> ast {
+    mut []u8 stem = "ab";
+    stem[1] = 'z';
+    ast.Identifier v = $fresh(stem);
+    ret quote: @(v.$src);
+}
+stc []u8 fresh_text = <fresh_from_text()>;
+stc u8 fresh_second = fresh_text[1]; #= fresh_second 122
+stcfun fresh_twice = () -> ast {
+    ast.Identifier stem = $fresh("q");
+    ast.Identifier again = ast.Identifier(stem.$src);
+    ret quote { @again = 2; ret @again + 1; };
+}
+fun twice_named = () -> u32: <fresh_twice()>;
+stc u32 tn = twice_named(); #= tn 3
+
+$main = () {}

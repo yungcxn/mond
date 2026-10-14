@@ -1,0 +1,13 @@
+# a case list takes cases: a name, a name with payload types, a name with a tag
+variant Color = +(Red, Green);
+stcfun bad_case = (*ast(variant) v) {
+    v.$cases += quote: 1 + 2;
+}
+<bad_case(refl Color)>; #! type_mismatch
+
+# a lifted literal is typed where it lands
+stcfun lifted = (i8 n) -> ast: ret quote: @n;
+stc u8 negative_into_unsigned = <lifted(-3)>; #! type_mismatch
+stc u8 too_big = <quote: @(300)>; #! type_mismatch
+
+$main = () {}

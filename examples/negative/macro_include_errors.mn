@@ -1,0 +1,8 @@
+# a file that does not lex, a directory, a private declaration, an `@` outside a quote in a library
+<include "../lib/broken_lex.mn">; #! include_failed
+<include "../lib">; #! include_failed
+<include "../lib/macro_kit.mn">;
+stc u32 hidden = <hidden_macro()>; #! undefined_name
+<include "../lib/stray_unquote.mn">; #! stray_unquote
+
+$main = () {}

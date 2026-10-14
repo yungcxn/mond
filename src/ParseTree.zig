@@ -748,15 +748,19 @@ pub fn land(self: *@This(), n: NodeId, fresh: *u32) void {
         } else self.scratch.push(x);
     }
     const binders = self.scratch.buffer[mark..self.scratch.len];
-    var buf: [256]u8 = undefined;
+    var buf: [16]u8 = undefined;
     for (s[0]..s[1]) |i| {
         const x = self.binder(@intCast(i)) orelse continue;
         const k = for (binders, 0..) |y, j| {
             if (self.same_word(x, y)) break j;
         } else continue;
-        const str = std.fmt.bufPrint(&buf, "{s}`{d}", .{ self.text_bytes.buffer[self.words.column(.at)[x]..][0..self.words.column(.len)[x]], fresh.* + k }) catch continue;
-        self.words.push(.{ .at = self.text_bytes.len, .len = @intCast(str.len), .owner = 0, .binds = false });
-        self.text_bytes.append(str);
+        const w = self.words.get(x).?;
+        const suffix = std.fmt.bufPrint(&buf, "`{d}", .{fresh.* + k}) catch unreachable;
+        const at = self.text_bytes.len;
+        self.text_bytes.push_repeated(w.len, 0);
+        @memcpy(self.text_bytes.buffer[at..][0..w.len], self.text_bytes.buffer[w.at..][0..w.len]);
+        self.text_bytes.append(suffix);
+        self.words.push(.{ .at = at, .len = w.len + @as(u32, @intCast(suffix.len)), .owner = 0, .binds = false });
         self.ast_nodes.column(.args)[i][1] = self.words.len();
     }
     fresh.* += @intCast(binders.len);

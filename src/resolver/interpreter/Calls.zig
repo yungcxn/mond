@@ -225,11 +225,11 @@ fn call_static_function(
             break :blk interpreter.trees.admits(.of(static_pool, argument_index), parameter_type);
         };
         if (!admitted) {
-            const found = if (resolver.tree.macros)
-                interpreter.trees.kind_of(argument_index)
+            const found, const wanted = if (resolver.tree.macros)
+                interpreter.trees.rejection(.of(static_pool, argument_index), parameter_type)
             else
-                static_pool.type_of(argument_index);
-            return interpreter.fail(value_node, .type_mismatch, found, parameter_type);
+                .{ static_pool.type_of(argument_index), parameter_type };
+            return interpreter.fail(value_node, .type_mismatch, found, wanted);
         }
         const retyped = resolver.static_values.retyped(argument_index, parameter_type);
         interpreter.pool_indices.push(retyped);
@@ -448,8 +448,8 @@ fn attempt(
         const argument_value = interpreter.argument_values.buffer[values_start + i];
         if (resolver.tree.macros and !interpreter.trees.admits(argument_value, parameter_type)) {
             const value_node = resolver.tree.arg_value(arguments[i]);
-            const found = interpreter.trees.kind_of(interpreter.interned(argument_value));
-            return interpreter.fail(value_node, .type_mismatch, found, parameter_type);
+            const found, const wanted = interpreter.trees.rejection(argument_value, parameter_type);
+            return interpreter.fail(value_node, .type_mismatch, found, wanted);
         }
         const parameter_declaration = interpreter.node_info(.declaration, parameter_node);
         _ = interpreter.variables.store(parameter_node, parameter_declaration, argument_value);

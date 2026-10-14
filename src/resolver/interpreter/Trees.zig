@@ -235,6 +235,7 @@ fn land(self: *Trees, code: NodeId, into: Kind) NodeId {
     const copied = tree.copy(tree, code, resolver.src_bytes, false, resolver.macros.at);
     // code written as a declaration (`mut u32 a = 7`) landing in a field or parameter list is one
     const landed = blk: {
+        if (into == .partial__variant_def_param_tuple) break :blk variant_case(tree, copied);
         const is_field = into == .partial__type_def_param_tuple;
         if (!is_field and into != .partial__fun_def_param_tuple) break :blk copied;
 
@@ -251,6 +252,7 @@ fn land(self: *Trees, code: NodeId, into: Kind) NodeId {
         const declared_type = tree.arg(declaration, 0);
         const name = tree.arg(declaration, 1);
         if (is_field) {
+            as_label(tree, name);
             var parameter = tree.push_node_with(
                 .partial__type_def_param,
                 .{ .type = declared_type },
@@ -285,6 +287,49 @@ fn land(self: *Trees, code: NodeId, into: Kind) NodeId {
     tree.land(landed, &resolver.session.fresh_name_count);
     resolver.macros.report_stray_unquotes(landed, false);
     return landed;
+}
+
+fn variant_case(tree: *ParseTree, code: NodeId) NodeId {
+    switch (tree.kind(code)) {
+        .identifier => {
+            as_label(tree, code);
+            return tree.push_node_with(.partial__variant_def_param, .{ .name = code });
+        },
+        .assign => {
+            const named = variant_case(tree, tree.arg(code, 0));
+            if (named == tree.arg(code, 0)) return code;
+            return tree.push_node_with(
+                .partial__variant_def_param_tagged,
+                .{ .param = named, .tag_value = tree.arg(code, 1) },
+            );
+        },
+        .fun_call => {
+            if (tree.kind(tree.arg(code, 0)) != .identifier) return code;
+            const named = variant_case(tree, tree.arg(code, 0));
+            const mark = tree.scratch.len;
+            defer tree.scratch.len = mark;
+            for (0..tree.arg(tree.arg(code, 1), 1)) |i| {
+                const argument = tree.manychildren(tree.arg(code, 1))[i];
+                const field_type = tree.arg_value(argument);
+                tree.scratch.push(tree.push_node_with(
+                    .partial__type_def_param,
+                    .{ .type = field_type },
+                ));
+            }
+            const fields = tree.push_node(.partial__type_def_param_tuple);
+            tree.set_children(fields, tree.scratch.buffer[mark..tree.scratch.len]);
+            return tree.push_node_with(
+                .partial__variant_def_param_typed,
+                .{ .param = named, .def_type = fields },
+            );
+        },
+        else => return code,
+    }
+}
+
+fn as_label(tree: *ParseTree, name: NodeId) void {
+    if (tree.kind(name) != .identifier or tree.arg(name, 1) == 0) return;
+    tree.words.column(.binds)[tree.arg(name, 1) - 1] = false;
 }
 
 fn fill(self: *Trees, written: NodeId, owner: u32, mode: Mode) ?NodeId {
@@ -432,12 +477,20 @@ fn hole(self: *Trees, expression: NodeId) ?NodeId {
     if (value.is(.poison_type)) return null;
 
     // the value put into code: a tree as a copy of it, a static value as the literal or type it is
-    const static_pool = &resolver.static_pool;
     if (self.node_of(value)) |value_root| {
         return tree.copy(tree, value_root, resolver.src_bytes, false, null);
     }
+    return self.code_of(tree.first_token(expression), value) orelse {
+        _ = interpreter.fail(expression, .not_static, interpreter.interned(value), 0);
+        return null;
+    };
+}
 
-    const token = tree.first_token(expression);
+fn code_of(self: *Trees, token: u32, value: Value) ?NodeId {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const tree = resolver.tree;
     if (value.value_type == .bool_type) {
         return tree.push_node(if (value.bits != 0) .boolean_true else .boolean_false);
     }
@@ -477,10 +530,7 @@ fn hole(self: *Trees, expression: NodeId) ?NodeId {
         }
         return resolver.tree.push_word(.string, token, escaped[0..length], 0, false);
     }
-    if (static_pool.properties(index).is_type) {
-        if (self.type_tree(token, index)) |code| return code;
-    }
-    _ = interpreter.fail(expression, .not_static, index, 0);
+    if (static_pool.properties(index).is_type) return self.type_tree(token, index);
     return null;
 }
 
@@ -561,12 +611,22 @@ fn text_of(self: *Trees, value: Value) ?[]const u8 {
     const static_pool = &resolver.static_pool;
     if (self.node_of(value)) |root| {
         if (arity(resolver.tree.kind(root)) != .data) return null;
-        return resolver.tree.text(root, resolver.src_bytes);
+        const text = resolver.tree.text(root, resolver.src_bytes);
+        const copy = resolver.temporary_slice(u8, text.len);
+        @memcpy(copy, text);
+        return copy;
     }
 
     const index = self.owning_interpreter().interned(value);
-    if (static_pool.tag(index) != .string_value) return null;
-    return static_pool.get(index).string_value;
+    if (static_pool.tag(index) == .string_value) return static_pool.get(index).string_value;
+    if (static_pool.tag(index) != .aggregate_value) return null;
+    const aggregate = static_pool.get(index).aggregate_value;
+    if (static_pool.array_element(aggregate.value_type) != .u8_type) return null;
+    const bytes = resolver.temporary_slice(u8, aggregate.elements.len);
+    for (bytes, aggregate.elements) |*byte, element| {
+        byte.* = @intCast(Value.of(static_pool, element).bits);
+    }
+    return bytes;
 }
 
 // the keyword kind (`type_u32`) of each builtin type index (`u32_type`) that has one
@@ -621,10 +681,35 @@ fn type_tree(self: *Trees, token: u32, named: Index) ?NodeId {
         => {
             const declaration = resolver.static_pool.nominal_declaration(named);
             if (declaration == .none) return null;
-            const name = resolver.name_pool.text_of(resolver.decl_pool.get(declaration, .name));
-            return tree.push_word(.identifier, token, name, 0, false);
+            const name = resolver.decl_pool.get(declaration, .name);
+            const is_realized = resolver.generics.template_of.contains(declaration);
+            if (is_realized or name == .empty) return self.realized_type_tree(token, named);
+            return tree.push_word(.identifier, token, resolver.name_pool.text_of(name), 0, false);
         },
     }
+}
+
+fn realized_type_tree(self: *Trees, token: u32, named: Index) ?NodeId {
+    const resolver = self.owning_interpreter().owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const tree = resolver.tree;
+    var realizations = resolver.generics.realizations.iterator();
+    const key = while (realizations.next()) |entry| {
+        if (entry.value_ptr.* == named) break entry.key_ptr.*;
+    } else return null;
+    if (static_pool.tag(key.args_tuple) != .aggregate_value) return null;
+
+    const name = resolver.name_pool.text_of(resolver.decl_pool.get(key.generic_tuple, .name));
+    const callee = tree.push_word(.identifier, token, name, 0, false);
+    const count = static_pool.get(key.args_tuple).aggregate_value.elements.len;
+    const arguments = resolver.temporary_slice(NodeId, count);
+    for (arguments, 0..) |*argument, i| {
+        const element = static_pool.get(key.args_tuple).aggregate_value.elements[i];
+        argument.* = self.code_of(token, .of(static_pool, element)) orelse return null;
+    }
+    const tuple = tree.push_node(.partial__fun_call_param_tuple);
+    tree.set_children(tuple, arguments);
+    return tree.push_node_with(.fun_call, .{ .callable = callee, .fun_param_tuple = tuple });
 }
 
 fn array_type_tree(self: *Trees, token: u32, array: StaticPool.ArrayType) ?NodeId {
@@ -647,7 +732,11 @@ fn array_type_tree(self: *Trees, token: u32, array: StaticPool.ArrayType) ?NodeI
 fn include(self: *Trees, node: NodeId) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
-    const name = resolver.tree.text(resolver.tree.arg(node, 0), resolver.src_bytes);
+    const path = resolver.tree.arg(node, 0);
+    const name = if (resolver.tree.kind(path) == .string)
+        resolver.tree.text(path, resolver.src_bytes)
+    else
+        self.text_of(interpreter.evaluate(path)) orelse return .poison;
     const included = self.read(node, name) orelse {
         return interpreter.fail(node, .include_failed, resolver.name_pool.intern_copy(name), 0);
     };
@@ -678,7 +767,7 @@ fn read(self: *Trees, node: NodeId, name: []const u8) ?NodeId {
 
     const mark = tree.scratch.len;
     defer tree.scratch.len = mark;
-    const origin = tree.arg(tree.arg(node, 0), 0);
+    const origin = tree.first_token(tree.arg(node, 0));
     for (parser.global_store.items()) |root| {
         if (parser.tree.kind(root) != .mod_pub) continue;
         tree.scratch.push(tree.copy(&parser.tree, root, bytes, false, origin));
@@ -916,10 +1005,13 @@ pub fn member(self: *Trees, node: NodeId, base: Value) Value {
 // the source a tree was written as, a made name its text, a keyword (`u32`, `true`) itself
 fn src_of(self: *Trees, root: NodeId) []const u8 {
     const resolver = self.owning_interpreter().owning_resolver();
-    const kind = resolver.tree.kind(root);
-    if (arity(kind) == .data) return resolver.tree.text(root, resolver.src_bytes);
+    const tree = resolver.tree;
+    const kind = tree.kind(root);
+    if (arity(kind) == .data) return tree.text(root, resolver.src_bytes);
 
-    const extent = resolver.tree.extent(root) orelse {
+    var bounds: [2]u32 = .{ std.math.maxInt(u32), 0 };
+    token_bounds(tree, root, &bounds);
+    if (bounds[0] > bounds[1]) {
         switch (kind) {
             .boolean_true => return "true",
             .boolean_false => return "false",
@@ -932,8 +1024,105 @@ fn src_of(self: *Trees, root: NodeId) []const u8 {
             value <= @intFromEnum(Kind.type_stcfun);
         if (!is_type_keyword) return "";
         return @tagName(kind)["type_".len..];
-    };
-    return resolver.src_bytes[extent[0]..extent[1]];
+    }
+
+    const spans = tree.span_store;
+    var first, var last = bounds;
+    var leading = root;
+    while (leading != 0) : (leading = edge_child(tree, leading, 0)) {
+        for (0..operator_tokens.get(tree.kind(leading))[0]) |_| {
+            if (first > 0) first -= 1;
+            while (first > 0 and self.token_is(first, "(")) first -= 1;
+        }
+    }
+    var trailing = root;
+    while (trailing != 0) : (trailing = edge_child(tree, trailing, 1)) {
+        for (0..operator_tokens.get(tree.kind(trailing))[1]) |_| {
+            if (last + 1 < spans.len) last += 1;
+            while (last + 1 < spans.len and self.token_is(last, ")")) last += 1;
+        }
+    }
+
+    var depth: i32 = 0;
+    var lowest: i32 = 0;
+    for (first..last + 1) |token| {
+        depth += self.bracket(token);
+        lowest = @min(lowest, depth);
+    }
+    while (lowest < 0 and first > 0 and self.bracket(first - 1) > 0) : (lowest += 1) first -= 1;
+    depth -= lowest;
+    while (depth > 0 and last + 1 < spans.len and self.bracket(last + 1) < 0) : (depth -= 1) {
+        last += 1;
+    }
+    return resolver.src_bytes[spans[first][0]..spans[last][1]];
+}
+
+const operator_tokens = std.EnumArray(Kind, [2]u8).initDefault(.{ 0, 0 }, .{
+    .neg_num = .{ 1, 0 },
+    .neg_logic = .{ 1, 0 },
+    .inc_prefix = .{ 1, 0 },
+    .dec_prefix = .{ 1, 0 },
+    .sizeof = .{ 1, 0 },
+    .typeof = .{ 1, 0 },
+    .if_then = .{ 1, 0 },
+    .stcif_then = .{ 1, 0 },
+    .@"while" = .{ 1, 0 },
+    .stcwhile = .{ 1, 0 },
+    .for_seq = .{ 1, 0 },
+    .stcfor_seq = .{ 1, 0 },
+    .match = .{ 1, 0 },
+    .stcmatch = .{ 1, 0 },
+    .type_ptr = .{ 1, 0 },
+    .type_ptrmut = .{ 1, 0 },
+    .type_array_unlengthed = .{ 2, 0 },
+    .array = .{ 1, 0 },
+    .refl = .{ 1, 0 },
+    .unquote = .{ 1, 0 },
+    .unquote_list = .{ 2, 0 },
+    .splice = .{ 1, 1 },
+    .dereference = .{ 0, 1 },
+    .address_of = .{ 0, 1 },
+    .inc_postfix = .{ 0, 1 },
+    .dec_postfix = .{ 0, 1 },
+});
+
+fn token_bounds(tree: *const ParseTree, node: NodeId, bounds: *[2]u32) void {
+    if (tree.token(node)) |token| {
+        bounds.* = .{ @min(bounds[0], token), @max(bounds[1], token) };
+        return;
+    }
+    for (tree.children(node)) |child| {
+        if (child != 0) token_bounds(tree, child, bounds);
+    }
+}
+
+fn edge_child(tree: *const ParseTree, node: NodeId, side: u1) NodeId {
+    const children = tree.children(node);
+    if (children.len == 0) return 0;
+    if (side == 0) return if (children[0] != 0) children[0] else children[children.len - 1];
+    return if (children[children.len - 1] != 0) children[children.len - 1] else children[0];
+}
+
+fn token_text(self: *Trees, token: usize) []const u8 {
+    const resolver = self.owning_interpreter().owning_resolver();
+    const bytes = resolver.src_bytes;
+    const span = resolver.tree.span_store[token];
+    const quoted = span[0] > 0 and span[1] < bytes.len and
+        (bytes[span[0] - 1] == '"' or bytes[span[0] - 1] == '\'') and
+        bytes[span[1]] == bytes[span[0] - 1];
+    return if (quoted) "" else bytes[span[0]..span[1]];
+}
+
+fn token_is(self: *Trees, token: usize, text: []const u8) bool {
+    return std.mem.eql(u8, self.token_text(token), text);
+}
+
+fn bracket(self: *Trees, token: usize) i32 {
+    const text = self.token_text(token);
+    if (text.len == 0) return 0;
+    if (std.mem.indexOfScalar(u8, "([{", text[text.len - 1]) != null) return 1;
+    if (text.len == 1 and std.mem.indexOfScalar(u8, ")]}", text[0]) != null) return -1;
+    return 0;
 }
 
 // `ast.Identifier`: the type of trees of that root
@@ -965,13 +1154,14 @@ pub fn write(self: *Trees, node: NodeId, value: Value) bool {
     if (!is_tree_place) return false;
 
     var into: Kind = .none;
-    const target: ?NodeId = switch (kind) {
+    const source = self.node_of(value);
+    const target: ?NodeId = if (source == null) null else switch (kind) {
         .dereference => self.node_of(interpreter.evaluate(base)),
         .member => self.member_target(node, base),
         .array_index => self.element_target(node, base, &into),
         else => unreachable,
     };
-    const source = self.node_of(value);
+    if (target == ParseTree.none_node) return true;
     if (target == null or source == null) {
         if (!value.is(.poison_type)) _ = interpreter.fail(node, .not_static, 0, 0);
         return true;
@@ -985,7 +1175,47 @@ fn member_target(self: *Trees, node: NodeId, base: NodeId) ?NodeId {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
     const root = self.node_of(interpreter.evaluate(base)) orelse return null;
-    return self.view(root, resolver.name_pool.name_of_node(resolver.tree.arg(node, 1)));
+    const name = resolver.name_pool.name_of_node(resolver.tree.arg(node, 1));
+    return self.view(root, name) orelse self.grown_view(node, root, name);
+}
+
+fn grown_view(self: *Trees, at: NodeId, root: NodeId, name: NamePool.Index) ?NodeId {
+    const tree = self.owning_interpreter().owning_resolver().tree;
+    const kind = tree.kind(root);
+    const of_function = @intFromEnum(kind) <= @intFromEnum(Kind.partial__fun_def_param_where_else);
+    const slot: Kind = switch (name) {
+        .default => if (of_function)
+            .partial__fun_def_param_default
+        else
+            .partial__type_def_param_default,
+        .where => if (of_function)
+            .partial__fun_def_param_where
+        else
+            .partial__type_def_param_where,
+        .ret => {
+            const function = subject(tree, root);
+            if (tree.kind(function) != .def_fun) return null;
+            const header = tree.arg(function, 0);
+            if (tree.kind(header) != .partial__fun_def_header) return null;
+            if (!self.writable(at, root)) return ParseTree.none_node;
+
+            const placeholder = tree.push_node(.none);
+            tree.ast_nodes.column(.nk)[header] = .partial__fun_def_header_ret;
+            tree.ast_nodes.column(.args)[header] = .{ tree.arg(header, 0), placeholder };
+            return placeholder;
+        },
+        else => return null,
+    };
+    if (!is_parameter(kind)) return null;
+    if (!self.writable(at, root)) return ParseTree.none_node;
+
+    const inner = tree.push_node(kind);
+    tree.ast_nodes.column(.args)[inner] = tree.ast_nodes.column(.args)[root];
+    const placeholder = tree.push_node(.none);
+    const wrapper = tree.push_node(slot);
+    tree.ast_nodes.column(.args)[wrapper] = .{ inner, placeholder };
+    tree.overwrite(root, wrapper);
+    return placeholder;
 }
 
 fn element_target(self: *Trees, node: NodeId, base: NodeId, into: *Kind) ?NodeId {
@@ -1078,9 +1308,10 @@ pub fn append(self: *Trees, node: NodeId) ?Value {
 fn writable(self: *Trees, at: NodeId, target: NodeId) bool {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
-    if (target >= resolver.macros.pass_len) return true;
+    const is_file = target == resolver.macros.file;
+    if (target >= resolver.macros.pass_len and !is_file) return true;
 
-    const root = resolver.macros.root_of(target);
+    const root = if (is_file) 0 else resolver.macros.root_of(target);
     const declaration = if (root == 0) .none else resolver.node_declarations[root];
     const open = resolver.macros.splicing > 0 and (declaration == .none or
         resolver.decl_pool.get(declaration, .state) == .unresolved);
@@ -1115,10 +1346,6 @@ pub fn with(self: *Trees, node: NodeId, base: Value) Value {
 
     const root = self.node_of(base).?;
     const kind = tree.kind(root);
-    if (arity(kind) != .one and arity(kind) != .two) {
-        return interpreter.fail(node, .not_static, 0, 0);
-    }
-
     var children: [2]NodeId = tree.ast_nodes.column(.args)[root];
     const arguments = tree.arg(node, 1);
     // by index: evaluating an argument may grow the tree and move its child lists
@@ -1126,7 +1353,8 @@ pub fn with(self: *Trees, node: NodeId, base: Value) Value {
         const argument = tree.manychildren(arguments)[argument_index];
         const field = self.field_named(kind, argument) orelse {
             const name = resolver.name_pool.name_of_node(tree.arg_name(argument));
-            return interpreter.fail(argument, .unknown_named_argument, name, 0);
+            const tree_kind = self.kind_of(interpreter.interned(base));
+            return interpreter.fail(argument, .unknown_named_argument, name, tree_kind);
         };
         const value = interpreter.evaluate(tree.arg_value(argument));
         children[field] = self.node_of(value) orelse {
@@ -1262,8 +1490,8 @@ pub fn builtin(self: *Trees, node: NodeId, name: NamePool.Index, arguments: []co
     const message = interpreter.evaluate(tree.arg_value(second_argument));
     if (message.is(.poison_type)) return message;
 
-    const at = self.node_of(first) orelse node;
-    const text = resolver.name_pool.intern_copy(self.text_of(message) orelse "");
+    const at = self.node_of(first) orelse return .poison;
+    const text = resolver.name_pool.intern_copy(self.text_of(message) orelse return .poison);
     resolver.doctor.report(.macro_error, at, text, 0);
     return .poison;
 }
@@ -1289,6 +1517,19 @@ pub fn admits(self: *Trees, value: Value, parameter_type: Index) bool {
 
     const root = self.node_of(value) orelse return true;
     return root_kind_code(interpreter.owning_resolver().tree.kind(root)) == root_kind;
+}
+
+pub fn rejection(self: *Trees, value: Value, parameter_type: Index) [2]Index {
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
+    const element_type = static_pool.array_element(parameter_type);
+    if (element_type != .none and static_pool.contains_trees(element_type)) {
+        for (0..interpreter.aggregate_length(value) orelse 0) |i| {
+            const element = interpreter.element(value, @intCast(i));
+            if (!self.admits(element, element_type)) return self.rejection(element, element_type);
+        }
+    }
+    return .{ self.kind_of(interpreter.interned(value)), parameter_type };
 }
 
 // the type of trees of the root of a tree value (`ast.BinaryAdd`), for what is reported
@@ -1450,14 +1691,21 @@ inline fn shape_list(self: *Trees, pattern: NodeId, code: NodeId) bool {
     const tree = self.owning_interpreter().owning_resolver().tree;
     const pattern_items = tree.manychildren(pattern);
     const code_items = tree.manychildren(code);
+    const rest_at = for (pattern_items, 0..) |item, i| {
+        if (tree.kind(item) == .unquote_list) break i;
+    } else pattern_items.len;
+    const fixed_count = pattern_items.len - @intFromBool(rest_at < pattern_items.len);
+    if (code_items.len < fixed_count) return false;
+    if (rest_at == pattern_items.len and code_items.len != fixed_count) return false;
+    const rest_count = code_items.len - fixed_count;
 
     for (pattern_items, 0..) |item, i| {
-        // `@..xs` takes the rest of the list as a `[]ast`
-        if (tree.kind(item) == .unquote_list) {
+        // `@..xs` takes the items between those before and after it as a `[]ast`
+        if (i == rest_at) {
             const interpreter = self.owning_interpreter();
             const static_pool = &interpreter.owning_resolver().static_pool;
             const binder = tree.arg(item, 0);
-            const rest = code_items[@min(i, code_items.len)..];
+            const rest = code_items[i..][0..rest_count];
 
             const mark = interpreter.pool_indices.len;
             defer interpreter.pool_indices.len = mark;
@@ -1473,9 +1721,10 @@ inline fn shape_list(self: *Trees, pattern: NodeId, code: NodeId) bool {
                 .elements = interpreter.pool_indices.buffer[mark..interpreter.pool_indices.len],
             } });
             interpreter.patterns.bind_name(binder, .pooled(bound));
-            return true;
+            continue;
         }
-        if (i >= code_items.len or !self.shape(item, code_items[i])) return false;
+        const at = if (i > rest_at) i - 1 + rest_count else i;
+        if (!self.shape(item, code_items[at])) return false;
     }
-    return pattern_items.len == code_items.len;
+    return true;
 }

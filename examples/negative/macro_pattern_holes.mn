@@ -1,0 +1,22 @@
+# a quote pattern binds each name once: `@a + @a` would take two trees, not test them for equality
+stcfun same_twice = (ast e) -> u32: ret match e {
+    quote: @a + @a => 1, #! duplicate_declaration
+    _ => 0,
+}
+stc u32 st = same_twice(quote: x + y);
+stcfun list_twice = (ast e) -> u32: ret match e {
+    quote: f(@b, 1) => 1,
+    quote: g(@b, @..b) => 2, #! duplicate_declaration
+    _ => 0,
+}
+stc u32 lt = list_twice(quote: g(x, 2));
+
+# fine: a name in separate arms, `_` any number of times
+stcfun separate = (ast e) -> u32: ret match e {
+    quote: @c * 1 => 1,
+    quote: @c + @_ + @_ => 2,
+    _ => 0,
+}
+stc u32 sep = separate(quote: x + y + z);
+
+$main = () {}

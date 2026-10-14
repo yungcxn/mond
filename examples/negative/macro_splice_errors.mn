@@ -1,0 +1,22 @@
+# a splice takes one tree known statically, what it makes is typed where it lands
+stcfun make = (u32 n) -> ast: ret quote: @n;
+fun runtime_arg = (u32 n) -> u32: ret <make(n)>; #! not_static
+stcfun many = () -> []ast: ret [quote: 1];
+stc u32 list_splice = <many()>; #! type_mismatch
+stcfun take_i32 = (ast(i32) e) -> ast(i32): ret e;
+stc i32 wrong_tree = <take_i32(quote: true)>; #! type_mismatch
+stcfun splice_type = () -> ast(type): ret quote: u8;
+stc u32 type_as_value = <splice_type()>; #! type_mismatch
+stc ast(u32) not_a_quote = 5; #! type_mismatch
+fun spliced_statement = () -> u32 {
+    u32 x = <quote { brk; }>; #! type_mismatch
+    ret x;
+}
+
+# a macro failing to check reports its own error, its splice nothing more
+stcfun broken = (*ast file) {
+    u32 x = true; #! type_mismatch
+}
+<broken(refl $file)>;
+
+$main = () {}

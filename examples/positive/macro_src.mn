@@ -1,0 +1,32 @@
+# `$src` is the source a tree was written as: with the brackets it closes and the operators around
+stc []u8 call = (quote: f(x)).$src; #= call "f(x)"
+stc []u8 index = (quote: xs[0]).$src; #= index "xs[0]"
+stc []u8 not = (quote: !done).$src; #= not "!done"
+stc []u8 grouped = (quote: (a + b) * c).$src; #= grouped "(a + b) * c"
+stc []u8 array = (quote: [1, 2]).$src; #= array "[1, 2]"
+stc []u8 nested_calls = (quote: g(h(1))).$src; #= nested_calls "g(h(1))"
+stc []u8 call_first = (quote: g(h(1)) + 1).$src; #= call_first "g(h(1)) + 1"
+stc []u8 call_last = (quote: x == f(y)).$src; #= call_last "x == f(y)"
+stc []u8 negated = (quote: -x).$src; #= negated "-x"
+stc []u8 negated_group = (quote: -(a + b)).$src; #= negated_group "-(a + b)"
+stc []u8 negated_name = (quote: -(x)).$src; #= negated_name "-(x)"
+stc []u8 dereferenced = (quote: p.*).$src; #= dereferenced "p.*"
+stc []u8 call_dereferenced = (quote: f(x).*).$src; #= call_dereferenced "f(x).*"
+stc []u8 pointer_type = (quote: *Rec).$src; #= pointer_type "*Rec"
+stc []u8 branches = (quote: if a: b else: c).$src; #= branches "if a: b else: c"
+stc []u8 matched = (quote: match x { 1 => 2, _ => 3 }).$src; #= matched "match x { 1 => 2, _ => 3 }"
+stc []u8 holes = (quote: m(x, @y)).$src; #= holes "m(x, @y)"
+stc []u8 arrays = (quote: [[1], [2]]).$src; #= arrays "[[1], [2]]"
+stc []u8 with_copy = (quote: x with (a = 1)).$src; #= with_copy "x with (a = 1)"
+
+# brackets in texts and characters are no brackets
+stc []u8 text_bracket = (quote: f("(", g(1))).$src; #= text_bracket "f("(", g(1))"
+stc []u8 char_bracket = (quote: k('(')).$src; #= char_bracket "k('(')"
+
+# keywords are themselves, a body is what follows its `ret`
+stc []u8 keyword_true = (quote: true).$src; #= keyword_true "true"
+stc []u8 keyword_type = (quote: u32).$src; #= keyword_type "u32"
+fun body_f = (u32 a) -> u32 { ret body_f(a); }
+stc []u8 body = (refl body_f).$body.$src; #= body "body_f(a)"
+
+$main = () {}

@@ -424,7 +424,17 @@ fn define_variant(
             parts.payload = resolver.tree.arg(inner, 1);
             inner = resolver.tree.arg(inner, 0);
         }
-        parts.name = resolver.tree.arg(inner, 0);
+        const is_case = resolver.tree.kind(inner) == .partial__variant_def_param and
+            resolver.tree.kind(resolver.tree.arg(inner, 0)) == .identifier;
+        if (!is_case) {
+            const Kind = ParseTree.Node.Kind;
+            const found_kind = @as(u16, @intFromEnum(resolver.tree.kind(inner))) + 1;
+            const case_kind = @as(u16, @intFromEnum(Kind.partial__variant_def_param)) + 1;
+            const found = static_pool.ast_type_of(.none, found_kind);
+            const wanted = static_pool.ast_type_of(.none, case_kind);
+            _ = resolver.report(.type_mismatch, case_node, found, wanted);
+        }
+        parts.name = if (is_case) resolver.tree.arg(inner, 0) else case_node;
         const payload = if (parts.payload == 0)
             .none
         else
@@ -445,7 +455,7 @@ fn define_variant(
             _ = resolver.report_mismatch(parts.tag, static_pool.type_of(tag_value), .u64_type);
         }
 
-        const name = resolver.name_pool.name_of_node(parts.name);
+        const name = if (is_case) resolver.name_pool.name_of_node(parts.name) else .empty;
         for (cases[0..i]) |previous| {
             if (static_pool.get(previous).variant_case_type.name != name) continue;
             // one report per repeated case, like fields and parameters
