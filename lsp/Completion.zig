@@ -92,14 +92,6 @@ const kind_entries = blk: {
     break :blk entries;
 };
 
-// a view of trees or `$file`: code, not a value of the program
-pub fn of_trees(name: []const u8) bool {
-    for (view_entries ++ [_]Entry{file_entry}) |entry| {
-        if (std.mem.eql(u8, entry.label, name)) return true;
-    }
-    return false;
-}
-
 // a view or builtin by its name, for hovers
 pub fn described(name: []const u8) ?Entry {
     const all = view_entries ++ builtin_entries ++ [_]Entry{ length_entry, file_entry };

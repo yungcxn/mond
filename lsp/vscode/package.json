@@ -32,7 +32,17 @@
 			"[mond]": {
 				"editor.semanticHighlighting.enabled": true
 			}
-		}
+		},
+		"semanticTokenScopes": [
+			{
+				"language": "mond",
+				"scopes": {
+					"macro": [
+						"keyword.control.meta.mond"
+					]
+				}
+			}
+		]
 	},
 	"__metadata": {
 		"size": 7649558

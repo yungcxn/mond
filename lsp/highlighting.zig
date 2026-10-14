@@ -24,6 +24,9 @@ const class_of_token_kind = blk: {
         if (std.mem.startsWith(u8, field.name, "xpct_")) table[field.value] = .operator;
     }
     for (@intFromEnum(Kind.kw_u8)..@intFromEnum(Kind.kw_bool) + 1) |i| table[i] = .type;
+    // the syntax between code and the code it writes: a quote, a reflection, a hole
+    table[@intFromEnum(Kind.kw_quote)] = .macro;
+    table[@intFromEnum(Kind.kw_refl)] = .macro;
     table[@intFromEnum(Kind.@"xpct_@")] = .macro;
     table[@intFromEnum(Kind.identifier)] = .variable;
     table[@intFromEnum(Kind.val_string)] = .string;
@@ -57,7 +60,7 @@ const opens_bracket = blk: {
 };
 
 // `_` is no name, a builtin is what it is, a declared name what its keyword declares (in quotes)
-// the `<..>` of a splice and `@` are macros
+// the meta syntax (`quote`, `refl`, the `<..>` of a splice, `@`) is a macro, what it holds is code
 pub fn classify_lexically(analysis: *Analysis, lexer: *Lexer) void {
     const tokens = lexer.tokens.columns();
     analysis.token_class = analysis.allocator.alloc(?Type, tokens.tk.len) catch @panic("OOM");
@@ -74,7 +77,6 @@ pub fn classify_lexically(analysis: *Analysis, lexer: *Lexer) void {
             class.* = blk: {
                 if (Completion.described(name)) |entry| {
                     if (entry.class == .function) break :blk .function;
-                    if (Completion.of_trees(name)) break :blk .macro;
                     break :blk .property;
                 }
                 if (i > 0) {
@@ -145,7 +147,7 @@ pub fn classify_resolved(resolver: *Resolver, token_class: []?Type, token_modifi
                 for (tree.manychildren(arguments)) |argument| {
                     const token = linking.name_token(resolver, tree.arg_name(argument)) orelse
                         continue;
-                    token_class[token] = .macro;
+                    token_class[token] = .property;
                 }
                 continue;
             },
@@ -162,25 +164,26 @@ pub fn classify_resolved(resolver: *Resolver, token_class: []?Type, token_modifi
 
         const declaration = resolver.node_declarations[node];
         if (declaration == .none) {
-            // a view of trees stays code
+            // a builtin (`$src`) stays what it is, a later pass may know more of other names
             if (undeclared_class) |class| {
-                if (token_class[token] != .macro) token_class[token] = class;
+                const span = tree.span(identifier);
+                const name = resolver.src_bytes[span[0]..span[1]];
+                if (Completion.described(name) == null) token_class[token] = class;
             }
             continue;
         }
 
         const declaration_index = @intFromEnum(declaration);
-        token_class[token] = symbol_classes.shown_class(resolver, declaration_index);
+        const kind = resolver.decl_pool.get(declaration, .kind);
+        token_class[token] = symbol_classes.class_of_kind(kind);
         token_modifiers[token] = symbol_classes.declaration_modifiers(resolver, declaration_index);
     }
 }
 
-// a member of a type is a case, of a tree a child, of any other value a field
+// a member of a type is a case, of any other value (a tree too) a field
 fn member_class(resolver: *Resolver, base: u32) Type {
     const is_type = symbol_classes.is_type(resolver, base) or resolver.tree.kind(base) == .type_ast;
-    if (is_type) return .enumMember;
-    if (resolver.static_pool.is_tree(resolver.node_types[base])) return .macro;
-    return .property;
+    return if (is_type) .enumMember else .property;
 }
 
 // encodes every token by its class, lsp wants each relative to the one before

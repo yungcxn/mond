@@ -52,11 +52,10 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
         else
             declarations.value_type[i];
         const detail = type_text(analysis, resolver, declared_type);
-        const shown_class = symbol_classes.shown_class(resolver, i);
         declare(analysis, token, .{
             .name = name,
             .detail = detail,
-            .class = shown_class,
+            .class = class,
             .modifiers = symbol_classes.modifiers(class, flags),
             .outlined = !is_local_value or flags.is_global,
             .global = flags.is_global,
@@ -111,14 +110,6 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
         }
         const is_case = class == .enumMember;
         const parameter = if (is_case) ParseTree.Param{} else ParseTree.Param.from_node(tree, node);
-        // a type written with `ast` in it, of a parameter the resolver did not check
-        const is_written_code = parameter.ty != 0 and blk: {
-            const subtree = tree.subtree(parameter.ty);
-            for (subtree[0]..subtree[1]) |descendant| {
-                if (tree.kind(@intCast(descendant)) == .type_ast) break :blk true;
-            }
-            break :blk false;
-        };
         const name = resolver.name_pool.text_of(resolver.name_pool.name_of_node(identifier));
         // the type of a parameter as written before its name (`&u8 fmt`), when it is not evaluated
         const detail = if (is_case) "" else blk: {
@@ -146,7 +137,7 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
         declare(analysis, token, .{
             .name = name,
             .detail = detail,
-            .class = if (is_written_code) .macro else class,
+            .class = class,
             .modifiers = if (is_case) 0 else readonly,
             .outlined = class != .parameter,
             .global = false,
@@ -350,11 +341,10 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
 
         const first_token = same_name.items()[nearest_index];
         if (analysis.token_meaning[first_token] == none) {
-            const holds_tree = binds_tree(analysis, tree, analysis.token_leaf[first_token]);
             declare(analysis, first_token, .{
                 .name = name,
                 .detail = "",
-                .class = if (holds_tree) .macro else .variable,
+                .class = .variable,
                 .modifiers = 0,
                 .outlined = false,
                 .global = false,
@@ -363,11 +353,6 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
             });
         }
         analysis.token_meaning[token] = analysis.token_meaning[first_token];
-    }
-
-    // a binder of a quote pattern holds a tree, used or not
-    for (analysis.token_leaf, 0..) |leaf, token| {
-        if (leaf != none and binds_tree(analysis, tree, leaf)) analysis.token_class[token] = .macro;
     }
 
     for (analysis.token_meaning, spans) |meaning, span| {
@@ -403,7 +388,7 @@ pub fn remember_pass(analysis: *Analysis, resolver: *Resolver) void {
         else
             declarations.value_type[i];
         const detail = type_text(analysis, resolver, declared_type);
-        const class = symbol_classes.shown_class(resolver, i);
+        const class = symbol_classes.class_of_kind(declarations.kind[i]);
         const modifiers = symbol_classes.declaration_modifiers(resolver, i);
         analysis.past_declarations.items()[past_index.*] = .{
             .name = name,
@@ -559,20 +544,6 @@ fn nearest(analysis: *Analysis, node: u32, candidates: []const u32) ?usize {
         if (best != null) return best;
     }
     return null;
-}
-
-// a binder of a quote pattern holds a tree (`quote: @x + 0 => x`)
-fn binds_tree(analysis: *Analysis, tree: *ParseTree, node: u32) bool {
-    if (node == none) return false;
-    const parents = analysis.node_parent;
-    if (parents[node] == none or tree.kind(parents[node]) != .unquote) return false;
-
-    var quote = parents[node];
-    while (quote != none and tree.kind(quote) != .quote) quote = parents[quote];
-    if (quote == none) return false;
-
-    const arm = parents[quote];
-    return arm != none and tree.kind(arm) == .partial__match_case and tree.arg(arm, 0) == quote;
 }
 
 // where the type of `node` is declared, a type stands for itself

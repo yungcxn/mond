@@ -441,7 +441,7 @@ test "macros expand before anything is linked, made names link nowhere" {
     try std.testing.expectEqualStrings("include_failed   `nope.mn`", message);
 }
 
-test "macros: code is a macro, splices and stcfuns are classed and linked by what they mean" {
+test "macros: the meta syntax is a macro, code by its role, splices and stcfuns by what they mean" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const source = try arena.allocator().dupe(u8, "" ++
@@ -468,13 +468,14 @@ test "macros: code is a macro, splices and stcfuns are classed and linked by wha
     // `kids` matched only the second alternative, the splice is gone from the last pass
     // a `<` after a splice compares
     const expected = [_]struct { u32, u32, Type }{
-        .{ 0, 7, .macro },       .{ 0, 25, .macro },    .{ 0, 52, .macro },
-        .{ 0, 53, .macro },      .{ 1, 29, .macro },    .{ 1, 30, .macro },
-        .{ 1, 43, .parameter },  .{ 1, 45, .macro },    .{ 1, 47, .operator },
-        .{ 2, 42, .macro },      .{ 2, 54, .macro },    .{ 2, 63, .macro },
-        .{ 2, 78, .macro },      .{ 2, 83, .function }, .{ 2, 101, .macro },
-        .{ 3, 48, .enumMember }, .{ 3, 58, .macro },    .{ 3, 61, .macro },
-        .{ 3, 102, .macro },     .{ 3, 108, .macro },   .{ 3, 119, .macro },
+        .{ 0, 7, .function },    .{ 0, 25, .parameter },  .{ 0, 45, .macro },
+        .{ 0, 52, .macro },      .{ 0, 53, .parameter },  .{ 1, 29, .macro },
+        .{ 1, 30, .function },   .{ 1, 43, .parameter },  .{ 1, 45, .macro },
+        .{ 1, 47, .operator },   .{ 2, 42, .parameter },  .{ 2, 54, .variable },
+        .{ 2, 63, .variable },   .{ 2, 78, .variable },   .{ 2, 83, .function },
+        .{ 2, 101, .parameter }, .{ 3, 48, .enumMember }, .{ 3, 58, .variable },
+        .{ 3, 61, .variable },   .{ 3, 102, .property },  .{ 3, 108, .variable },
+        .{ 3, 119, .property },
     };
     for (expected) |token| try std.testing.expectEqual(token[2], classes[token[0]][token[1]].?[0]);
 

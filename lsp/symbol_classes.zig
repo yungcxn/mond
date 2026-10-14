@@ -7,19 +7,6 @@ const Modifier = Analysis.Modifier;
 
 // what a declaration is to the reader: its class and modifiers when highlighted, its outline kind
 
-// one holding code (a tree, a list of trees, a function taking or making them) is a macro
-pub fn shown_class(resolver: *Resolver, declaration: usize) Type {
-    const declarations = resolver.decl_pool.entries.columns();
-    const kind = declarations.kind[declaration];
-    const value_type = declarations.value_type[declaration];
-    const class = class_of_kind(kind);
-    if (!resolver.tree.macros or kind.is_type_declaration() or value_type == .none) return class;
-
-    const pool = &resolver.static_pool;
-    if (pool.contains_trees(pool.substitute_type_variables(value_type))) return .macro;
-    return class;
-}
-
 pub fn class_of_kind(kind: DeclPool.Entry.Kind) Type {
     return switch (kind) {
         .parameter, .static_parameter => .parameter,
