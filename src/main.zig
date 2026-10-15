@@ -292,6 +292,7 @@ pub fn main(init: std.process.Init) void {
     ) catch |err| @panic(@errorName(err));
     defer alloc.free(source_bytes);
 
+    const started = std.Io.Timestamp.now(io, .awake);
     var lexer = Lexer{ .src_bytes = source_bytes, .tokens = .init(alloc, 10000) };
     defer lexer.tokens.deinit();
     lexer.gen_tokens() catch |err| return lexer.handle_err(io, err);
@@ -406,6 +407,28 @@ pub fn main(init: std.process.Init) void {
     const keeps_objects = linked and args.debug and builtin.os.tag.isDarwin();
     if (!keeps_objects) for (objects.items) |built| std.Io.Dir.cwd().deleteFile(io, built) catch {};
     if (!linked) std.process.exit(1);
+
+    // from lexing to the finished executable, `Built` in bold green on a terminal
+    const elapsed = started.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds;
+    const milliseconds = @as(f64, @floatFromInt(elapsed)) / std.time.ns_per_ms;
+    const is_terminal = std.Io.File.stderr().isTty(io) catch false;
+    const green, const bold, const reset = if (is_terminal)
+        .{ "\x1b[1;32m", "\x1b[1m", "\x1b[0m" }
+    else
+        .{ "", "", "" };
+    const amount, const unit = if (milliseconds < 1000)
+        .{ milliseconds, "ms" }
+    else
+        .{ milliseconds / 1000, "s" };
+    std.debug.print("{s}Built{s} {s}{s}{s} in {d:.1} {s}\n", .{
+        green,
+        reset,
+        bold,
+        executable,
+        reset,
+        amount,
+        unit,
+    });
 }
 
 // `dir/app.mn` builds `app` in the working directory

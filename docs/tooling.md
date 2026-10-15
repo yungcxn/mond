@@ -12,7 +12,6 @@ zig build                           # builds ./mond (needs llvm and lld, see bel
 ./mond -b app.mn -i add '#3' ':12'  # inspect declarations by name, index or line
 zig build test [-- filter]          # examples, docs, then the backend tests
 zig build test-backend [-- filter]  # only the programs of examples/backend
-zig build bench -- 10               # time the front end over all examples
 zig build lsp                       # the language server, into lsp/vscode and lsp/vim
 ```
 
@@ -46,7 +45,7 @@ fun qsort = (*u8 items, u64 count, u64 size, (&u8, &u8) -> i32 compare);
 
 ### Building mond
 
-`build.zig` asks `llvm-config` where LLVM is (LLVM 19 or newer). It takes the first one in `PATH`, or else where Homebrew, Debian and Fedora install it. `-Dllvm-config=/path/to/llvm-config` picks one. lld's headers and libraries are looked for next to LLVM and in Homebrew's `opt/lld`, or `-Dlld-prefix=..`. On Linux, `-Dcrt-dir=..` names where `Scrt1.o` and libc are if they aren't found. `-Doptimize=Debug` builds mond with stack traces for compiler bugs. The language server, bench and example tests don't need LLVM.
+`build.zig` asks `llvm-config` where LLVM is (LLVM 19 or newer). It takes the first one in `PATH`, or else where Homebrew, Debian and Fedora install it. `-Dllvm-config=/path/to/llvm-config` picks one. lld's headers and libraries are looked for next to LLVM and in Homebrew's `opt/lld`, or `-Dlld-prefix=..`. On Linux, `-Dcrt-dir=..` names where `Scrt1.o` and libc are if they aren't found. `-Doptimize=Debug` builds mond with stack traces for compiler bugs. The language server and the example tests don't need LLVM.
 
 ## Tests
 

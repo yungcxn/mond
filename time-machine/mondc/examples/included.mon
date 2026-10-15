@@ -1,3 +1,0 @@
-%flag INCLUDEDFLAG;
-%incl included2.mon;
-global string includedstring = "hi";

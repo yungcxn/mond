@@ -6,8 +6,8 @@ pub fn build(b: *std.Build) void {
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "how mond is built") orelse
         .ReleaseFast;
 
-    // the front end, from lexing to `HighIr`: all that the language server, the bench and the
-    // example tests need, so they build without llvm
+    // the front end, from lexing to `HighIr`: all that the language server and the example tests
+    // need, so they build without llvm
     const front = b.createModule(.{
         .root_source_file = b.path("src/mond.zig"),
         .target = target,
@@ -60,19 +60,6 @@ pub fn build(b: *std.Build) void {
             if (step == test_step) run_backend_tests.step.dependOn(&run_tests.step);
             step.dependOn(&run_backend_tests.step);
         }
-    }
-
-    { // the whole pipeline over every compiling example, `zig build bench -- <rounds>`
-        const bench = b.addExecutable(.{ .name = "mond-bench", .root_module = b.createModule(.{
-            .root_source_file = b.path("stats/bench.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{.{ .name = "mond", .module = front }},
-        }) });
-        const run_bench = b.addRunArtifact(bench);
-        run_bench.setCwd(b.path("."));
-        if (b.args) |args| run_bench.addArgs(args);
-        b.step("bench", "Time lexing, parsing, resolving and lowering of all examples.").dependOn(&run_bench.step);
     }
 
     { // https://zigtools.org/zls/guides/build-on-save/

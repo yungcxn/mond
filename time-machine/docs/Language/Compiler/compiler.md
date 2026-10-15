@@ -1,3 +1,0 @@
-# mondc
-
-starts with mondpre
