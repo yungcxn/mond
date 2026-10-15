@@ -51,23 +51,11 @@ pub fn build(b: *std.Build) void {
                 .target = b.graph.host,
             }),
         });
-        // the c library the programs call, linked into each of them
-        const c_library = b.addLibrary(.{
-            .name = "mond-test-c",
-            .linkage = .static,
-            .root_module = b.createModule(.{
-                .target = b.graph.host,
-                .optimize = .ReleaseFast,
-                .link_libc = true,
-            }),
-        });
-        c_library.root_module.addCSourceFile(.{ .file = b.path("examples/backend/lib/clib.c") });
         const backend_step = b.step("test-backend", "Build and run the programs of examples/backend.");
         for ([_]*std.Build.Step{ test_step, backend_step }) |step| {
             const run_backend_tests = b.addRunArtifact(backend_tests);
             run_backend_tests.setCwd(b.path("."));
             run_backend_tests.addArtifactArg(exe);
-            run_backend_tests.addArtifactArg(c_library);
             if (b.args) |args| run_backend_tests.addArgs(args);
             if (step == test_step) run_backend_tests.step.dependOn(&run_tests.step);
             step.dependOn(&run_backend_tests.step);

@@ -3,50 +3,68 @@
 const std = @import("std");
 const llvm = @import("llvm_c");
 
-// `--level`: the pass pipeline and how hard instruction selection tries.
-// level 0 also keeps the runtime checks the lowerer emits
-pub const Level = enum {
-    @"0",
-    @"1",
-    @"2",
-    @"3",
-    s,
-    z,
+// `--mode`: the pass pipeline, how hard instruction selection tries, and whether the runtime checks
+// the lowerer emits stay
+pub const Mode = enum {
+    none,
+    safe,
+    less,
+    default,
+    aggressive,
+    size,
+    minsize,
 
-    pub const usage = "levels: 0, 1, 2, 3, s (small), z (smallest)\n";
-
-    pub fn parse(text: []const u8) ?Level {
-        return std.meta.stringToEnum(Level, text);
-    }
-
-    fn pipeline(level: Level) [:0]const u8 {
-        return switch (level) {
-            .@"0" => "default<O0>",
-            .@"1" => "default<O1>",
-            .@"2" => "default<O2>",
-            .@"3" => "default<O3>",
-            .s => "default<Os>",
-            .z => "default<Oz>",
+    pub fn description(mode: Mode) []const u8 {
+        return switch (mode) {
+            .none => "no optimization, runtime checks (the default)",
+            .safe => "optimized like default, runtime checks",
+            .less => "light optimization",
+            .default => "full optimization",
+            .aggressive => "more inlining and unrolling, larger code",
+            .size => "optimized, small code",
+            .minsize => "smallest code",
         };
     }
 
-    fn codegen(level: Level) llvm.LLVMCodeGenOptLevel {
-        return switch (level) {
-            .@"0" => llvm.LLVMCodeGenLevelNone,
-            .@"1" => llvm.LLVMCodeGenLevelLess,
-            .@"2", .s, .z => llvm.LLVMCodeGenLevelDefault,
-            .@"3" => llvm.LLVMCodeGenLevelAggressive,
+    // the level as llvm and c compilers name it, `-O2` for clang
+    pub fn optimization(mode: Mode) []const u8 {
+        return switch (mode) {
+            .none => "O0",
+            .less => "O1",
+            .default, .safe => "O2",
+            .aggressive => "O3",
+            .size => "Os",
+            .minsize => "Oz",
+        };
+    }
+
+    pub fn has_checks(mode: Mode) bool {
+        return mode == .none or mode == .safe;
+    }
+
+    fn pipeline(mode: Mode) [:0]const u8 {
+        return switch (mode) {
+            inline else => |known| "default<" ++ comptime known.optimization() ++ ">",
+        };
+    }
+
+    fn codegen(mode: Mode) llvm.LLVMCodeGenOptLevel {
+        return switch (mode) {
+            .none => llvm.LLVMCodeGenLevelNone,
+            .less => llvm.LLVMCodeGenLevelLess,
+            .default, .safe, .size, .minsize => llvm.LLVMCodeGenLevelDefault,
+            .aggressive => llvm.LLVMCodeGenLevelAggressive,
         };
     }
 };
 
 // the executable runs where it is built, so it may use every feature of this cpu
 pub const Machine = struct {
-    level: Level,
+    mode: Mode,
     triple: [*c]u8,
     target_machine: llvm.LLVMTargetMachineRef,
 
-    pub fn init(level: Level) Machine {
+    pub fn init(mode: Mode) Machine {
         if (llvm.LLVMInitializeNativeTarget() != 0) @panic("llvm has no backend for this machine");
         if (llvm.LLVMInitializeNativeAsmPrinter() != 0) {
             @panic("llvm can't print this machine's code");
@@ -63,14 +81,14 @@ pub const Machine = struct {
         const features = llvm.LLVMGetHostCPUFeatures();
         defer llvm.LLVMDisposeMessage(features);
         return .{
-            .level = level,
+            .mode = mode,
             .triple = triple,
             .target_machine = llvm.LLVMCreateTargetMachine(
                 target,
                 triple,
                 cpu,
                 features,
-                level.codegen(),
+                mode.codegen(),
                 llvm.LLVMRelocPIC,
                 llvm.LLVMCodeModelDefault,
             ),
@@ -92,7 +110,7 @@ pub const Machine = struct {
         defer llvm.LLVMDisposePassBuilderOptions(options);
         const failure = llvm.LLVMRunPasses(
             module,
-            machine.level.pipeline(),
+            machine.mode.pipeline(),
             machine.target_machine,
             options,
         );

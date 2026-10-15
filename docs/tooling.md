@@ -3,33 +3,40 @@
 The compiler checks a program, lowers it to an SSA IR, and builds a native executable of it with LLVM and the linker built in (lld), against the C library.
 
 ```sh
-zig build                         # builds ./mond (needs llvm and lld, see below)
-./mond -b app.mn                  # builds ./app
-./mond -b app.mn -o out -l 2      # builds ./out, optimized
-./mond -b app.mn -p tree,ir,llvm  # also prints stages: tree, decls, ir, llvm
+zig build                           # builds ./mond (needs llvm and lld, see below)
+./mond --help                       # the flags and modes
+./mond -b app.mn                    # builds ./app
+./mond -b app.mn -o out -m default  # builds ./out, optimized
+./mond -b app.mn io.c libz.a        # compiles io.c with the c compiler, links both in
+./mond -b app.mn -p tree,ir,llvm    # also prints stages: tree, decls, ir, llvm
 ./mond -b app.mn -i add '#3' ':12'  # inspect declarations by name, index or line
-zig build test [-- filter]        # examples, docs, then the backend tests
+zig build test [-- filter]          # examples, docs, then the backend tests
 zig build test-backend [-- filter]  # only the programs of examples/backend
-zig build bench -- 10             # time the front end over all examples
-zig build lsp                     # the language server, into lsp/vscode and lsp/vim
+zig build bench -- 10               # time the front end over all examples
+zig build lsp                       # the language server, into lsp/vscode and lsp/vim
 ```
 
 | flag | |
 |---|---|
+| `-b` `--build` | the source, then files to link with it: `.o` `.a` `.so` `.dylib` as they are, any other (`.c` `.cpp` `.s` ..) compiled first by `<cc> -c file -o <out>.file.o`, with the mode's `-O` flag, and `-g` under `-d`. The objects are deleted after linking (kept with `-d` on macOS) |
+| `-c` `--cc` | the c compiler and its flags (`--cc "clang -Iinclude"`), else `$CC`, else `cc` |
 | `-o` `--out` | the executable, by default the source's name without `.mn` |
-| `-l` `--level` | `0` (default) unoptimized, traps on division by zero, oversized shifts and indices past an array's end; `1` `2` `3` optimized without checks; `s` `z` small |
+| `-m` `--mode` | how to optimize: `none` (the default, `-O0`) and `safe` (`-O2`) keep the runtime checks; `less` `default` `aggressive` (`-O1` `-O2` `-O3`), `size` and `minsize` (`-Os` `-Oz`) drop them |
 | `-d` `--debug` | DWARF for a debugger: functions, source lines and frame pointers. On macOS the object file stays next to the executable, lldb reads the DWARF from it. Code from `include` and macros is placed at the line that splices it |
-| `-w` `--with` | object files and libraries to link with, comma separated: `-w clib.o,libfoo.a,-lm` |
+| `-w` `--with` | further linker inputs, comma separated: `-w -lm,-L/opt/lib` |
 | `-p` `--print` | `tree` the resolved tree, `decls` the declarations, `ir` the SSA IR, `llvm` the optimized LLVM IR |
 | `-i` `--inspect` | declarations by name, `#index` or `:line`; nothing is built |
+| `-h` `--help` | the flags and modes; also shown when `mond` gets no arguments |
 
 Diagnostics go to stderr as `file:line:column: code operands`. `$main` returns the exit code. It may take `(argc, argv)` as integers, pointers, or `&[]&u8` (the arguments with their count).
 
-Records, arrays and variants live in memory: they are passed by address and returned through a pointer the caller gives. LLVM's passes promote small ones to registers from level 1 on.
+Records, arrays and variants live in memory: they are passed by address and returned through a pointer the caller gives. LLVM's passes promote small ones to registers in every mode but `none`.
+
+The runtime checks stop the program with a trap (a debugger shows the line) on a division by zero (and the smallest integer divided by `-1`), a shift by the width or more, an index past the end of an array, and on reaching code that can't be reached, like a failing `x??`. Without them these are undefined behavior. Debug symbols (`-d`) are independent of the mode: `-m none -d` is what other compilers call a debug build.
 
 ### C functions
 
-A function declared without a body is a C function, linked from the C library or from what `-w` names. Its values cross as C passes them on this machine (aarch64 or x86-64): ints, floats, `bool` and pointers as themselves, records by value in registers or as a copy in memory, a slice (`&[]u8`) as the address of its first element, and a function without captures, named directly, as a C function pointer. A C function declared with several parameter lists is variadic (`printf`): the parameters all lists share are fixed, the others get C's promotions.
+A function declared without a body is a C function, linked from the C library or from the files listed after the source. Its values cross as C passes them on this machine (aarch64 or x86-64): ints, floats, `bool` and pointers as themselves, records by value in registers or as a copy in memory, a slice (`&[]u8`) as the address of its first element, and a function without captures, named directly, as a C function pointer. A C function declared with several parameter lists is variadic (`printf`): the parameters all lists share are fixed, the others get C's promotions.
 
 ```mond
 fun printf = (&u8 format, i64 number) -> i32;
@@ -54,7 +61,7 @@ Every `.mn` file under `examples/` and every ```` ```mond ```` block in `docs/` 
 
 These markers count anywhere in a comment. Values print as they are stored: a variant as `+(..).Case[payload]`, a computed `[]u8` as numbers, a string literal as text. Files in `examples/negative/` must mark at least one diagnostic. The docs must name every keyword, tree kind and diagnostic in backticks, so a new feature fails the tests until it is documented.
 
-The programs in `examples/backend/` are built and run after that, at levels `0` and `2`: each must exit with `0` and print exactly its `#> text` lines, in order. `examples/backend/lib/out.mn` gives them output through the C library.
+The programs in `examples/backend/` are built and run after that, in the modes `none`, `safe` and `default`: each must exit with `0` and print exactly its `#> text` lines, in order. `examples/backend/lib/out.mn` gives them output through the C library, and `examples/backend/lib/clib.c` is compiled and linked into each.
 
 ## Editor
 

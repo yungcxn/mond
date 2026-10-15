@@ -1,8 +1,7 @@
 # bc, the calculator of unix, in its integer core: numbers, `+ - * / % ^`, a minus in front,
 # parentheses, the variables `a` to `z`, `x = ..`, statements split by `;`, and `quit`.
-# it prints through `print` of examples/lib/print.c, which is linked in:
-#   cc -c examples/lib/print.c -o print.o
-#   ./mond -b examples/bc.mn -w print.o -l 2
+# it prints through `print` of examples/lib/print.c, which mond compiles and links in:
+#   ./mond -b examples/bc.mn examples/lib/print.c -m default
 #   echo 'x = 6; x * 7; 2 ^ 62; 7 / 0' | ./bc
 
 # several parameter lists: `print` is one variadic c function

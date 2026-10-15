@@ -1,4 +1,4 @@
-// the backend tests: every program in examples/backend is built by `mond` at the levels below and
+// the backend tests: every program in examples/backend is built by `mond` in the modes below and
 // run, and must exit with 0 and print exactly its `#> line` markers, in order
 const std = @import("std");
 
@@ -12,21 +12,22 @@ const Writer = std.Io.Writer;
 
 const directory_path = "examples/backend";
 const output_path = ".zig-cache/backend-tests";
-// unoptimized with the runtime checks, and optimized
-const levels = [_][]const u8{ "0", "2" };
+// the c functions the programs call, compiled by `mond` with the c compiler and linked into each
+const c_source_path = "examples/backend/lib/clib.c";
+// unoptimized and optimized with the runtime checks, and optimized without them
+const modes = [_][]const u8{ "none", "safe", "default" };
 const time_limit: std.Io.Timeout = .{ .duration = .{
     .raw = .fromSeconds(60),
     .clock = .awake,
 } };
 
-// `mond-test-backend <mond> <c library> [filters..]`
+// `mond-test-backend <mond> [filters..]`
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const arena = init.arena.allocator();
     const arguments = try init.minimal.args.toSlice(arena);
     const mond = arguments[1];
-    const c_library = arguments[2];
-    const filters = arguments[3..];
+    const filters = arguments[2..];
 
     var buffer: [1 << 16]u8 = undefined;
     var file_writer = std.Io.File.stdout().writerStreaming(io, &buffer);
@@ -51,7 +52,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }.less_than);
 
-    const rule = "\n{s} (built at levels 0 and 2, must print its `#>` lines)\n";
+    const rule = "\n{s} (built in modes none, safe and default, must print its `#>` lines)\n";
     try writer.print(bold ++ rule ++ reset, .{directory_path});
     var counts: [2]usize = .{ 0, 0 };
     for (names.items) |name| {
@@ -62,8 +63,8 @@ pub fn main(init: std.process.Init) !void {
 
         const source = try directory.readFileAlloc(io, name, arena, .limited(50 << 20));
         const expected = try expected_output(arena, source);
-        for (levels) |level| {
-            const passed = try check(writer, arena, io, mond, c_library, name, level, expected);
+        for (modes) |mode| {
+            const passed = try check(writer, arena, io, mond, name, mode, expected);
             counts[@intFromBool(!passed)] += 1;
         }
     }
@@ -93,21 +94,20 @@ fn check(
     arena: std.mem.Allocator,
     io: std.Io,
     mond: []const u8,
-    c_library: []const u8,
     name: []const u8,
-    level: []const u8,
+    mode: []const u8,
     expected: []const u8,
 ) !bool {
     const stem = name[0 .. name.len - ".mn".len];
     const source_path = try std.fs.path.join(arena, &.{ directory_path, name });
-    const executable = try std.fmt.allocPrint(arena, "{s}/{s}-{s}", .{ output_path, stem, level });
+    const executable = try std.fmt.allocPrint(arena, "{s}/{s}-{s}", .{ output_path, stem, mode });
 
     const built = try std.process.run(arena, io, .{
-        .argv = &.{ mond, "-b", source_path, "-o", executable, "-l", level, "-w", c_library },
+        .argv = &.{ mond, "-b", source_path, c_source_path, "-o", executable, "-m", mode },
         .timeout = time_limit,
     });
     if (!exited_cleanly(built.term)) {
-        try report(writer, name, level, "does not build", built.stderr);
+        try report(writer, name, mode, "does not build", built.stderr);
         return false;
     }
 
@@ -115,23 +115,23 @@ fn check(
     const ran = try std.process.run(arena, io, .{ .argv = &.{executable}, .timeout = time_limit });
     if (!exited_cleanly(ran.term)) {
         const status = try std.fmt.allocPrint(arena, "ended with {any}", .{ran.term});
-        try report(writer, name, level, status, ran.stdout);
+        try report(writer, name, mode, status, ran.stdout);
         return false;
     }
     if (!std.mem.eql(u8, ran.stdout, expected)) {
         try report(
             writer,
             name,
-            level,
+            mode,
             "printed other lines",
             try difference(arena, expected, ran.stdout),
         );
         return false;
     }
     const line_count = std.mem.count(u8, expected, "\n");
-    const passed_format = "  " ++ green ++ "✓" ++ reset ++ " {s} -l {s}  " ++
+    const passed_format = "  " ++ green ++ "✓" ++ reset ++ " {s} -m {s}  " ++
         dim ++ "{d} lines" ++ reset ++ "\n";
-    try writer.print(passed_format, .{ name, level, line_count });
+    try writer.print(passed_format, .{ name, mode, line_count });
     return true;
 }
 
@@ -145,12 +145,12 @@ fn exited_cleanly(term: std.process.Child.Term) bool {
 fn report(
     writer: *Writer,
     name: []const u8,
-    level: []const u8,
+    mode: []const u8,
     problem: []const u8,
     details: []const u8,
 ) !void {
-    const failed_format = "  " ++ red ++ "✗" ++ reset ++ " {s} -l {s}  {s}\n";
-    try writer.print(failed_format, .{ name, level, problem });
+    const failed_format = "  " ++ red ++ "✗" ++ reset ++ " {s} -m {s}  {s}\n";
+    try writer.print(failed_format, .{ name, mode, problem });
     var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, details, "\n"), '\n');
     while (lines.next()) |line| try writer.print(dim ++ "      {s}\n" ++ reset, .{line});
 }
