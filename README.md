@@ -14,6 +14,7 @@ The [docs](docs/README.md) are always in sync with the compiler source and its f
 
 ## Roadmap:
 
-1. Build a basic compiler that transpiles into as-primitive-as-possible C
-2. Replace the backend with true x86 code gen
-3. ?
+1. DONE: Build a basic compiler that transpiles into as-primitive-as-possible C
+2. DONE: Replace the backend with a custom IR
+3. DONE: Add LLVM as Backend and finally compile working executables
+4. Self-hosting
