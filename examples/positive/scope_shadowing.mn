@@ -89,4 +89,4 @@ stc u32 LA = lambda_shadows(); #= LA 23
 stc u32 DB = deep_blocks(); #= DB 201
 stc u32 IB = if_branch_scope(true); #= IB 4
 # argc / argv in any integer and pointer type, an integer result
-$main = (i32 argc, &[]&u8 argv) -> i32: ret argc + inner_scope() as i32; #: $main (i32, &[]&u8) -> i32
+$main = (u32 argc, &&u8 argv) -> i32: ret argc as i32 + inner_scope() as i32; #: $main (u32, &&u8) -> i32

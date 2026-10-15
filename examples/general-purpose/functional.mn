@@ -2,13 +2,13 @@ type IntFn = (i64) -> i64;
 type Pred = (i64) -> bool;
 type Fold = (i64, i64) -> i64;
 
-fun compose = (IntFn f, IntFn g): (i64 x): f(g(x));
-fun twice = (IntFn f): (i64 x): f(f(x));
-fun adder = (i64 n): (i64 x): x + n;
-fun multiplier = (i64 n) -> IntFn: ret (i64 x): x * n;
-fun curry_add = (i64 a): (i64 b): (i64 c): a + b + c;
-fun flip = (Fold f): (i64 a, i64 b): f(b, a);
-fun negate = (Pred p): (i64 x): !p(x);
+stcfun compose = (IntFn f, IntFn g): (i64 x): f(g(x));
+stcfun twice = (IntFn f): (i64 x): f(f(x));
+stcfun adder = (i64 n): (i64 x): x + n;
+stcfun multiplier = (i64 n) -> IntFn: ret (i64 x): x * n;
+stcfun curry_add = (i64 a, i64 b): (i64 c): a + b + c;
+stcfun flip = (Fold f): (i64 a, i64 b): f(b, a);
+stcfun negate = (Pred p): (i64 x): !p(x);
 
 fun map_into = (&[]i64 src, *[]i64 dst, IntFn f) {
     for i in 0..<src.$len: dst.*[i] = f(src.*[i]);
@@ -52,7 +52,7 @@ fun fix_point = (IntFn f, i64 start) -> i64 {
     ret v;
 }
 
-fun counter_from = (i64 start): (i64 step): start + step;
+stcfun counter_from = (i64 start): (i64 step): start + step;
 
 
 fun apply_all = (&[]IntFn fs, i64 x) -> i64 {
@@ -102,12 +102,11 @@ fun nested_closures = (i64 a) -> i64 {
     ret outer(3);
 }
 
-fun church = (u32 n) -> IntFn {
-    mut IntFn acc = (i64 x): x;
-    for 0..<n {
-        IntFn prev = acc;
-        acc = (i64 x): prev(x) + 1;
-    }
+# n applications of the successor, as the church numeral n applies it
+fun church = (u32 n, i64 x) -> i64 {
+    succ = (i64 v): v + 1;
+    mut i64 acc = x;
+    for 0..<n: acc = succ(acc);
     ret acc;
 }
 
@@ -161,10 +160,8 @@ fun parity = (i64 n) -> bool {
 }
 
 stcfun closures = () -> i64 {
-    IntFn inc = adder(1);
-    IntFn dbl = multiplier(2);
-    IntFn f = compose(inc, dbl);
-    i64 a = f(5) + twice(dbl)(3) + curry_add(1)(2)(3) + flip((i64 x, i64 y): x - y)(1, 10) + counter_from(5)(6) + church(7)(100);
+    IntFn f = compose(adder(1), multiplier(2));
+    i64 a = f(5) + twice(multiplier(2))(3) + curry_add(1, 2)(3) + flip((i64 x, i64 y): x - y)(1, 10) + counter_from(5)(6) + church(7, 100);
     ret a * 10 + filter_count([1, 2, 3].&, negate((i64 x): x > 1)) as i64;
 }
 
@@ -193,9 +190,7 @@ stc i64 CN = counting(); #= CN 2
 stc bool PA = parity(7); #= PA true
 
 $main = () {
-    IntFn inc = adder(1);
-    IntFn dbl = multiplier(2);
-    IntFn f = compose(inc, dbl);
-    i64 a = f(5) + twice(dbl)(3) + curry_add(1)(2)(3) + flip((i64 x, i64 y): x - y)(1, 10) + counter_from(5)(6) + church(7)(100);
+    IntFn f = compose(adder(1), multiplier(2));
+    i64 a = f(5) + twice(multiplier(2))(3) + curry_add(1, 2)(3) + flip((i64 x, i64 y): x - y)(1, 10) + counter_from(5)(6) + church(7, 100);
     b = filter_count([1, 2, 3].&, negate((i64 x): x > 1));
 }

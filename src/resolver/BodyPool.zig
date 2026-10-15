@@ -51,7 +51,7 @@ pub fn deinit(self: *BodyPool) void {
     self.captured_declarations.deinit();
 }
 
-// `body` with copies of its slice of the node tables
+// `body` with copies of its part of the node tables
 pub fn copy_node_tables(
     self: *BodyPool,
     body: Body,

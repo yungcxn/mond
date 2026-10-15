@@ -84,7 +84,7 @@ fun scan_line = (*Line ln, *Stats st) -> u32 {
     ret tokens;
 }
 
-$main = (i32 argc, &[]&u8 argv) -> i32 {
+$main = (u32 argc, &&u8 argv) -> i32 {
     mut Line line;
     mut Stats stats;
     mut u32 lines = 0;

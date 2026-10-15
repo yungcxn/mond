@@ -25,17 +25,18 @@ fun encode = (u32 cp, *[]u8 out, u32 at) -> u32 {
     ret 4;
 }
 
-fun is_cont = (&[]u8 s, u64 at) -> bool: ret at < s.$len and (s.*[at] & 0xC0) == 0x80;
+# the text and its length are passed apart: a text in a record has no static length
+fun is_cont = (&[]u8 s, u64 length, u64 at) -> bool: ret at < length and (s.*[at] & 0xC0) == 0x80;
 
-fun decode = (&[]u8 s, u32 at) -> Dec {
-    if at >= s.$len: ret Dec.Bad;
+fun decode = (&[]u8 s, u64 length, u32 at) -> Dec {
+    if at >= length: ret Dec.Bad;
     u32 b0 = s.*[at] as u32;
     if b0 < 0x80: ret Dec.Ok(b0, 1);
     if b0 < 0xC2 or b0 > 0xF4: ret Dec.Bad;
     u32 need = if b0 < 0xE0: 1 else: (if b0 < 0xF0: 2 else: 3);
     mut u32 cp = if need == 1: b0 & 0x1F else: (if need == 2: b0 & 0x0F else: b0 & 0x07);
     for k in 1..=need {
-        if !is_cont(s, (at + k) as u64): ret Dec.Bad;
+        if !is_cont(s, length, (at + k) as u64): ret Dec.Bad;
         cp = (cp << 6) | ((s.*[at + k] as u32) & 0x3F);
     }
     if need == 2 and cp < 0x800: ret Dec.Bad;
@@ -52,7 +53,7 @@ fun show = (Dec d) -> u64: ret match d {
 fun validate = (&[]u8 s) -> bool {
     mut u32 at = 0;
     while at < s.$len {
-        match decode(s, at) {
+        match decode(s, s.$len, at) {
             Dec.Ok(_, len) => at += len,
             Dec.Bad => ret false,
         }
@@ -64,7 +65,7 @@ fun count_cps = (&[]u8 s) -> i32 {
     mut u32 at = 0;
     mut i32 n = 0;
     while at < s.$len {
-        match decode(s, at) {
+        match decode(s, s.$len, at) {
             Dec.Ok(_, len) => at += len,
             Dec.Bad => ret -1,
         }
@@ -73,10 +74,10 @@ fun count_cps = (&[]u8 s) -> i32 {
     ret n;
 }
 
-type Chars = *(&[]u8 src, mut u32 at, mut u32 bad) !{
-    $has_next = () -> bool: ret self.at < self.src.$len;
+type Chars = *(&[]u8 src, u64 length, mut u32 at, mut u32 bad) !{
+    $has_next = () -> bool: ret self.at < self.length;
     $next = () -> u32 {
-        match decode(self.src, self.at) {
+        match decode(self.src, self.length, self.at) {
             Dec.Ok(cp, len) => {
                 self.at += len;
                 ret cp;
@@ -111,7 +112,7 @@ fun rt = (u32 cp) -> u64 {
     mut [4]u8 b;
     u32 n = encode(cp, b.&, 0);
     if n == 0: ret 1;
-    match decode(b.&, 0) {
+    match decode(b.&, b.$len, 0) {
         Dec.Ok(c, len) => ret if c == cp and len == n: 0 else: 2,
         Dec.Bad => ret 3,
     }
@@ -129,7 +130,7 @@ fun sweep = (u32 step) -> u64 {
     ret bad + good;
 }
 
-fun dec_seq = (&[]u8 s) -> u64: ret show(decode(s, 0));
+fun dec_seq = (&[]u8 s) -> u64: ret show(decode(s, s.$len, 0));
 
 stc u64 E1 = enc_bytes(0x24); #= E1 361
 stc u64 E2 = enc_bytes(0xA2); #= E2 498262
@@ -194,7 +195,7 @@ stc i32 N6 = count_cps("héllo €".&); #= N6 7
 stc u64 N7 = "héllo €".$len; #= N7 10
 
 fun chars_sum = (&[]u8 s) -> u64 {
-    mut Chars it = Chars(src = s, at = 0, bad = 0);
+    mut Chars it = Chars(src = s, length = s.$len, at = 0, bad = 0);
     mut u64 sum = 0;
     for cp in it: sum = sum * 3 + cp as u64;
     ret sum * 10 + it.bad as u64;

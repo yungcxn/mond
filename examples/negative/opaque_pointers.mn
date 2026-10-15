@@ -1,0 +1,22 @@
+# a pointer to a type without a size (a trait, a template, a runtime-length array) is an address
+# only: kept and passed anywhere, used as what it points to only after a cast
+trait Named = !{ fun id = () -> u32; }
+type Cat = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
+type Box = (type T): *(mut T value);
+type Shelf = *(&Named first, [2]&Named all, *Box any, &[]u8 bytes);
+
+fun cat_of = (Shelf s) -> u32: ret (s.first as &Cat).id();
+fun box_of = (Shelf s) -> u32: ret (s.any as *Box(u32)).value;
+fun byte_of = (Shelf s) -> u8: ret s.bytes.*[1];
+fun word_of = (Shelf s) -> [2]u8: ret (s.bytes as &[2]u8).*;
+fun kept = (Shelf s) -> &Named: ret s.all[1];
+
+fun called = (Shelf s) -> u32: ret s.first.id();           #! unstorable_dereference
+fun loaded = (Shelf s) { c = s.first.*; }                  #! unstorable_dereference
+fun opened = (Shelf s) -> u32: ret s.any.value;            #! unstorable_dereference
+fun copied = (Shelf s) { b = s.bytes.*; }                  #! unstorable_dereference
+fun direct = (Shelf s) -> u8: ret s.bytes[1];              #! unstorable_dereference
+fun by_value = (Named n, Shelf s) { Named m = n; }         #! trait_outside_parameter
+
+stc u64 SHELF = sizeof Shelf;   #= SHELF 40
+$main = () {}

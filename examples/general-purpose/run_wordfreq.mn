@@ -76,11 +76,11 @@ fun report = (*Table t) {
     }
 }
 
-$main = (i32 argc, &[]&u8 argv) -> i32 {
+$main = (u32 argc, &&u8 argv) -> i32 {
     mut Table table;
     mut u32 rejected = 0;
-    for i in 1..<argv.$len {
-        &u8 w = argv.*[i];
+    for i in 1..<argc {
+        &u8 w = argv[i];
         if text_len(w) == 0: cont;
         if !table.add(w): rejected += 1;
     }

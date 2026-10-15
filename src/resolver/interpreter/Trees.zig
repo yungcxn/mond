@@ -1063,6 +1063,7 @@ const operator_tokens = std.EnumArray(Kind, [2]u8).initDefault(.{ 0, 0 }, .{
     .inc_prefix = .{ 1, 0 },
     .dec_prefix = .{ 1, 0 },
     .sizeof = .{ 1, 0 },
+    .alignof = .{ 1, 0 },
     .typeof = .{ 1, 0 },
     .if_then = .{ 1, 0 },
     .stcif_then = .{ 1, 0 },

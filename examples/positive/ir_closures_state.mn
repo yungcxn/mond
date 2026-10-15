@@ -26,7 +26,7 @@ fun composed = (u32 x) -> u32 {
     ret r + calls;
 }
 
-fun make_scaler = (u32 m): (u32 v) -> u32: ret v * m;
+stcfun make_scaler = (u32 m): (u32 v) -> u32: ret v * m;
 
 stcfun s_counter = (u32 n) -> u32: ret counter_sum(n);
 stcfun s_copy = () -> u32: ret captured_copy();

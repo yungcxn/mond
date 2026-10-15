@@ -364,7 +364,7 @@ fn type_of_ref(self: *HighLowerer, ref: Ref) Index {
     return self.builder.result_type_of(ref);
 }
 
-// read anew each time: the slice moves when the pool grows
+// read anew each time: the memory moves when the pool grows
 fn parameter_type(self: *HighLowerer, function_type: Index, parameter_index: usize) Index {
     return self.static_pool.get(function_type).function_type.parameters[parameter_index];
 }
@@ -2065,11 +2065,7 @@ fn enter_array_head(self: *HighLowerer, for_loop: ForLoop, walk: *SequenceWalk) 
         self.expression(for_loop.sequence)
     else
         self.place(for_loop.sequence);
-    const length_value = self.static_pool.get(array_type).array_type.length;
-    const length: Ref = if (self.static_pool.tag(length_value) == .int_value)
-        self.builder.constant_int(.u64_type, self.static_pool.get(length_value).int_value.bits)
-    else
-        self.builder.emit_refs(.len, .u64_type, array, .none);
+    const length = self.array_length(sequence_type);
     const counter = self.new_temporary(.u64_type);
     self.write_current(counter, self.builder.constant_int(.u64_type, 0));
     if (for_loop.collects_dynamic) {
@@ -2155,6 +2151,24 @@ fn call(self: *HighLowerer, node: NodeId, result_type: Index) Ref {
     const tree = self.resolver.tree;
     const callee = tree.arg(node, 0);
     const arguments = tree.manychildren(tree.arg(node, 1));
+    // `$asm("..")` with the static text the checker took
+    const calls_assembly = tree.kind(callee) == .identifier and
+        self.resolver.name_pool.name_of_node(callee) == .@"asm";
+    if (calls_assembly) {
+        const text = self.static_value_of(tree.arg_value(arguments[0])).?;
+        return self.builder.emit(.inline_asm, .unit_type, @intFromEnum(Ref.of(text)), 0);
+    }
+    const calls_kernel = tree.kind(callee) == .identifier and
+        self.resolver.name_pool.name_of_node(callee) == .syscall;
+    if (calls_kernel) {
+        const mark = self.scratch.len;
+        defer self.scratch.len = mark;
+        for (arguments) |argument| {
+            self.scratch.push(@intFromEnum(self.expression(tree.arg_value(argument))));
+        }
+        const operands = self.builder.list(self.scratch.buffer[mark..self.scratch.len]);
+        return self.builder.emit(.syscall, .i64_type, 0, operands);
+    }
     // a stcfun call producing a function stands for its realization
     if (tree.kind(node) == .fun_call) {
         const callee_declaration = self.declaration_of(callee);
@@ -2484,7 +2498,7 @@ fn member_access(self: *HighLowerer, node: NodeId) Ref {
             const trait = self.static_pool.get(method.trait).trait_type.declaration;
             return self.function_value(@enumFromInt(@intFromEnum(trait) + 1 + method.index));
         },
-        .builtin_len => self.array_length(parent, parent_type),
+        .builtin_len => self.array_length(parent_type),
         .builtin_tag => self.variant_tag_of(parent, parent_type, base_type),
         .none, .builtin_init, .builtin_deinit => .none,
     };
@@ -2505,15 +2519,11 @@ fn member_field(
     return self.builder.emit(.extract, field_type, @intFromEnum(self.expression(parent)), field);
 }
 
-fn array_length(self: *HighLowerer, array: NodeId, value_type: Index) Ref {
+// lengths are static, the checker rejects one of a runtime-length array
+fn array_length(self: *HighLowerer, value_type: Index) Ref {
     const array_type = self.dereferenced_type(value_type);
     const length = self.static_pool.get(array_type).array_type.length;
-    if (self.static_pool.tag(length) == .int_value) {
-        return self.builder.constant_int(.u64_type, self.static_pool.get(length).int_value.bits);
-    }
-    const by_value = self.is_pointer(value_type) or self.is_dynamic_array(value_type);
-    const array_value = if (by_value) self.expression(array) else self.place(array);
-    return self.builder.emit_refs(.len, .u64_type, array_value, .none);
+    return self.builder.constant_int(.u64_type, self.static_pool.get(length).int_value.bits);
 }
 
 fn variant_tag_of(self: *HighLowerer, variant: NodeId, value_type: Index, base_type: Index) Ref {

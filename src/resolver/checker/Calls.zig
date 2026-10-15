@@ -70,8 +70,46 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
         return record_type;
     }
 
-    // `$fresh(..)` and `$error(..)` belong to the macros
     const callee = tree.arg(node, 0);
+    // `$asm("..")`: machine code put where it stands, its text static. it runs only at run time
+    const calls_assembly = tree.kind(callee) == .identifier and
+        resolver.name_pool.name_of_node(callee) == .@"asm";
+    if (calls_assembly) {
+        if (arguments.len != 1) return resolver.report(.wrong_arity, node, arguments.len, 1);
+        const text = tree.arg_value(arguments[0]);
+        _ = resolver.expressions.check(context, text, resolver.macros.string_type());
+        if (context.is_interpreted) return resolver.report(.not_static, node, 0, 0);
+        if (resolver.static_values.try_evaluate(context, text) == null) {
+            return resolver.report(.not_static, text, 0, 0);
+        }
+        return .unit_type;
+    }
+
+    // `$syscall(number, ..)`: a call of the kernel with up to six ints or pointers, its result or
+    // -errno. it runs only at run time
+    const calls_kernel = tree.kind(callee) == .identifier and
+        resolver.name_pool.name_of_node(callee) == .syscall;
+    if (calls_kernel) {
+        if (arguments.len == 0 or arguments.len > 7) {
+            return resolver.report(.wrong_arity, node, arguments.len, 7);
+        }
+        for (arguments) |argument| {
+            const value = tree.arg_value(argument);
+            const value_type = static_pool.substitute_type_variables(
+                resolver.expressions.infer(context, value, .none),
+            );
+            const fits = static_pool.properties(value_type).is_integer or
+                value_type == .bool_type or
+                static_pool.is_pointer(value_type);
+            if (!fits and value_type != .poison_type) {
+                _ = resolver.report(.type_mismatch, value, value_type, .u64_type);
+            }
+        }
+        if (context.is_interpreted) return resolver.report(.not_static, node, 0, 0);
+        return .i64_type;
+    }
+
+    // `$fresh(..)` and `$error(..)` belong to the macros
     const names_builtin = tree.macros and
         tree.kind(callee) == .identifier and
         tree.text(callee, resolver.src_bytes)[0] == '$';
@@ -298,6 +336,10 @@ fn call_declared(
         const values = resolver.temporary_slice(StaticPool.Index, all_arguments.len);
         for (all_arguments, 0..) |argument, i| {
             const value_node = resolver.tree.arg_value(argument);
+            // a closure needs the frame that made it, it is no static value
+            if (resolver.expressions.may_capture(value_node)) {
+                return resolver.report(.not_static, value_node, 0, 0);
+            }
             const evaluated = resolver.interpreter.evaluate_static(context, value_node);
             const parameter_type = resolver.types.signature(first).parameters[i];
             values[i] = resolver.static_values.retyped(evaluated, parameter_type);
@@ -538,7 +580,17 @@ fn call_declared(
                         break :blk static_pool.unwrapped(argument_type);
                     }
                     if (static_pool.tag(parameter_type) != .meta_type) {
-                        break :blk static_pool.argument_length(argument_type, parameter_type);
+                        const length = static_pool.argument_length(argument_type, parameter_type);
+                        // a value of an interpreted body, or of a function handling trees, has
+                        // its length: the interpreter realizes the function for it
+                        const declared = if (context.declaration == .none)
+                            .none
+                        else
+                            resolver.decl_pool.get(context.declaration, .value_type);
+                        const runs_while_compiling = context.is_interpreted or
+                            static_pool.contains_trees(declared);
+                        if (length == StaticPool.dyn_len and runs_while_compiling) break :blk .none;
+                        break :blk length;
                     }
 
                     const value = resolver.tree.arg_value(arguments.nodes[i]);
@@ -586,6 +638,9 @@ fn call_declared(
         return resolver.types.signature(realized_callee).return_type;
     }
 
+    // c may keep what it gets
+    const calls_c = resolver.tree.kind(resolver.declarations.value_node(callee)) ==
+        .def_fun_declaration;
     for (arguments.nodes, 0..) |argument, i| {
         const parameter_index = arguments.parameter_of[i] + self_count;
         const parameter_type = resolver.types.signature(callee).parameters[parameter_index];
@@ -594,6 +649,7 @@ fn call_declared(
             arguments.types[i],
             self.type_named_argument(argument, parameter_type),
         );
+        if (calls_c) resolver.expressions.reject_escape(context, resolver.tree.arg_value(argument));
     }
 
     // the call names its dispatch group's head: the lowerer walks `next_overload` from there

@@ -1,0 +1,24 @@
+<include "lib/out.mn">;
+
+# machine code in place, picked per target by static matches: the same output on every system
+fun relax = () {
+    $asm(stcmatch $arch { "aarch64" => "yield", "x86_64" => "pause", _ => "nop" });
+}
+
+fun spin = (u64 rounds) -> u64 {
+    mut u64 done = 0;
+    for 0..<rounds {
+        relax();
+        done += 1;
+    }
+    ret done;
+}
+
+stc u64 KNOWN_SYSTEM = stcmatch $os { "macos" => 1, "linux" => 1, _ => 0 };
+stc u64 KNOWN_MACHINE = stcmatch $arch { "aarch64" => 1, "x86_64" => 1, _ => 0 };
+
+$main = () {
+    line_u64(spin(5));                         #> 5
+    $asm("nop");
+    line_u64(KNOWN_SYSTEM + KNOWN_MACHINE);    #> 2
+}

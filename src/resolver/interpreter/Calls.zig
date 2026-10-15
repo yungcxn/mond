@@ -93,6 +93,11 @@ pub fn call(self: *Calls, node: NodeId) Value {
     const static_pool = &resolver.static_pool;
     const callee = resolver.tree.arg(node, 0);
     const arguments = resolver.tree.manychildren(resolver.tree.arg(node, 1));
+    // machine code and the kernel run only at run time
+    const runs_later = resolver.tree.kind(callee) == .identifier and
+        (resolver.name_pool.name_of_node(callee) == .@"asm" or
+            resolver.name_pool.name_of_node(callee) == .syscall);
+    if (runs_later) return interpreter.fail(node, .not_static, 0, 0);
     // `$fresh` and `$error` are builtins of macro bodies
     if (resolver.tree.macros and
         resolver.tree.kind(callee) == .identifier and

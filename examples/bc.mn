@@ -1,7 +1,7 @@
 # bc, the calculator of unix, in its integer core: numbers, `+ - * / % ^`, a minus in front,
 # parentheses, the variables `a` to `z`, `x = ..`, statements split by `;`, and `quit`.
 # it prints through `print` of examples/lib/print.c, which mond compiles and links in:
-#   ./mond -b examples/bc.mn examples/lib/print.c -m default
+#   ./mond -b examples/bc.mn examples/lib/print.c -lc -m default
 #   echo 'x = 6; x * 7; 2 ^ 62; 7 / 0' | ./bc
 
 # several parameter lists: `print` is one variadic c function
@@ -49,8 +49,8 @@ fun apply = (u8 operator, i64 left, i64 right) -> Result: ret Result.Value(match
 });
 
 # the tokens of a line, which ends at its length or at a zero byte
-type Lexer = *(&[]u8 source, mut u64 at = 0) !{
-    fun peek = () -> u8: ret if self.at < self.source.$len: self.source.*[self.at] else: 0;
+type Lexer = *(&[]u8 source, u64 length, mut u64 at = 0) !{
+    fun peek = () -> u8: ret if self.at < self.length: self.source.*[self.at] else: 0;
 
     fun spells = (u64 start, &[]u8 word) -> bool {
         if self.at - start != word.$len: ret false;
@@ -90,7 +90,7 @@ type Lexer = *(&[]u8 source, mut u64 at = 0) !{
 # the variables, and the line being run; for each statement of the line it gives its outcome
 type Calculator = *(mut [26]i64 variables, mut Lexer lexer, mut Token token = Token.End) !{
     fun feed = (&[]u8 line) {
-        self.lexer = Lexer(line);
+        self.lexer = Lexer(line, line.$len);
         self.advance();
     }
 

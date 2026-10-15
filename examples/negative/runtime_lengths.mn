@@ -1,0 +1,16 @@
+# a length is static: a runtime-length array is only an address, a cast to a length gives one back
+type Text = *(&[]u8 bytes, u64 count);
+fun counted = (Text t) -> u64: ret t.bytes.$len;                  #! not_static
+fun walked = (Text t) -> u32 {
+    mut u32 sum = 0;
+    for b in t.bytes: sum += b;                                  #! not_static
+    ret sum;
+}
+fun compared = (Text a, Text b) -> bool: ret a.bytes.* == b.bytes.*;   #! unstorable_dereference unstorable_dereference
+fun recast = (Text t) -> u64: ret (t.bytes as &[4]u8).$len;
+fun indexed = (Text t, u64 i) -> u8: ret t.bytes.*[i];
+fun generic = (&[]u8 bytes) -> u64: ret bytes.$len;
+stc [4]u8 WORD = [1, 2, 3, 4];
+stc u64 RECAST = recast(Text(WORD.&, 4));   #= RECAST 4
+stc u64 GENERIC = generic(WORD.&);         #= GENERIC 4
+$main = () {}

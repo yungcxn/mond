@@ -1,0 +1,25 @@
+<include "lib/out.mn">;
+
+# pointers to a trait and to a runtime-length array kept in a record, used after a cast
+trait Named = !{ fun id = () -> u32; }
+type Cat = *(u32 lives) implof Named !{ fun id = () -> u32: ret self.lives; }
+type Dog = *(u32 age) implof Named !{ fun id = () -> u32: ret self.age * 7; }
+type Pet = *(&Named animal, bool is_cat);
+type Text = *(&[]u8 bytes, u64 count);
+
+fun id_of = (Pet pet) -> u32: ret if pet.is_cat: (pet.animal as &Cat).id() else: (pet.animal as &Dog).id();
+fun sum = (Text text) -> u64 {
+    mut u64 total = 0;
+    for i in 0..<text.count: total += text.bytes.*[i] as u64;
+    ret total;
+}
+
+$main = () {
+    Cat cat = Cat(9);
+    Dog dog = Dog(3);
+    [2]Pet pets = [Pet(cat.&, true), Pet(dog.&, false)];
+    for pet in pets: line_u64(id_of(pet) as u64);   #> 9
+                                                    #> 21
+    [4]u8 bytes = [1, 2, 3, 4];
+    line_u64(sum(Text(bytes.&, bytes.$len)));       #> 10
+}

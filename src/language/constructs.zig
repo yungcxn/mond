@@ -90,7 +90,7 @@ const construct_table = .{
     .{ .bit_cast, .{.asbits} },
     .{ .type_test, .{.oftype} },
     .{ .type_of, .{.typeof} },
-    .{ .size_of, .{.sizeof} },
+    .{ .size_of, .{ .sizeof, .alignof } },
     .{ .branch, .{ .if_then, .if_else, .stcif_then, .stcif_else } },
     .{ .loop, .{
         .@"while",                  .while_with_repeat_stmt, .stcwhile,

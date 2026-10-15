@@ -17,8 +17,8 @@ type Step = *(mut i32 at, i32 end, i32 by) !{
     }
 }
 
-type Bytes = *(&[]u8 data, mut u64 at) !{
-    $has_next = () -> bool: ret self.at < self.data.$len;
+type Bytes = *(&[]u8 data, u64 length, mut u64 at) !{
+    $has_next = () -> bool: ret self.at < self.length;
     $next = () -> u8 {
         u8 v = self.data.*[self.at];
         self.at += 1;
@@ -71,7 +71,7 @@ stcfun steps = () -> i32 {
 }
 
 stcfun bytes_sum = () -> u32 {
-    mut Bytes b = Bytes(data = "abc".&, at = 0);
+    mut Bytes b = Bytes(data = "abc".&, length = 3, at = 0);
     mut u32 s = 0;
     for c in b: s = s * 256 + c as u32;
     ret s;

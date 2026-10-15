@@ -20,6 +20,12 @@ pub const Index = enum(u32) {
     // what macros ask of trees and the compiler: `$fresh(..)`, `$error(..)`, `refl $file`, `x.$src`
     fresh,
     @"error",
+    // machine code in place, calls of the kernel, and what they are for: `$asm(..)`,
+    // `$syscall(..)`, `$os`, `$arch`
+    @"asm",
+    syscall,
+    os,
+    arch,
     file,
     src,
     children,

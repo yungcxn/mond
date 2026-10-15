@@ -28,7 +28,7 @@ pub const panic = std.debug.FullPanic(struct {
 }.on_panic);
 
 // command line flags: the field `out` is `--out` or `-o`, an underscore in a name becomes a dash
-// bool: set when present, string: takes the next argument, slice: takes the following arguments up
+// bool: set when present, string: takes the next argument, list: takes the following arguments up
 // to the next flag. a field without a default is required
 const Args = struct {
     build: []const [:0]const u8,
@@ -41,11 +41,13 @@ const Args = struct {
     inspect: ?[]const [:0]const u8 = null,
     help: bool = false,
 
-    // per flag: what it takes, what it does (a line each), and the heading of the section it opens
+    // per flag: what it takes, what it does (a line each), the heading of the section it opens,
+    // and rows of arguments that are no flags of this table, shown after it
     const Help = struct {
         takes: []const u8 = "",
         does: []const []const u8,
         opens: []const u8 = "",
+        followed_by: []const [2][]const u8 = &.{},
     };
     const helps = .{
         .build = Help{
@@ -68,7 +70,11 @@ const Args = struct {
         },
         .with = Help{
             .takes = " <inputs>",
-            .does = &.{"more linker inputs, comma separated: -lm,-L/opt/lib"},
+            .does = &.{"more linker inputs, comma separated: -framework,Cocoa"},
+            .followed_by = &.{
+                .{ "  -l<name>, -L<dir>", "a library, and where libraries are, as cc takes them" },
+                .{ "  -lc", "the c library, the program then starts through it" },
+            },
         },
         .print = Help{
             .takes = " <stages>",
@@ -92,8 +98,10 @@ const Args = struct {
         const heading_end = if (bold) "\x1b[0m" else "";
         var column = 0;
         for (fields) |field| {
+            const help: Help = @field(helps, field.name);
             const left = "  " ++ short_arg(field.name) ++ ", " ++ arg(field.name);
-            column = @max(column, left.len + @field(helps, field.name).takes.len + 2);
+            column = @max(column, left.len + help.takes.len + 2);
+            for (help.followed_by) |row| column = @max(column, row[0].len + 2);
         }
         var text: []const u8 = "mond, the compiler of the mond language\n\n" ++
             heading_start ++ "Usage" ++ heading_end ++ "\n" ++
@@ -110,6 +118,9 @@ const Args = struct {
             for (help.does, 0..) |line, k| {
                 const start = if (k == 0) left else "";
                 text = text ++ start ++ padding(column - start.len) ++ line ++ "\n";
+            }
+            for (help.followed_by) |row| {
+                text = text ++ row[0] ++ padding(column - row[0].len) ++ row[1] ++ "\n";
             }
         }
         text = text ++ "\n" ++ heading_start ++ "Modes" ++ heading_end ++ "\n";
@@ -247,10 +258,26 @@ pub fn main(init: std.process.Init) void {
     const io = init.io;
     const alloc = init.gpa;
     const arena = init.arena.allocator();
-    const arguments = init.minimal.args.toSlice(arena) catch |err| @panic(@errorName(err));
+    const all_arguments = init.minimal.args.toSlice(arena) catch |err| @panic(@errorName(err));
+    // `-l<name>` and `-L<dir>` go to the linker as cc takes them, `-lc` also has the program
+    // started by the c library
+    var arguments: std.ArrayList([:0]const u8) = .empty;
+    var libraries: std.ArrayList([:0]const u8) = .empty;
+    var libc = false;
+    for (all_arguments) |argument| {
+        const for_linker = argument.len > 2 and
+            (std.mem.startsWith(u8, argument, "-l") or std.mem.startsWith(u8, argument, "-L"));
+        if (std.mem.eql(u8, argument, "-lc")) {
+            libc = true;
+        } else if (for_linker) {
+            libraries.append(arena, argument) catch @panic("OOM");
+        } else {
+            arguments.append(arena, argument) catch @panic("OOM");
+        }
+    }
     var problem: Args.Problem = undefined;
-    const args = if (arguments.len == 1) Args{ .build = &.{}, .help = true } else Args.parse(
-        arguments,
+    const args = if (all_arguments.len == 1) Args{ .build = &.{}, .help = true } else Args.parse(
+        arguments.items,
         &problem,
     ) orelse switch (problem) {
         .unknown => |argument| fail(io, "'{s}' is no flag, see mond --help", .{argument}),
@@ -344,6 +371,7 @@ pub fn main(init: std.process.Init) void {
         .checks = mode.has_checks(),
         .debug_source = debug_source,
         .optimized = mode != .none,
+        .libc = libc,
     });
     defer backend.deinit();
     backend.lower();
@@ -397,12 +425,13 @@ pub fn main(init: std.process.Init) void {
         }
         inputs.append(arena, input) catch @panic("OOM");
     } else true;
+    inputs.appendSlice(arena, libraries.items) catch @panic("OOM");
     var listed = std.mem.tokenizeScalar(u8, args.with orelse "", ',');
     while (listed.next()) |input| {
         const terminated = arena.dupeSentinel(u8, input, 0) catch @panic("OOM");
         inputs.append(arena, terminated) catch @panic("OOM");
     }
-    const linked = compiled and link.executable(arena, object, executable, inputs.items);
+    const linked = compiled and link.executable(arena, object, executable, inputs.items, libc);
     // on macos the debugger reads the dwarf from the object files the executable names
     const keeps_objects = linked and args.debug and builtin.os.tag.isDarwin();
     if (!keeps_objects) for (objects.items) |built| std.Io.Dir.cwd().deleteFile(io, built) catch {};

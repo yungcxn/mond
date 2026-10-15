@@ -11,6 +11,7 @@ variant Fault = +(None, StackUnderflow, StackOverflow, DivByZero, BadJump(u32), 
 
 type Vm = *(
     &[]Op code,
+    u64 length,
     mut [16]i64 stack,
     mut [8]i64 mem,
     mut [8]u32 calls,
@@ -39,7 +40,7 @@ type Vm = *(
     }
 
     fun jump = (u32 to) {
-        if to as u64 >= self.code.$len: self.fault = Fault.BadJump(to) else: self.pc = to;
+        if to as u64 >= self.length: self.fault = Fault.BadJump(to) else: self.pc = to;
     }
 
     fun step = () -> bool {
@@ -115,7 +116,7 @@ fun exec = (&[]Op code) -> i64 {
     [16]i64 stack;
     [8]i64 mem;
     [8]u32 calls;
-    mut Vm vm = Vm(code = code, stack = stack, mem = mem, calls = calls, sp = 0, cp = 0, pc = 0, steps = 0);
+    mut Vm vm = Vm(code = code, length = code.$len, stack = stack, mem = mem, calls = calls, sp = 0, cp = 0, pc = 0, steps = 0);
     Fault f = vm.run();
     ret match f {
         Fault.None => if vm.sp == 0: 0 else: vm.stack[vm.sp - 1],
@@ -131,7 +132,7 @@ fun steps_of = (&[]Op code) -> u32 {
     [16]i64 stack;
     [8]i64 mem;
     [8]u32 calls;
-    mut Vm vm = Vm(code = code, stack = stack, mem = mem, calls = calls, sp = 0, cp = 0, pc = 0, steps = 0);
+    mut Vm vm = Vm(code = code, length = code.$len, stack = stack, mem = mem, calls = calls, sp = 0, cp = 0, pc = 0, steps = 0);
     do vm.run();
     ret vm.steps;
 }

@@ -192,11 +192,7 @@ pub fn print_function(writer: *Writer, lowerer: *HighLowerer, function_index: us
                     try context.reference(instruction.b);
                     try writer.writeAll("]");
                 },
-                .dyn => try context.print_dynamic_slice(),
-                .len => {
-                    try context.reference(instruction.a);
-                    try writer.writeAll(".len");
-                },
+                .dyn => try context.print_dynamic_array(),
                 .aggregate => try context.print_aggregate(),
                 .extract => try context.print_extract(),
                 .variant_make => try context.print_variant_make(),
@@ -211,6 +207,17 @@ pub fn print_function(writer: *Writer, lowerer: *HighLowerer, function_index: us
                 },
                 .call => try context.print_call(),
                 .closure => try context.print_closure(),
+                .syscall => {
+                    try writer.writeAll(kind_color ++ "syscall" ++ reset ++ " ");
+                    for (lowerer.ir.list(instruction.b), 0..) |operand, i| {
+                        if (i > 0) try writer.writeAll(", ");
+                        try print_reference(writer, lowerer, operand);
+                    }
+                },
+                .inline_asm => {
+                    try writer.writeAll(kind_color ++ "asm" ++ reset ++ " ");
+                    try context.reference(instruction.a);
+                },
                 .select => try context.print_select(),
                 .@"switch" => {
                     try context.print_switch();
@@ -408,13 +415,13 @@ fn print_pointer_type(
     pointer: StaticPool.PointerType,
 ) Writer.Error!void {
     const pool = lowerer.static_pool;
-    // a pointer to a dynamic array is the slice itself, it gets no `*`
-    const is_slice = pool.get(pointer.pointee) == .array_type and
+    // a pointer to a runtime-length array is that array itself, it gets no `*`
+    const to_runtime_array = pool.get(pointer.pointee) == .array_type and
         pool.get(pointer.pointee).array_type.length == StaticPool.dyn_len;
 
     if (!pointer.is_mutable) try writer.writeAll("const ");
     try print_type(writer, lowerer, pointer.pointee);
-    if (!is_slice) try writer.writeAll(type_color ++ "*");
+    if (!to_runtime_array) try writer.writeAll(type_color ++ "*");
 }
 
 fn print_function_type(
@@ -665,7 +672,7 @@ const InstructionContext = struct {
         try writer.writeAll(")");
     }
 
-    fn print_dynamic_slice(context: InstructionContext) !void {
+    fn print_dynamic_array(context: InstructionContext) !void {
         const bounds = context.operand_list();
         try context.reference(context.instruction.a);
         try context.writer.writeAll("[");

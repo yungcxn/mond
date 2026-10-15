@@ -52,25 +52,25 @@ fun lookup = (&u8 name) -> Cmd {
     };
 }
 
-fun fold_args = (&[]&u8 argv, u32 from, i32 init, (i32, i32) -> i32 f) -> i32 {
+fun fold_args = (&&u8 argv, u32 argc, u32 from, i32 init, (i32, i32) -> i32 f) -> i32 {
     mut i32 acc = init;
-    for i in from..<argv.$len: acc = f(acc, parse(argv.*[i]));
+    for i in from..<argc: acc = f(acc, parse(argv[i]));
     ret acc;
 }
 
-fun run = (Cmd c, &[]&u8 argv) -> Outcome {
+fun run = (Cmd c, u32 argc, &&u8 argv) -> Outcome {
     ret match c {
         Cmd.Echo => {
-            for i in 2..<argv.$len: printf("%s\n", argv.*[i]);
+            for i in 2..<argc: printf("%s\n", argv[i]);
             Outcome.Done(0);
         },
-        Cmd.Add => Outcome.Done(fold_args(argv, 2, 0, (i32 a, i32 b): a + b)),
-        Cmd.Mul => Outcome.Done(fold_args(argv, 2, 1, (i32 a, i32 b): a * b)),
+        Cmd.Add => Outcome.Done(fold_args(argv, argc, 2, 0, (i32 a, i32 b): a + b)),
+        Cmd.Mul => Outcome.Done(fold_args(argv, argc, 2, 1, (i32 a, i32 b): a * b)),
         Cmd.Neg => {
-            if argv.$len < 3: ret Outcome.Failed(2);
-            Outcome.Done(-parse(argv.*[2]));
+            if argc < 3: ret Outcome.Failed(2);
+            Outcome.Done(-parse(argv[2]));
         },
-        Cmd.Count => Outcome.Done(argv.$len as i32 - 2),
+        Cmd.Count => Outcome.Done(argc as i32 - 2),
         Cmd.Help => {
             printf("commands: echo add mul neg count help quit\n");
             Outcome.Done(0);
@@ -80,14 +80,14 @@ fun run = (Cmd c, &[]&u8 argv) -> Outcome {
     };
 }
 
-$main = (i32 argc, &[]&u8 argv) -> i32 {
+$main = (u32 argc, &&u8 argv) -> i32 {
     mut Shell sh;
     if argc < 2 {
         printf("usage: shell <command> args\n");
         ret 64;
     }
-    cmd = lookup(argv.*[1]); #: cmd +(Echo, Add, Mul, Neg, Count, Help, Quit, Unknown)
-    out = run(cmd, argv); #: out +(Done, Failed, Stop)
+    cmd = lookup(argv[1]); #: cmd +(Echo, Add, Mul, Neg, Count, Help, Quit, Unknown)
+    out = run(cmd, argc, argv); #: out +(Done, Failed, Stop)
     sh.note(out);
     match out {
         Outcome.Done(v) => printf("= %d\n", v),

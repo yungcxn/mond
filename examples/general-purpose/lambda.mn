@@ -4,6 +4,7 @@ stc u32 NONE = 0xFFFFFFFF;
 
 type Lc = *(
     mut &[]u8 src,
+    mut u64 length,
     mut u32 pos,
     mut u32 bad,
     mut [2600]T nodes,
@@ -118,7 +119,7 @@ type Lc = *(
     }
 
     fun ws = () {
-        while (self.pos as u64) < self.src.$len and self.src.*[self.pos] == ' ': self.pos += 1;
+        while (self.pos as u64) < self.length and self.src.*[self.pos] == ' ': self.pos += 1;
     }
 
     fun fail = (u32 code) -> u32 {
@@ -128,13 +129,13 @@ type Lc = *(
 
     fun parse_atom = () -> u32 {
         self.ws();
-        if (self.pos as u64) >= self.src.$len: ret self.fail(1);
+        if (self.pos as u64) >= self.length: ret self.fail(1);
         u8 c = self.src.*[self.pos];
         self.pos += 1;
         if c == '(' {
             u32 t = self.parse_term();
             self.ws();
-            if (self.pos as u64) < self.src.$len and self.src.*[self.pos] == ')' {
+            if (self.pos as u64) < self.length and self.src.*[self.pos] == ')' {
                 self.pos += 1;
             } else {
                 do self.fail(2);
@@ -143,12 +144,12 @@ type Lc = *(
         }
         if c == '\\' {
             self.ws();
-            if (self.pos as u64) >= self.src.$len: ret self.fail(1);
+            if (self.pos as u64) >= self.length: ret self.fail(1);
             u8 name = self.src.*[self.pos];
             self.pos += 1;
             if (name < 'a' or name > 'z') and name != '_': ret self.fail(3);
             self.ws();
-            if (self.pos as u64) >= self.src.$len or self.src.*[self.pos] != '.': ret self.fail(4);
+            if (self.pos as u64) >= self.length or self.src.*[self.pos] != '.': ret self.fail(4);
             self.pos += 1;
             if self.depth == 16: ret self.fail(7);
             self.names[self.depth] = name;
@@ -174,7 +175,7 @@ type Lc = *(
             ret self.lam(self.lam(inner));
         }
         if c == '#' {
-            if (self.pos as u64) >= self.src.$len: ret self.fail(1);
+            if (self.pos as u64) >= self.length: ret self.fail(1);
             u8 d = self.src.*[self.pos];
             self.pos += 1;
             if d < '0' or d > '9': ret self.fail(6);
@@ -187,7 +188,7 @@ type Lc = *(
         mut u32 t = self.parse_atom();
         loop {
             self.ws();
-            if (self.pos as u64) >= self.src.$len or self.bad != 0: brk;
+            if (self.pos as u64) >= self.length or self.bad != 0: brk;
             if self.src.*[self.pos] == ')': brk;
             u32 a = self.parse_atom();
             t = self.app(t, a);
@@ -198,7 +199,7 @@ type Lc = *(
     fun parse = () -> u32 {
         u32 t = self.parse_term();
         self.ws();
-        if self.bad == 0 and (self.pos as u64) < self.src.$len: ret self.fail(8);
+        if self.bad == 0 and (self.pos as u64) < self.length: ret self.fail(8);
         ret t;
     }
 
@@ -247,7 +248,7 @@ fun fresh = (&[]u8 src) -> Lc {
     [2600]T nodes;
     [16]u8 names;
     [96]u8 out;
-    ret Lc(src = src, pos = 0, bad = 0, nodes = nodes, n = 0, names = names, depth = 0, out = out, nout = 0, done = false, steps = 0);
+    ret Lc(src = src, length = src.$len, pos = 0, bad = 0, nodes = nodes, n = 0, names = names, depth = 0, out = out, nout = 0, done = false, steps = 0);
 }
 
 fun nat = (&[]u8 src, u32 limit) -> i32 {
@@ -308,6 +309,7 @@ fun subst_is = (&[]u8 src, u32 j, &[]u8 arg, &[]u8 want) -> bool {
     mut Lc l = fresh(src);
     u32 t = l.parse();
     l.src = arg;
+    l.length = arg.$len;
     l.pos = 0;
     u32 s = l.parse();
     l.print(l.subst(j, s, t), 0);

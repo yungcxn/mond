@@ -12,5 +12,5 @@ pub const error_color = "\x1b[1;31m";
 pub const warning_color = "\x1b[1;33m";
 pub const type_color = "\x1b[34m";
 
-// sliced to pad columns without a loop
+// cut to pad columns without a loop
 pub const spaces = "                                ";

@@ -19,9 +19,9 @@ fun classify = (i64 x where x % 5 == 0) -> u32: ret 5;
 fun classify = (i64 x where x % 3 == 0) -> u32: ret 3;
 fun classify = (i64 x) -> u32: ret 0;
 
-fun scaler = (i64 k): (i64 x): x * k;
-fun offset = (i64 k): (i64 x): x + k;
-fun then = ((i64) -> i64 f, (i64) -> i64 g): (i64 x): g(f(x));
+stcfun scaler = (i64 k): (i64 x): x * k;
+stcfun offset = (i64 k): (i64 x): x + k;
+stcfun then = ((i64) -> i64 f, (i64) -> i64 g): (i64 x): g(f(x));
 
 fun max_ptr = (&[]i64 xs) -> u64 {
     mut u64 best = 0;

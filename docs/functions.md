@@ -79,9 +79,19 @@ The type is `(T1, T2) -> R`. Function values match exactly (no variance), take p
 
 ```mond
 type IntFn = (i32) -> i32;
-fun make_mul = (i32 n) -> IntFn: ret (i32 x): x * n;
+stcfun scaled = (i32 n): (i32 x) -> i32: ret x * n;   # a function per static n
 fun apply = (IntFn f, i32 v) -> i32: ret f(v);
-stc i32 M = apply(make_mul(6), 7);   #= M 42
+fun sum_scaled = (&[3]i32 xs, i32 k) -> i32 {
+    scale = (i32 x): x * k;     # a closure: uses k of the frame around it
+    mut i32 s = 0;
+    for x in xs: s += apply(scale, x);
+    ret s;
+}
+stc [3]i32 XS = [1, 2, 3];
+stc i32 M = apply(scaled(6), 7) + sum_scaled(XS.&, 10);   #= M 102
+stc [2]IntFn TABLE = [scaled(2), scaled(3)];
+fun pick = (u64 i, i32 v) -> i32: ret TABLE[i](v);       # static functions, a runtime index
+stc i32 P = pick(1, 5);                                   #= P 15
 
 stcfun sees_later = () -> i32 {
     mut i32 x = 1;
@@ -90,10 +100,13 @@ stcfun sees_later = () -> i32 {
     ret get();
 }
 stc i32 SL = sees_later();   #= SL 5
+fun make_mul = (i32 n) -> IntFn: ret (i32 x): x * n;   #! escaping_closure
 ```
 
-- Captures: mutable locals, records and arrays are captured by reference, other immutable locals by copy. Globals are not captured.
-- At run time a function value is a function and the environment holding its captures (`sizeof` 16). The environment lives in the frame that made the closure. A closure that outlives that call (returned, stored, or passed where it may be kept, like `make_mul` above) keeps its environment, and the variables it captures by reference, on the heap; that memory is never freed.
+- Captures: mutable locals, records and arrays are captured by reference, other immutable locals by copy. Globals and static values are not captured.
+- A closure is a scoped function: its captures stay in the frame that made it. So it is called, passed down as an argument, or kept in locals of that frame, but it never outlives the frame: returning it, storing it in a global or through a pointer, or giving it to C is `escaping_closure`. The same holds for a record, array or variant holding one, and for a function-typed parameter, which may be one. A function made from values comes from a `stcfun` instead, per static argument; static function values go anywhere.
+- At run time a function value is a function and the environment holding its captures (`sizeof` 16). The environment lives in the frame and is never allocated; a closure called where it is made is inlined. A closure made in a loop has one environment per frame, made anew on each pass.
+- Inside a `stcfun` body, which only runs at compile time, closures may go anywhere. One that leaves the `stcfun` must use nothing but static values (its parameters).
 - `f = (..): ..` declares a local function from that point on. `fun f = ..` in a body is hoisted to its whole block.
 - `brk` and `cont` don't cross a function boundary.
 - There's no UFCS: `x.f()` works only for methods.

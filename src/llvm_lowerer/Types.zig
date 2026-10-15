@@ -10,7 +10,7 @@ const Type = llvm.LLVMTypeRef;
 // alignment like `StaticPool.layout`, so the sizes agree. records, arrays and tagged variants live
 // in memory (`is_in_memory`), their values are pointers to them (`value_of`):
 // - bool is `i1`, `()` and static-only types are `{}`
-// - a pointer is `ptr`, a pointer to a runtime-length array and such an array are `{ptr, i64}`
+// - a pointer is `ptr`, so is a runtime-length array: the address of its first element
 // - a function value is `{ptr fn, ptr env}`, see the thunks in LLVMLowerer.zig
 // - a variant is `{tag, [n x iA]}`: the payload room of the widest case, in units of its
 //   alignment, so the payloads start where the layout puts them. a `tagof self` variant is its int
@@ -23,8 +23,6 @@ names: *const NamePool,
 // per pool entry, null until lowered: the pool is complete once the backend runs
 memo: []Type,
 pointer: Type,
-// a runtime-length array or a pointer to one: the first element and the length
-slice: Type,
 // a function value: the function taking the environment first, and the environment
 closure: Type,
 unit: Type,
@@ -50,12 +48,6 @@ pub fn init(
         .names = names,
         .memo = memo,
         .pointer = pointer,
-        .slice = llvm.LLVMStructTypeInContext(
-            context,
-            @constCast(&[_]Type{ pointer, length }),
-            2,
-            0,
-        ),
         .closure = llvm.LLVMStructTypeInContext(
             context,
             @constCast(&[_]Type{ pointer, pointer }),
@@ -105,15 +97,11 @@ pub fn has_value(type_index: Index) bool {
     };
 }
 
-pub fn is_slice(self: *const Types, type_index: Index) bool {
-    const pool = self.pool;
-    const array = switch (pool.get(type_index)) {
-        .array_type => type_index,
-        .pointer_type => |pointer| pointer.pointee,
-        else => return false,
+pub fn is_runtime_array(self: *const Types, type_index: Index) bool {
+    return switch (self.pool.get(type_index)) {
+        .array_type => |array| array.length == StaticPool.dyn_len,
+        else => false,
     };
-    if (pool.tag(array) != .array_type) return false;
-    return pool.get(array).array_type.length == StaticPool.dyn_len;
 }
 
 pub fn is_self_tagged(self: *const Types, type_index: Index) bool {
@@ -168,9 +156,9 @@ fn lower(self: *Types, type_index: Index) Type {
             llvm.LLVMInt1TypeInContext(context)
         else
             self.unit,
-        .pointer_type => if (self.is_slice(type_index)) self.slice else self.pointer,
+        .pointer_type => self.pointer,
         .array_type => |array| blk: {
-            if (array.length == StaticPool.dyn_len) break :blk self.slice;
+            if (array.length == StaticPool.dyn_len) break :blk self.pointer;
             const length = pool.static_length(type_index) orelse 0;
             break :blk llvm.LLVMArrayType2(self.of(array.element), length);
         },

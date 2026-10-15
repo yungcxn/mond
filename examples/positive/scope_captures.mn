@@ -53,7 +53,7 @@ fun into_field = () -> u32 {
     h.f = (): k;
     ret h.f() + k;
 }
-fun param_captured = (u32 base): (u32 x): base * x; #: param_captured (u32) -> (u32) -> u32
+stcfun param_captured = (u32 base): (u32 x): base * x;
 fun local_fn_sees_param = (u32 k) -> u32 {
     fun scaled = (u32 v) -> u32: ret v * k;
     ret scaled(3);

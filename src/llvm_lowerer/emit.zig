@@ -69,6 +69,8 @@ pub const Machine = struct {
         if (llvm.LLVMInitializeNativeAsmPrinter() != 0) {
             @panic("llvm can't print this machine's code");
         }
+        // `$asm` and the start code of linux are assembled into the object
+        if (llvm.LLVMInitializeNativeAsmParser() != 0) @panic("llvm can't read this machine's asm");
 
         const triple = llvm.LLVMGetDefaultTargetTriple();
         var target: llvm.LLVMTargetRef = null;

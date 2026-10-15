@@ -13,4 +13,9 @@ pub const Doctor = @import("resolver/Doctor.zig");
 pub const DynamicBuffer = @import("containers.zig").DynamicBuffer;
 pub const dbg = @import("debug.zig");
 
-pub const target: struct { pointer_bits: u8 } = .{ .pointer_bits = 64 };
+// what programs are built for: the machine mond runs on
+pub const target: struct { pointer_bits: u8, os: []const u8, arch: []const u8 } = .{
+    .pointer_bits = 64,
+    .os = @tagName(@import("builtin").os.tag),
+    .arch = @tagName(@import("builtin").cpu.arch),
+};

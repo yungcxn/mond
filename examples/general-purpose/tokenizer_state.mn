@@ -93,14 +93,14 @@ stc u8 TR1 = TRANS[0 * 11 + 1]; #= TR1 2
 stc u8 TR2 = TRANS[2 * 11 + 8]; #= TR2 4
 stc u8 TR3 = TRANS[4 * 11 + 8]; #= TR3 15
 
-type Lexer = *(&[]u8 src, mut u32 pos, mut [24]u8 kinds, mut [24]u8 lens, mut u32 n, mut u32 steps) !{
+type Lexer = *(&[]u8 src, u64 length, mut u32 pos, mut [24]u8 kinds, mut [24]u8 lens, mut u32 n, mut u32 steps) !{
     fun next_token = () -> bool {
-        if (self.pos as u64) >= self.src.$len: ret false;
+        if (self.pos as u64) >= self.length: ret false;
         mut u32 state = 0;
         mut u32 i = self.pos;
         mut u8 last_kind = 0;
         mut u32 last_end = self.pos;
-        while (i as u64) < self.src.$len {
+        while (i as u64) < self.length {
             u32 cls = CLASS[self.src.*[i]] as u32;
             u32 ns = TRANS[state * 11 + cls] as u32;
             if ns == 15: brk;
@@ -133,7 +133,7 @@ type Lexer = *(&[]u8 src, mut u32 pos, mut [24]u8 kinds, mut [24]u8 lens, mut u3
 fun lex = (&[]u8 src) -> Lexer {
     [24]u8 kinds;
     [24]u8 lens;
-    mut Lexer l = Lexer(src = src, pos = 0, kinds = kinds, lens = lens, n = 0, steps = 0);
+    mut Lexer l = Lexer(src = src, length = src.$len, pos = 0, kinds = kinds, lens = lens, n = 0, steps = 0);
     l.run();
     ret l;
 }

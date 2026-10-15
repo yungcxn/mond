@@ -806,17 +806,17 @@ pub fn function_type_of(
             break :blk default_return_type;
         }
         const declared = self.concrete_type_from_node(context, resolver.tree.arg(header, 1));
-        // a result behind a pointer to an unlengthed array is a runtime slice: any length fits
+        // a result behind a pointer to an unlengthed array has a runtime length: any length fits
         if (category == .static or static_pool.tag(declared) != .pointer_type) break :blk declared;
         const pointer = static_pool.get(declared).pointer_type;
         if (static_pool.tag(pointer.pointee) != .array_type) break :blk declared;
         const array = static_pool.get(pointer.pointee).array_type;
         if (static_pool.tag(array.length) != .type_variable) break :blk declared;
-        const slice = static_pool.intern(.{ .array_type = .{
+        const runtime_array = static_pool.intern(.{ .array_type = .{
             .length = StaticPool.dyn_len,
             .element = array.element,
         } });
-        break :blk static_pool.pointer_to(slice, pointer.is_mutable);
+        break :blk static_pool.pointer_to(runtime_array, pointer.is_mutable);
     };
     return static_pool.intern(.{ .function_type = .{
         .category = category,
@@ -883,7 +883,7 @@ pub fn concrete_type_from_node(
     return node_type;
 }
 
-// `[lo..hi]T` and `*[lo..hi]T` as cast targets: a static slice of the source array
+// `[lo..hi]T` and `*[lo..hi]T` as cast targets: a static part of the source array
 pub fn cast_target(
     self: *Types,
     context: *FunctionContext,

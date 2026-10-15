@@ -29,22 +29,6 @@ pub fn operand(lowerer: *LLVMLowerer, value: Index) Value {
     return slot.*;
 }
 
-// a constant where an instruction expects `expected`: a string literal typed as the pointer or
-// slice it becomes (`f("s")` for `f = (&u8 s)`), or an array literal typed as a slice
-pub fn operand_as(lowerer: *LLVMLowerer, value: Index, expected: Type) Value {
-    const pool = lowerer.pool;
-    const types = &lowerer.types;
-    const lowered = operand(lowerer, value);
-    if (expected != types.slice or llvm.LLVMTypeOf(lowered) == expected) return lowered;
-    const length = switch (pool.get(value)) {
-        .string_value => |bytes| bytes.len,
-        .aggregate_value => |aggregate| aggregate.elements.len,
-        else => return lowered,
-    };
-    return pair(lowerer, lowered, llvm.LLVMConstInt(types.length, length, 0));
-}
-
-// the value of `zeroed` in memory: zero bytes in a constant global
 pub fn zeros(lowerer: *LLVMLowerer, zeroed_type: Index) Value {
     const slot = &lowerer.zero_globals[@intFromEnum(zeroed_type)];
     if (slot.* == null) {
@@ -86,14 +70,7 @@ pub fn lower(lowerer: *LLVMLowerer, value: Index, expected: Index) Value {
             .unit => llvm.LLVMConstNull(types.unit),
         },
         .string_value => |bytes| {
-            const into_type = types.of(into);
-            if (into_type == types.pointer) return string_pointer(lowerer, value);
-            const length = llvm.LLVMConstInt(types.length, bytes.len, 0);
-            if (into_type == types.slice) return pair(
-                lowerer,
-                string_pointer(lowerer, value),
-                length,
-            );
+            if (types.of(into) == types.pointer) return string_pointer(lowerer, value);
             return llvm.LLVMConstStringInContext2(lowerer.context, bytes.ptr, bytes.len, 1);
         },
         .aggregate_value => |aggregate| {
@@ -152,7 +129,7 @@ fn lower_aggregate(lowerer: *LLVMLowerer, value: Index, aggregate_type: Index) V
     var offset: u64 = 0;
     var of_bytes = false;
     for (parts, 0..) |*part, i| {
-        // read anew: lowering a part may intern and move the pool's slices
+        // read anew: lowering a part may intern and move the pool's memory
         const element = pool.get(value).aggregate_value.elements[i];
         const part_type = if (is_record) pool.field_type(aggregate_type, i) else element_type;
         const part_layout = pool.layout(part_type);
@@ -177,13 +154,12 @@ fn lower_aggregate(lowerer: *LLVMLowerer, value: Index, aggregate_type: Index) V
     for (parts, part_values) |part, *part_value| part_value.* = part.value;
 
     // a runtime-length array points to its elements in a constant global
-    if (lowered_type == lowerer.types.slice) {
+    if (lowerer.types.is_runtime_array(aggregate_type)) {
         const elements = if (of_bytes)
             packed_struct(lowerer, parts, offset)
         else
             llvm.LLVMConstArray2(lowerer.types.of(element_type), part_values.ptr, element_count);
-        const global = constant_global(lowerer, elements, lowerer.alignment_of(element_type));
-        return pair(lowerer, global, llvm.LLVMConstInt(lowerer.types.length, element_count, 0));
+        return constant_global(lowerer, elements, lowerer.alignment_of(element_type));
     }
     if (of_bytes) return packed_struct(lowerer, parts, pool.layout(aggregate_type).size);
     if (is_record) return llvm.LLVMConstNamedStruct(

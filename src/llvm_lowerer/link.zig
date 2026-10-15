@@ -16,33 +16,38 @@ const macos_version = if (builtin.os.tag == .macos) std.fmt.comptimePrint("{d}.{
     builtin.os.version_range.semver.min.minor,
 }) else "";
 
-// `inputs`: further object files and libraries (`foo.o`, `libbar.a`, `-lm`), the c code mond calls
+// `inputs`: further object files and libraries (`foo.o`, `libbar.a`, `-lm`), the c code mond calls.
+// with `libc` the c library starts the program and is linked, else mond's `_start` does and
+// nothing is: a static executable on linux, on macos only libSystem, which dyld requires
 pub fn executable(
     arena: std.mem.Allocator,
     object: [:0]const u8,
     output: [:0]const u8,
     inputs: []const [:0]const u8,
+    libc: bool,
 ) bool {
+    const arch = switch (builtin.cpu.arch) {
+        .aarch64 => "arm64",
+        else => @tagName(builtin.cpu.arch),
+    };
+    const macos = [_][*:0]const u8{
+        "ld64.lld",
+        "-arch",
+        arch,
+        "-platform_version",
+        "macos",
+        macos_version,
+        sdk_version,
+        "-syslibroot",
+        sdk_root,
+        "-lSystem",
+        "-o",
+        output,
+        object,
+    };
     const system: []const [*:0]const u8 = switch (builtin.os.tag) {
-        .macos => &.{
-            "ld64.lld",
-            "-arch",
-            switch (builtin.cpu.arch) {
-                .aarch64 => "arm64",
-                else => @tagName(builtin.cpu.arch),
-            },
-            "-platform_version",
-            "macos",
-            macos_version,
-            sdk_version,
-            "-syslibroot",
-            sdk_root,
-            "-lSystem",
-            "-o",
-            output,
-            object,
-        },
-        .linux => &.{
+        .macos => if (libc) &macos else &(macos ++ [_][*:0]const u8{ "-e", "__start" }),
+        .linux => if (libc) &.{
             "ld.lld",
             "-pie",
             "--dynamic-linker",
@@ -56,7 +61,7 @@ pub fn executable(
             in_crt_dir(arena, "crtn.o"),
             "-o",
             output,
-        },
+        } else &.{ "ld.lld", "-static", "-e", "_start", object, "-o", output },
         else => @compileError("mond links only on macos and linux"),
     };
     var arguments: std.ArrayList([*:0]const u8) = .empty;

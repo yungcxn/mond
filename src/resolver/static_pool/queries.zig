@@ -64,10 +64,12 @@ pub fn is_realized_per_type(pool: *const StaticPool, parameter: Index) bool {
     return pool.template_of(parameter) != .none or pool.trait_of(parameter) != .none;
 }
 
+// behind a pointer a trait or template is opaque, and allowed
 pub fn contains_trait(pool: *const StaticPool, type_index: Index) bool {
     return any_component(pool, type_index, struct {
         fn decide(p: *const StaticPool, t: Index) ?bool {
             if (t == .none or t == .poison_type) return false;
+            if (p.is_pointer(t) and p.tag(p.pointee(t)) == .trait_type) return false;
             return if (p.tag(t) == .trait_type) true else null;
         }
     }.decide);
@@ -77,6 +79,7 @@ pub fn contains_template(pool: *const StaticPool, type_index: Index) bool {
     return any_component(pool, type_index, struct {
         fn decide(p: *const StaticPool, t: Index) ?bool {
             if (t == .none or t == .poison_type) return false;
+            if (p.is_pointer(t) and p.tag(p.pointee(t)) == .template_type) return false;
             return if (p.tag(t) == .template_type) true else null;
         }
     }.decide);
@@ -90,6 +93,37 @@ pub fn has_open_type_variable(pool: *const StaticPool, type_index: Index) bool {
             return if (p.tag(t) == .type_variable) true else null;
         }
     }.decide);
+}
+
+// a type without a size: a trait, a template, an array of a runtime length. a pointer to one is
+// only an address, used after a cast
+pub fn is_unstorable(pool: *const StaticPool, type_index: Index) bool {
+    return switch (pool.get(type_index)) {
+        .trait_type, .template_type => true,
+        .array_type => |array| array.length == StaticPool.dyn_len,
+        else => false,
+    };
+}
+
+// a function value in the value itself: the value, an element, a field or a payload. what a
+// pointer reaches is not part of it
+pub fn holds_function_value(pool: *const StaticPool, type_index: Index) bool {
+    if (type_index == .none or type_index == .poison_type) return false;
+    return switch (pool.get(type_index)) {
+        .function_type => true,
+        .array_type => |array| pool.holds_function_value(array.element),
+        .record_type => |record| for (record.field_types) |field| {
+            if (pool.holds_function_value(field)) break true;
+        } else false,
+        .variant_type => |variant| for (variant.cases) |case| {
+            if (pool.holds_function_value(case)) break true;
+        } else false,
+        .variant_case_type => |case| pool.holds_function_value(case.payload),
+        .variant_union_type => |members| for (members) |member| {
+            if (pool.holds_function_value(member)) break true;
+        } else false,
+        else => false,
+    };
 }
 
 // a type only static code can have: trees and what holds them

@@ -28,6 +28,7 @@ pub const Token = struct {
         kw_ret,
         kw_typeof,
         kw_sizeof,
+        kw_alignof,
         kw_where,
         kw_pub,
         kw_inlfun,

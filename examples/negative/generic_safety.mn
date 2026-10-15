@@ -23,7 +23,7 @@ fun through_variant = (&Opt(Stack(u8, 2)) o) {
     o.* = Opt(Stack(u8, 2)).None; #! write_through_immutable_pointer
 }
 
-fun through_slice = (&[]Stack(u8, 2) xs) {
+fun through_runtime_length = (&[]Stack(u8, 2) xs) {
     xs.*[0].len = 1; #! write_through_immutable_pointer
 }
 
@@ -79,7 +79,7 @@ fun branches = (bool c, bool d, u32 k) -> u32 {
 
 fun calls = () {
     mut [2]Stack(u8, 2) two;
-    through_slice(two.&);
+    through_runtime_length(two.&);
 }
 
 $main = () {}

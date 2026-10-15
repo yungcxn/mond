@@ -20,7 +20,7 @@ fun f = () {
     bool wrong = m(1); #! type_mismatch
     i32 inner_scope = { i32 q = 1; q; };
     i32 leak = q; #! undefined_name
-    n = (i32 a): (i32 b): a + b;
+    n = (i32 a): (i32 b): a + b;  #! escaping_closure
     i32 o = n(1)(true); #! type_mismatch
     (i32) -> i32 typed = (u32 x): x; #! type_mismatch
     (i32) -> i32 ok = (i32 x): x;

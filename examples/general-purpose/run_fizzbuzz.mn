@@ -104,7 +104,7 @@ fun longest_collatz = (u32 limit) -> u32 {
     ret best;
 }
 
-$main = (i32 argc, &[]&u8 argv) -> i32 {
+$main = (u32 argc, &&u8 argv) -> i32 {
     mut Tally tally = Tally(fizz = 0, buzz = 0, both = 0, plain = 0);
     limit = if argc > 1: 30 else: 15; #: limit u32
     fizzbuzz(limit, tally.&);

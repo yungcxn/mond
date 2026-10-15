@@ -1,5 +1,5 @@
 # compile-time values of past bugs: a stcfun result of open length per call, a string equal to its
-# bytes, slices of any length as results, read-only methods of statics, pointers into a static
+# bytes, runtime-length arrays of any length as results, read-only methods of statics, pointers into a static
 # copied before its first method call, a `fun` taking only types making a length-generic function
 stcfun evens = (u32 n) -> []u32: ret for i in 0..<n: i * 2;
 stc []u32 E2 = evens(2); #= E2 [0, 2]

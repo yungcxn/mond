@@ -1,29 +1,42 @@
 <include "lib/out.mn">;
 
 type IntFn = (i64) -> i64;
-type Counter = () -> i64;
 
-fun make_mul = (i64 n) -> IntFn: ret (i64 x): x * n;
-fun compose = (IntFn f, IntFn g) -> IntFn: ret (i64 x): f(g(x));
+# functions made from values come from stcfuns, one per static argument
+stcfun scaled = (i64 n): (i64 x) -> i64: ret x * n;
+stcfun compose = (IntFn f, IntFn g): (i64 x) -> i64: ret f(g(x));
 fun apply = (IntFn f, i64 v) -> i64: ret f(v);
+stc [3]IntFn TABLE = [scaled(1), scaled(2), scaled(3)];
 
-# the counted variable is captured by reference and outlives the call making it
-fun make_counter = (i64 start) -> Counter {
-    mut i64 count = start;
-    ret () -> i64 { count += 1; ret count; };
+# closures use the frame around them and are passed down
+fun sum_with = (&[4]i64 xs, i64 k) -> i64 {
+    add_k = (i64 x): x + k;
+    mut i64 s = 0;
+    for x in xs: s += apply(add_k, x);
+    ret s;
+}
+
+# a mutable local is captured by reference
+fun count_calls = (u64 n) -> i64 {
+    mut i64 count = 0;
+    bump = (i64 x) -> i64 { count += 1; ret x; };
+    for 0..<n: do apply(bump, 0);
+    ret count;
 }
 
 $main = () {
-    triple = make_mul(3);
-    double = make_mul(2);
-    line_i64(triple(7));                        #> 21
-    line_i64(compose(triple, double)(5));       #> 30
-    line_i64(apply((i64 x): x + 1, 41));        #> 42
-    next = make_counter(10);
-    next();
-    next();
-    line_i64(next());                           #> 13
-    mut [3]IntFn made = [triple, triple, triple];
-    for i in 0..<3: made[i] = make_mul(i as i64 + 1);
-    line_i64(made[0](10) + made[1](10) + made[2](10));  #> 60
+    line_i64(scaled(3)(7));                          #> 21
+    line_i64(compose(scaled(3), scaled(2))(5));      #> 30
+    line_i64(apply((i64 x): x + 1, 41));             #> 42
+    [4]i64 xs = [1, 2, 3, 4];
+    line_i64(sum_with(xs.&, 10));                    #> 50
+    line_i64(count_calls(13));                       #> 13
+    mut i64 total = 0;
+    for i in 0..<3: total += TABLE[i](10);           # static functions, a runtime index
+    line_i64(total);                                 #> 60
+    for i in 0..<3 {
+        times_i = (i64 x): x * i as i64;             # made anew on each pass
+        total += apply(times_i, 1);
+    }
+    line_i64(total);                                 #> 63
 }

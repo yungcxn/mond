@@ -61,6 +61,7 @@ The last column is the name `mond -b` prints in its tree dump.
 | `ArrayEmpty` | `[]` | – | array_empty |
 | `TypeOf` | `typeof e` | subnode | typeof |
 | `SizeOf` | `sizeof e` | subnode | sizeof |
+| `AlignOf` | `alignof e` | subnode | alignof |
 | `TypeArray` | `[N]T` | length, type | type_array |
 | `TypeArrayUnlengthed` | `[]T` | type | type_array_unlengthed |
 | `NegateNumerical` | `-e` | subnode | neg_num |

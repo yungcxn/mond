@@ -1,1 +1,1 @@
-$main = () -> bool: ret true; #! type_mismatch
+$main = () -> bool: ret true; #! invalid_main

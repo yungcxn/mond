@@ -30,6 +30,7 @@ pub const Node = struct {
         .{ "ArrayEmpty", "array_empty", .leaf },
         .{ "TypeOf", "typeof", struct { subnode: NodeId } },
         .{ "SizeOf", "sizeof", struct { subnode: NodeId } },
+        .{ "AlignOf", "alignof", struct { subnode: NodeId } },
         .{ "TypeArray", "type_array", struct { length: NodeId, type: NodeId } },
         .{ "TypeArrayUnlengthed", "type_array_unlengthed", struct { type: NodeId } },
         .{ "NegateNumerical", "neg_num", struct { subnode: NodeId } },

@@ -1,0 +1,23 @@
+# built without the c library (no arguments after the marker): mond's own `_start`, on linux
+# also its memcpy and memset
+#+
+
+type Pt = *(i64 x, i64 y);
+variant Shape = +(Square(i64 side), Rect(Pt corner));
+
+fun area = (Shape shape) -> i64: ret match shape {
+    Shape.Square(side) => side * side,
+    Shape.Rect(corner) => corner.x * corner.y,
+};
+
+# the exit code is the test: 0 when everything holds
+$main = (u32 argc, &&u8 argv) -> u8 {
+    mut [256]u8 bytes;
+    for i in 0..<256: bytes[i] = i as u8;
+    [256]u8 copied = bytes;
+    mut [3]Shape shapes = [Shape.Square(3), Shape.Rect(Pt(2, 5)), Shape.Square(1)];
+    mut i64 total = 0;
+    for shape in shapes: total += area(shape);
+    if argc != 1 or copied[200] != 200 or total != 20: ret 1;
+    ret 0;
+}

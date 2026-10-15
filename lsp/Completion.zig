@@ -61,6 +61,30 @@ const builtin_entries = [_]Entry{
         .doc = "ends the expansion with an error at the tree",
         .class = .function,
     },
+    .{
+        .label = "$asm",
+        .ty = "([]u8 code)",
+        .doc = "machine code in place, its text static",
+        .class = .function,
+    },
+    .{
+        .label = "$syscall",
+        .ty = "(u64 number, ..) -> i64",
+        .doc = "a call of the kernel: its result, or -errno",
+        .class = .function,
+    },
+    .{
+        .label = "$os",
+        .ty = "[]u8",
+        .doc = "the system the program is built for: \"macos\", \"linux\"",
+        .class = .property,
+    },
+    .{
+        .label = "$arch",
+        .ty = "[]u8",
+        .doc = "the machine the program is built for: \"aarch64\", \"x86_64\"",
+        .class = .property,
+    },
 };
 
 const file_entry: Entry = .{
@@ -419,9 +443,9 @@ test "the kinds after `ast.`, the builtins after `$`" {
         try std.testing.expectEqualStrings("(lhs, rhs)", kind.detail);
     }
     const builtin_labels = try offered_labels(allocator, source, 1, 14);
-    try std.testing.expectEqualStrings("$fresh $error ", builtin_labels);
+    try std.testing.expectEqualStrings("$fresh $error $asm $syscall $os $arch ", builtin_labels);
     const after_refl = try offered_labels(allocator, source, 2, 18);
-    try std.testing.expectEqualStrings("$fresh $error $file ", after_refl);
+    try std.testing.expectEqualStrings("$fresh $error $asm $syscall $os $arch $file ", after_refl);
     // the word typed is replaced, its `$` too
     const builtins = try offer(allocator, source, .{ .line = 2, .character = 18 }, result.decls);
     try std.testing.expectEqual(@as(u32, 17), builtins[0].textEdit.range.start.character);

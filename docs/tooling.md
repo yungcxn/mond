@@ -1,6 +1,6 @@
 # Tooling
 
-The compiler checks a program, lowers it to an SSA IR, and builds a native executable of it with LLVM and the linker built in (lld), against the C library.
+The compiler checks a program, lowers it to an SSA IR, and builds a native executable of it with LLVM and the linker built in (lld). Nothing else is linked unless asked for: the program starts in mond's own `_start`, and `-lc` links the C library.
 
 ```sh
 zig build                           # builds ./mond (needs llvm and lld, see below)
@@ -8,6 +8,7 @@ zig build                           # builds ./mond (needs llvm and lld, see bel
 ./mond -b app.mn                    # builds ./app
 ./mond -b app.mn -o out -m default  # builds ./out, optimized
 ./mond -b app.mn io.c libz.a        # compiles io.c with the c compiler, links both in
+./mond -b app.mn -lc -lm            # with the C library and libm
 ./mond -b app.mn -p tree,ir,llvm    # also prints stages: tree, decls, ir, llvm
 ./mond -b app.mn -i add '#3' ':12'  # inspect declarations by name, index or line
 zig build test [-- filter]          # examples, docs, then the backend tests
@@ -22,12 +23,14 @@ zig build lsp                       # the language server, into lsp/vscode and l
 | `-o` `--out` | the executable, by default the source's name without `.mn` |
 | `-m` `--mode` | how to optimize: `none` (the default, `-O0`) and `safe` (`-O2`) keep the runtime checks; `less` `default` `aggressive` (`-O1` `-O2` `-O3`), `size` and `minsize` (`-Os` `-Oz`) drop them |
 | `-d` `--debug` | DWARF for a debugger: functions, source lines and frame pointers. On macOS the object file stays next to the executable, lldb reads the DWARF from it. Code from `include` and macros is placed at the line that splices it |
-| `-w` `--with` | further linker inputs, comma separated: `-w -lm,-L/opt/lib` |
+| `-l<name>` `-L<dir>` | a library, and where libraries are, as cc takes them |
+| `-lc` | the C library: the program starts through C's startup, which calls `$main` |
+| `-w` `--with` | further linker inputs, comma separated: `-w -framework,Cocoa` |
 | `-p` `--print` | `tree` the resolved tree, `decls` the declarations, `ir` the SSA IR, `llvm` the optimized LLVM IR |
 | `-i` `--inspect` | declarations by name, `#index` or `:line`; nothing is built |
 | `-h` `--help` | the flags and modes; also shown when `mond` gets no arguments |
 
-Diagnostics go to stderr as `file:line:column: code operands`. `$main` returns the exit code. It may take `(argc, argv)` as integers, pointers, or `&[]&u8` (the arguments with their count).
+Diagnostics go to stderr as `file:line:column: code operands`. `$main` returns the exit code, and takes nothing, the arguments as `&[]&u8`, or `(argc, &&u8 argv)` (see [basics](basics.md#program)).
 
 Records, arrays and variants live in memory: they are passed by address and returned through a pointer the caller gives. LLVM's passes promote small ones to registers in every mode but `none`.
 
@@ -35,13 +38,17 @@ The runtime checks stop the program with a trap (a debugger shows the line) on a
 
 ### C functions
 
-A function declared without a body is a C function, linked from the C library or from the files listed after the source. Its values cross as C passes them on this machine (aarch64 or x86-64): ints, floats, `bool` and pointers as themselves, records by value in registers or as a copy in memory, a slice (`&[]u8`) as the address of its first element, and a function without captures, named directly, as a C function pointer. A C function declared with several parameter lists is variadic (`printf`): the parameters all lists share are fixed, the others get C's promotions.
+A function declared without a body is a C function, linked from the files listed after the source or from libraries (`-lc` for the C library). Its values cross as C passes them on this machine (aarch64 or x86-64): ints, floats, `bool` and pointers as themselves, records by value in registers or as a copy in memory, a runtime-length array (`&[]u8`) as the address of its first element, and a static function value as a C function pointer. A C function declared with several parameter lists is variadic (`printf`): the parameters all lists share are fixed, the others get C's promotions.
 
 ```mond
 fun printf = (&u8 format, i64 number) -> i32;
 fun printf = (&u8 format, &u8 text) -> i32;
 fun qsort = (*u8 items, u64 count, u64 size, (&u8, &u8) -> i32 compare);
 ```
+
+### Without the C library
+
+Without `-lc` nothing is linked that the program doesn't name. On Linux the executable is static: the kernel jumps to `_start`, which passes the arguments to `$main` and ends the process with its result through a system call, and mond adds the few C functions its code calls itself (`memcpy`, `memset`, `memmove`, `memcmp`, `strcmp`, and `fmod`/`fmodf` for float `%`, exact like C's). On macOS every program is started by dyld, which needs libSystem, so that is linked and `_start` is called like `main`.
 
 ### Building mond
 
@@ -57,10 +64,11 @@ Every `.mn` file under `examples/` and every ```` ```mond ```` block in `docs/` 
 | `#= name value` | the static value of `name`, declared on this line |
 | `#: name type` | the type of `name` |
 | `#> text` | (backend tests) the next line the program prints |
+| `#+ arguments` | (backend tests) what the program is built with instead of `-lc lib/clib.c` |
 
 These markers count anywhere in a comment. Values print as they are stored: a variant as `+(..).Case[payload]`, a computed `[]u8` as numbers, a string literal as text. Files in `examples/negative/` must mark at least one diagnostic. The docs must name every keyword, tree kind and diagnostic in backticks, so a new feature fails the tests until it is documented.
 
-The programs in `examples/backend/` are built and run after that, in the modes `none`, `safe` and `default`: each must exit with `0` and print exactly its `#> text` lines, in order. `examples/backend/lib/out.mn` gives them output through the C library, and `examples/backend/lib/clib.c` is compiled and linked into each.
+The programs in `examples/backend/` are built and run after that, in the modes `none`, `safe` and `default`: each must exit with `0` and print exactly its `#> text` lines, in order. `examples/backend/lib/out.mn` gives them output through the C library: each is built with `-lc examples/backend/lib/clib.c`, or with the arguments after its `#+` marker (files relative to `examples/backend`).
 
 ## Editor
 
@@ -103,8 +111,10 @@ Lexing and parsing stop at the first error (`LexingError_*`, `Expected*`, `Illeg
 | `missing_ret` / `redundant_ret` | a path doesn't return / `ret` before a template's definition |
 | `redundant_fun` | `fun` on a predefined name (`$main`, `$init`, ...) |
 | `unrealized_template` | a template where a concrete type is needed |
-| `trait_outside_parameter` | a trait type is used other than as a parameter type |
+| `trait_outside_parameter` | a trait type is used other than as a parameter type or behind a pointer |
+| `unstorable_dereference` | a pointer to a trait, a template or a runtime-length array is used as what it points to: dereferenced, called through, or indexed directly instead of through `.*` |
 | `impure_stcfun` | a `stcfun` writes state outside itself |
+| `escaping_closure` | a closure, or a value that may hold one, outlives its frame (returned, stored outside it, given to C) |
 | `brk_outside_loop` / `cont_outside_loop` | a jump outside a loop |
 | `ret_type_mismatch` | `ret` disagrees with the result type |
 | `non_exhaustive_match` | some value matches no arm |
@@ -114,6 +124,7 @@ Lexing and parsing stop at the first error (`LexingError_*`, `Expected*`, `Illeg
 | `use_before_initialization` | a read before every path wrote it |
 | `destructure_type_conflict` | the names of a multi-assignment need different types |
 | `missing_main` | there is no `$main` |
+| `invalid_main` | `$main` has another signature than `()`, `(&[]&u8 arguments)` or `(argc, &&u8 argv)`, or another result than nothing, an integer or `never` |
 | `stray_unquote` | `@` outside a quote |
 | `frozen_declaration` | a write to a declaration that is already resolved, or a write outside a splice |
 | `macro_error` | a macro called `$error` |

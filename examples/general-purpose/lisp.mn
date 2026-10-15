@@ -17,6 +17,7 @@ fun is_false = (Val v) -> bool: ret match v {
 
 type Lisp = *(
     &[]u8 src,
+    u64 length,
     mut u32 pos,
     mut [40]Val cars,
     mut [40]Val cdrs,
@@ -39,7 +40,7 @@ type Lisp = *(
     }
 
     fun ws = () {
-        while self.pos as u64 < self.src.$len and self.src.*[self.pos] == ' ': self.pos += 1;
+        while self.pos as u64 < self.length and self.src.*[self.pos] == ' ': self.pos += 1;
     }
 
     fun sym_is = (u32 id, &[]u8 w) -> bool {
@@ -83,7 +84,7 @@ type Lisp = *(
 
     fun read_list = () -> Val {
         self.ws();
-        if self.pos as u64 >= self.src.$len: ret Val.Err(8);
+        if self.pos as u64 >= self.length: ret Val.Err(8);
         if self.src.*[self.pos] == ')' {
             self.pos += 1;
             ret Val.Nil;
@@ -97,7 +98,7 @@ type Lisp = *(
 
     fun read = () -> Val {
         self.ws();
-        if self.pos as u64 >= self.src.$len: ret Val.Err(8);
+        if self.pos as u64 >= self.length: ret Val.Err(8);
         u8 c = self.src.*[self.pos];
         if c == '(' {
             self.pos += 1;
@@ -108,7 +109,7 @@ type Lisp = *(
             ret Val.Err(9);
         }
         u32 s = self.pos;
-        while self.pos as u64 < self.src.$len and self.src.*[self.pos] != ' ' and self.src.*[self.pos] != '(' and self.src.*[self.pos] != ')': self.pos += 1;
+        while self.pos as u64 < self.length and self.src.*[self.pos] != ' ' and self.src.*[self.pos] != '(' and self.src.*[self.pos] != ')': self.pos += 1;
         ret self.atom(s, self.pos);
     }
 
@@ -391,7 +392,7 @@ type Lisp = *(
         Val form = self.read();
         if is_err(form): ret form;
         self.ws();
-        if (self.pos as u64) < self.src.$len: ret Val.Err(1);
+        if (self.pos as u64) < self.length: ret Val.Err(1);
         ret self.eval(form);
     }
 }
@@ -404,7 +405,7 @@ fun evals_to = (&[]u8 src, &[]u8 want) -> bool {
     [8]u32 e1;
     [8]Val e2;
     [64]u8 buf;
-    mut Lisp l = Lisp(src = src, pos = 0, cars = c1, cdrs = c2, ncell = 0, sb = b1, se = b2, nsym = 0, en = e1, ev = e2, nenv = 0, out = buf, nout = 0);
+    mut Lisp l = Lisp(src = src, length = src.$len, pos = 0, cars = c1, cdrs = c2, ncell = 0, sb = b1, se = b2, nsym = 0, en = e1, ev = e2, nenv = 0, out = buf, nout = 0);
     Val r = l.run();
     l.print(r);
     if l.nout as u64 != want.$len: ret false;
@@ -422,7 +423,7 @@ fun cells_after_read = (&[]u8 src) -> u32 {
     [8]u32 e1;
     [8]Val e2;
     [64]u8 buf;
-    mut Lisp l = Lisp(src = src, pos = 0, cars = c1, cdrs = c2, ncell = 0, sb = b1, se = b2, nsym = 0, en = e1, ev = e2, nenv = 0, out = buf, nout = 0);
+    mut Lisp l = Lisp(src = src, length = src.$len, pos = 0, cars = c1, cdrs = c2, ncell = 0, sb = b1, se = b2, nsym = 0, en = e1, ev = e2, nenv = 0, out = buf, nout = 0);
     do l.read();
     ret l.ncell;
 }

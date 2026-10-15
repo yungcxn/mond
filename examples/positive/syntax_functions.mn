@@ -8,7 +8,7 @@ fun f_dollar = (u32, u32): ret $0 - $1; #: f_dollar (u32, u32) -> u32
 fun f_default = (u32 a, u32 b = 10) -> u32: ret a + b; #: f_default (u32, u32) -> u32
 fun f_decl = (u32 a) -> u32; #: f_decl (u32) -> u32
 fun f_expr = (u32 a): a + 1; #: f_expr (u32) -> u32
-fun f_curried = (u32 a): (u32 b): a + b; #: f_curried (u32) -> (u32) -> u32
+stcfun f_curried = (u32 a): (u32 b): a + b;
 
 stcfun s_template = (type T): (T a) -> T: ret a; #: s_template (type) -> fun
 stcfun s_value = (u32 n) -> u32: ret n * 2; #: s_value (u32) -> u32
@@ -19,12 +19,12 @@ stc u32 V3 = f_expr(1) + f_curried(2)(3); #= V3 7
 stc u32 V4 = s_template(u32)(6) + s_value(4); #= V4 14
 
 $main = () {
-    # lambdas: called directly, stored, passed, returning lambdas
+    # lambdas: called directly, stored, passed
     called = ((u8 c): c + 1)(4); #: called u8
     lam = (i32 a, i32 b) -> i32 { ret a - b; }; #: lam (i32, i32) -> i32
     unit_lam = () {}; #: unit_lam () -> ()
-    nested = (i32 a): (i32 b): (i32 c): a + b + c; #: nested (i32) -> (i32) -> (i32) -> i32
-    r = nested(1)(2)(3); #: r i32
+    nested = (i32 a, i32 b, i32 c): a + b + c; #: nested (i32, i32, i32) -> i32
+    r = nested(1, 2, 3); #: r i32
     # a group without `:` / `{` / `->` after it is a value
     g = (3 + 4); #: g u32
 }

@@ -425,6 +425,7 @@ inline fn tested_type(self: *Types, type_node: NodeId) Index {
     return interpreter.owning_resolver().types.type_from_node(context, type_node);
 }
 
+// `sizeof` and `alignof` in bytes, of a type or of a value's type
 pub fn size_of(self: *Types, node: NodeId) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
@@ -444,5 +445,8 @@ pub fn size_of(self: *Types, node: NodeId) Value {
 
     if (measured == .poison_type) return .poison;
     const layout = static_pool.layout(resolver.types.with_runtime_lengths(measured));
+    if (resolver.tree.kind(node) == .alignof) {
+        return .int(.u64_type, @as(u64, 1) << @intCast(layout.align_log2));
+    }
     return .int(.u64_type, layout.size);
 }

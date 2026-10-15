@@ -211,6 +211,10 @@ pub fn check_loop(
 
         // arrays are stepped through by their length, anything else by its `next` method
         const is_array = static_pool.get(sequence_type) == .array_type;
+        const expressions = &resolver.expressions;
+        if (is_array and !expressions.length_is_static(context, sequence_type, loop.seq)) {
+            _ = resolver.report(.not_static, loop.seq, 0, 0);
+        }
         const stepper: NamePool.Index = if (is_array) .len else .next;
         const element_type = switch (static_pool.lookup_member(sequence_type, stepper)) {
             .builtin_len => static_pool.get(sequence_type).array_type.element,

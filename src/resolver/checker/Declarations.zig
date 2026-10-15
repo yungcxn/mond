@@ -4,6 +4,7 @@ const Resolver = @import("../../Resolver.zig");
 const NamePool = @import("../NamePool.zig");
 const StaticPool = @import("../StaticPool.zig");
 const DeclPool = @import("../DeclPool.zig");
+const target = @import("../../mond.zig").target;
 const FunctionContext = Resolver.FunctionContext;
 const NodeId = ParseTree.NodeId;
 
@@ -70,7 +71,7 @@ pub const Stmt = struct {
 
         var values: []const NodeId = &.{};
         if (value != 0) {
-            // the value is the second child of both assignment forms, sliced in place in the tree
+            // the value is the second child of both assignment forms, cut in place in the tree
             std.debug.assert(value == tree.arg(root, 1));
             values = if (tree.kind(value) == .partial__assign_multival)
                 tree.manychildren(value)
@@ -502,6 +503,7 @@ pub fn check_function_result(self: *Declarations, context: *FunctionContext, bod
 
     if (resolver.tree.kind(body) != .block) {
         _ = resolver.expressions.check(context, body, context.return_type);
+        resolver.expressions.reject_escape(context, body);
         return;
     }
 
@@ -611,7 +613,11 @@ pub fn check_statement(
             resolver.macros.tree_place_type(place, place_type)
         else
             place_type;
-        for (statement.values) |value| _ = resolver.expressions.check(context, value, expected);
+        const outside_frame = resolver.expressions.is_outside_frame(place);
+        for (statement.values) |value| {
+            _ = resolver.expressions.check(context, value, expected);
+            if (outside_frame) resolver.expressions.reject_escape(context, value);
+        }
         return .unit_type;
     }
 
@@ -751,6 +757,9 @@ pub fn check_statement(
             );
         const assigns_existing = existing[i] != .none;
         const values = statement.values;
+        if (decl_pool.get(declaration, .flags).is_global and values.len > 0) {
+            resolver.expressions.reject_escape(context, values[if (values.len > 1) i else 0]);
+        }
 
         const value_type = decl_pool.get(declaration, .value_type);
 
@@ -995,6 +1004,25 @@ pub fn realized(self: *Declarations, declaration: DeclPool.Index) DeclPool.Index
 pub fn collect_globals(self: *Declarations) void {
     const resolver = self.owning_resolver();
 
+    // `$os` and `$arch`: what the program is built for, static text a `stcmatch` picks code by
+    const built_for = [_]struct { NamePool.Index, []const u8 }{
+        .{ .os, target.os },
+        .{ .arch, target.arch },
+    };
+    for (built_for) |known| {
+        const entry = resolver.scopes.globals.getOrPut(resolver.allocator, known[0]) catch {
+            @panic("OOM");
+        };
+        if (entry.found_existing) continue;
+        const text = resolver.static_pool.intern(.{ .string_value = known[1] });
+        const flags: DeclPool.Entry.Flags = .{ .is_global = true, .is_stc = true };
+        const text_type = resolver.static_pool.type_of(text);
+        const declaration = resolver.decl_pool.push(known[0], 0, .variable, text_type, flags);
+        resolver.decl_pool.set(declaration, .static_value, text);
+        resolver.decl_pool.set(declaration, .state, .done);
+        entry.value_ptr.* = declaration;
+    }
+
     for (resolver.roots) |root| {
         // the parser knows no statements, every root is read as one here
         const statement = Stmt.from_node(resolver, root);
@@ -1071,21 +1099,23 @@ pub fn check_main(self: *Declarations) void {
         return resolver.doctor.report(.duplicate_declaration, second_node, name, main);
     }
 
+    // `()` or `(u32 argc, &&u8 argv)`, a unit, never or integer result
     const main_type = decl_pool.get(main, .value_type);
-    // no parameters or `(count, arguments)`, a unit, never or integer result
-    if (main_type != .none and static_pool.tag(main_type) == .function_type) {
-        const function = static_pool.get(main_type).function_type;
-        const parameters = function.parameters;
-        const parameters_fit = parameters.len == 0 or (parameters.len == 2 and
-            static_pool.properties(parameters[0]).is_integer and
-            static_pool.properties(parameters[1]).is_pointer);
-
-        const return_type = function.return_type;
-        const runnable = parameters_fit and (return_type == .unit_type or
-            return_type == .runit_type or
-            return_type == .never_type or
-            static_pool.properties(return_type).is_integer);
-        if (runnable) return;
+    if (main_type == .none) return;
+    if (static_pool.tag(main_type) != .function_type) {
+        return resolver.doctor.report(.invalid_main, node, main_type, 0);
     }
-    _ = resolver.report(.type_mismatch, node, main_type, .none);
+    const function = static_pool.get(main_type).function_type;
+    const parameters = function.parameters;
+    const parameters_fit = parameters.len == 0 or parameters.len == 2 and
+        static_pool.properties(parameters[0]).is_integer and
+        static_pool.is_pointer(parameters[1]) and
+        static_pool.is_pointer(static_pool.pointee(parameters[1])) and
+        static_pool.pointee(static_pool.pointee(parameters[1])) == .u8_type;
+    const return_type = function.return_type;
+    const result_fits = return_type == .unit_type or
+        return_type == .runit_type or
+        return_type == .never_type or
+        static_pool.properties(return_type).is_integer;
+    if (!parameters_fit or !result_fits) resolver.doctor.report(.invalid_main, node, main_type, 0);
 }

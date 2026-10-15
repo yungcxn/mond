@@ -65,7 +65,9 @@ const definition_table = .{
     .{ "redundant_fun", .@"error", no_operand, no_operand },
     .{ "unrealized_template", .@"error", no_operand, no_operand },
     .{ "trait_outside_parameter", .@"error", operand(.type, "type"), no_operand },
+    .{ "unstorable_dereference", .@"error", operand(.type, "pointer"), no_operand },
     .{ "impure_stcfun", .@"error", no_operand, no_operand },
+    .{ "escaping_closure", .@"error", no_operand, no_operand },
     .{ "brk_outside_loop", .@"error", no_operand, no_operand },
     .{ "cont_outside_loop", .@"error", no_operand, no_operand },
     .{ "ret_type_mismatch", .@"error", operand(.type, "found"), operand(.type, "expected") },
@@ -81,6 +83,7 @@ const definition_table = .{
         operand(.type, "expected"),
     },
     .{ "missing_main", .@"error", no_operand, no_operand },
+    .{ "invalid_main", .@"error", operand(.type, "type"), no_operand },
     // macros: stray `@`, writes into resolved declarations, `$error`, includes, endless expansion
     .{ "stray_unquote", .@"error", no_operand, no_operand },
     .{ "frozen_declaration", .@"error", operand(.declaration, "of"), no_operand },

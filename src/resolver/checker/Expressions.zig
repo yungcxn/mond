@@ -13,6 +13,9 @@ const operators = @import("../../language/operators.zig");
 // expressions: the walk over a body, every node gets its type here or in the module of its kind
 const Expressions = @This();
 
+// the dereference an index reads through: `p.*[i]` reads one element of what `p` points to
+indexed_dereference: NodeId = 0,
+
 pub fn owning_resolver(self: *Expressions) *Resolver {
     return @alignCast(@fieldParentPtr("expressions", self));
 }
@@ -238,6 +241,11 @@ fn infer_comparison(self: *Expressions, context: *FunctionContext, node: NodeId)
 
     const operand_type = self.join_operands(context, node, left, right, .none);
     if (operand_type == .poison_type) return operand_type;
+    // arrays compare element by element, as far as a static length reaches
+    const compared = resolver.static_pool.substitute_type_variables(operand_type);
+    if (!self.length_is_static(context, compared, node)) {
+        return resolver.report(.not_static, node, 0, 0);
+    }
     return .bool_type;
 }
 
@@ -300,6 +308,7 @@ fn infer_index(self: *Expressions, context: *FunctionContext, node: NodeId) Stat
     const indexed = resolver.tree.arg(node, 0);
     const index = resolver.tree.arg(node, 1);
 
+    if (resolver.tree.kind(indexed) == .dereference) self.indexed_dereference = indexed;
     const indexed_type = static_pool.substitute_type_variables(self.infer(context, indexed, .none));
     if (resolver.tree.props(index).range) {
         // checked anyway, so the names in the bounds are resolved and their errors reported
@@ -316,6 +325,9 @@ fn infer_index(self: *Expressions, context: *FunctionContext, node: NodeId) Stat
     // pointers index like arrays (`*u8 buf; buf[i]`), arrays auto-deref once
     const through_pointer = static_pool.is_pointer(indexed_type);
     const container_type = static_pool.pointee(indexed_type);
+    if (through_pointer and static_pool.is_unstorable(container_type) and !context.is_abstract) {
+        return resolver.report(.unstorable_dereference, indexed, indexed_type, 0);
+    }
     const is_array = static_pool.get(container_type) == .array_type;
     if (!is_array and !through_pointer) {
         return resolver.report(.type_mismatch, indexed, container_type, .none);
@@ -351,10 +363,19 @@ fn infer_dereference(self: *Expressions, context: *FunctionContext, node: NodeId
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
 
+    const indexed = self.indexed_dereference == node;
+    self.indexed_dereference = 0;
     const operand_type = self.infer(context, resolver.tree.arg(node, 0), .none);
     const pointer_type = static_pool.substitute_type_variables(operand_type);
-    if (static_pool.is_pointer(pointer_type)) return static_pool.pointee(pointer_type);
-    return resolver.report_mismatch(node, pointer_type, .none);
+    if (!static_pool.is_pointer(pointer_type)) {
+        return resolver.report_mismatch(node, pointer_type, .none);
+    }
+    const pointee = static_pool.pointee(pointer_type);
+    const reads_element = indexed and static_pool.tag(pointee) == .array_type;
+    if (static_pool.is_unstorable(pointee) and !reads_element and !context.is_abstract) {
+        return resolver.report(.unstorable_dereference, node, pointer_type, 0);
+    }
+    return pointee;
 }
 
 fn infer_address_of(
@@ -544,7 +565,7 @@ fn infer_type_test(self: *Expressions, context: *FunctionContext, node: NodeId) 
     return .bool_type;
 }
 
-// `typeof` and `sizeof`: questions about the operand answered at compile time
+// `typeof`, `sizeof` and `alignof`: questions about the operand answered at compile time
 fn infer_static_query(
     self: *Expressions,
     context: *FunctionContext,
@@ -620,6 +641,7 @@ fn infer_return_value(
     } else {
         _ = self.check(context, value, context.return_type);
     }
+    self.reject_escape(context, value);
     return .never_type;
 }
 
@@ -734,6 +756,89 @@ fn infer_type_value(self: *Expressions, context: *FunctionContext, node: NodeId)
     return resolver.types.meta_type_of_node(node);
 }
 
+// a closure's environment lives in the frame that made it, so a value that may hold one stays
+// below that frame: called and passed down, never returned, stored outside the frame or handed to
+// c. a stcfun runs at compile time, its closures may go anywhere
+pub fn reject_escape(self: *Expressions, context: *FunctionContext, node: NodeId) void {
+    if (context.is_interpreted or !self.may_capture(node)) return;
+    self.owning_resolver().doctor.report(.escaping_closure, node, 0, 0);
+}
+
+// whether a value may hold a closure: a lambda or local function using locals of a running frame,
+// what is made of one, or a runtime variable or parameter that holds function values
+pub fn may_capture(self: *Expressions, node: NodeId) bool {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    const static_pool = &resolver.static_pool;
+    const decl_pool = &resolver.decl_pool;
+    if (node == 0) return false;
+    // a function named or written here is static only without captures
+    const construct = constructs.construct_of(tree.kind(node));
+    const names_function = construct == .lambda or construct == .name;
+    if (!names_function and resolver.node_static_values[node] != .none) return false;
+    const value_type = static_pool.substitute_type_variables(resolver.node_types[node]);
+    if (!static_pool.holds_function_value(value_type)) return false;
+    return switch (construct) {
+        .grouping, .branch, .array_literal, .record_update, .unwrap => {
+            for (tree.children(node)) |child| if (self.may_capture(child)) return true;
+            return false;
+        },
+        .block => tree.manychildren(node).len > 0 and
+            self.may_capture(tree.manychildren(node)[tree.manychildren(node).len - 1]),
+        .match => {
+            for (tree.manychildren(tree.arg(node, 1))) |arm| {
+                if (self.may_capture(tree.arg(arm, 1))) return true;
+            }
+            return false;
+        },
+        // a record or case made of its arguments, any other call returns nothing of its frame
+        .call => {
+            const callee_type = resolver.node_types[tree.arg(node, 0)];
+            if (static_pool.tag(callee_type) != .meta_type) return false;
+            for (tree.manychildren(tree.arg(node, 1))) |argument| {
+                if (self.may_capture(tree.arg_value(argument))) return true;
+            }
+            return false;
+        },
+        .member_access, .index => {
+            const base = tree.arg(node, 0);
+            return static_pool.is_pointer(resolver.node_types[base]) or self.may_capture(base);
+        },
+        .lambda => resolver.bodies.captures_of(decl_pool, resolver.node_declarations[node]).len > 0,
+        .name => {
+            const declaration = resolver.node_declarations[node];
+            if (declaration == .none or decl_pool.get(declaration, .flags).is_global) return false;
+            if (decl_pool.get(declaration, .kind).is_function()) {
+                return resolver.bodies.captures_of(decl_pool, declaration).len > 0;
+            }
+            return resolver.node_static_values[node] == .none and
+                decl_pool.get(declaration, .static_value) == .none;
+        },
+        .dereference => true,
+        else => false,
+    };
+}
+
+// a place outside the frame: a global, or memory reached through a pointer
+pub fn is_outside_frame(self: *Expressions, place: NodeId) bool {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    var node = place;
+    while (true) switch (tree.kind(node)) {
+        .capture => node = tree.arg(node, 0),
+        .member, .array_index => {
+            const base = tree.arg(node, 0);
+            if (resolver.static_pool.is_pointer(resolver.node_types[base])) return true;
+            node = base;
+        },
+        .identifier, .identifier_self => {
+            const declaration = resolver.node_declarations[node];
+            return declaration != .none and resolver.decl_pool.get(declaration, .flags).is_global;
+        },
+        else => return true,
+    };
+}
+
 pub fn expect_type(
     self: *Expressions,
     node: NodeId,
@@ -812,6 +917,12 @@ fn infer_member_access(
         if (on_type) return resolver.macros.tree_kind_member(node, name);
         return resolver.macros.tree_member(base_type, name);
     }
+    const through_opaque = !on_type and static_pool.is_pointer(base_type) and
+        static_pool.tag(static_pool.pointee(base_type)) != .array_type and
+        static_pool.is_unstorable(static_pool.pointee(base_type));
+    if (through_opaque and !context.is_abstract) {
+        return resolver.report(.unstorable_dereference, parent, base_type, 0);
+    }
     if (static_pool.tag(base_type) == .type_variable) {
         return resolver.report(.uninferable_type, parent, base_type, .none);
     }
@@ -845,7 +956,10 @@ fn infer_member_access(
             static_pool.trait_method_declaration(trait_method),
         ),
         .case => |case_type| case_type,
-        .builtin_len => .u64_type,
+        .builtin_len => if (self.length_is_static(context, base_type, node))
+            .u64_type
+        else
+            resolver.report(.not_static, node, 0, 0),
         .builtin_tag => if (on_type)
             resolver.report(.unknown_member, node, name, base_type)
         else
@@ -853,6 +967,25 @@ fn infer_member_access(
         .builtin_init, .builtin_deinit => self.builtin_lifecycle_type(base_type, name),
         .none => resolver.report(.unknown_member, node, name, base_type),
     };
+}
+
+// a length is static: a runtime-length array has none, unless what holds it is evaluated while
+// compiling (trees, static values, stcfun bodies)
+pub fn length_is_static(
+    self: *Expressions,
+    context: *FunctionContext,
+    array_type: StaticPool.Index,
+    node: NodeId,
+) bool {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const array = static_pool.pointee(array_type);
+    if (static_pool.tag(array) != .array_type) return true;
+    if (static_pool.get(array).array_type.length != StaticPool.dyn_len) return true;
+    // a length-generic body is checked once for all lengths, each realization has its own
+    if (context.is_interpreted or context.is_abstract) return true;
+    if (static_pool.contains_trees(array)) return true;
+    return resolver.static_values.try_evaluate(context, node) != null;
 }
 
 fn builtin_lifecycle_type(

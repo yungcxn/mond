@@ -4,6 +4,7 @@ fun is_hex = (u8 c) -> bool: ret is_digit(c) or (c >= 'a' and c <= 'f') or (c >=
 
 type Json = *(
     &[]u8 s,
+    u64 length,
     mut u32 p,
     mut u32 depth,
     mut u32 maxd,
@@ -18,7 +19,7 @@ type Json = *(
     mut bool failed,
 ) !{
     fun peek = () -> u8 {
-        if (self.p as u64) >= self.s.$len: ret 0;
+        if (self.p as u64) >= self.length: ret 0;
         ret self.s.*[self.p];
     }
 
@@ -84,7 +85,7 @@ type Json = *(
     fun string_body = () {
         self.p += 1;
         loop {
-            if (self.p as u64) >= self.s.$len {
+            if (self.p as u64) >= self.length {
                 self.fail();
                 ret;
             }
@@ -221,12 +222,12 @@ type Json = *(
         self.value();
         if self.failed: ret;
         self.ws();
-        if (self.p as u64) < self.s.$len: self.fail();
+        if (self.p as u64) < self.length: self.fail();
     }
 }
 
 fun parse = (&[]u8 s) -> Json {
-    ret Json(s = s, p = 0, depth = 0, maxd = 0, nval = 0, narr = 0, nobj = 0, nstr = 0, nnum = 0, nlit = 0, nkey = 0, err = 0, failed = false);
+    ret Json(s = s, length = s.$len, p = 0, depth = 0, maxd = 0, nval = 0, narr = 0, nobj = 0, nstr = 0, nnum = 0, nlit = 0, nkey = 0, err = 0, failed = false);
 }
 
 fun check = (&[]u8 s) -> i32 {

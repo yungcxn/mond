@@ -80,8 +80,8 @@ fn equals(lowerer: *LLVMLowerer, value_type: Index, left: Value, right: Value) V
         if (kind == llvm.LLVMIntegerTypeKind or kind == llvm.LLVMPointerTypeKind) {
             return llvm.LLVMBuildICmp(builder, llvm.LLVMIntEQ, left, right, "");
         }
-        // pointers with a length and function values: the same address, length and environment
-        if (lowered_type != lowerer.types.slice and lowered_type != lowerer.types.closure) {
+        // function values: the same function and environment
+        if (lowered_type != lowerer.types.closure) {
             return result;
         }
         for (0..2) |i| {
@@ -153,29 +153,12 @@ fn variants_equal(lowerer: *LLVMLowerer, variant_or_union: Index, left: Value, r
     return llvm.LLVMBuildAnd(builder, same_tag, same_payload, "");
 }
 
-// strings by their bytes: arrays of the same length, slices by length and bytes, and pointers as
-// the zero-terminated strings of c (string constants end in a zero byte)
+// strings by their bytes: arrays of the same length, and pointers and runtime-length arrays as the
+// zero-terminated strings of c (string constants end in a zero byte)
 pub fn bytes_equal(lowerer: *LLVMLowerer, operand_type: Index, left: Value, right: Value) Value {
     const builder = lowerer.builder;
     if (lowerer.types.is_in_memory(operand_type)) {
         return memory_equal(lowerer, left, right, lowerer.pool.layout(operand_type).size);
-    }
-    if (llvm.LLVMTypeOf(left) == lowerer.types.slice) {
-        const left_length = llvm.LLVMBuildExtractValue(builder, left, 1, "");
-        const right_length = llvm.LLVMBuildExtractValue(builder, right, 1, "");
-        const same_length = llvm.LLVMBuildICmp(
-            builder,
-            llvm.LLVMIntEQ,
-            left_length,
-            right_length,
-            "",
-        );
-        const zero = llvm.LLVMConstNull(lowerer.types.length);
-        const compared = llvm.LLVMBuildSelect(builder, same_length, left_length, zero, "");
-        const left_bytes = llvm.LLVMBuildExtractValue(builder, left, 0, "");
-        const right_bytes = llvm.LLVMBuildExtractValue(builder, right, 0, "");
-        const same_bytes = memory_compare(lowerer, left_bytes, right_bytes, compared);
-        return llvm.LLVMBuildAnd(builder, same_length, same_bytes, "");
     }
     const int = llvm.LLVMInt32TypeInContext(lowerer.context);
     var parameters = [_]Type{ lowerer.types.pointer, lowerer.types.pointer };
@@ -230,20 +213,8 @@ pub fn convert(lowerer: *LLVMLowerer, kind: StaticPool.CoercionKind, to: Index, 
             "",
         ),
         .float_widen => llvm.LLVMBuildFPExt(builder, value, lowerer.types.of(to), ""),
-        .array_ptr_to_elem_ptr => if (llvm.LLVMTypeOf(value) == lowerer.types.slice)
-            llvm.LLVMBuildExtractValue(builder, value, 0, "")
-        else
-            value,
-        // the slice of an array value points into that value's own copy
-        .to_dyn => {
-            if (llvm.LLVMTypeOf(value) == lowerer.types.slice) return value;
-            const length = lowerer.pool.static_length(lowerer.pool.pointee(from)) orelse 0;
-            return lowerer.pair(
-                lowerer.types.slice,
-                value,
-                llvm.LLVMConstInt(lowerer.types.length, length, 0),
-            );
-        },
+        // the address of the first element, of an array value its own copy
+        .array_ptr_to_elem_ptr, .to_dyn => value,
         .variant_to_union => into_union(lowerer, lowerer.types.variant_of(from), to, value),
     };
 }
@@ -287,32 +258,10 @@ pub fn cast(lowerer: *LLVMLowerer, kind: StaticPool.CastKind, to: Index, source:
             return make_variant(lowerer, case.variant, case.case_index, payload);
         },
         // a relengthed pointer still points to the first element
-        .pointer_relength => if (lowered_type == lowerer.types.slice)
-            relength(lowerer, source, value)
-        else
-            value,
+        .pointer_relength => value,
         // lowered by HighLowerer as a relengthed pointer, and traits are realized per type
         .array_narrow, .trait_narrow => unreachable,
     };
-}
-
-// HighLowerer relengthes the pointer to an element of an array: the slice reaches from there to
-// the array's end
-fn relength(lowerer: *LLVMLowerer, source: Ref, first: Value) Value {
-    const builder = lowerer.builder;
-    const element = lowerer.instruction_of(source).?;
-    const array = @as(Ref, @enumFromInt(element.a));
-    const array_value = lowerer.operand(array);
-    const length = if (llvm.LLVMTypeOf(array_value) == lowerer.types.slice)
-        llvm.LLVMBuildExtractValue(builder, array_value, 1, "")
-    else
-        llvm.LLVMConstInt(
-            lowerer.types.length,
-            lowerer.pool.static_length(lowerer.pointee_of_ref(array)) orelse 0,
-            0,
-        );
-    const start = lowerer.index_value(@enumFromInt(element.b));
-    return lowerer.pair(lowerer.types.slice, first, llvm.LLVMBuildSub(builder, length, start, ""));
 }
 
 // the bytes of `value` read as `to`, zero-extended when `to` is larger
@@ -359,17 +308,11 @@ pub fn index_pointer(lowerer: *LLVMLowerer, result_type: Index, base: Ref, index
     const element = pool.pointee(result_type);
     const element_type = lowerer.types.of(element);
 
-    if (llvm.LLVMTypeOf(base_value) == lowerer.types.slice) {
-        const length = llvm.LLVMBuildExtractValue(builder, base_value, 1, "");
-        lowerer.trap_if(llvm.LLVMBuildICmp(builder, llvm.LLVMIntUGE, offset, length, ""));
-        const first = llvm.LLVMBuildExtractValue(builder, base_value, 0, "");
-        var indices = [_]Value{offset};
-        return llvm.LLVMBuildInBoundsGEP2(builder, element_type, first, &indices, 1, "");
-    }
-
+    // an array of a static length is checked, one of a runtime length is its first element
     const array = lowerer.pointee_of_ref(base);
     const indexes_array = pool.tag(array) == .array_type and
-        pool.get(array).array_type.element == element;
+        pool.get(array).array_type.element == element and
+        !lowerer.types.is_runtime_array(array);
     if (indexes_array) {
         const length = pool.static_length(array) orelse 0;
         const length_value = llvm.LLVMConstInt(lowerer.types.length, length, 0);
@@ -390,23 +333,23 @@ pub fn index_pointer(lowerer: *LLVMLowerer, result_type: Index, base: Ref, index
 
 // aggregates
 
-// a record or array of `parts`; a runtime-length array points to its elements in the frame
+// a record or array of `parts`; a runtime-length array is the address of its elements
 pub fn aggregate(lowerer: *LLVMLowerer, aggregate_type: Index, parts: []const u32) Value {
     const pool = lowerer.pool;
     const types = &lowerer.types;
-    const is_slice = types.of(aggregate_type) == types.slice;
+    const is_runtime_array = types.is_runtime_array(aggregate_type);
     const element: Index = if (pool.tag(aggregate_type) == .array_type)
         pool.get(aggregate_type).array_type.element
     else
         .none;
-    const memory_type = if (is_slice)
+    const memory_type = if (is_runtime_array)
         llvm.LLVMArrayType2(types.of(element), parts.len)
     else
         types.of(aggregate_type);
     const slot = lowerer.entry_alloca(memory_type);
     for (parts, 0..) |part_ref, i| {
         const part_type = if (element != .none) element else pool.field_type(aggregate_type, i);
-        const value = lowerer.operand_as(@enumFromInt(part_ref), types.value_of(part_type));
+        const value = lowerer.operand(@enumFromInt(part_ref));
         store_value(
             lowerer,
             part_type,
@@ -414,8 +357,7 @@ pub fn aggregate(lowerer: *LLVMLowerer, aggregate_type: Index, parts: []const u3
             value,
         );
     }
-    if (!is_slice) return slot;
-    return lowerer.pair(types.slice, slot, llvm.LLVMConstInt(types.length, parts.len, 0));
+    return slot;
 }
 
 // a field of a record or case value, or an element of an array value

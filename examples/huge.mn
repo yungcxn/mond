@@ -387,9 +387,9 @@ fun lambda_tour = () {
 }
 
 # currying: a function returning a function
-fun make_adder = (i32 n): (i32 x): x + n;
+stcfun make_adder = (i32 n): (i32 x): x + n;
 # `-> (` always means unit, so function-typed returns go through an alias
-fun make_multiplier = (i32 n) -> IntFn { ret (i32 x): x * n; }
+stcfun make_multiplier = (i32 n) -> IntFn { ret (i32 x): x * n; }
 
 fun currying_tour = () {
     add5 = make_adder(5);
@@ -1274,9 +1274,10 @@ type Vm = *(
     mut u32 sp = 0,
     mut u32 pc = 0,
     &[]Op program,
+    u64 length,
     mut bool running = true,
 ) !{
-    $init = (&[]Op program): ret Vm(stack = empty_stack, program = program);
+    $init = (&[]Op program): ret Vm(stack = empty_stack, program = program, length = program.$len);
 
     fun push = (i64 v) -> VmStatus {
         if self.sp >= VM_STACK_SIZE: ret VmStatus.Err(VmError.StackOverflow);
@@ -1297,7 +1298,7 @@ type Vm = *(
 
     # arms assign, so they are separated by `;` (a `,` would continue the assigned values)
     fun step = () -> VmStatus {
-        if self.pc >= self.program.$len: ret VmStatus.Err(VmError.BadJump(self.pc));
+        if self.pc >= self.length: ret VmStatus.Err(VmError.BadJump(self.pc));
         Op op = self.program.*[self.pc++];
 
         match op {
@@ -1553,9 +1554,9 @@ fun traffic_demo = () {
 ### MAIN ###
 # ============================================================================================== #
 
-$main = (i32 argc, &[]&u8 argv) -> i32 {
+$main = (u32 argc, &&u8 argv) -> i32 {
     if argc < 2 {
-        print("usage: %s <demo>", argv.*[0]);
+        print("usage: %s <demo>", argv[0]);
         ret 1;
     }
 
@@ -1577,7 +1578,7 @@ $main = (i32 argc, &[]&u8 argv) -> i32 {
     u8 unwrapped = unwrap_tour();
     i32 matched = match_bodies(1);
 
-    &u8 demo = argv.*[1];
+    &u8 demo = argv[1];
     match demo {
         "vm" => vm_demo(),
         "tokens" => do tokenize("12 + foo * (3 - bar)", 20),

@@ -23,7 +23,7 @@ stc i32 X = P.x;                             #= X 3
 - Unnamed fields are `$0`, `$1`, ...
 - `T(..)` needs every field that has no default, even an array (a missing one is `wrong_arity`). `T.$init()` builds a value with every field defaulted or zeroed, so `T.$init() with (f = v)` sets just some fields. An unknown name is `unknown_named_argument`.
 - Writing `p.x = ..` needs a `mut` field and a writable `p` (or a `*` pointer to it).
-- The layout is C order with natural alignment. `assertsize N` (bytes) or `assertsize T` checks it.
+- The layout is C order with natural alignment. `assertsize N` (bytes) or `assertsize T` checks it, `alignof` gives the alignment in bytes.
 - A record can't contain itself by value (`recursive_by_value_type`). Use a pointer.
 
 ```mond
@@ -32,6 +32,9 @@ type Pk = **(u8 a, u32 b);
 type Node = *(i32 value, *Node next);
 stc u64 SA = sizeof A;     #= SA 8
 stc u64 SP = sizeof Pk;    #= SP 5
+stc u64 AA = alignof A;    #= AA 4
+stc u64 AP = alignof Pk;   #= AP 1
+stc u64 AF = alignof (i32) -> i32;   #= AF 8
 type Big = *(u64 a) assertsize 4;   #! assertsize_failed
 ```
 
@@ -130,12 +133,14 @@ stc bool IS = CAT oftype Named;                 #= IS true
 ```mond
 trait Named = !{ fun id = () -> u32; }
 type Cat = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
-fun first = ([]&Named all) -> u32: ret 0;      #! trait_outside_parameter
 fun pick = () -> Named: ret Cat(1);            #! trait_outside_parameter
+type Slot = *(&Named any);                     # opaque: an address of some implementer
+fun peek = (Slot s) -> u32: ret (s.any as &Cat).id();
+fun guess = (Slot s) -> u32: ret s.any.id();   #! unstorable_dereference
 ```
 
 - A missing member is `trait_member_missing`, and a different signature is `trait_signature_mismatch`.
-- A trait is only a parameter type (`Named n`, `&Named n`, `*Named n`). Like a template, the function is realized for each argument type, so calls are static and no trait value exists at run time. Defaults are realized per implementer through `self`. A trait type anywhere else (a local, field, result, array element, or inside a parameter type) is `trait_outside_parameter`; for a closed set of types use a variant.
+- A trait is only a parameter type (`Named n`, `&Named n`, `*Named n`). Like a template, the function is realized for each argument type, so calls are static and no trait value exists at run time. Defaults are realized per implementer through `self`. A trait type anywhere else (a local, field, result, array element, or inside a parameter type) is `trait_outside_parameter`; for a closed set of types use a variant. Behind a pointer it is allowed everywhere (`&Named`, `[]*Named`): an address of some implementer, used after a cast to its type (`p as &Cat`). Calling or dereferencing through it is `unstorable_dereference`, as for a pointer to a template or to a runtime-length array.
 - Inside the function the parameter reaches only the trait's members.
 - `T oftype Named` also works on types, which makes it a constraint for generics: `stcfun max_of = (type T where T oftype Cmp(T)): (T a, T b) -> T: ..`.
 - Only declared types implement traits; built-in types like `u32` can't.
@@ -159,7 +164,7 @@ stc u64 SG = sizeof Grid(3);                 #= SG 3
 
 - The arguments must be static, and they are not inferred (`Box(value = 3)` is `wrong_arity`). A failing `stcwhere` of a template is reported at the template.
 - A template used as a parameter type, `(Box b)`, realizes the function for each argument. Only the members whose type doesn't depend on the parameters are reachable (`generic_member`). `match b { Box(u8) x => .. }` narrows it to one realization, where everything is reachable.
-- A bare template where a concrete type is needed is `unrealized_template`.
+- A bare template where a concrete type is needed is `unrealized_template`. Behind a pointer (`*Box`) it is an address only, like a pointer to a trait: used after a cast to a realization (`p as *Box(u32)`).
 
 ## Aliases and local types
 

@@ -4,10 +4,10 @@ const llvm = @import("llvm_c");
 const mond = @import("mond");
 const Types = @import("llvm_lowerer/Types.zig");
 const DebugInfo = @import("llvm_lowerer/DebugInfo.zig");
-const Escapes = @import("llvm_lowerer/Escapes.zig");
 const c_abi = @import("llvm_lowerer/c_abi.zig");
 const constants = @import("llvm_lowerer/constants.zig");
 const values = @import("llvm_lowerer/values.zig");
+const runtime = @import("llvm_lowerer/runtime.zig");
 const HighIr = mond.HighIr;
 const HighLowerer = mond.HighLowerer;
 const StaticPool = mond.StaticPool;
@@ -36,6 +36,8 @@ pub const Options = struct {
     debug_source: ?[]const u8 = null,
     // the module will be optimized, debug info marks itself so
     optimized: bool = false,
+    // linked with the c library, started by its startup, else by mond's own `_start`
+    libc: bool = false,
 };
 
 // a phi waits for its operands until all blocks of its function are lowered. a value in memory
@@ -52,8 +54,6 @@ module: llvm.LLVMModuleRef,
 builder: llvm.LLVMBuilderRef,
 types: Types,
 debug: ?DebugInfo,
-// which closures and captured variables outlive their frame, known once functions are declared
-escapes: ?Escapes = null,
 // per ir function: its llvm function and that function's type
 functions: []Value,
 function_types: []Type,
@@ -94,9 +94,6 @@ reachable: std.DynamicBitSetUnmanaged = .{},
 block_order: std.ArrayList(u32) = .empty,
 // blocks being walked, and how many of their successors are walked already
 walk: std.ArrayList([2]u32) = .empty,
-// the walk of `is_in_cycle`, which runs while `block_order` is lowered
-cycle_walk: std.ArrayList(u32) = .empty,
-cycle_seen: std.DynamicBitSetUnmanaged = .{},
 pending_phis: std.ArrayList(PendingPhi) = .empty,
 // the entry block holding the function's allocas, in front of the ir's first block
 alloca_builder: llvm.LLVMBuilderRef,
@@ -161,7 +158,6 @@ pub fn deinit(self: *LLVMLowerer) void {
     const allocator = self.allocator;
     self.types.deinit();
     if (self.debug) |*debug| debug.deinit();
-    if (self.escapes) |*escapes| escapes.deinit();
     allocator.free(self.functions);
     allocator.free(self.function_types);
     allocator.free(self.thunks);
@@ -180,8 +176,6 @@ pub fn deinit(self: *LLVMLowerer) void {
     self.reachable.deinit(allocator);
     self.block_order.deinit(allocator);
     self.walk.deinit(allocator);
-    self.cycle_walk.deinit(allocator);
-    self.cycle_seen.deinit(allocator);
     self.pending_phis.deinit(allocator);
     llvm.LLVMDisposeBuilder(self.builder);
     llvm.LLVMDisposeBuilder(self.alloca_builder);
@@ -217,10 +211,10 @@ pub fn lower(self: *LLVMLowerer) void {
     }
     for (0..function_count) |i| self.declare_function(@intCast(i));
     for (self.ir.globals.column(.decl), 0..) |declaration, i| self.declare_global(declaration, i);
-    self.escapes = .init(self.allocator, self.ir, self.pool, self.function_of_declaration);
     for (0..function_count) |i| self.lower_function(@intCast(i));
     if (self.debug) |*debug| debug.leave_function(self.builder);
     self.define_main();
+    if (!self.options.libc and builtin.os.tag == .linux) runtime.define(self);
     if (self.debug) |*debug| debug.finish();
 
     var message: [*c]u8 = null;
@@ -325,7 +319,10 @@ fn declare_global(self: *LLVMLowerer, declaration: DeclPool.Index, global_index:
     self.globals[global_index] = lowered;
 }
 
-// `main` of c: the global initializers, then `$main` with the arguments it asks for
+// the entry: the global initializers, then `$main` with the arguments it asks for. with the c
+// library its `main`, which its startup calls. without it `_start`: linux jumps there with
+// argc and argv on the stack and takes the exit code by a system call, macos' dyld calls it
+// like `main`
 fn define_main(self: *LLVMLowerer) void {
     const main_function = for (self.ir.functions.column(.decl), 0..) |declaration, i| {
         if (declaration == .none) continue;
@@ -333,40 +330,52 @@ fn define_main(self: *LLVMLowerer) void {
     } else return;
 
     const int = llvm.LLVMInt32TypeInContext(self.context);
-    var parameters = [_]Type{ int, self.types.pointer };
-    const main_type = llvm.LLVMFunctionType(int, &parameters, parameters.len, 0);
-    const entry = llvm.LLVMAddFunction(self.module, "main", main_type);
-    self.add_function_attributes(entry);
-    const argument_count = llvm.LLVMGetParam(entry, 0);
-    const argument_vector = llvm.LLVMGetParam(entry, 1);
-    llvm.LLVMPositionBuilderAtEnd(
-        self.builder,
-        llvm.LLVMAppendBasicBlockInContext(self.context, entry, "entry"),
-    );
+    const is_bare_linux = !self.options.libc and builtin.os.tag == .linux;
+    const argument_count, const argument_vector = if (is_bare_linux) blk: {
+        // the stack is aligned for the call of `mond_start`, which gets its address
+        llvm.LLVMAppendModuleInlineAsm(self.module, start_assembly.ptr, start_assembly.len);
+        var parameters = [_]Type{self.types.pointer};
+        const void_type = llvm.LLVMVoidTypeInContext(self.context);
+        const start_type = llvm.LLVMFunctionType(void_type, &parameters, 1, 0);
+        const start = llvm.LLVMAddFunction(self.module, "mond_start", start_type);
+        llvm.LLVMSetVisibility(start, llvm.LLVMHiddenVisibility);
+        self.add_function_attributes(start);
+        llvm.LLVMPositionBuilderAtEnd(
+            self.builder,
+            llvm.LLVMAppendBasicBlockInContext(self.context, start, "entry"),
+        );
+        const stack = llvm.LLVMGetParam(start, 0);
+        const count = llvm.LLVMBuildLoad2(self.builder, self.types.length, stack, "");
+        var offset = [_]Value{llvm.LLVMConstInt(self.types.length, 1, 0)};
+        const vector =
+            llvm.LLVMBuildInBoundsGEP2(self.builder, self.types.pointer, stack, &offset, 1, "");
+        break :blk .{ llvm.LLVMBuildTrunc(self.builder, count, int, ""), vector };
+    } else blk: {
+        var parameters = [_]Type{ int, self.types.pointer };
+        const main_type = llvm.LLVMFunctionType(int, &parameters, parameters.len, 0);
+        const name = if (self.options.libc) "main" else "_start";
+        const main = llvm.LLVMAddFunction(self.module, name, main_type);
+        self.add_function_attributes(main);
+        llvm.LLVMPositionBuilderAtEnd(
+            self.builder,
+            llvm.LLVMAppendBasicBlockInContext(self.context, main, "entry"),
+        );
+        break :blk .{ llvm.LLVMGetParam(main, 0), llvm.LLVMGetParam(main, 1) };
+    };
     const init_function = self.ir.init_fn;
     _ = self.build_call(self.function_types[init_function], self.functions[init_function], &.{});
 
-    // `(argc, argv)` in the shapes `$main` takes them: ints, a pointer, or `[]&u8` with its length
+    // `()` or `(argc, argv)`
     const main_type_index = self.ir.functions.column(.ty)[main_function];
+    const parameters = self.pool.get(main_type_index).function_type.parameters;
     const mark = self.value_stack.items.len;
     defer self.value_stack.shrinkRetainingCapacity(mark);
-    const parameter_count = self.pool.get(main_type_index).function_type.parameters.len;
-    for (0..parameter_count) |i| {
-        const parameter = self.pool.get(main_type_index).function_type.parameters[i];
-        const lowered = self.types.of(parameter);
-        const given = if (i == 0) argument_count else argument_vector;
-        const argument = if (i > 1)
-            llvm.LLVMConstNull(lowered)
-        else if (lowered == self.types.slice) blk: {
-            const count = llvm.LLVMBuildZExt(self.builder, argument_count, self.types.length, "");
-            break :blk self.pair(self.types.slice, argument_vector, count);
-        } else if (lowered == self.types.pointer)
-            given
-        else if (i == 0)
-            llvm.LLVMBuildIntCast2(self.builder, given, lowered, 1, "")
-        else
-            llvm.LLVMBuildPtrToInt(self.builder, given, lowered, "");
-        self.value_stack.append(self.allocator, argument) catch @panic("OOM");
+    if (parameters.len == 2) {
+        const count_type = self.types.of(parameters[0]);
+        const signed: c_int = @intFromBool(self.is_signed(parameters[0]));
+        const count = llvm.LLVMBuildIntCast2(self.builder, argument_count, count_type, signed, "");
+        self.value_stack.append(self.allocator, count) catch @panic("OOM");
+        self.value_stack.append(self.allocator, argument_vector) catch @panic("OOM");
     }
     const result = self.build_call(
         self.function_types[main_function],
@@ -380,8 +389,134 @@ fn define_main(self: *LLVMLowerer) void {
         llvm.LLVMConstInt(int, 0, 0)
     else
         llvm.LLVMBuildIntCast2(self.builder, result, int, signed, "");
-    _ = llvm.LLVMBuildRet(self.builder, exit_code);
+    if (!is_bare_linux) {
+        _ = llvm.LLVMBuildRet(self.builder, exit_code);
+        return;
+    }
+    // exit_group(exit code)
+    const length = self.types.length;
+    var exit_parameters = [_]Type{ length, length };
+    const void_type = llvm.LLVMVoidTypeInContext(self.context);
+    const exit_type = llvm.LLVMFunctionType(void_type, &exit_parameters, 2, 0);
+    const exit_assembly, const constraints, const exit_number = switch (builtin.cpu.arch) {
+        .x86_64 => .{ "syscall", "{ax},{di},~{rcx},~{r11},~{memory}", 231 },
+        .aarch64 => .{ "svc #0", "{x8},{x0},~{memory}", 94 },
+        else => @compileError("mond starts programs only on aarch64 and x86-64"),
+    };
+    const exit = llvm.LLVMGetInlineAsm(
+        exit_type,
+        @constCast(exit_assembly.ptr),
+        exit_assembly.len,
+        @constCast(constraints.ptr),
+        constraints.len,
+        1,
+        0,
+        llvm.LLVMInlineAsmDialectATT,
+        0,
+    );
+    const code = llvm.LLVMBuildSExt(self.builder, exit_code, length, "");
+    _ = self.build_call(exit_type, exit, &.{ llvm.LLVMConstInt(length, exit_number, 0), code });
+    _ = llvm.LLVMBuildUnreachable(self.builder);
 }
+
+// a call of the kernel. linux gives -errno itself, macos sets the carry flag and gives errno
+const system_call = switch (builtin.os.tag) {
+    .linux => switch (builtin.cpu.arch) {
+        .x86_64 => "syscall",
+        .aarch64 => "svc #0",
+        else => @compileError("mond calls the kernel only on aarch64 and x86-64"),
+    },
+    .macos => switch (builtin.cpu.arch) {
+        .x86_64 => "syscall\n\tjnc 1f\n\tneg %rax\n1:",
+        .aarch64 => "svc #0x80\n\tcneg x0, x0, cs",
+        else => @compileError("mond calls the kernel only on aarch64 and x86-64"),
+    },
+    else => @compileError("mond calls the kernel only on linux and macos"),
+};
+
+// per argument count: the result's register, the number's, the arguments', and what the kernel
+// changes besides (macos may give a second result)
+const system_call_constraints = blk: {
+    const Registers = struct {
+        result: []const u8,
+        number: []const u8,
+        arguments: [6][]const u8,
+        clobbers: []const u8,
+    };
+    const registers: Registers = switch (builtin.cpu.arch) {
+        .x86_64 => .{
+            .result = "={rax}",
+            .number = "{rax}",
+            .arguments = .{ "{rdi}", "{rsi}", "{rdx}", "{r10}", "{r8}", "{r9}" },
+            .clobbers = ",~{rcx},~{r11},~{rdx},~{memory},~{flags}",
+        },
+        .aarch64 => .{
+            .result = "={x0}",
+            .number = if (builtin.os.tag == .macos) "{x16}" else "{x8}",
+            .arguments = .{ "{x0}", "{x1}", "{x2}", "{x3}", "{x4}", "{x5}" },
+            .clobbers = ",~{memory},~{cc}",
+        },
+        else => @compileError("mond calls the kernel only on aarch64 and x86-64"),
+    };
+    var all: [7][]const u8 = undefined;
+    for (&all, 0..) |*constraints, count| {
+        var text: []const u8 = registers.result ++ "," ++ registers.number;
+        for (registers.arguments[0..count]) |argument| text = text ++ "," ++ argument;
+        constraints.* = text ++ registers.clobbers;
+    }
+    break :blk all;
+};
+
+// what `$asm` may change: every register llvm allocates (the frame pointer and on aarch64 the
+// platform register aside), the flags and memory
+const assembly_clobbers = blk: {
+    @setEvalBranchQuota(100_000);
+    var clobbers: []const u8 = "~{memory}";
+    const registers: []const []const u8 = switch (builtin.cpu.arch) {
+        .x86_64 => &.{ "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "dirflag", "fpsr", "flags" },
+        .aarch64 => &.{ "x30", "cc" },
+        else => @compileError("mond builds code only for aarch64 and x86-64"),
+    };
+    for (registers) |register| clobbers = clobbers ++ ",~{" ++ register ++ "}";
+    const numbered: []const [3]u8 = switch (builtin.cpu.arch) {
+        .x86_64 => &.{ .{ 'r', 8, 15 }, .{ 'x', 0, 15 } },
+        .aarch64 => &.{ .{ 'x', 0, 17 }, .{ 'x', 19, 28 }, .{ 'q', 0, 31 } },
+        else => unreachable,
+    };
+    for (numbered) |range| for (range[1]..range[2] + 1) |n| {
+        const is_vector = range[0] == 'x' and builtin.cpu.arch == .x86_64;
+        const prefix = if (is_vector) "xmm" else &[_]u8{range[0]};
+        clobbers = clobbers ++ std.fmt.comptimePrint(",~{{{s}{d}}}", .{ prefix, n });
+    };
+    break :blk clobbers;
+};
+
+// `_start` on linux: the stack holds argc, then argv; `mond_start` gets its address
+const start_assembly = switch (builtin.cpu.arch) {
+    .x86_64 =>
+    \\.text
+    \\.globl _start
+    \\.type _start,@function
+    \\_start:
+    \\  xor %ebp, %ebp
+    \\  mov %rsp, %rdi
+    \\  and $-16, %rsp
+    \\  call mond_start
+    \\  ud2
+    ,
+    .aarch64 =>
+    \\.text
+    \\.globl _start
+    \\.type _start,%function
+    \\_start:
+    \\  mov x29, #0
+    \\  mov x30, #0
+    \\  mov x0, sp
+    \\  bl mond_start
+    \\  brk #0
+    ,
+    else => "",
+};
 
 // a function value of a function: called with the environment first, which holds its captures
 pub fn thunk(self: *LLVMLowerer, function_index: u32) Value {
@@ -551,7 +686,7 @@ fn add_c_attributes(self: *LLVMLowerer, function: Value, index: c_uint, value_ty
             llvm.LLVMAddAttributeAtIndex(function, index, byval);
             self.add_attribute(function, index, "align", self.alignment_of(value_type));
         },
-        .direct, .coerced, .address, .function => {},
+        .direct, .coerced, .function => {},
     }
 }
 
@@ -620,8 +755,7 @@ fn lower_function(self: *LLVMLowerer, function_index: u32) void {
         for (predecessors, self.ir.list(pending.instruction.b)) |predecessor, operand_ref| {
             if (!self.reachable.isSet(predecessor)) continue;
             const exit = self.block_exits.items[predecessor];
-            const expected = self.types.value_of(phi_type);
-            const incoming = self.operand_as(@enumFromInt(operand_ref), expected);
+            const incoming = self.operand(@enumFromInt(operand_ref));
             if (in_memory) {
                 const terminator = llvm.LLVMGetBasicBlockTerminator(exit);
                 llvm.LLVMPositionBuilderBefore(self.builder, terminator);
@@ -737,12 +871,12 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
         },
         .eq, .ne, .lt, .gt, .le, .ge => {
             const left = self.operand(a);
-            const right = self.operand_as(b, llvm.LLVMTypeOf(left));
+            const right = self.operand(b);
             return values.compare(self, instruction.op, self.type_of_ref(a), left, right);
         },
         .bytes_eq => {
             const left = self.operand(a);
-            const right = self.operand_as(b, llvm.LLVMTypeOf(left));
+            const right = self.operand(b);
             return values.bytes_equal(self, self.type_of_ref(a), left, right);
         },
         .neg => if (self.pool.properties(result_type).is_float)
@@ -754,21 +888,14 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
         .cast => values.cast(self, @enumFromInt(instruction.b), result_type, a),
         .alloca => {
             const pointee = self.types.of(self.pool.pointee(result_type));
-            const on_heap = self.escapes.?.on_heap.isSet(self.instruction_index);
             // with a length: the elements of a runtime-length array, allocated where it is made
-            if (a == .none) {
-                if (!on_heap) return self.entry_alloca(pointee);
-                return self.heap_allocate(self.alloca_builder, llvm.LLVMSizeOf(pointee));
-            }
-            if (!on_heap) return llvm.LLVMBuildArrayAlloca(builder, pointee, self.operand(a), "");
-            const count = self.index_value(a);
-            const size = llvm.LLVMBuildMul(builder, count, llvm.LLVMSizeOf(pointee), "");
-            return self.heap_allocate(builder, size);
+            if (a == .none) return self.entry_alloca(pointee);
+            return llvm.LLVMBuildArrayAlloca(builder, pointee, self.operand(a), "");
         },
         .load => {
             const pointer = self.operand(a);
-            // a pointer to a runtime-length array is the same pair as the array it points to
-            if (llvm.LLVMTypeOf(pointer) == self.types.slice) return pointer;
+            // a runtime-length array is the address its pointer holds
+            if (self.types.is_runtime_array(result_type)) return pointer;
             // a value in memory is a copy, the memory loaded from may change later
             if (self.types.is_in_memory(result_type)) {
                 const copied = self.entry_alloca(self.types.of(result_type));
@@ -782,7 +909,7 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
         .store => {
             const stored_type = self.type_of_ref(b);
             if (!self.types.is_in_memory(stored_type)) {
-                const stored = self.operand_as(b, self.types.of(self.pointee_of_ref(a)));
+                const stored = self.operand(b);
                 const store = llvm.LLVMBuildStore(builder, stored, self.operand(a));
                 if (self.is_packed_field(a)) llvm.LLVMSetAlignment(store, 1);
             } else if (self.is_zeroed(b)) {
@@ -803,20 +930,16 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
             const bounds = self.ir.list(instruction.b);
             const element = self.pool.get(result_type).array_type.element;
             const start = self.index_value(@enumFromInt(bounds[0]));
-            const end = self.index_value(@enumFromInt(bounds[1]));
             var offset = [_]Value{start};
             const element_type = self.types.of(element);
             const base = self.operand(a);
-            const first = llvm.LLVMBuildInBoundsGEP2(builder, element_type, base, &offset, 1, "");
-            return self.pair(self.types.slice, first, llvm.LLVMBuildSub(builder, end, start, ""));
+            return llvm.LLVMBuildInBoundsGEP2(builder, element_type, base, &offset, 1, "");
         },
-        .len => llvm.LLVMBuildExtractValue(builder, self.operand(a), 1, ""),
         .aggregate => values.aggregate(self, result_type, self.ir.list(instruction.b)),
         .select => {
             const choices = self.ir.list(instruction.b);
-            const choice_type = self.types.value_of(result_type);
-            const then_value = self.operand_as(@enumFromInt(choices[0]), choice_type);
-            const else_value = self.operand_as(@enumFromInt(choices[1]), choice_type);
+            const then_value = self.operand(@enumFromInt(choices[0]));
+            const else_value = self.operand(@enumFromInt(choices[1]));
             return llvm.LLVMBuildSelect(builder, self.operand(a), then_value, else_value, "");
         },
         .extract => values.extract(self, result_type, a, instruction.b),
@@ -827,7 +950,67 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
             return values.variant_payload(self, result_type, variant_type, self.operand(a));
         },
         .call => self.call(result_type, a, self.ir.list(instruction.b)),
-        .closure => self.closure(instruction.a, self.ir.list(instruction.b), block),
+        .closure => self.closure(instruction.a, self.ir.list(instruction.b)),
+        .syscall => {
+            // every argument one 64-bit register, the result the kernel's or -errno
+            const length = self.types.length;
+            const mark = self.value_stack.items.len;
+            defer self.value_stack.shrinkRetainingCapacity(mark);
+            const operands = self.ir.list(instruction.b);
+            for (operands, 0..) |operand_ref, i| {
+                const ref: Ref = @enumFromInt(operand_ref);
+                const value_type = self.type_of_ref(ref);
+                const value = self.operand(ref);
+                const signed: c_int = @intFromBool(self.is_signed(value_type));
+                var widened = if (llvm.LLVMTypeOf(value) == self.types.pointer)
+                    llvm.LLVMBuildPtrToInt(builder, value, length, "")
+                else
+                    llvm.LLVMBuildIntCast2(builder, value, length, signed, "");
+                // macos on x86-64 takes the class of its calls in the number
+                if (i == 0 and builtin.os.tag == .macos and builtin.cpu.arch == .x86_64) {
+                    const unix_class = llvm.LLVMConstInt(length, 0x2000000, 0);
+                    widened = llvm.LLVMBuildOr(builder, widened, unix_class, "");
+                }
+                self.value_stack.append(self.allocator, widened) catch @panic("OOM");
+            }
+            const arguments = self.value_stack.items[mark..];
+            const constraints = system_call_constraints[arguments.len - 1];
+            var parameter_types: [7]Type = @splat(length);
+            const count: c_uint = @intCast(arguments.len);
+            const call_type = llvm.LLVMFunctionType(length, &parameter_types, count, 0);
+            const code = llvm.LLVMGetInlineAsm(
+                call_type,
+                @constCast(system_call.ptr),
+                system_call.len,
+                @constCast(constraints.ptr),
+                constraints.len,
+                1,
+                0,
+                llvm.LLVMInlineAsmDialectATT,
+                0,
+            );
+            return self.build_call(call_type, code, arguments);
+        },
+        .inline_asm => {
+            // what it touches is unknown: all memory, the flags and every register llvm may
+            // allocate. it is kept where it stands
+            const text = self.pool.get(a.value()).string_value;
+            const void_type = llvm.LLVMVoidTypeInContext(self.context);
+            const asm_type = llvm.LLVMFunctionType(void_type, null, 0, 0);
+            const code = llvm.LLVMGetInlineAsm(
+                asm_type,
+                @constCast(text.ptr),
+                text.len,
+                @constCast(assembly_clobbers.ptr),
+                assembly_clobbers.len,
+                1,
+                0,
+                llvm.LLVMInlineAsmDialectATT,
+                0,
+            );
+            _ = self.build_call(asm_type, code, &.{});
+            return null;
+        },
         .br => {
             _ = llvm.LLVMBuildBr(builder, self.blocks.items[instruction.a]);
             return null;
@@ -861,7 +1044,7 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
             } else if (a == .none or !Types.has_value(result)) {
                 _ = llvm.LLVMBuildRetVoid(builder);
             } else {
-                _ = llvm.LLVMBuildRet(builder, self.operand_as(a, self.types.value_of(result)));
+                _ = llvm.LLVMBuildRet(builder, self.operand(a));
             }
             return null;
         },
@@ -962,20 +1145,13 @@ fn call(self: *LLVMLowerer, result_type: Index, callee: Ref, arguments: []const 
         const environment = llvm.LLVMBuildExtractValue(self.builder, closure_value, 1, "");
         self.value_stack.append(self.allocator, environment) catch @panic("OOM");
     }
-    const parameter_count = self.pool.get(callee_type).function_type.parameters.len;
-    const capture_count = arguments.len - parameter_count;
-    for (arguments, 0..) |argument, i| {
+    for (arguments) |argument| {
         const argument_ref: Ref = @enumFromInt(argument);
         // a capture by reference of a variable that never lived in memory is passed as nothing
         const lowered = if (argument_ref == .none)
             llvm.LLVMConstNull(self.types.pointer)
-        else if (i < capture_count)
-            self.operand(argument_ref)
-        else blk: {
-            const parameters = self.pool.get(callee_type).function_type.parameters;
-            const expected = self.types.value_of(parameters[i - capture_count]);
-            break :blk self.operand_as(argument_ref, expected);
-        };
+        else
+            self.operand(argument_ref);
         self.value_stack.append(self.allocator, lowered) catch @panic("OOM");
     }
 
@@ -1020,7 +1196,6 @@ fn call_function(self: *LLVMLowerer, function_index: u32, mark: usize, result_sl
                     self.copy(copied, argument.*, parameter);
                     break :blk copied;
                 } else argument.*,
-                .address => llvm.LLVMBuildExtractValue(self.builder, argument.*, 0, ""),
                 .function => self.c_function_pointer(argument.*),
             };
             if (i < fixed) continue;
@@ -1083,11 +1258,9 @@ pub fn build_call(
     return llvm.LLVMBuildCall2(self.builder, function_type, target, pointer, count, "");
 }
 
-// the environment of a closure lives in the frame making it: once per call, or once per pass when
-// that happens in a loop, so each closure made there keeps its own captures. a closure that
-// outlives the call keeps it on the heap
-fn closure(self: *LLVMLowerer, function_index: u32, captured: []const u32, block: u32) Value {
-    const outlives = self.escapes.?.escapes.isSet(self.instruction_index);
+// the environment of a closure is a slot of the frame making it: a closure never outlives that
+// frame (`escaping_closure`), and one made in a loop fills the slot anew on each pass
+fn closure(self: *LLVMLowerer, function_index: u32, captured: []const u32) Value {
     const function = self.thunk(function_index);
     const mark = self.value_stack.items.len;
     defer self.value_stack.shrinkRetainingCapacity(mark);
@@ -1109,12 +1282,7 @@ fn closure(self: *LLVMLowerer, function_index: u32, captured: []const u32, block
         @intCast(field_types.len),
         0,
     );
-    const environment = if (outlives)
-        self.heap_allocate(self.builder, llvm.LLVMSizeOf(environment_type))
-    else if (self.is_in_cycle(block))
-        llvm.LLVMBuildAlloca(self.builder, environment_type, "")
-    else
-        self.entry_alloca(environment_type);
+    const environment = self.entry_alloca(environment_type);
     for (self.value_stack.items[mark..], 0..) |capture_value, i| {
         const position: c_uint = @intCast(i);
         const field =
@@ -1124,32 +1292,7 @@ fn closure(self: *LLVMLowerer, function_index: u32, captured: []const u32, block
     return self.pair(self.types.closure, function, environment);
 }
 
-// whether the block can run again in the same call, walking its successors
-fn is_in_cycle(self: *LLVMLowerer, block: u32) bool {
-    self.cycle_seen.resize(self.allocator, self.function.blocks, false) catch @panic("OOM");
-    self.cycle_seen.unsetAll();
-    self.cycle_walk.clearRetainingCapacity();
-    self.cycle_walk.append(self.allocator, block) catch @panic("OOM");
-    while (self.cycle_walk.pop()) |current| {
-        const following = self.successors(current);
-        for (0..following.count) |i| {
-            const successor = following.at(self, @intCast(i));
-            if (successor == block) return true;
-            if (self.cycle_seen.isSet(successor)) continue;
-            self.cycle_seen.set(successor);
-            self.cycle_walk.append(self.allocator, successor) catch @panic("OOM");
-        }
-    }
-    return false;
-}
-
 // operands and helpers shared with values.zig and constants.zig
-
-// a constant shaped for where it is used, see `constants.operand_as`
-pub fn operand_as(self: *LLVMLowerer, ref: Ref, expected: Type) Value {
-    if (!ref.is_const() or ref.is_global()) return self.operand(ref);
-    return constants.operand_as(self, ref.value(), expected);
-}
 
 pub fn operand(self: *LLVMLowerer, ref: Ref) Value {
     if (ref.is_global()) return self.globals[ref.index()];
@@ -1222,15 +1365,6 @@ pub fn copy(self: *LLVMLowerer, destination: Value, source: Value, copied_type: 
     const size = llvm.LLVMConstInt(self.types.length, self.pool.layout(copied_type).size, 0);
     const alignment = self.alignment_of(copied_type);
     _ = llvm.LLVMBuildMemCpy(self.builder, destination, alignment, source, alignment, size);
-}
-
-// memory that outlives the frame. there is no ownership yet that would free it
-fn heap_allocate(self: *LLVMLowerer, builder: llvm.LLVMBuilderRef, size: Value) Value {
-    var parameters = [_]Type{self.types.length};
-    const malloc_type = llvm.LLVMFunctionType(self.types.pointer, &parameters, 1, 0);
-    const malloc = self.runtime_function("malloc", malloc_type);
-    var arguments = [_]Value{size};
-    return llvm.LLVMBuildCall2(builder, malloc_type, malloc, &arguments, 1, "");
 }
 
 // with checks on, continues only when `failed` is false

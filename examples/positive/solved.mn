@@ -24,9 +24,9 @@ fun by_range = (i8 x) -> u8: ret match x { ..<0 => 0, 0..=127 => 1 }
 fun by_member = (U v) -> u8: ret match v { A.X => 1, A.Y => 2, B.Z(z) => z }
 fun by_group = (U v) -> u8: ret match v { A a => 1, B b => 2 }
 
-type Buf = *(&[]u8 data);
+type Buf = *(&[]u8 data, u64 length);
 
-fun blen = (Buf b) -> u64: ret b.data.$len; #: blen (*(&[]u8 data)) -> u64
+fun blen = (Buf b) -> u64: ret b.length; #: blen (*(&[]u8 data, u64 length)) -> u64
 fun squares = (u32 n) -> []u32: ret for i in 0..<n: i * i; #: squares (u32) -> []u32
 fun area = (u32 w, u32 h = w) -> u32: ret w * h;
 
@@ -36,16 +36,16 @@ type Dog = *(u8 age) implof Speak !{ fun speak = () -> &u8: ret "woof"; }
 fun is_dog = (Speak s) -> bool: ret s oftype Dog;
 fun small = (type T stcwhere sizeof T <= 8) -> u64: ret sizeof T;
 
-$main = (i32 argc, &[]&u8 argv) -> i32 {
+$main = (u32 argc, &&u8 argv) -> i32 {
     mut i32 counter = 0;
     inc = (): counter += 1; #: inc () -> ()
     inc();
     a = area(3); #: a u32
     [4]u8 bytes = [1, 2, 3, 4];
-    b = blen(Buf(data = bytes.&)); #: b u64
+    b = blen(Buf(data = bytes.&, length = bytes.$len)); #: b u64
     sq = squares(5); #: sq []u32
     first = sq[0]; #: first u32
-    n = argv.$len; #: n u64
+    n = argc; #: n u32
     s = small(u32); #: s u64
     Dog d = Dog(age = 3);
     dog = is_dog(d); #: dog bool

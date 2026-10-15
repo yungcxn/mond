@@ -10,7 +10,7 @@ fun prec = (u8 c) -> u32: ret match c {
 
 fun is_right = (u8 c) -> bool: ret c == '^' or c == 'n';
 
-type Sy = *(&[]u8 src, mut [24]Tok out, mut u32 nout, mut [24]u8 ops, mut u32 nops, mut u32 err, mut u32 at) !{
+type Sy = *(&[]u8 src, u64 length, mut [24]Tok out, mut u32 nout, mut [24]u8 ops, mut u32 nops, mut u32 err, mut u32 at) !{
     fun emit = (Tok t) {
         self.out[self.nout] = t;
         self.nout += 1;
@@ -50,7 +50,7 @@ type Sy = *(&[]u8 src, mut [24]Tok out, mut u32 nout, mut [24]u8 ops, mut u32 no
 
     fun convert = () {
         mut bool want = true;
-        while self.at < self.src.$len and self.err == 0 {
+        while self.at < self.length and self.err == 0 {
             u8 c = self.src.*[self.at];
             self.at += 1;
             match c {
@@ -58,7 +58,7 @@ type Sy = *(&[]u8 src, mut [24]Tok out, mut u32 nout, mut [24]u8 ops, mut u32 no
                 '0'..='9' => {
                     if !want: self.fail(3);
                     mut i64 v = (c - '0') as i64;
-                    while self.at < self.src.$len and self.src.*[self.at] >= '0' and self.src.*[self.at] <= '9' {
+                    while self.at < self.length and self.src.*[self.at] >= '0' and self.src.*[self.at] <= '9' {
                         v = v * 10 + (self.src.*[self.at] - '0') as i64;
                         self.at += 1;
                     }
@@ -86,7 +86,7 @@ type Sy = *(&[]u8 src, mut [24]Tok out, mut u32 nout, mut [24]u8 ops, mut u32 no
             }
         }
         if self.err != 0: ret;
-        if self.src.$len == 0: self.fail(5);
+        if self.length == 0: self.fail(5);
         if want: self.fail(3);
         while self.nops > 0 and self.err == 0 {
             u8 top = self.ops[self.nops - 1];
@@ -146,7 +146,7 @@ type Sy = *(&[]u8 src, mut [24]Tok out, mut u32 nout, mut [24]u8 ops, mut u32 no
 fun calc = (&[]u8 src) -> i64 {
     [24]Tok blank;
     [24]u8 ob;
-    mut Sy sy = Sy(src = src, out = blank, nout = 0, ops = ob, nops = 0, err = 0, at = 0);
+    mut Sy sy = Sy(src = src, length = src.$len, out = blank, nout = 0, ops = ob, nops = 0, err = 0, at = 0);
     sy.convert();
     if sy.err != 0 {
         i64 code = sy.err as i64;
@@ -163,7 +163,7 @@ fun calc = (&[]u8 src) -> i64 {
 fun rpn_is = (&[]u8 src, &[]u8 want) -> bool {
     [24]Tok blank;
     [24]u8 ob;
-    mut Sy sy = Sy(src = src, out = blank, nout = 0, ops = ob, nops = 0, err = 0, at = 0);
+    mut Sy sy = Sy(src = src, length = src.$len, out = blank, nout = 0, ops = ob, nops = 0, err = 0, at = 0);
     sy.convert();
     if sy.err != 0 or sy.nout as u64 != want.$len: ret false;
     for i in 0..<sy.nout {

@@ -1,0 +1,39 @@
+# without the c library (nothing after the marker): output and memory straight from the kernel,
+# its numbers picked per system, so the output is the same everywhere
+#+
+
+stc u64 WRITE = stcmatch $os {
+    "linux" => stcmatch $arch { "x86_64" => 1, _ => 64 },
+    "macos" => 4,
+    _ => 0,
+};
+stc u64 MMAP = stcmatch $os {
+    "linux" => stcmatch $arch { "x86_64" => 9, _ => 222 },
+    "macos" => 197,
+    _ => 0,
+};
+stc u64 MUNMAP = stcmatch $os {
+    "linux" => stcmatch $arch { "x86_64" => 11, _ => 215 },
+    "macos" => 73,
+    _ => 0,
+};
+# private and anonymous: memory of the program's own
+stc u64 ANONYMOUS = stcmatch $os { "linux" => 0x22, "macos" => 0x1002, _ => 0 };
+stc u64 PAGE = 4096;
+
+fun print = (&[]u8 text): do $syscall(WRITE, 1, text, text.$len);
+
+$main = () -> u8 {
+    print("kernel\n".&);                            #> kernel
+    i64 got = $syscall(MMAP, 0, PAGE, 3, ANONYMOUS, -1, 0);
+    if got < 0: ret 1;
+    *u8 page = got asbits *u8;
+    page[0] = 'o';
+    page[1] = 'k';
+    page[2] = '\n';
+    do $syscall(WRITE, 1, page, 3);                 #> ok
+    if $syscall(MUNMAP, page, PAGE) != 0: ret 2;
+    # a file that isn't open: -EBADF, 9 on both systems
+    if $syscall(WRITE, 99, page, 1) != -9: ret 3;
+    ret 0;
+}

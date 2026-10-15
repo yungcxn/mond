@@ -3,14 +3,14 @@ variant Res = +(Ok(i64 v), DivZero, Syntax(u32 at), Overflow) tagof u8;
 
 fun is_digit = (u8 c) -> bool: ret c >= '0' and c <= '9';
 
-type Lexer = *(&[]u8 src, mut u32 at, mut [32]Tok toks, mut u32 n) !{
+type Lexer = *(&[]u8 src, u64 length, mut u32 at, mut [32]Tok toks, mut u32 n) !{
     fun emit = (Tok t) {
         self.toks[self.n] = t;
         self.n += 1;
     }
 
     fun run = () -> bool {
-        while self.at < self.src.$len {
+        while self.at < self.length {
             u8 c = self.src.*[self.at];
             self.at += 1;
             match c {
@@ -25,7 +25,7 @@ type Lexer = *(&[]u8 src, mut u32 at, mut [32]Tok toks, mut u32 n) !{
                 ')' => self.emit(Tok.RParen),
                 '0'..='9' => {
                     mut i64 v = (c - '0') as i64;
-                    while self.at < self.src.$len and is_digit(self.src.*[self.at]) {
+                    while self.at < self.length and is_digit(self.src.*[self.at]) {
                         v = v * 10 + (self.src.*[self.at] - '0') as i64;
                         self.at += 1;
                     }
@@ -107,7 +107,7 @@ type Parser = *(mut [32]Tok toks, mut u32 at, mut u32 bad) !{
 
 fun calc = (&[]u8 src) -> Res {
     [32]Tok blank;
-    mut Lexer lx = Lexer(src = src, at = 0, toks = blank, n = 0);
+    mut Lexer lx = Lexer(src = src, length = src.$len, at = 0, toks = blank, n = 0);
     if !lx.run(): ret Res.Syntax(lx.at);
     mut Parser p = Parser(toks = lx.toks, at = 0, bad = 0);
     i64 v = p.expr(0);

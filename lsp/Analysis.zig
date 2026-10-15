@@ -280,7 +280,7 @@ fn observe_pass(context: *anyopaque, resolver: *Resolver) void {
     linking.remember_pass(self, resolver);
 }
 
-// a slice of `length` entries, all `none`
+// `length` entries, all `none`
 pub fn allocate_unset(self: *Analysis, length: usize) []u32 {
     const entries = self.allocator.alloc(u32, length) catch @panic("OOM");
     @memset(entries, none);
@@ -408,6 +408,25 @@ test "names the resolver never met" {
         try std.testing.expectEqual(name[3], declared_at);
     }
     try std.testing.expectEqualStrings("&u8", result.decls[result.links[1][3]].detail);
+}
+
+test "the target, machine code and alignment" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\stc u64 KNOWN = (stcmatch $os { "macos" => 1, _ => 2 }) + $arch.$len;
+        \\fun relax = () { $asm("nop"); }
+        \\stc u64 A = alignof u64;
+        \\$main = () { relax(); }
+    );
+    const result = analyze(arena.allocator(), source);
+    try std.testing.expectEqual(0, result.diagnostics.len);
+    // `$os` and `$arch` are declared by the compiler, nowhere in the source
+    for ([_]struct { u32, []const u8 }{ .{ 26, "$os" }, .{ 58, "$arch" } }) |name| {
+        const declaration = result.decls[(try link_at(result, 0, name[0]))[3]];
+        try std.testing.expectEqualStrings(name[1], declaration.name);
+        try std.testing.expectEqual(null, declaration.selectionRange);
+    }
 }
 
 test "a name reported undefined stays unlinked" {

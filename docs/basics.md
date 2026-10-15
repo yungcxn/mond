@@ -10,10 +10,10 @@ fun square = (u32 x) -> u32: ret x * x;
 $main = () -> u32: ret square(7);
 ```
 
-`$main` takes nothing, or an integer and a pointer (`**u8`, `&&u8`, or `&[]&u8` with a length). It returns nothing or an integer, and falling off the end returns `0`.
+`$main` takes nothing, or C's pair of the arguments' count and a pointer to them (`u32 argc, &&u8 argv`, any integer type for the count). It returns nothing, an integer (the exit code) or `never`, and falling off the end returns `0`. Any other signature is `invalid_main`.
 
 ```mond
-$main = (i32 argc, &[]&u8 argv) -> i32 { ret argc; }
+$main = (u32 argc, &&u8 argv) -> u8 { ret argc as u8; }
 ```
 
 A statement ends with `;` unless its last token is `}`. There are no empty statements (`;;`). A statement may discard a value (`stack.push(1);`).
@@ -24,7 +24,7 @@ A statement ends with `;` unless its last token is `}`. There are no empty state
 
 A name is `[A-Za-z_$][A-Za-z0-9_]*`. A leading `$` marks builtin names (`$main`, `$init`, `$len`, `$it`, `$0`, ...), and you may declare `$` names of your own. `self` is the receiver in methods. Keywords:
 
-`fun` `stcfun` `inlfun` `type` `variant` `trait` `mut` `stc` `pub` `ret` `brk` `cont` `defer` `deinit` `if` `else` `stcif` `match` `stcmatch` `while` `stcwhile` `for` `stcfor` `loop` `stcloop` `in` `do` `where` `stcwhere` `implof` `tagof` `assertsize` `as` `asbits` `oftype` `typeof` `sizeof` `with` `and` `or` `xor` `true` `false` `self` `quote` `refl` `include` `ast` `bool` `u8` `u16` `u32` `u64` `i8` `i16` `i32` `i64` `f16` `f32` `f64`
+`fun` `stcfun` `inlfun` `type` `variant` `trait` `mut` `stc` `pub` `ret` `brk` `cont` `defer` `deinit` `if` `else` `stcif` `match` `stcmatch` `while` `stcwhile` `for` `stcfor` `loop` `stcloop` `in` `do` `where` `stcwhere` `implof` `tagof` `assertsize` `as` `asbits` `oftype` `typeof` `sizeof` `alignof` `with` `and` `or` `xor` `true` `false` `self` `quote` `refl` `include` `ast` `bool` `u8` `u16` `u32` `u64` `i8` `i16` `i32` `i64` `f16` `f32` `f64`
 
 ## Literals
 
@@ -58,24 +58,29 @@ u8 too_big = 256;          #! type_mismatch
 | `bool` | 1 byte |
 | `()` | unit, written as a type only in function types |
 | `[N]T` | array, `N` is a static integer |
-| `[]T` | length taken from the value; behind a pointer or in a field it is a runtime length |
+| `[]T` | length taken from the value; behind a pointer or in a field it is a runtime length, only the address of the first element |
 | `*T` / `&T` | writable / read-only pointer (`**u8`, `&*u8`, ...) |
 | `type` | a type as a value (static only) |
 
 Two types appear only in messages: `never` (the type of `ret`, `brk`, `cont`, or a `loop` without `brk`) and `runit` (an `if` or block used as a statement-like branch). Both disappear when joined with another type.
 
-`[]T` means different things by position. A parameter `[]T` / `&[]T` / `*[]T` is realized for each length (see [functions.md](functions.md#length-generic-functions)). A `&[]T` or `*[]T` local or field is a runtime slice (pointer plus length), and it only fits pointer parameters.
+`[]T` means different things by position. A parameter `[]T` / `&[]T` / `*[]T` is realized for each length (see [functions.md](functions.md#length-generic-functions)). A `&[]T` or `*[]T` field or result is a runtime-length array: like a pointer in C, only the address of its first element (`sizeof` 8), and it only fits pointer parameters. A length is always static, so a runtime-length array has no `.$len`, no `for` over it and no `==` (each `not_static`); keep its length yourself, or cast it to a length (`p as &[4]u8`) to have one again. Its elements index as usual, unchecked.
 
 ```mond
 []u32 a = [1, 2, 3];       #: a [3]u32
 stc u64 N = a.$len;        #= N 3
 stc u64 S = sizeof u64;    #= S 8
+type Text = *(&[]u8 bytes, u64 count);
+fun first = (Text t) -> u8: ret t.bytes.*[0];
+fun count = (Text t) -> u64: ret t.bytes.$len;          #! not_static
+fun word = (Text t) -> u64: ret (t.bytes as &[4]u8).$len;
+stc u64 AL = alignof a;    #= AL 4
 typeof N m = 4;            #: m u64
 ```
 
 ### Arrays
 
-`[a, b, c]` builds an array, and trailing commas are fine. The element type comes from the expected type, else from the join of the elements. Arrays are values: they are copied, and `==` compares them element by element. An array without a value is zero-filled. `.$len` is a `u64`. Arrays of different lengths don't join as values (`if c: "ab" else: "other"` is a `type_mismatch`), but slices do: a function returning `&[]u8` may return `"ab".&` or `"other".&`.
+`[a, b, c]` builds an array, and trailing commas are fine. The element type comes from the expected type, else from the join of the elements. Arrays are values: they are copied, and `==` compares them element by element. An array without a value is zero-filled. `.$len` is a static `u64`, also through a pointer to an array of a static length. Arrays of different lengths don't join as values (`if c: "ab" else: "other"` is a `type_mismatch`), but runtime-length arrays do: a function returning `&[]u8` may return `"ab".&` or `"other".&`.
 
 ```mond
 fun last = ([3]u32 xs) -> u32: ret xs[2];
@@ -84,7 +89,7 @@ stc [4]u8 BYTES = [1, 2, 3, 4];
 stc []u8 HEAD = BYTES as [2]u8;  #= HEAD [1, 2]
 ```
 
-A range as an index is not allowed (`a[1..]` is `genexpr_index`). Slice with a cast: `a as [lo..<hi]T`.
+A range as an index is not allowed (`a[1..]` is `genexpr_index`). A part of an array is a cast: `a as [lo..<hi]T`.
 
 ### Pointers
 
@@ -112,7 +117,7 @@ Lowest to highest precedence, and `·` separates levels within a row. All binary
 | `== !=` · `< > <= >=` | comparisons, not chained |
 | `<< >>` | shifts (`>>` is arithmetic on signed types) |
 | `+ -` · `* / %` | arithmetic (`/` truncates, `%` keeps the dividend's sign) |
-| prefix | `- ! ++ -- typeof sizeof` |
+| prefix | `- ! ++ -- typeof sizeof alignof` |
 | postfix | `f(..) a[i] .m .* .& x++ x-- as asbits oftype ?? <- ?<- with ..` (unwrapping and labels: [control.md](control.md#unwrapping)) |
 
 `!` is logical not on `bool` and bitwise not on integers. Unary `-` on an unsigned value wraps. The operands of a shift join like any others, so `u8 << u32` is a `u32`. `||` is not logical or: it is the variant union type. There is no `**`, and no `<<=` or similar.
@@ -151,6 +156,31 @@ bool no = 1 as bool;             #! invalid_cast
 ```
 
 Casts don't chain without parentheses: `x as u8 as u16` parses as `x as (u8 as u16)`.
+
+## Machine code
+
+`$asm("..")` puts machine code where it stands, as a statement. Its text is a static `[]u8` in the assembler syntax of the target (AT&T on x86-64), and it only runs at run time. The compiler doesn't know what the code touches, so it counts as reading and writing all memory and every register: values live across it in memory or are saved around it, and it is never moved or removed. `$os` and `$arch` are static text naming the target (`"macos"`, `"linux"`; `"aarch64"`, `"x86_64"`), so a `stcmatch` picks the code for it:
+
+```mond
+fun relax = () {
+    $asm(stcmatch $arch { "aarch64" => "yield", "x86_64" => "pause", _ => "nop" });
+}
+stc u64 WORD = stcmatch $arch { "aarch64" => 8, "x86_64" => 8, _ => 4 };   #= WORD 8
+stcfun at_compile_time = () -> u32 { $asm("nop"); ret 1; }   #! not_static
+stc u32 NO = at_compile_time();
+```
+
+`$syscall(number, ..)` calls the kernel with up to six integers, `bool`s or pointers, each passed as one 64-bit register. It returns an `i64`: the kernel's result, or the negated error number when the call failed, on Linux as on macOS. The numbers are the system's own (`SYS_write` of its headers), picked with `stcmatch`:
+
+```mond
+stc u64 WRITE = stcmatch $os {
+    "linux" => stcmatch $arch { "x86_64" => 1, _ => 64 },
+    "macos" => 4,
+    _ => 0,
+};
+fun print = (&[]u8 text) -> i64: ret $syscall(WRITE, 1, text, text.$len);
+fun twice = (f32 x) -> i64: ret $syscall(WRITE, x);   #! type_mismatch
+```
 
 ## Declarations
 

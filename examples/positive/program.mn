@@ -87,7 +87,7 @@ fun compile = (&[]u8 src) -> Program {
     ret p;
 }
 
-$main = (i32 argc, &[]&u8 argv) -> i32 {
+$main = (u32 argc, &&u8 argv) -> i32 {
     Program prog = compile("12+30".&);
     result = prog.eval(); #: result i64
     printf("result %d", result);

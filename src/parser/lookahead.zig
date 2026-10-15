@@ -11,6 +11,7 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = &eval.bracket;
     t[@intFromEnum(Lexer.Token.Kind.kw_typeof)] = &eval.templ_prefix(.typeof, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.kw_sizeof)] = &eval.templ_prefix(.sizeof, prec_unary + 1);
+    t[@intFromEnum(Lexer.Token.Kind.kw_alignof)] = &eval.templ_prefix(.alignof, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = &eval.templ_prefix(.neg_num, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_!")] = &eval.templ_prefix(.neg_logic, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_++")] = &eval.templ_prefix(.inc_prefix, prec_unary + 1);

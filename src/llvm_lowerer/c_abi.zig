@@ -24,8 +24,6 @@ pub const Passing = struct {
         // a record too large for registers: by the address of a copy (aarch64), copied by
         // llvm (`byval`, x86-64), or returned through the caller's slot (`sret`)
         indirect,
-        // a slice: c has none, it gets the address of the first element
-        address,
         // a function value naming a function without captures, as a c function pointer
         function,
     };
@@ -34,7 +32,6 @@ pub const Passing = struct {
 pub fn classify(lowerer: *LLVMLowerer, value_type: Index) Passing {
     const types = &lowerer.types;
     const pool = lowerer.pool;
-    if (types.is_slice(value_type)) return .{ .how = .address, .lowered = types.pointer };
     if (pool.tag(value_type) == .function_type) {
         return .{ .how = .function, .lowered = types.pointer };
     }

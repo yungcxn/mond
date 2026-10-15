@@ -87,14 +87,10 @@ fn primitive(bits: u16) Partial {
     return .{ .size = size, .align_log2 = std.math.log2_int(u64, size) };
 }
 
-// a pointer to a runtime-length array carries its length too, and a function value the
-// environment of its captures. the null address is the niche
+// an address, a function value also the environment of its captures. the null address is the
+// niche
 fn pointer_layout(pool: *StaticPool, type_index: Index) Partial {
-    const key = pool.get(type_index);
-    const pointee = if (key == .pointer_type) pool.get(key.pointer_type.pointee) else key;
-    const to_runtime_length = key == .pointer_type and pointee == .array_type and
-        pointee.array_type.length == dyn_len;
-    const is_pair = to_runtime_length or key == .function_type;
+    const is_pair = pool.tag(type_index) == .function_type;
     return .{
         .size = pointer_bytes * @as(u64, if (is_pair) 2 else 1),
         .align_log2 = std.math.log2_int(u64, pointer_bytes),
@@ -103,9 +99,9 @@ fn pointer_layout(pool: *StaticPool, type_index: Index) Partial {
 }
 
 fn array_layout(pool: *StaticPool, array: StaticPool.ArrayType) Partial {
-    // a runtime-length array is a pointer and a length
+    // a runtime-length array is the address of its first element
     if (array.length == dyn_len) {
-        return .{ .size = pointer_bytes * 2, .align_log2 = std.math.log2_int(u64, pointer_bytes) };
+        return .{ .size = pointer_bytes, .align_log2 = std.math.log2_int(u64, pointer_bytes) };
     }
     if (pool.tag(array.length) != .int_value) return .{};
     const element = pool.layout(array.element);

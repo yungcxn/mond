@@ -1,1 +1,1 @@
-$main = () -> &u8: ret "x"; #! type_mismatch
+$main = () -> &u8: ret "x"; #! invalid_main

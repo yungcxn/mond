@@ -1,1 +1,1 @@
-$main = (i32 argc) {} #! type_mismatch
+$main = (i32 argc) {} #! invalid_main

@@ -32,6 +32,7 @@ type Stack = (type T, u32 N): *(mut [N]T items, mut u32 n) !{
 
 type Checker = *(
     mut &[]u8 src,
+    mut u64 length,
     mut u32 pos,
     mut u32 bad,
     mut [32]Ty tys,
@@ -85,12 +86,12 @@ type Checker = *(
     }
 
     fun ws = () {
-        while (self.pos as u64) < self.src.$len and self.src.*[self.pos] == ' ': self.pos += 1;
+        while (self.pos as u64) < self.length and self.src.*[self.pos] == ' ': self.pos += 1;
     }
 
     fun word = () -> u8 {
         self.ws();
-        if (self.pos as u64) >= self.src.$len {
+        if (self.pos as u64) >= self.length {
             self.bad = 1;
             ret 0;
         }
@@ -100,7 +101,7 @@ type Checker = *(
 
     fun number = (u8 first) -> i64 {
         mut i64 v = (first - '0') as i64;
-        while (self.pos as u64) < self.src.$len and self.src.*[self.pos] >= '0' and self.src.*[self.pos] <= '9' {
+        while (self.pos as u64) < self.length and self.src.*[self.pos] >= '0' and self.src.*[self.pos] <= '9' {
             v = v * 10 + (self.src.*[self.pos] - '0') as i64;
             self.pos += 1;
         }
@@ -361,7 +362,7 @@ fun fresh = (&[]u8 src) -> Checker {
     [64]Val cv;
     [64]u32 cp;
     [24]u8 out;
-    ret Checker(src = src, pos = 0, bad = 0, tys = tys, nty = 0, exs = exs, nex = 0, env = Stack(u32, 12)(items = items, n = 0), cv = cv, cp = cp, nc = 0, out = out, nout = 0);
+    ret Checker(src = src, length = src.$len, pos = 0, bad = 0, tys = tys, nty = 0, exs = exs, nex = 0, env = Stack(u32, 12)(items = items, n = 0), cv = cv, cp = cp, nc = 0, out = out, nout = 0);
 }
 
 fun type_is = (&[]u8 src, &[]u8 want) -> bool {

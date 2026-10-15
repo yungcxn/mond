@@ -12,8 +12,9 @@ const Writer = std.Io.Writer;
 
 const directory_path = "examples/backend";
 const output_path = ".zig-cache/backend-tests";
-// the c functions the programs call, compiled by `mond` with the c compiler and linked into each
-const c_source_path = "examples/backend/lib/clib.c";
+// what a program is built with unless a `#+` marker names it: the c library, and the c functions
+// of c_interop.mn, compiled by `mond` with the c compiler
+const default_arguments = [_][]const u8{ "-lc", "examples/backend/lib/clib.c" };
 // unoptimized and optimized with the runtime checks, and optimized without them
 const modes = [_][]const u8{ "none", "safe", "default" };
 const time_limit: std.Io.Timeout = .{ .duration = .{
@@ -63,8 +64,9 @@ pub fn main(init: std.process.Init) !void {
 
         const source = try directory.readFileAlloc(io, name, arena, .limited(50 << 20));
         const expected = try expected_output(arena, source);
+        const build_with = try build_arguments(arena, source);
         for (modes) |mode| {
-            const passed = try check(writer, arena, io, mond, name, mode, expected);
+            const passed = try check(writer, arena, io, mond, name, mode, expected, build_with);
             counts[@intFromBool(!passed)] += 1;
         }
     }
@@ -89,6 +91,25 @@ fn expected_output(arena: std.mem.Allocator, source: []const u8) ![]const u8 {
     return output.items;
 }
 
+// the arguments after `#+ `, files relative to examples/backend, else `default_arguments`
+fn build_arguments(arena: std.mem.Allocator, source: []const u8) ![]const []const u8 {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    const marked = while (lines.next()) |line| {
+        const at = std.mem.indexOf(u8, line, "#+") orelse continue;
+        break line[at + "#+".len ..];
+    } else return &default_arguments;
+    var arguments: std.ArrayList([]const u8) = .empty;
+    var words = std.mem.tokenizeAny(u8, marked, " \r");
+    while (words.next()) |word| {
+        const argument = if (word[0] == '-') word else try std.fs.path.join(arena, &.{
+            directory_path,
+            word,
+        });
+        try arguments.append(arena, argument);
+    }
+    return arguments.items;
+}
+
 fn check(
     writer: *Writer,
     arena: std.mem.Allocator,
@@ -97,15 +118,17 @@ fn check(
     name: []const u8,
     mode: []const u8,
     expected: []const u8,
+    arguments: []const []const u8,
 ) !bool {
     const stem = name[0 .. name.len - ".mn".len];
     const source_path = try std.fs.path.join(arena, &.{ directory_path, name });
     const executable = try std.fmt.allocPrint(arena, "{s}/{s}-{s}", .{ output_path, stem, mode });
 
-    const built = try std.process.run(arena, io, .{
-        .argv = &.{ mond, "-b", source_path, c_source_path, "-o", executable, "-m", mode },
-        .timeout = time_limit,
-    });
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, &.{ mond, "-b", source_path });
+    try argv.appendSlice(arena, arguments);
+    try argv.appendSlice(arena, &.{ "-o", executable, "-m", mode });
+    const built = try std.process.run(arena, io, .{ .argv = argv.items, .timeout = time_limit });
     if (!exited_cleanly(built.term)) {
         try report(writer, name, mode, "does not build", built.stderr);
         return false;

@@ -1,5 +1,5 @@
-fun make_adder = (i32 n): (i32 x): x + n;
-fun compose = ((i32) -> i32 f, (i32) -> i32 g): (i32 x): g(f(x));
+stcfun make_adder = (i32 n): (i32 x): x + n;
+stcfun compose = ((i32) -> i32 f, (i32) -> i32 g): (i32 x): g(f(x));
 fun apply_n = ((i32) -> i32 f, u32 n, i32 x) -> i32 {
     mut i32 v = x;
     for 0..<n: v = f(v);
@@ -33,8 +33,8 @@ stcfun shared_state = () -> i32 {
 
 stcfun nested_capture = () -> i32 {
     i32 a = 1;
-    outer = (i32 b): (i32 c): a * 100 + b * 10 + c;
-    ret outer(2)(3);
+    outer = (i32 b, i32 c): a * 100 + b * 10 + c;
+    ret outer(2, 3);
 }
 
 stcfun returned = () -> i32 {
@@ -90,8 +90,8 @@ $main = () {
     mut i32 c = 0;
     inc = (): c += 1; #: inc () -> ()
     inc();
-    add = make_adder(c); #: add (i32) -> i32
+    stc add = make_adder(1); #: add (i32) -> i32
     r = apply_n(add, 3, 1); #: r i32
-    pair = compose(add, add); #: pair (i32) -> i32
+    stc pair = compose(add, add); #: pair (i32) -> i32
     twice = (i32 x): pair(pair(x)); #: twice (i32) -> i32
 }

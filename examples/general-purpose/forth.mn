@@ -1,5 +1,6 @@
 type Forth = *(
     &[]u8 src,
+    u64 length,
     mut [8]i64 st,
     mut u32 sp,
     mut [4]u32 dname,
@@ -34,13 +35,13 @@ type Forth = *(
 
     fun skip = (u32 i) -> u32 {
         mut u32 k = i;
-        while k as u64 < self.src.$len and self.src.*[k] == ' ': k += 1;
+        while k as u64 < self.length and self.src.*[k] == ' ': k += 1;
         ret k;
     }
 
     fun tok_end = (u32 i) -> u32 {
         mut u32 k = i;
-        while k as u64 < self.src.$len and self.src.*[k] != ' ': k += 1;
+        while k as u64 < self.length and self.src.*[k] != ' ': k += 1;
         ret k;
     }
 
@@ -287,7 +288,7 @@ fun exec = (&[]u8 src) -> [8]i64 {
     [4]u32 z2;
     [4]u32 z3;
     [4]u32 z4;
-    mut Forth f = Forth(src = src, st = blank, sp = 0, dname = z1, dnend = z2, dbody = z3, dend = z4, nd = 0, err = 0, depth = 0);
+    mut Forth f = Forth(src = src, length = src.$len, st = blank, sp = 0, dname = z1, dnend = z2, dbody = z3, dend = z4, nd = 0, err = 0, depth = 0);
     f.run(0, src.$len as u32);
     mut [8]i64 out;
     out[0] = f.err as i64;
@@ -302,7 +303,7 @@ fun top = (&[]u8 src) -> i64 {
     [4]u32 z2;
     [4]u32 z3;
     [4]u32 z4;
-    mut Forth f = Forth(src = src, st = blank, sp = 0, dname = z1, dnend = z2, dbody = z3, dend = z4, nd = 0, err = 0, depth = 0);
+    mut Forth f = Forth(src = src, length = src.$len, st = blank, sp = 0, dname = z1, dnend = z2, dbody = z3, dend = z4, nd = 0, err = 0, depth = 0);
     f.run(0, src.$len as u32);
     if f.err != 0 {
         i64 code = f.err as i64;
