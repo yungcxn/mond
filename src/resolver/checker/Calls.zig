@@ -109,15 +109,33 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
         return .i64_type;
     }
 
-    // `$fresh(..)` and `$error(..)` belong to the macros
-    const names_builtin = tree.macros and
-        tree.kind(callee) == .identifier and
+    // `$fresh(..)` and `$asterr(..)` belong to the macros
+    const names_builtin = tree.kind(callee) == .identifier and
         tree.text(callee, resolver.src_bytes)[0] == '$';
     if (names_builtin) {
         const name = resolver.name_pool.name_of_node(callee);
         switch (name) {
-            .fresh, .@"error" => {
+            .fresh, .asterr => if (tree.macros) {
                 return resolver.macros.check_builtin(context, node, name, arguments);
+            },
+            .crash => {
+                if (arguments.len != 1) {
+                    return resolver.report(.wrong_arity, node, arguments.len, 1);
+                }
+                const message = tree.arg_value(arguments[0]);
+                const message_type = static_pool.substitute_type_variables(
+                    resolver.expressions.infer(context, message, .none),
+                );
+                const is_text = static_pool.array_element(message_type) == .u8_type or
+                    static_pool.is_pointer(message_type) and
+                        static_pool.pointee(message_type) == .u8_type;
+                if (!is_text and message_type != .poison_type) {
+                    const expected = resolver.macros.string_type();
+                    _ = resolver.report(.type_mismatch, message, message_type, expected);
+                } else if (is_text and !context.is_interpreted) {
+                    _ = resolver.interpreter.evaluate_static(context, node);
+                }
+                return .never_type;
             },
             else => {},
         }

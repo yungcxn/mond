@@ -4,7 +4,7 @@ const DynamicBuffer = @import("containers.zig").DynamicBuffer;
 const Lexer = @import("Lexer.zig");
 const ParseTree = @import("ParseTree.zig");
 const Parser = @This();
-const lookahead = @import("parser/lookahead.zig");
+pub const lookahead = @import("parser/lookahead.zig");
 const NodeId = ParseTree.NodeId;
 
 tokens: StructOfArrays(Lexer.Token),

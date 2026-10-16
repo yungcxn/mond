@@ -606,7 +606,7 @@ fn paste(self: *Trees, node: NodeId) ?NodeId {
 }
 
 // the text a name, a literal or a string is
-fn text_of(self: *Trees, value: Value) ?[]const u8 {
+pub fn text_of(self: *Trees, value: Value) ?[]const u8 {
     const resolver = self.owning_interpreter().owning_resolver();
     const static_pool = &resolver.static_pool;
     if (self.node_of(value)) |root| {
@@ -1525,7 +1525,7 @@ fn made_node(self: *Trees, node: NodeId, kind: Kind, values: []const Index) ?Nod
     return made;
 }
 
-// `$fresh("tmp")`: a name like no other, `$error(tree, "..")` ends evaluating with an error there
+// `$fresh("tmp")`: a name like no other, `$asterr(tree, "..")` ends evaluating with an error there
 pub fn builtin(self: *Trees, node: NodeId, name: NamePool.Index, arguments: []const NodeId) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
@@ -1556,7 +1556,7 @@ pub fn builtin(self: *Trees, node: NodeId, name: NamePool.Index, arguments: []co
 
     const at = self.node_of(first) orelse return .poison;
     const text = resolver.name_pool.intern_copy(self.text_of(message) orelse return .poison);
-    resolver.doctor.report(.macro_error, at, text, 0);
+    resolver.doctor.report(.asterr, at, text, 0);
     return .poison;
 }
 

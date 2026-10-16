@@ -61,6 +61,20 @@ fun runtime = (u32 n) -> u64: ret fib(n);   #! not_static
 - Results are memoized across evaluations, so a call cached once costs nothing later.
 - A second parameter tuple produces a function: `stcfun scaler = (u32 k): (u32 x) -> u32: ret x * k;`. Templates are `stcfun`s too (see [types.md](types.md#templates)).
 
+## $crash
+
+`$crash("text")` is the compile error `crash` with that text, wherever the compiler meets it. Runtime code is checked once, so it throws in any branch there, also in a function nobody calls and in each instantiation. Static code throws when it is evaluated: a `stc` value, the taken branch of a `stcif` or `stcmatch`, a `stcfun` running into it. A branch that isn't taken is never checked, so a static branch makes it a condition. The text is any static text: a `[]u8`, a `[N]u8` (also a field) or a `&u8`. It has the type `never`, so it fits where any value is expected. The error points at the `$crash`, a `stcfun` reports it once.
+
+```mond
+stcfun Int = (u32 bits) -> type: ret if bits <= 64: u64 else: $crash("at most 64 bits");   #! crash
+stc Int(12) small = 7;                                   #: small u64
+stc type HUGE = Int(65);                                 # runs into the $crash above
+stcif sizeof u32 != 4: $crash("u32 must be 4 bytes");    # not taken, never checked
+fun wide = (type T) -> u32: ret stcif sizeof T <= 8: 1 else: $crash("too wide");
+stc u32 W = wide(u32);                                   #= W 1
+fun never_called = () { $crash("checked all the same"); }   #! crash
+```
+
 ## Interpreter rules
 
 - Values are copied: assignment, parameters, returns and loop variables all copy, and a pointer is the only way to share. Pointers work inside an evaluation but can't escape it.

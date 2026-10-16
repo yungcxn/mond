@@ -623,9 +623,9 @@ fun meta_test = () {
 }
 
 # a) control flow: c's assert, but the condition comes as a tree so its source comes along (#cond in c).
-#   trees and not text -> `!@cond` needs no parentheses. $error reports at the user's code, not here
+#   trees and not text -> `!@cond` needs no parentheses. $asterr reports at the user's code, not here
 stcfun assert = (ast(bool) cond) -> ast(()): ret match cond {
-    ast.BooleanTrue | ast.BooleanFalse => $error(cond, "assertion on a constant"),
+    ast.BooleanTrue | ast.BooleanFalse => $asterr(cond, "assertion on a constant"),
     _ => quote { if !@cond: print("assertion failed: %s", @cond.$src); },
 }
 

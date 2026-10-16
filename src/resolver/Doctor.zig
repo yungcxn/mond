@@ -84,10 +84,11 @@ const definition_table = .{
     },
     .{ "missing_main", .@"error", no_operand, no_operand },
     .{ "invalid_main", .@"error", operand(.type, "type"), no_operand },
-    // macros: stray `@`, writes into resolved declarations, `$error`, includes, endless expansion
+    // macros: stray `@`, writes into resolved declarations, `$asterr`, includes, endless expansion
     .{ "stray_unquote", .@"error", no_operand, no_operand },
     .{ "frozen_declaration", .@"error", operand(.declaration, "of"), no_operand },
-    .{ "macro_error", .@"error", operand(.name, ""), no_operand },
+    .{ "asterr", .@"error", operand(.name, ""), no_operand },
+    .{ "crash", .@"error", operand(.name, ""), no_operand },
     .{ "include_failed", .@"error", operand(.name, "file"), operand(.name, "because") },
     .{ "endless_expansion", .@"error", no_operand, no_operand },
 };

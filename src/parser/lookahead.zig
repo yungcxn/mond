@@ -79,6 +79,19 @@ pub const pre = blk: {
     break :blk t;
 };
 
+// the tokens whose prefix rule is macro syntax: the tree then has macros
+pub const macro_syntax = blk: {
+    var t: [256]bool = @splat(false);
+    t[@intFromEnum(Lexer.Token.Kind.kw_ast)] = true;
+    t[@intFromEnum(Lexer.Token.Kind.kw_quote)] = true;
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_@")] = true;
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<")] = true;
+    t[@intFromEnum(Lexer.Token.Kind.kw_refl)] = true;
+    t[@intFromEnum(Lexer.Token.Kind.kw_include)] = true;
+    t[@intFromEnum(Lexer.Token.Kind.kw_includeraw)] = true;
+    break :blk t;
+};
+
 pub const post = blk: {
     var t: [256]?*const fn (parser: *Parser, lhs: u32) anyerror!u32 = @splat(null);
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = &eval.unify_variants;

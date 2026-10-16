@@ -2,7 +2,10 @@ const std = @import("std");
 const mond = @import("mond");
 const Lexer = mond.Lexer;
 const Resolver = mond.Resolver;
-const DynamicBuffer = mond.DynamicBuffer;
+const StaticPool = mond.StaticPool;
+const Node = mond.ParseTree.Node;
+const lookahead = mond.Parser.lookahead;
+const constructs = mond.constructs;
 const Completion = @import("Completion.zig");
 const Analysis = @import("Analysis.zig");
 const linking = @import("linking.zig");
@@ -16,18 +19,24 @@ const undefined_name = Analysis.undefined_name;
 // the semantic tokens: every token classed by its kind, then by what the resolver and links found
 
 // the class of a token kind by its name in the lexer, so new keywords and operators are colored too
-const class_of_token_kind = blk: {
+// the macro syntax, the builtin types' keywords as the compiler pairs them (`u32_type`, `type_u32`)
+pub const class_of_token_kind = blk: {
     @setEvalBranchQuota(10_000);
     var table: [256]?Type = @splat(null);
     for (@typeInfo(Kind).@"enum".fields) |field| {
         if (std.mem.startsWith(u8, field.name, "kw_")) table[field.value] = .keyword;
         if (std.mem.startsWith(u8, field.name, "xpct_")) table[field.value] = .operator;
+        // a token that also continues an expression (`<`) is macro syntax only where the tree says
+        const continues = lookahead.post[field.value] != null or
+            lookahead.binary_compute[field.value] != null;
+        if (lookahead.macro_syntax[field.value] and !continues) table[field.value] = .macro;
     }
-    for (@intFromEnum(Kind.kw_u8)..@intFromEnum(Kind.kw_bool) + 1) |i| table[i] = .type;
-    // the syntax between code and the code it writes: a quote, a reflection, a hole
-    table[@intFromEnum(Kind.kw_quote)] = .macro;
-    table[@intFromEnum(Kind.kw_refl)] = .macro;
-    table[@intFromEnum(Kind.@"xpct_@")] = .macro;
+    for (@typeInfo(StaticPool.Index).@"enum".fields) |field| {
+        if (!std.mem.endsWith(u8, field.name, "_type")) continue;
+        const name = field.name[0 .. field.name.len - "_type".len];
+        if (!@hasField(Node.Kind, "type_" ++ name) or !@hasField(Kind, "kw_" ++ name)) continue;
+        table[@intFromEnum(@field(Kind, "kw_" ++ name))] = .type;
+    }
     table[@intFromEnum(Kind.identifier)] = .variable;
     table[@intFromEnum(Kind.val_string)] = .string;
     table[@intFromEnum(Kind.val_char)] = .string;
@@ -36,97 +45,96 @@ const class_of_token_kind = blk: {
     break :blk table;
 };
 
-// the keywords a declaration starts with, what the name after them is
-const class_after_keyword = blk: {
-    var table: [256]?Type = @splat(null);
-    for ([_]Kind{ .kw_fun, .kw_stcfun, .kw_inlfun }) |kind| table[@intFromEnum(kind)] = .function;
-    table[@intFromEnum(Kind.kw_type)] = .type;
-    table[@intFromEnum(Kind.kw_variant)] = .@"enum";
-    table[@intFromEnum(Kind.kw_trait)] = .interface;
-    break :blk table;
-};
-
-// the tokens a bracket opens with: `(`, `*(`, `!{`, ..
-const opens_bracket = blk: {
+const is_punctuation = blk: {
     var table: [256]bool = @splat(false);
     for (@typeInfo(Kind).@"enum".fields) |field| {
-        const name = field.name;
-        const ends_in_opening = std.mem.endsWith(u8, name, "(") or
-            std.mem.endsWith(u8, name, "[") or
-            std.mem.endsWith(u8, name, "{");
-        table[field.value] = ends_in_opening;
+        table[field.value] = std.mem.startsWith(u8, field.name, "pct_");
     }
     break :blk table;
 };
 
-// `_` is no name, a builtin is what it is, a declared name what its keyword declares (in quotes)
-// the meta syntax (`quote`, `refl`, the `<..>` of a splice, `@`) is a macro, what it holds is code
+// `_` is no name, a builtin is what it is, `..` spreading a hole is part of it
 pub fn classify_lexically(analysis: *Analysis, lexer: *Lexer) void {
     const tokens = lexer.tokens.columns();
+    analysis.token_kinds = tokens.tk;
     analysis.token_class = analysis.allocator.alloc(?Type, tokens.tk.len) catch @panic("OOM");
     analysis.token_modifiers = analysis.allocator.alloc(u32, tokens.tk.len) catch @panic("OOM");
     @memset(analysis.token_modifiers, 0);
 
-    // the bracket depth at every `<` opening a splice still open
-    var open_splices: DynamicBuffer(u32) = .init(analysis.allocator, 4);
-    var depth: u32 = 0;
     for (tokens.tk, tokens.span, analysis.token_class, 0..) |kind, span, *class, i| {
         class.* = class_of_token_kind[@intFromEnum(kind)];
         if (kind == .identifier) {
             const name = analysis.source[span[0]..span[1]];
-            class.* = blk: {
-                if (Completion.described(name)) |entry| {
-                    if (entry.class == .function) break :blk .function;
-                    break :blk .property;
-                }
-                if (i > 0) {
-                    const after_keyword = class_after_keyword[@intFromEnum(tokens.tk[i - 1])];
-                    if (after_keyword) |declared| break :blk declared;
-                }
-                if (std.mem.eql(u8, name, "_")) break :blk .keyword;
-                break :blk .variable;
-            };
+            class.* = if (Completion.described(name)) |entry|
+                (if (entry.class == .function) .function else .property)
+            else if (std.mem.eql(u8, name, "_")) .keyword else .variable;
         }
-
-        if (opens_bracket[@intFromEnum(kind)]) depth += 1;
-        switch (kind) {
-            .@"pct_)", .@"pct_]", .@"pct_}" => depth -|= 1,
-            // a `<` where no operand ends opens a splice
-            .@"xpct_<" => if (i == 0 or !ends_operand(analysis.token_class, tokens.tk, i - 1)) {
-                class.* = .macro;
-                open_splices.push(depth);
-            },
-            // the first `>` outside the brackets in a splice closes it
-            .@"xpct_>" => if (open_splices.last() == depth) {
-                class.* = .macro;
-                open_splices.len -= 1;
-            },
-            .@"xpct_.." => if (i > 0 and tokens.tk[i - 1] == .@"xpct_@") {
-                class.* = .macro;
-            },
-            else => {},
-        }
+        const spreads = kind == .@"xpct_.." and i > 0 and analysis.token_class[i - 1] == .macro;
+        if (spreads) class.* = .macro;
     }
 }
 
-// a token an operand ends with, a `<` after it compares
-fn ends_operand(token_class: []const ?Type, kinds: []const Kind, index: usize) bool {
-    return switch (kinds[index]) {
-        .identifier,
-        .val_string,
-        .val_int,
-        .val_float,
-        .val_char,
-        .@"pct_)",
-        .@"pct_]",
-        .kw_true,
-        .kw_false,
-        .@"xpct_.*",
-        .@"xpct_.&",
-        => true,
-        .@"xpct_>" => token_class[index] == .macro,
-        else => false,
-    };
+// the code as written, before a pass changed it: its macro syntax, and the names it declares by
+// what the resolver would declare (in quotes, renamed by a macro)
+pub fn classify_written(analysis: *Analysis, resolver: *Resolver) void {
+    const tree = resolver.tree;
+    const opener = analysis.allocate_unset(tree.ast_nodes.len());
+    const closer = analysis.allocate_unset(tree.ast_nodes.len());
+    for (0..tree.ast_nodes.len()) |i| {
+        const node: u32 = @intCast(i);
+        if (tree.kind(node) == .assign_typed) {
+            const statement = Resolver.Declarations.Stmt.from_node(resolver, node);
+            if (statement.assignees.len != 1) continue;
+            const token = tree.first_token(statement.assignees[0]);
+            if (analysis.token_kinds[token] != .identifier) continue;
+            analysis.token_class[token] = symbol_classes.class_of_kind(statement.kind);
+            continue;
+        }
+        if (constructs.construct_of(tree.kind(node)) != .macro) continue;
+        const children = tree.children(node);
+        if (children.len == 0) continue;
+
+        // back from what it holds to the token it opens with, over what is between (`..`, `(`, `:`)
+        var token = bound(tree, children[0], opener, .first);
+        while (token != none and token > 0) {
+            token -= 1;
+            const kind = @intFromEnum(analysis.token_kinds[token]);
+            if (lookahead.macro_syntax[kind] and class_of_token_kind[kind] != .type) {
+                analysis.token_class[token] = .macro;
+                opener[node] = token;
+                break;
+            }
+            const between = is_punctuation[kind] or class_of_token_kind[kind] == .operator or
+                class_of_token_kind[kind] == .type;
+            if (!between) break;
+        }
+        if (tree.kind(node) != .splice) continue;
+        var closing = bound(tree, node, closer, .last) +% 1;
+        while (closing < analysis.token_kinds.len) : (closing += 1) {
+            if (!is_punctuation[@intFromEnum(analysis.token_kinds[closing])]) break;
+        }
+        if (closing >= analysis.token_kinds.len) continue;
+        analysis.token_class[closing] = .macro;
+        closer[node] = closing;
+    }
+}
+
+// the first or last token of a subtree, with the syntax of the macros in it
+fn bound(
+    tree: *const mond.ParseTree,
+    node: u32,
+    syntax: []const u32,
+    end: enum { first, last },
+) u32 {
+    const subtree = tree.subtree(node);
+    var found: u32 = none;
+    for (subtree[0]..subtree[1]) |i| {
+        const token = tree.token(@intCast(i)) orelse syntax[i];
+        if (token == none) continue;
+        if (found == none) found = token;
+        found = if (end == .first) @min(found, token) else @max(found, token);
+    }
+    return found;
 }
 
 // names by their declaration, fields, cases and children of trees without one (`e.lhs`)

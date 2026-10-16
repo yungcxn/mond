@@ -107,6 +107,7 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `no_deinit` | `deinit` on a value without one |
 | `not_static` | a compile-time value depends on runtime |
 | `static_eval_failed` | compile-time evaluation failed (division by zero, bounds, budget, depth) |
+| `crash` | a `$crash` was checked or evaluated, with its text |
 | `stcwhere_violated` | a `stcwhere` condition is false |
 | `redundant_stc` | a `stc..` form where everything is static already |
 | `genexpr_index` | a range used as an index |
@@ -130,6 +131,6 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `invalid_main` | `$main` has another signature than `()` or `(argc, &&u8 argv)`, or another result than nothing, an integer or `never` |
 | `stray_unquote` | `@` outside a quote |
 | `frozen_declaration` | a write to a declaration that is already resolved, or a write outside a splice |
-| `macro_error` | a macro called `$error` |
+| `asterr` | a macro called `$asterr` |
 | `include_failed` | the file can't be read, lexed or parsed |
 | `endless_expansion` | more than 64 expansion passes |

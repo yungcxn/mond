@@ -18,3 +18,8 @@ type Boxed = (type T): *(T v) !{ fun get = () -> T: ret self.v + 1; } #! type_mi
 
 type BB = Boxed(bool);
 type BI = Boxed(i32);
+
+# an instantiation that fails is reported in its body only, not again where it is called
+fun per_type = (type T) -> u32: ret stcif sizeof T > 4: undefined_wide else: 1; #! undefined_name
+stc u32 NARROW = per_type(u32);
+stc u32 WIDE = per_type(u64);

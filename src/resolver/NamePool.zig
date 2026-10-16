@@ -17,9 +17,10 @@ pub const Index = enum(u32) {
     has_next,
     next,
     tag,
-    // what macros ask of trees and the compiler: `$fresh(..)`, `$error(..)`, `refl $file`, `x.$src`
+    // what macros ask of trees and the compiler: `$fresh(..)`, `$asterr(..)`, `refl $file`, `.$src`
     fresh,
-    @"error",
+    asterr,
+    crash,
     // machine code in place, calls of the kernel, and what they are for: `$asm(..)`,
     // `$syscall(..)`, `$os`, `$arch`
     @"asm",
@@ -69,16 +70,19 @@ pub fn init(alloc: std.mem.Allocator, tree: *const ParseTree, src_bytes: []const
     // the predefined names in `Index` order, so each lands at its own index. `none` names nothing
     inline for (@typeInfo(Index).@"enum".fields) |field| {
         if (comptime @field(Index, field.name) == .none) continue;
-        const text = comptime switch (@field(Index, field.name)) {
-            .empty => "",
-            .underscore => "_",
-            .self => "self",
-            else => "$" ++ field.name,
-        };
-        _ = self.intern(text);
+        _ = self.intern(comptime predefined_text(@field(Index, field.name)));
     }
     std.debug.assert(self.text_to_name.count() == Index.first_dynamic);
     return self;
+}
+
+pub fn predefined_text(comptime name: Index) []const u8 {
+    return switch (name) {
+        .empty => "",
+        .underscore => "_",
+        .self => "self",
+        else => "$" ++ @tagName(name),
+    };
 }
 
 pub fn deinit(self: *NamePool) void {

@@ -33,6 +33,13 @@ fun locals = () -> u32 {
 # a stcmatch in a runtime function too
 fun code = () -> u32: ret stcmatch sizeof u16 { 1 => "a", 2 => 2, _ => undefined_name }
 
+# a static condition is checked before it runs: an array literal compares by its elements
+stc []u32 POW = stcfor i in 0..<3: 1 << i;
+stc u32 SAME = stcif POW == [1, 2, 4]: 1 else: 0;    #= SAME 1
+stc u32 OTHER = stcif POW != [1, 2, 4]: 1 else: 0;   #= OTHER 0
+fun compared = () -> u32: ret stcif POW != [1, 2, 4]: 1 else: 0;
+stc u32 IN_FUN = compared();                         #= IN_FUN 0
+
 $main = () {
     u32 x = pick() + locals() + code();
     u64 p = platform();

@@ -58,7 +58,9 @@ pub fn any(
 }
 
 pub fn expr(p: *Parser, prec: u8) anyerror!NodeId {
-    const lookup_f = lookahead.pre[@intFromEnum(try p.pop_tok())] orelse return error.NoRuleFound;
+    const token = @intFromEnum(try p.pop_tok());
+    if (lookahead.macro_syntax[token]) p.tree.macros = true;
+    const lookup_f = lookahead.pre[token] orelse return error.NoRuleFound;
     return rest(p, try lookup_f(p), prec);
 }
 
@@ -768,7 +770,6 @@ fn label(p: *Parser) anyerror!NodeId {
 }
 
 pub fn type_ast(p: *Parser) anyerror!NodeId {
-    p.tree.macros = true;
     return p.tree.push_node(.type_ast);
 }
 
@@ -776,7 +777,6 @@ pub fn type_ast(p: *Parser) anyerror!NodeId {
 pub fn source(comptime kind: Node.Kind) fn (parser: *Parser) anyerror!NodeId {
     return struct {
         pub fn eval(p: *Parser) anyerror!NodeId {
-            p.tree.macros = true;
             return templ_prefix(kind, lookahead.prec_unary + 1)(p);
         }
     }.eval;
@@ -784,7 +784,6 @@ pub fn source(comptime kind: Node.Kind) fn (parser: *Parser) anyerror!NodeId {
 
 // `quote: <expr or statement>` and `quote { .. }`: the code itself as a value. outside of a pattern `quote: <pattern> => <body>` is an arm
 pub fn quote(p: *Parser) anyerror!NodeId {
-    p.tree.macros = true;
     const body = if (try p.peek_eq_tok(.@"pct_{")) blk: {
         p.tok_cursor += 1;
         break :blk try block(p);
@@ -836,7 +835,6 @@ pub fn unquote(p: *Parser) anyerror!NodeId {
 
 // `<x>`: the tree `x` is, expanded where it stands. comparisons inside need parentheses
 pub fn splice(p: *Parser) anyerror!NodeId {
-    p.tree.macros = true;
     const outer = p.angle;
     p.angle = true;
     const x = try any(p, .forbid_assign, 0);

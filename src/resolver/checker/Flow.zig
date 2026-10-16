@@ -50,9 +50,10 @@ pub fn check_if(
     const is_stc = resolver.tree.props(node).stc;
     const condition_value = if (context.is_interpreted or is_stc and context.is_abstract)
         resolver.static_values.try_evaluate(context, branch.cond) orelse .none
-    else if (is_stc)
-        resolver.interpreter.evaluate_static(context, branch.cond)
-    else
+    else if (is_stc) blk: {
+        _ = resolver.expressions.infer(context, branch.cond, .bool_type);
+        break :blk resolver.interpreter.evaluate_static(context, branch.cond);
+    } else
         .none;
     const is_decided = condition_value == .bool_true or condition_value == .bool_false or
         condition_value != .none and !context.is_interpreted;

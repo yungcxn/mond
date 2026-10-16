@@ -10,6 +10,7 @@ pub const StaticPool = @import("resolver/StaticPool.zig");
 pub const DeclPool = @import("resolver/DeclPool.zig");
 pub const NamePool = @import("resolver/NamePool.zig");
 pub const Doctor = @import("resolver/Doctor.zig");
+pub const constructs = @import("language/constructs.zig");
 pub const DynamicBuffer = @import("containers.zig").DynamicBuffer;
 pub const dbg = @import("debug.zig");
 

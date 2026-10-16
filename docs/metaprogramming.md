@@ -218,21 +218,21 @@ stc u32 UP = upgraded(4);                   #= UP 50
 - Renaming (`$name =`) doesn't update the uses of the old name.
 - Top splices run first, in order. What they write is seen everywhere, even by code written before them.
 
-## $error, include
+## $asterr, include
 
-`$error(at, "text")` stops expansion with `macro_error`, reported where the tree `at` was written. `at` is an `ast`, so dereference a `refl` tree (`d.*`); the error then points at that declaration. The text is fixed: there is no string concatenation. `include "path"` reads the top-level declarations of a file (relative to the compiled file, the path any static `[]u8`) as a block tree. `<include "lib/math.mn">;` declares them. To edit them first, take a writable tree: `mut ast lib = include "f.mn"; *ast b = lib.&;` then change `b.$decls` and splice `<lib>`. A library is only included and needs no `$main`. The declarations without `pub` come along under names of their own: the library's code uses them, the including program can't name them. `includeraw "path"` gives the same tree with every name as written: the program can name all of it, and a name it declares itself is a `duplicate_declaration`. Other free names in included code resolve in the including program. Including a file twice declares its `pub` declarations twice. A missing or broken file is `include_failed`.
+`$asterr(at, "text")` stops expansion with `asterr`, reported where the tree `at` was written. `at` is an `ast`, so dereference a `refl` tree (`d.*`); the error then points at that declaration. The text is fixed: there is no string concatenation. `include "path"` reads the top-level declarations of a file (relative to the compiled file, the path any static `[]u8`) as a block tree. `<include "lib/math.mn">;` declares them. To edit them first, take a writable tree: `mut ast lib = include "f.mn"; *ast b = lib.&;` then change `b.$decls` and splice `<lib>`. A library is only included and needs no `$main`. The declarations without `pub` come along under names of their own: the library's code uses them, the including program can't name them. `includeraw "path"` gives the same tree with every name as written: the program can name all of it, and a name it declares itself is a `duplicate_declaration`. Other free names in included code resolve in the including program. Including a file twice declares its `pub` declarations twice. A missing or broken file is `include_failed`.
 
 ```mond
 stcfun positive = (ast(i32) e) -> ast(i32): ret match e {
-    quote: -@_ => $error(e, "must not be negated"),
+    quote: -@_ => $asterr(e, "must not be negated"),
     _ => e,
 };
 stc i32 OK = <positive(quote: 5)>;      #= OK 5
 ```
 
 ```mond
-stcfun positive = (ast(i32) e) -> ast(i32): ret match e { quote: -@_ => $error(e, "negated"), _ => e };
-stc i32 NO = <positive(quote: -5)>;     #! macro_error
+stcfun positive = (ast(i32) e) -> ast(i32): ret match e { quote: -@_ => $asterr(e, "negated"), _ => e };
+stc i32 NO = <positive(quote: -5)>;     #! asterr
 stc ast lib = include "missing.mn";     #! include_failed
 ```
 

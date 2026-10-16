@@ -200,7 +200,7 @@ fun forms = () -> u32 {
 stc u32 FORMS = forms();  #= FORMS 41
 ```
 
-- `pub` marks what an `include` lets the program name, `includeraw` lets it name everything (see [metaprogramming.md](metaprogramming.md#error-include)).
+- `pub` marks what an `include` lets the program name, `includeraw` lets it name everything (see [metaprogramming.md](metaprogramming.md#asterr-include)).
 - `x++` / `x--` give the old value, `++x` / `--x` the new one.
 - Operands and arguments are evaluated left to right. An assignment evaluates its value before its place: in `a[i()] += f()`, `f()` runs first.
 - `name = v` writes the visible `name`, or declares it if there is none. A typed or modified declaration (`mut`, `stc`, `pub`) always declares, and may shadow.

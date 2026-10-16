@@ -34,7 +34,7 @@ $main = () -> u32 {
 | [functions](functions.md) | parameters, overloads, dispatch, lambdas, closures, generic lengths |
 | [types](types.md) | records, methods, variants, unions, traits, templates |
 | [control](control.md) | if, loops, match and patterns, unwrapping, defer, initialization |
-| [static](static.md) | compile-time evaluation |
+| [static](static.md) | compile-time evaluation, `$crash` |
 | [metaprogramming](metaprogramming.md) | quotes, splices, hygiene, trees, `refl`, `include`, `includeraw`, limits |
 | [trees](trees.md) | every tree kind, how it is written, its children |
 | [tooling](tooling.md) | CLI, tests, editor, every diagnostic |

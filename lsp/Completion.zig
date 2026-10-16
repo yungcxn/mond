@@ -2,8 +2,12 @@ const std = @import("std");
 const mond = @import("mond");
 const Analysis = @import("Analysis.zig");
 const positions = @import("positions.zig");
+const highlighting = @import("highlighting.zig");
 const Node = mond.ParseTree.Node;
 const Macros = mond.Resolver.Macros;
+const NamePool = mond.NamePool;
+const Kind = mond.Lexer.Token.Kind;
+const lookahead = mond.Parser.lookahead;
 
 // completion of the api of trees: views, children, `$len`, the kinds after `ast.`, builtins
 // it goes by the text before the cursor and the last names known, typed text rarely parses
@@ -19,8 +23,17 @@ pub const Item = struct {
 // lsp numbers the kinds of completions
 const Class = enum(u8) { function = 3, field = 5, property = 10, enum_member = 20 };
 
+// where a name is offered: after `$`, after `refl $`, after the `.` of a tree or of a list
+const Offered = enum { dollar, refl, tree, list };
+
 // what is offered: its text, its type and what it is
-pub const Entry = struct { label: []const u8, ty: []const u8, doc: []const u8 = "", class: Class };
+pub const Entry = struct {
+    label: []const u8,
+    ty: []const u8,
+    doc: []const u8 = "",
+    class: Class,
+    offered: Offered = .dollar,
+};
 
 const view_entries = blk: {
     var entries: [Macros.views.len]Entry = undefined;
@@ -32,66 +45,93 @@ const view_entries = blk: {
             .flag => "bool",
         };
         entry.* = .{
-            .label = "$" ++ @tagName(view.name),
+            .label = NamePool.predefined_text(view.name),
             .ty = view_type,
             .doc = view.doc,
             .class = .property,
+            .offered = .tree,
         };
     }
     break :blk entries;
 };
 
-const length_entry: Entry = .{
-    .label = "$len",
-    .ty = "u64",
-    .doc = "its length",
-    .class = .property,
-};
+// what the editor shows of a name the compiler predefines, one it adds compiles only once described
+fn entry_of(comptime name: NamePool.Index) ?Entry {
+    const label = NamePool.predefined_text(name);
+    return switch (name) {
+        .fresh => .{
+            .label = label,
+            .ty = "([]u8 name) -> ast.Identifier",
+            .doc = "a name like no other",
+            .class = .function,
+        },
+        .asterr => .{
+            .label = label,
+            .ty = "(ast at, []u8 message)",
+            .doc = "ends the expansion with an error at the tree",
+            .class = .function,
+        },
+        .crash => .{
+            .label = label,
+            .ty = "([]u8 message)",
+            .doc = "a compile error with its static message wherever it is checked or run",
+            .class = .function,
+        },
+        .@"asm" => .{
+            .label = label,
+            .ty = "([]u8 code)",
+            .doc = "machine code in place, its text static",
+            .class = .function,
+        },
+        .syscall => .{
+            .label = label,
+            .ty = "(u64 number, ..) -> i64",
+            .doc = "a call of the kernel: its result, or -errno",
+            .class = .function,
+        },
+        .os => .{
+            .label = label,
+            .ty = "[]u8",
+            .doc = "the system the program is built for: \"macos\", \"linux\"",
+            .class = .property,
+        },
+        .arch => .{
+            .label = label,
+            .ty = "[]u8",
+            .doc = "the machine the program is built for: \"aarch64\", \"x86_64\"",
+            .class = .property,
+        },
+        .file => .{
+            .label = label,
+            .ty = "*ast",
+            .doc = "the program: `refl $file` reads and writes its declarations",
+            .class = .property,
+            .offered = .refl,
+        },
+        .len => .{
+            .label = label,
+            .ty = "u64",
+            .doc = "its length",
+            .class = .property,
+            .offered = .list,
+        },
+        .empty, .underscore, .it, .self, .init, .deinit, .main, .has_next, .next, .tag => null,
+        .wall => null,
+        .none, _ => null,
+        inline else => for (view_entries) |entry| {
+            if (std.mem.eql(u8, entry.label, label)) break entry;
+        } else @compileError("describe the predefined name " ++ label),
+    };
+}
 
-const builtin_entries = [_]Entry{
-    .{
-        .label = "$fresh",
-        .ty = "([]u8 name) -> ast.Identifier",
-        .doc = "a name like no other",
-        .class = .function,
-    },
-    .{
-        .label = "$error",
-        .ty = "(ast at, []u8 message)",
-        .doc = "ends the expansion with an error at the tree",
-        .class = .function,
-    },
-    .{
-        .label = "$asm",
-        .ty = "([]u8 code)",
-        .doc = "machine code in place, its text static",
-        .class = .function,
-    },
-    .{
-        .label = "$syscall",
-        .ty = "(u64 number, ..) -> i64",
-        .doc = "a call of the kernel: its result, or -errno",
-        .class = .function,
-    },
-    .{
-        .label = "$os",
-        .ty = "[]u8",
-        .doc = "the system the program is built for: \"macos\", \"linux\"",
-        .class = .property,
-    },
-    .{
-        .label = "$arch",
-        .ty = "[]u8",
-        .doc = "the machine the program is built for: \"aarch64\", \"x86_64\"",
-        .class = .property,
-    },
-};
-
-const file_entry: Entry = .{
-    .label = "$file",
-    .ty = "*ast",
-    .doc = "the program: `refl $file` reads and writes its declarations",
-    .class = .property,
+// the described names in the order the compiler predefines them
+const predefined_entries = blk: {
+    var described_entries: []const Entry = &.{};
+    for (@typeInfo(NamePool.Index).@"enum".fields) |field| {
+        const entry = entry_of(@field(NamePool.Index, field.name)) orelse continue;
+        described_entries = described_entries ++ .{entry};
+    }
+    break :blk described_entries;
 };
 
 // `ast.Kind` with the children it is made of
@@ -118,8 +158,7 @@ const kind_entries = blk: {
 
 // a view or builtin by its name, for hovers
 pub fn described(name: []const u8) ?Entry {
-    const all = view_entries ++ builtin_entries ++ [_]Entry{ length_entry, file_entry };
-    for (all) |entry| {
+    for (predefined_entries) |entry| {
         if (std.mem.eql(u8, entry.label, name)) return entry;
     }
     return null;
@@ -156,7 +195,9 @@ pub fn offer(
             .kinds => for (kind_entries) |entry| {
                 try items.append(allocator, item_of(entry, replaced));
             },
-            .list => try items.append(allocator, item_of(length_entry, replaced)),
+            .list => for (predefined_entries) |entry| {
+                if (entry.offered == .list) try items.append(allocator, item_of(entry, replaced));
+            },
             .tree => {
                 for (view_entries) |entry| try items.append(allocator, item_of(entry, replaced));
                 const kind = shape.kind orelse return items.items;
@@ -176,10 +217,13 @@ pub fn offer(
     }
 
     if (typed.len > 0 and typed[0] == '$') {
-        for (builtin_entries) |entry| try items.append(allocator, item_of(entry, replaced));
         const before_word = std.mem.trimEnd(u8, source[0..word_start], " ");
-        if (std.mem.endsWith(u8, before_word, "refl")) {
-            try items.append(allocator, item_of(file_entry, replaced));
+        var start = before_word.len;
+        while (start > 0 and is_word_byte(before_word[start - 1])) start -= 1;
+        const after_refl = Kind.kw_from_str(before_word[start..]) == .kw_refl;
+        for (predefined_entries) |entry| {
+            const is_offered = entry.offered == .dollar or entry.offered == .refl and after_refl;
+            if (is_offered) try items.append(allocator, item_of(entry, replaced));
         }
     }
     return items.items;
@@ -264,7 +308,10 @@ fn shape_of_root(
     cursor: Analysis.Position,
     names: []const Analysis.Symbol,
 ) ?Shape {
-    if (std.mem.eql(u8, root, "ast")) {
+    var keyword_end: usize = 0;
+    while (keyword_end < root.len and is_word_byte(root[keyword_end])) keyword_end += 1;
+    const keyword = Kind.kw_from_str(root[0..keyword_end]);
+    if (keyword == .kw_ast and keyword_end == root.len) {
         if (steps.len == 0) return .{ .holds = .kinds };
         // `ast.Kind(..)` makes a tree of that kind
         if (steps.len < 2 or steps.*[1][0] != '(') return null;
@@ -273,15 +320,16 @@ fn shape_of_root(
         return .{ .holds = .tree, .kind = kind };
     }
 
-    if (std.mem.eql(u8, root, "$fresh")) {
+    // a builtin's call makes what its type says it returns
+    if (described(root)) |entry| {
+        const arrow = std.mem.indexOf(u8, entry.ty, "-> ") orelse return null;
         if (steps.len == 0 or steps.*[0][0] != '(') return null;
         steps.* = steps.*[1..];
-        return .{ .holds = .tree, .kind = .identifier };
+        return shape_of_type(entry.ty[arrow + "-> ".len ..]);
     }
 
-    for ([_][]const u8{ "refl", "quote", "include" }) |keyword| {
-        if (std.mem.startsWith(u8, root, keyword)) return .{ .holds = .tree };
-    }
+    // `quote: ..`, `(refl f)`, `include ".."`: macro syntax makes a tree
+    if (keyword) |kind| if (lookahead.macro_syntax[@intFromEnum(kind)]) return .{ .holds = .tree };
 
     // the type of the nearest `root` before the cursor, of an untyped one what is written before it
     const written = blk: {
@@ -306,13 +354,17 @@ fn shape_of_root(
         }
         break :blk source[start..name_start];
     };
+    return shape_of_type(written);
+}
 
-    // a type as the analysis wrote it (`*ast(fun)`, `[]ast.Identifier`) or as written (`mut ast`)
+// a type as the analysis wrote it (`*ast(fun)`, `[]ast.Identifier`) or as written (`mut ast`)
+fn shape_of_type(written: []const u8) Shape {
     var text = std.mem.trim(u8, written, " ");
-    for ([_][]const u8{ "pub ", "mut ", "stc " }) |modifier| {
-        if (std.mem.startsWith(u8, text, modifier)) {
-            text = std.mem.trimStart(u8, text[modifier.len..], " ");
-        }
+    // the modifiers before it: keywords that are no type
+    while (std.mem.indexOfScalar(u8, text, ' ')) |space| {
+        const modifier = Kind.kw_from_str(text[0..space]) orelse break;
+        if (highlighting.class_of_token_kind[@intFromEnum(modifier)] != .keyword) break;
+        text = std.mem.trimStart(u8, text[space..], " ");
     }
     if (text.len > 0 and (text[0] == '*' or text[0] == '&')) text = text[1..];
 
@@ -443,9 +495,10 @@ test "the kinds after `ast.`, the builtins after `$`" {
         try std.testing.expectEqualStrings("(lhs, rhs)", kind.detail);
     }
     const builtin_labels = try offered_labels(allocator, source, 1, 14);
-    try std.testing.expectEqualStrings("$fresh $error $asm $syscall $os $arch ", builtin_labels);
+    const builtin_names = "$fresh $asterr $crash $asm $syscall $os $arch ";
+    try std.testing.expectEqualStrings(builtin_names, builtin_labels);
     const after_refl = try offered_labels(allocator, source, 2, 18);
-    try std.testing.expectEqualStrings("$fresh $error $asm $syscall $os $arch $file ", after_refl);
+    try std.testing.expectEqualStrings(builtin_names ++ "$file ", after_refl);
     // the word typed is replaced, its `$` too
     const builtins = try offer(allocator, source, .{ .line = 2, .character = 18 }, result.decls);
     try std.testing.expectEqual(@as(u32, 17), builtins[0].textEdit.range.start.character);

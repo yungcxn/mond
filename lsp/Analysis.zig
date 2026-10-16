@@ -107,6 +107,7 @@ token_meaning: []u32 = &.{},
 declaration_token: []u32 = &.{},
 // per declaration in `declarations`: how its names are highlighted and found
 declaration_sites: DynamicBuffer(DeclarationSite),
+token_kinds: []const Lexer.Token.Kind = &.{},
 token_class: []?Type = &.{},
 token_modifiers: []u32 = &.{},
 // the last pass has no trace of the names splices spelled and of stcfuns it does not run again
@@ -219,6 +220,7 @@ fn resolve(self: *Analysis, lexer: *Lexer) ?*Resolver {
     const resolver = self.allocator.create(Resolver) catch @panic("OOM");
     const globals = parser.global_store.items();
     resolver.* = Resolver.init(self.allocator, &parser.tree, self.source, globals);
+    highlighting.classify_written(self, resolver);
     resolver.session = .{
         .io = self.io,
         .path = self.path,
@@ -309,7 +311,7 @@ test "tokens and diagnostics" {
     const result = analyze(arena.allocator(), source);
     // line and column relative to the token before, length, type, modifiers
     const expected = [_]struct { u32, u32, u32, Type, u32 }{
-        .{ 0, 0, 3, .keyword, 0 },  .{ 0, 4, 1, .function, 0 },  .{ 0, 2, 1, .operator, 0 },
+        .{ 0, 0, 3, .type, 0 },     .{ 0, 4, 1, .function, 0 },  .{ 0, 2, 1, .operator, 0 },
         .{ 0, 3, 3, .type, 0 },     .{ 0, 4, 1, .parameter, 1 }, .{ 0, 3, 2, .operator, 0 },
         .{ 0, 3, 3, .type, 0 },     .{ 0, 5, 3, .keyword, 0 },   .{ 0, 4, 1, .parameter, 1 },
         .{ 0, 3, 3, .comment, 0 },  .{ 1, 0, 5, .function, 0 },  .{ 0, 6, 1, .operator, 0 },
@@ -426,6 +428,36 @@ test "the target, machine code and alignment" {
         const declaration = result.decls[(try link_at(result, 0, name[0]))[3]];
         try std.testing.expectEqualStrings(name[1], declaration.name);
         try std.testing.expectEqual(null, declaration.selectionRange);
+    }
+}
+
+test "a crash reports its text where it is, of every static text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\stc &u8 POINTER = "pointer";
+        \\type Holder = *([5]u8 text);
+        \\stc Holder HOLDER = Holder(text = "field");
+        \\stcfun checked = (u32 n) -> u32: ret if n > 3: $crash("too big") else: n;
+        \\stc u32 BIG = checked(9);
+        \\$crash(POINTER);
+        \\$crash(HOLDER.text);
+        \\stcif false: $crash("pruned");
+        \\$main = () {}
+    );
+    const result = analyze(arena.allocator(), source);
+    const expected = [_]struct { u32, u32, []const u8 }{
+        .{ 3, 47, "crash   `too big`" },
+        .{ 5, 0, "crash   `pointer`" },
+        .{ 6, 0, "crash   `field`" },
+    };
+    try std.testing.expectEqual(expected.len, result.diagnostics.len);
+    for (expected) |crash| {
+        const found = for (result.diagnostics) |diagnostic| {
+            if (diagnostic.range.start.line == crash[0]) break diagnostic;
+        } else return error.TestExpectedEqual;
+        try std.testing.expectEqual(crash[1], found.range.start.character);
+        try std.testing.expectEqualStrings(crash[2], found.message);
     }
 }
 

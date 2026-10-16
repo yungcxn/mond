@@ -98,14 +98,20 @@ pub fn call(self: *Calls, node: NodeId) Value {
         (resolver.name_pool.name_of_node(callee) == .@"asm" or
             resolver.name_pool.name_of_node(callee) == .syscall);
     if (runs_later) return interpreter.fail(node, .not_static, 0, 0);
-    // `$fresh` and `$error` are builtins of macro bodies
-    if (resolver.tree.macros and
-        resolver.tree.kind(callee) == .identifier and
+    // `$fresh` and `$asterr` are builtins of macro bodies
+    if (resolver.tree.kind(callee) == .identifier and
         resolver.tree.text(callee, resolver.src_bytes)[0] == '$')
     {
         const name = resolver.name_pool.name_of_node(callee);
-        if (name == .fresh or name == .@"error") {
+        if (resolver.tree.macros and (name == .fresh or name == .asterr)) {
             return interpreter.trees.builtin(node, name, arguments);
+        }
+        if (name == .crash) {
+            if (arguments.len != 1) return .poison;
+            const message = interpreter.evaluate(resolver.tree.arg_value(arguments[0]));
+            if (message.is(.poison_type)) return message;
+            const text = interpreter.trees.text_of(message) orelse return .poison;
+            return interpreter.fail(node, .crash, resolver.name_pool.intern_copy(text), 0);
         }
     }
 
@@ -433,7 +439,7 @@ fn realize(
     } });
     const realized = resolver.generics.realize(declaration, tuple);
     if (static_pool.tag(realized) != .function_value) {
-        _ = interpreter.fail(node, .not_static, 0, 0);
+        if (realized != .poison_type) _ = interpreter.fail(node, .not_static, 0, 0);
         return null;
     }
     return static_pool.get(realized).function_value;

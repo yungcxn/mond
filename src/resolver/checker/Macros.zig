@@ -490,7 +490,7 @@ pub fn check_tree_call(
     return target;
 }
 
-// `$fresh("tmp")`: a name no other name is, `$error(tree, "..")` stops the expansion with an error
+// `$fresh("tmp")`: a name no other name is, `$asterr(tree, "..")` stops the expansion with an error
 // at the tree
 pub fn check_builtin(
     self: *Macros,

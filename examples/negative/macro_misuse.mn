@@ -19,9 +19,9 @@ stc ast bad_made = ast.Identifier(5); #! type_mismatch
 stc ast bad_made_child = ast.BinaryAdd(quote: 1, 2); #! type_mismatch
 stc ast bad_fresh = $fresh(5); #! type_mismatch
 
-# `$error` takes a tree and a text, an ill-typed one reports only that
-stc ast bad_error = $error(5, "x"); #! type_mismatch
-stc ast bad_error_text = $error(quote: x, 5); #! type_mismatch
+# `$asterr` takes a tree and a text, an ill-typed one reports only that
+stc ast bad_error = $asterr(5, "x"); #! type_mismatch
+stc ast bad_error_text = $asterr(quote: x, 5); #! type_mismatch
 
 # a list of `ast.Kind` reports the element that is not of the kind
 stcfun only_names = ([]ast.Identifier xs) -> u64: ret xs.$len;
