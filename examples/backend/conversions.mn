@@ -46,6 +46,7 @@ fun neg_zero_bits = (f64 a) -> u64: ret (-a) asbits u64;
 fun f32_round = (f64 a) -> u32: ret (a as f32) asbits u32;
 fun f16_add_bits = (f16 a, f16 c) -> u16: ret (a + c) asbits u16;
 fun f16_to_i32 = (f16 a) -> i32: ret a as i32;
+fun half_bits = (f64 x) -> u16: ret (x as f16) asbits u16;
 fun f32_mul = (f32 a, f32 c) -> u32: ret (a * c) asbits u32;
 
 $main = (u32 argc, &&u8 argv) {
@@ -99,4 +100,10 @@ $main = (u32 argc, &&u8 argv) {
     same(st(f16_add_bits(2048.0, 1.0) as i64), f16_add_bits(hf(2048.0) as f16, hf(1.0) as f16) as i64);  #> 26624
     same(st(f16_add_bits(65504.0, 32.0) as i64), f16_add_bits(hf(65504.0) as f16, hf(32.0) as f16) as i64);  #> 31744
     same(st(f16_to_i32(1.5) as i64), f16_to_i32(hf(1.5) as f16) as i64);  #> 1
+    same(st(half_bits(1.0004882812509095) as i64), half_bits(hf(1.0004882812509095)) as i64);  #> 15361
+    same(st(half_bits(-1.0004882812509095) as i64), half_bits(-hf(1.0004882812509095)) as i64);  #> 48129
+    same(st(half_bits(1.0004882812499998) as i64), half_bits(hf(1.0004882812499998)) as i64);  #> 15360
+    same(st(half_bits(65519.99) as i64), half_bits(hf(65519.99)) as i64);  #> 31743
+    same(st(half_bits(65520.0) as i64), half_bits(hf(65520.0)) as i64);    #> 31744
+    same(st(half_bits(0.00000000001) as i64), half_bits(hf(0.00000000001)) as i64);  #> 0
 }

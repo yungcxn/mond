@@ -79,7 +79,7 @@ pub fn classify(lowerer: *LLVMLowerer, value_type: Index) Passing {
             var eightbytes: [2]Type = undefined;
             const count: usize = if (size > 8) 2 else 1;
             for (eightbytes[0..count], 0..) |*eightbyte, k| {
-                const bytes = @min(8, size - 8 * k);
+                const bytes: u64 = @min(8, size - 8 * k);
                 eightbyte.* = if (shape.integer_in[k] or !shape.float_in[k])
                     llvm.LLVMIntTypeInContext(context, @intCast(bytes * 8))
                 else if (bytes <= 4)

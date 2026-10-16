@@ -676,9 +676,10 @@ fn add_memory_attributes(
 // how c widens a small int, and a record x86-64 copies itself (`byval`)
 fn add_c_attributes(self: *LLVMLowerer, function: Value, index: c_uint, value_type: Index) void {
     if (!Types.has_value(value_type)) return;
+    const extends_small_ints = builtin.cpu.arch != .aarch64 or builtin.os.tag.isDarwin();
     switch (c_abi.classify(self, value_type).how) {
-        .sign_extended => self.add_attribute(function, index, "signext", 0),
-        .zero_extended => self.add_attribute(function, index, "zeroext", 0),
+        .sign_extended => if (extends_small_ints) self.add_attribute(function, index, "signext", 0),
+        .zero_extended => if (extends_small_ints) self.add_attribute(function, index, "zeroext", 0),
         .indirect => if (builtin.cpu.arch == .x86_64 and index != llvm.LLVMAttributeReturnIndex) {
             const kind = llvm.LLVMGetEnumAttributeKindForName("byval", "byval".len);
             const memory_type = self.types.of(value_type);
@@ -1215,6 +1216,17 @@ fn call_function(self: *LLVMLowerer, function_index: u32, mark: usize, result_sl
             self.value_stack.insert(self.allocator, mark, result_slot) catch @panic("OOM");
         }
         const result = self.build_call(function_type, target, self.value_stack.items[mark..]);
+        const first: c_uint = @intFromBool(self.results_in_memory.isSet(function_index));
+        const parameter_count = self.pool.get(pool_type).function_type.parameters.len;
+        for (0..@min(fixed, parameter_count)) |i| {
+            const parameter = self.pool.get(pool_type).function_type.parameters[i];
+            const is_copied = c_abi.classify(self, parameter).how == .indirect;
+            if (builtin.cpu.arch != .x86_64 or !is_copied) continue;
+            const kind = llvm.LLVMGetEnumAttributeKindForName("byval", "byval".len);
+            const memory_type = self.types.of(parameter);
+            const byval = llvm.LLVMCreateTypeAttribute(self.context, kind, memory_type);
+            llvm.LLVMAddCallSiteAttribute(result, first + @as(c_uint, @intCast(i)) + 1, byval);
+        }
         if (result_slot == null or self.results_in_memory.isSet(function_index)) {
             return result_slot orelse result;
         }
@@ -1308,11 +1320,11 @@ fn c_entry(self: *LLVMLowerer, function_index: u32) Value {
     const in_memory = self.results_in_memory.isSet(function_index);
     var result_slot: Value = null;
     if (in_memory) {
-        result_slot = if (by_slot)
-            llvm.LLVMGetParam(entry, 0)
-        else
-            llvm.LLVMBuildAlloca(builder, scratch_type, "");
-        llvm.LLVMSetAlignment(result_slot, 16);
+        result_slot = if (by_slot) llvm.LLVMGetParam(entry, 0) else blk: {
+            const slot = llvm.LLVMBuildAlloca(builder, scratch_type, "");
+            llvm.LLVMSetAlignment(slot, 16);
+            break :blk slot;
+        };
         self.value_stack.append(self.allocator, result_slot) catch @panic("OOM");
     }
     for (0..parameter_count) |i| {

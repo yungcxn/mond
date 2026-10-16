@@ -64,3 +64,13 @@ double abi_call_quad(Quad (*f)(double, Quad), double x) {
     Quad q = f(x, (Quad){1, 2, 3, 4});
     return q.a + q.b * 10 + q.c * 100 + q.d * 1000;
 }
+
+// narrow results and arguments cut from wider values: only some calling conventions extend them
+uint8_t abi_low_byte(uint32_t x) { return (uint8_t)x; }
+int8_t abi_low_signed(uint32_t x) { return (int8_t)x; }
+uint32_t abi_call_narrow(uint32_t (*f)(uint8_t), uint32_t x) { return f((uint8_t)x); }
+typedef struct { int64_t a, b, c; } Longs;
+int64_t abi_call_triple(Longs (*f)(int64_t), int64_t x) {
+    Longs t = f(x);
+    return t.a + t.b * 10 + t.c * 100;
+}

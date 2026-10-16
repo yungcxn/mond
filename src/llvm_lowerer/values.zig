@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const llvm = @import("llvm_c");
 const mond = @import("mond");
 const LLVMLowerer = @import("../LLVMLowerer.zig");
@@ -246,7 +247,29 @@ pub fn cast(lowerer: *LLVMLowerer, kind: StaticPool.CastKind, to: Index, source:
             var arguments = [_]Value{value};
             break :blk llvm.LLVMBuildCall2(builder, function_type, function, &arguments, 1, "");
         },
-        .float_resize => llvm.LLVMBuildFPCast(builder, value, lowered_type, ""),
+        .float_resize => if (builtin.cpu.arch != .x86_64 or from != .f64_type or to != .f16_type)
+            llvm.LLVMBuildFPCast(builder, value, lowered_type, "")
+        else blk: {
+            const context = lowerer.context;
+            const float = llvm.LLVMFloatTypeInContext(context);
+            const bits_type = llvm.LLVMInt32TypeInContext(context);
+            const single = llvm.LLVMBuildFPTrunc(builder, value, float, "");
+            const back = llvm.LLVMBuildFPExt(builder, single, llvm.LLVMTypeOf(value), "");
+            const inexact = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealONE, back, value, "");
+            const zero = llvm.LLVMConstNull(llvm.LLVMTypeOf(value));
+            const negative = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealOLT, value, zero, "");
+            const below = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealOLT, back, value, "");
+            const above = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealOGT, back, value, "");
+            const away = llvm.LLVMBuildSelect(builder, negative, below, above, "");
+            var bits = llvm.LLVMBuildBitCast(builder, single, bits_type, "");
+            const one = llvm.LLVMConstInt(bits_type, 1, 0);
+            const toward_zero = llvm.LLVMBuildSub(builder, bits, one, "");
+            bits = llvm.LLVMBuildSelect(builder, away, toward_zero, bits, "");
+            const odd = llvm.LLVMBuildOr(builder, bits, one, "");
+            bits = llvm.LLVMBuildSelect(builder, inexact, odd, bits, "");
+            const rounded = llvm.LLVMBuildBitCast(builder, bits, float, "");
+            break :blk llvm.LLVMBuildFPTrunc(builder, rounded, lowered_type, "");
+        },
         .bit_reinterpret, .bit_extend => reinterpret(lowerer, value, from, to),
         .variant_retag => retag(lowerer, from, to, value),
         .payload_wrap => {

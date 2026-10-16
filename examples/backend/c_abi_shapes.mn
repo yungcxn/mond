@@ -8,6 +8,7 @@
 type FloatInt = *(f32 f, i32 i);
 type IntDouble = *(i64 i, f64 d);
 type Quad = *(f64 a, f64 b, f64 c, f64 d);
+type Triple = *(i64 a, i64 b, i64 c);
 type Five = *(f32 a, f32 b, f32 c, f32 d, f32 e);
 type Three = *(u8 a, u8 b, u8 c);
 type Shorts = *([3]u16 v);
@@ -40,7 +41,11 @@ fun abi_call_float = ((f64, f32) -> f64 f, f64 x) -> f64;
 fun abi_call_record = ((IntDouble) -> i64 f, i64 x) -> i64;
 fun abi_sort3 = (*i32 xs, (&i32, &i32) -> i32 less) -> i32;
 fun abi_call_maker = ((i64) -> IntDouble f, i64 x) -> i64;
+fun abi_low_byte = (u32 x) -> u8;
+fun abi_low_signed = (u32 x) -> i8;
+fun abi_call_narrow = ((u8) -> u32 f, u32 x) -> u32;
 fun abi_call_quad = ((f64, Quad) -> Quad f, f64 x) -> f64;
+fun abi_call_triple = ((i64) -> Triple f, i64 x) -> i64;
 type Step = (i64) -> i64;
 fun clib_apply = (Step function, i64 value) -> i64;
 
@@ -49,7 +54,9 @@ fun mix = (f64 x, f32 y) -> f64: ret x * 4.0 + y as f64;
 fun unpack = (IntDouble r) -> i64: ret r.i * 100 + (r.d * 100.0) as i64;
 fun less = (&i32 a, &i32 b) -> i32: ret if a.* < b.*: 1 else: 0;
 fun make = (i64 x) -> IntDouble: ret IntDouble(x * 2, 0.5);
+fun widen = (u8 b) -> u32: ret b as u32 + 1;
 fun shift = (f64 x, Quad q) -> Quad: ret Quad(q.a + x, q.b + x, q.c + x, q.d + x);
+fun counting = (i64 x) -> Triple: ret Triple(x, x + 1, x + 2);
 fun twice = (i64 x) -> i64: ret x * 2;
 fun thrice = (i64 x) -> i64: ret x * 3;
 stc [2]Step STEPS = [twice, thrice];
@@ -87,5 +94,10 @@ $main = () {
     line_i64(abi_call_record(unpack, 3));                            #> 325
     line_i64(abi_call_maker(make, 4));                               #> 850
     line_i64(abi_call_quad(shift, 1.0) as i64);                      #> 5432
+    line_i64(abi_call_triple(counting, 1));                          #> 321
     line_i64(clib_apply(STEPS[1], 1) + clib_apply((i64 x): x + 1, 1));   #> 5
+    line_u64(abi_low_byte(0x1FF) as u64);                            #> 255
+    line_i64(abi_low_signed(0x17F) as i64);                          #> 127
+    line_i64(abi_low_signed(0x180) as i64);                          #> -128
+    line_u64(abi_call_narrow(widen, 0x3FF) as u64);                  #> 256
 }
