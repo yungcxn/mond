@@ -11,7 +11,7 @@ fun f = (u8 a, i8 c, u32 n, f32 x, bool t, R r, V v, *u8 p, [2]u8 arr) {
     e6 = v * 2; #! type_mismatch
     e7 = arr + arr; #! type_mismatch
     e8 = x << 1; #! type_mismatch
-    e9 = x % 2.0;
+    e9 = x % 2.0; #! type_mismatch
     e10 = x & x; #! type_mismatch
     e13 = -t; #! type_mismatch
     e14 = -r; #! type_mismatch
@@ -38,7 +38,7 @@ fun g = () {
     a += 300; #! type_mismatch
     a += x; #! type_mismatch
     x += 1.0;
-    x %= 2.0;
+    x %= 2.0; #! type_mismatch
     t += true; #! type_mismatch
     t++; #! type_mismatch
     r--; #! type_mismatch

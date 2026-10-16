@@ -1,8 +1,8 @@
 // the c functions generated code calls, for a program linked without the c library: llvm turns
-// copies and fills into `memcpy`, `memset` and `memmove`, float `%` into `fmod` and `fmodf`,
-// comparisons of bytes call `memcmp` and `strcmp`. weak, so a library linked anyway takes over.
-// `no-builtins` keeps llvm from turning their loops back into calls of themselves, it still
-// vectorizes them
+// copies and fills into `memcpy`, `memset` and `memmove`, comparisons of bytes call `memcmp`,
+// which llvm makes `bcmp` where only equality counts, and `strcmp`. weak, so a library linked
+// anyway takes over. `no-builtins` keeps llvm from turning their loops back into calls of
+// themselves, it still vectorizes them
 const std = @import("std");
 const llvm = @import("llvm_c");
 const LLVMLowerer = @import("../LLVMLowerer.zig");
@@ -49,10 +49,10 @@ pub fn define(lowerer: *LLVMLowerer) void {
         loop.end(to);
     }
 
-    // memcmp(left, right, count) and strcmp(left, right): the difference of the first bytes that
-    // differ, strcmp also stops after a zero byte
-    for ([_][:0]const u8{ "memcmp", "strcmp" }) |name| {
-        const counted = std.mem.eql(u8, name, "memcmp");
+    // memcmp(left, right, count), bcmp(left, right, count) and strcmp(left, right): the difference
+    // of the first bytes that differ, strcmp also stops after a zero byte
+    for ([_][:0]const u8{ "memcmp", "bcmp", "strcmp" }) |name| {
+        const counted = !std.mem.eql(u8, name, "strcmp");
         const parameters: []const Type = if (counted)
             &.{ pointer, pointer, length }
         else
@@ -80,102 +80,6 @@ pub fn define(lowerer: *LLVMLowerer) void {
         llvm.LLVMPositionBuilderAtEnd(builder, next);
         loop.end(llvm.LLVMConstNull(int));
     }
-
-    // fmod(x, y) and fmodf(x, y), exact as c's: binary long division. |y| doubled up to below |x|,
-    // then halved back down to |y|, subtracted wherever it fits; each subtraction is exact, as the
-    // remainder is below twice what is subtracted. the result has the sign of x
-    const context = lowerer.context;
-    const floats = [_]struct { [:0]const u8, Type }{
-        .{ "fmod", llvm.LLVMDoubleTypeInContext(context) },
-        .{ "fmodf", llvm.LLVMFloatTypeInContext(context) },
-    };
-    for (floats) |entry| {
-        const name, const float = entry;
-        const function = loop.begin(name, float, &.{ float, float });
-        const x = llvm.LLVMGetParam(function, 0);
-        const y = llvm.LLVMGetParam(function, 1);
-        var types = [_]Type{float};
-        const fabs_id = llvm.LLVMLookupIntrinsicID("llvm.fabs", "llvm.fabs".len);
-        const fabs = llvm.LLVMGetIntrinsicDeclaration(lowerer.module, fabs_id, &types, 1);
-        const fabs_type = llvm.LLVMIntrinsicGetType(context, fabs_id, &types, 1);
-        const x_size = call(builder, fabs_type, fabs, &.{x});
-        const y_size = call(builder, fabs_type, fabs, &.{y});
-        const infinity = llvm.LLVMConstReal(float, std.math.inf(f64));
-        const zero = llvm.LLVMConstReal(float, 0);
-        // y zero, x infinite, or either not a number: not a number
-        const by_zero = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealOEQ, y_size, zero, "");
-        const unbounded = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealOEQ, x_size, infinity, "");
-        const unordered = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealUNO, x, y, "");
-        const invalid = llvm.LLVMBuildOr(
-            builder,
-            llvm.LLVMBuildOr(builder, by_zero, unbounded, ""),
-            unordered,
-            "",
-        );
-        const blocks = [_]llvm.LLVMBasicBlockRef{
-            llvm.LLVMAppendBasicBlockInContext(context, function, ""),
-            llvm.LLVMAppendBasicBlockInContext(context, function, ""),
-            llvm.LLVMAppendBasicBlockInContext(context, function, ""),
-            llvm.LLVMAppendBasicBlockInContext(context, function, ""),
-            llvm.LLVMAppendBasicBlockInContext(context, function, ""),
-            llvm.LLVMAppendBasicBlockInContext(context, function, ""),
-        };
-        const not_a_number, const check, const unchanged, const grow, const reduce, const done =
-            blocks;
-        _ = llvm.LLVMBuildCondBr(builder, invalid, not_a_number, check);
-
-        llvm.LLVMPositionBuilderAtEnd(builder, not_a_number);
-        const product = llvm.LLVMBuildFMul(builder, x, y, "");
-        _ = llvm.LLVMBuildRet(builder, llvm.LLVMBuildFDiv(builder, product, product, ""));
-
-        llvm.LLVMPositionBuilderAtEnd(builder, check);
-        const smaller = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealOLT, x_size, y_size, "");
-        _ = llvm.LLVMBuildCondBr(builder, smaller, unchanged, grow);
-        llvm.LLVMPositionBuilderAtEnd(builder, unchanged);
-        _ = llvm.LLVMBuildRet(builder, x);
-
-        // the largest |y| * 2^k not above |x|; a doubling that overflows is not above it
-        llvm.LLVMPositionBuilderAtEnd(builder, grow);
-        const step = llvm.LLVMBuildPhi(builder, float, "");
-        const doubled = llvm.LLVMBuildFMul(builder, step, llvm.LLVMConstReal(float, 2), "");
-        const fits = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealOLE, doubled, x_size, "");
-        _ = llvm.LLVMBuildCondBr(builder, fits, grow, reduce);
-        var step_values = [_]Value{ y_size, doubled };
-        var step_blocks = [_]llvm.LLVMBasicBlockRef{ check, grow };
-        llvm.LLVMAddIncoming(step, &step_values, &step_blocks, 2);
-
-        llvm.LLVMPositionBuilderAtEnd(builder, reduce);
-        const rest = llvm.LLVMBuildPhi(builder, float, "");
-        const part = llvm.LLVMBuildPhi(builder, float, "");
-        const takes = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealOGE, rest, part, "");
-        const taken = llvm.LLVMBuildFSub(builder, rest, part, "");
-        const next_rest = llvm.LLVMBuildSelect(builder, takes, taken, rest, "");
-        const halved = llvm.LLVMBuildFMul(builder, part, llvm.LLVMConstReal(float, 0.5), "");
-        const more = llvm.LLVMBuildFCmp(builder, llvm.LLVMRealOGE, halved, y_size, "");
-        _ = llvm.LLVMBuildCondBr(builder, more, reduce, done);
-        var rest_values = [_]Value{ x_size, next_rest };
-        var part_values = [_]Value{ step, halved };
-        var reduce_blocks = [_]llvm.LLVMBasicBlockRef{ grow, reduce };
-        llvm.LLVMAddIncoming(rest, &rest_values, &reduce_blocks, 2);
-        llvm.LLVMAddIncoming(part, &part_values, &reduce_blocks, 2);
-
-        llvm.LLVMPositionBuilderAtEnd(builder, done);
-        const sign_id = llvm.LLVMLookupIntrinsicID("llvm.copysign", "llvm.copysign".len);
-        const copysign = llvm.LLVMGetIntrinsicDeclaration(lowerer.module, sign_id, &types, 1);
-        const copysign_type = llvm.LLVMIntrinsicGetType(context, sign_id, &types, 1);
-        _ = llvm.LLVMBuildRet(builder, call(builder, copysign_type, copysign, &.{ next_rest, x }));
-    }
-}
-
-fn call(
-    builder: llvm.LLVMBuilderRef,
-    function_type: Type,
-    target: Value,
-    arguments: []const Value,
-) Value {
-    const count: c_uint = @intCast(arguments.len);
-    const pointer = @constCast(arguments.ptr);
-    return llvm.LLVMBuildCall2(builder, function_type, target, pointer, count, "");
 }
 
 // a function made of one loop over `index` from 0 to a count: `begin`, `counting`, the body,
@@ -192,7 +96,9 @@ const Loop = struct {
         const lowerer = loop.lowerer;
         const count: c_uint = @intCast(parameters.len);
         const function_type = llvm.LLVMFunctionType(result, @constCast(parameters.ptr), count, 0);
-        const function = llvm.LLVMAddFunction(lowerer.module, name, function_type);
+        // a call made while lowering declared it already, that declaration gets the body
+        const function = llvm.LLVMGetNamedFunction(lowerer.module, name) orelse
+            llvm.LLVMAddFunction(lowerer.module, name, function_type);
         llvm.LLVMSetLinkage(function, llvm.LLVMWeakAnyLinkage);
         const index: c_uint = @bitCast(@as(c_int, llvm.LLVMAttributeFunctionIndex));
         const key = "no-builtins";

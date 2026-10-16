@@ -50,7 +50,7 @@ const binary_table = .{
     .{ .binary_sub, .subtract, .numbers },
     .{ .binary_mul, .multiply, .numbers },
     .{ .binary_div, .divide, .numbers },
-    .{ .binary_mod, .remainder, .numbers },
+    .{ .binary_mod, .remainder, .integers },
     .{ .binary_shift_left, .shift_left, .integers },
     .{ .binary_shift_right, .shift_right, .integers },
     .{ .binary_num_or, .bit_or, .integers },
@@ -153,6 +153,17 @@ pub fn operands_of(kind: Kind) Operands {
 pub fn assigned_operator_of(kind: Kind) BinaryOperator {
     return (assigning_of_kind[@intFromEnum(kind)] orelse unreachable).operator;
 }
+
+// what that operator takes, as its binary form says (`%=` integers, as `%`)
+pub fn assigned_operands_of(kind: Kind) Operands {
+    return operands_of_operator[@intFromEnum(assigned_operator_of(kind))];
+}
+
+const operands_of_operator = blk: {
+    var table: [@typeInfo(BinaryOperator).@"enum".fields.len]Operands = undefined;
+    for (binary_table) |row| table[@intFromEnum(@as(BinaryOperator, row[1]))] = row[2];
+    break :blk table;
+};
 
 pub fn returns_old_value(kind: Kind) bool {
     return (assigning_of_kind[@intFromEnum(kind)] orelse unreachable).returns_old;

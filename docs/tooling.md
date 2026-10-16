@@ -48,7 +48,7 @@ fun qsort = (*u8 items, u64 count, u64 size, (&u8, &u8) -> i32 compare);
 
 ### Without the C library
 
-Without `-lc` nothing is linked that the program doesn't name. On Linux the executable is static: the kernel jumps to `_start`, which passes the arguments to `$main` and ends the process with its result through a system call, and mond adds the few C functions its code calls itself (`memcpy`, `memset`, `memmove`, `memcmp`, `strcmp`, and `fmod`/`fmodf` for float `%`, exact like C's). On macOS every program is started by dyld, which needs libSystem, so that is linked and `_start` is called like `main`.
+Without `-lc` nothing is linked that the program doesn't name. On Linux the executable is static: the kernel jumps to `_start`, which passes the arguments to `$main` and ends the process with its result through a system call, and mond adds the few C functions its code calls itself (`memcpy`, `memset`, `memmove`, `memcmp`, `strcmp`). On macOS every program is started by dyld, which needs libSystem, so that is linked and `_start` is called like `main`.
 
 ### Building mond
 

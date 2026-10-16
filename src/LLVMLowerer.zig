@@ -1067,7 +1067,6 @@ fn arithmetic(self: *LLVMLowerer, op: Op, result_type: Index, left: Value, right
         .sub => llvm.LLVMBuildFSub(builder, left, right, ""),
         .mul => llvm.LLVMBuildFMul(builder, left, right, ""),
         .div => llvm.LLVMBuildFDiv(builder, left, right, ""),
-        .rem => llvm.LLVMBuildFRem(builder, left, right, ""),
         else => unreachable,
     };
 

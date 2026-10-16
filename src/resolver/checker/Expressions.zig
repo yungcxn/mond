@@ -176,6 +176,10 @@ fn infer_compound_assignment(
     }
 
     _ = self.check(context, value, target_type);
+    const integral_mismatch = operators.assigned_operands_of(kind) == .integers and
+        !static_pool.properties(target_type).is_integer and
+        static_pool.tag(target_type) != .type_variable;
+    if (integral_mismatch) return resolver.report_mismatch(node, target_type, .none);
     return self.numeric_result(node, target_type, .unit_type);
 }
 

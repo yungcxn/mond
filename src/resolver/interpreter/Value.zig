@@ -299,10 +299,9 @@ pub fn binary(
             .subtract => float(float_type, left.as_float() - right.as_float()),
             .multiply => float(float_type, left.as_float() * right.as_float()),
             .divide => float(float_type, left.as_float() / right.as_float()),
-            .remainder => float(float_type, @rem(left.as_float(), right.as_float())),
             .equal, .not_equal, .less, .greater => compare(operator, left, right),
             .less_equal, .greater_equal => compare(operator, left, right),
-            .shift_left, .shift_right, .bit_or, .bit_xor, .bit_and => error.NotStatic,
+            .remainder, .shift_left, .shift_right, .bit_or, .bit_xor, .bit_and => error.NotStatic,
             .logic_and, .logic_or, .logic_xor => error.NotStatic,
         };
     }

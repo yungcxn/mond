@@ -1,0 +1,20 @@
+# without the c library: a comparison too long to be expanded calls memcmp, which optimized code
+# calls as bcmp
+#+
+
+stc u64 LENGTH = 96;
+
+$main = (u32 argc, &&u8 argv) -> u8 {
+    mut [LENGTH]u8 text;
+    for i in 0..<LENGTH: text[i] = 'a' + (i % 26) as u8;
+    bool equal = match text {
+        "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqr" => true,
+        _ => false,
+    };
+    text[LENGTH - 1] = argc as u8;
+    bool changed = match text {
+        "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqr" => true,
+        _ => false,
+    };
+    ret if equal and !changed: 0 else: 1;
+}

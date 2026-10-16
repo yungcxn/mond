@@ -116,7 +116,7 @@ Lowest to highest precedence, and `·` separates levels within a row. All binary
 | `\|` · `^` · `&` | bitwise |
 | `== !=` · `< > <= >=` | comparisons, not chained |
 | `<< >>` | shifts (`>>` is arithmetic on signed types) |
-| `+ -` · `* / %` | arithmetic (`/` truncates, `%` keeps the dividend's sign) |
+| `+ -` · `* / %` | arithmetic (`/` truncates, `%` keeps the dividend's sign and takes integers only) |
 | prefix | `- ! ++ -- typeof sizeof alignof` |
 | postfix | `f(..) a[i] .m .* .& x++ x-- as asbits oftype ?? <- ?<- with ..` (unwrapping and labels: [control.md](control.md#unwrapping)) |
 
@@ -126,6 +126,7 @@ Lowest to highest precedence, and `·` separates levels within a row. All binary
 stc u32 A = 1 << 2 + 1;          #= A 8
 stc i32 B = -7 / 2;              #= B -3
 stc i8 C = 127 + 1;              #= C -128
+stc f32 R = 5.5 % 2.0;           #! type_mismatch
 stc u8 D = !0x0F as u8;          #= D 240
 stc bool E = false and false xor true;  #= E true
 ```
