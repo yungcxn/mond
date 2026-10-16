@@ -1,0 +1,72 @@
+<include "lib/out.mn">;
+
+# closures: one per pass, writes to captured variables, captured aggregates, nesting; recursion
+# deep, mutual, through function values and with records by value
+mut i64 ONE = 0;
+fun h = (i64 v) -> i64: ret v * ONE;
+type IntFn = (i64) -> i64;
+fun apply = (IntFn f, i64 v) -> i64: ret f(v);
+fun apply_twice = (IntFn f, i64 v) -> i64: ret f(f(v));
+
+# every pass makes its own closure over that pass's variable
+fun per_pass = () -> i64 {
+    mut i64 s = 0;
+    for i in 0..<h(4) {
+        i64 k = i * 10;
+        f = (i64 x): x + k;
+        s += apply(f, i);
+    }
+    ret s;
+}
+# a closure writing a captured variable: the write is seen after the call
+fun counter = () -> i64 {
+    mut i64 hits = 0;
+    mut i64 last = 0;
+    record = (i64 x) -> i64 { hits += 1; last = x; ret x; };
+    do apply_twice(record, h(5));
+    ret hits * 100 + last;
+}
+# a closure capturing a record and an array by value
+type Pt = *(i64 x, i64 y);
+fun captured_aggregates = () -> i64 {
+    Pt p = Pt(h(3), h(4));
+    [3]i64 xs = [h(1), h(2), h(3)];
+    f = (i64 i): p.x * p.y + xs[i as u64];
+    ret apply(f, 2);
+}
+# closures inside closures, the inner one using the outer one's parameter and frame
+fun nested = (i64 base) -> i64 {
+    outer = (i64 a) -> i64 {
+        inner = (i64 b): a * 100 + b + base;
+        ret apply(inner, a + 1);
+    };
+    ret apply(outer, h(4));
+}
+# a closure recursing through a function value passed down
+fun fact = (IntFn self_call, i64 n) -> i64: ret if n <= 1: 1 else: n * self_call(n - 1);
+fun factorial = (i64 n) -> i64: ret fact(factorial, n);
+# deep recursion and mutual recursion
+fun depth = (u64 n) -> u64: ret if n == 0: 0 else: 1 + depth(n - 1);
+fun is_even = (u64 n) -> bool: ret if n == 0: true else: is_odd(n - 1);
+fun is_odd = (u64 n) -> bool: ret if n == 0: false else: is_even(n - 1);
+type Big = *(mut [16]i64 cells);
+fun spread = (Big b, i64 n) -> Big {
+    if n == 0: ret b;
+    mut Big c = b;
+    c.cells[(n % 16) as u64] += n;
+    ret spread(c, n - 1);
+}
+
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    line_i64(per_pass());                     #> 66
+    line_i64(counter());                      #> 205
+    line_i64(captured_aggregates());          #> 15
+    line_i64(nested(h(1000)));                #> 1405
+    line_i64(factorial(h(10)));               #> 3628800
+    line_u64(depth(h(100000) as u64));        #> 100000
+    line_i64(if is_even(h(10001) as u64): 1 else: 0);  #> 0
+    mut Big zero;
+    big = spread(zero, h(40));
+    line_i64(big.cells[8] * 1000 + big.cells[0]);   #> 72048
+}

@@ -1,0 +1,91 @@
+<include "lib/out.mn">;
+
+# every case runs twice: folded at compile time (stc) and at run time on inputs the optimizer
+# can't see (scaled by ONE, set from argc); `same` prints the run-time value, and both if they differ
+mut i64 ONE = 0;
+fun h = (i64 v) -> i64: ret v * ONE;
+fun printf = (&u8 format, i64 a, i64 b) -> i32;
+fun printf = (&u8 format) -> i32;
+# `st` takes a static argument: its call is evaluated by the compiler
+stcfun st = (i64 v) -> i64: ret v;
+fun same = (i64 compile_time, i64 run_time) {
+    if compile_time == run_time {
+        printf("%lld\n", run_time, 0);
+    } else {
+        printf("%lld != compile time %lld\n", run_time, compile_time);
+    }
+}
+
+fun add_u8 = (u8 a, u8 b) -> u8: ret a + b;
+fun sub_u8 = (u8 a, u8 b) -> u8: ret a - b;
+fun mul_u8 = (u8 a, u8 b) -> u8: ret a * b;
+fun add_i8 = (i8 a, i8 b) -> i8: ret a + b;
+fun mul_i16 = (i16 a, i16 b) -> i16: ret a * b;
+fun neg_i8 = (i8 a) -> i8: ret -a;
+fun neg_u8 = (u8 a) -> u8: ret -a;
+fun not_u8 = (u8 a) -> u8: ret !a;
+fun not_i16 = (i16 a) -> i16: ret !a;
+fun add_u32 = (u32 a, u32 b) -> u32: ret a + b;
+fun mul_u64 = (u64 a, u64 b) -> u64: ret a * b;
+fun add_i64 = (i64 a, i64 b) -> i64: ret a + b;
+fun div_i32 = (i32 a, i32 b) -> i32: ret a / b;
+fun rem_i32 = (i32 a, i32 b) -> i32: ret a % b;
+fun div_i8 = (i8 a, i8 b) -> i8: ret a / b;
+fun rem_i8 = (i8 a, i8 b) -> i8: ret a % b;
+fun div_u64 = (u64 a, u64 b) -> u64: ret a / b;
+fun rem_u64 = (u64 a, u64 b) -> u64: ret a % b;
+fun div_u8 = (u8 a, u8 b) -> u8: ret a / b;
+fun shr_i8 = (i8 a, u32 n) -> i8: ret a >> n as i8;
+fun shr_u8 = (u8 a, u32 n) -> u8: ret a >> n as u8;
+fun shr_i64 = (i64 a, u32 n) -> i64: ret a >> n as i64;
+fun shr_u64 = (u64 a, u32 n) -> u64: ret a >> n as u64;
+fun shl_u8 = (u8 a, u32 n) -> u8: ret a << n as u8;
+fun shl_i32 = (i32 a, u32 n) -> i32: ret a << n as i32;
+fun shl_u8_wide = (u8 a, u32 n) -> u32: ret a << n;
+fun lt_i8 = (i8 a, i8 b) -> bool: ret a < b;
+fun lt_u8 = (u8 a, u8 b) -> bool: ret a < b;
+fun ge_i64 = (i64 a, i64 b) -> bool: ret a >= b;
+fun b = (bool x) -> i64: ret if x: 1 else: 0;
+
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    # wrapping at every width
+    same(st(add_u8(250, 10)), add_u8(h(250) as u8, h(10) as u8));                  #> 4
+    same(st(sub_u8(3, 5)), sub_u8(h(3) as u8, h(5) as u8));                        #> 254
+    same(st(mul_u8(16, 17)), mul_u8(h(16) as u8, h(17) as u8));                    #> 16
+    same(st(add_i8(127, 1)), add_i8(h(127) as i8, h(1) as i8));                    #> -128
+    same(st(add_i8(-128, -1)), add_i8(h(-128) as i8, h(-1) as i8));                #> 127
+    same(st(mul_i16(300, 300)), mul_i16(h(300) as i16, h(300) as i16));            #> 24464
+    same(st(neg_i8(-128)), neg_i8(h(-128) as i8));                                 #> -128
+    same(st(neg_u8(1)), neg_u8(h(1) as u8));                                       #> 255
+    same(st(not_u8(0x0F)), not_u8(h(0x0F) as u8));                                 #> 240
+    same(st(not_i16(0)), not_i16(h(0) as i16));                                    #> -1
+    same(st(add_u32(4294967295, 2)), add_u32(h(4294967295) as u32, h(2) as u32)); #> 1
+    same(st(mul_u64(4294967296, 4294967297) as i64), mul_u64(h(4294967296) as u64, h(4294967297) as u64) as i64);  #> 4294967296
+    same(st(add_i64(9223372036854775807, 1)), add_i64(h(9223372036854775807), h(1)));  #> -9223372036854775808
+    # division truncates toward zero, the remainder keeps the dividend's sign
+    same(st(div_i32(-7, 2)), div_i32(h(-7) as i32, h(2) as i32));                  #> -3
+    same(st(div_i32(7, -2)), div_i32(h(7) as i32, h(-2) as i32));                  #> -3
+    same(st(rem_i32(-7, 2)), rem_i32(h(-7) as i32, h(2) as i32));                  #> -1
+    same(st(rem_i32(7, -2)), rem_i32(h(7) as i32, h(-2) as i32));                  #> 1
+    same(st(rem_i32(-7, -2)), rem_i32(h(-7) as i32, h(-2) as i32));                #> -1
+    same(st(div_i8(-128, 2)), div_i8(h(-128) as i8, h(2) as i8));                  #> -64
+    same(st(rem_i8(-128, 3)), rem_i8(h(-128) as i8, h(3) as i8));                  #> -2
+    same(st(div_u8(255, 2)), div_u8(h(255) as u8, h(2) as u8));                    #> 127
+    same(st(div_u64(18446744073709551615, 3) as i64), div_u64(h(-1) as u64, h(3) as u64) as i64);  #> 6148914691236517205
+    same(st(rem_u64(18446744073709551615, 10) as i64), rem_u64(h(-1) as u64, h(10) as u64) as i64);  #> 5
+    # shifts: arithmetic on signed, logical on unsigned, at the edges of the width
+    same(st(shr_i8(-128, 7)), shr_i8(h(-128) as i8, h(7) as u32));                 #> -1
+    same(st(shr_u8(128, 7)), shr_u8(h(128) as u8, h(7) as u32));                   #> 1
+    same(st(shr_i64(-9223372036854775807 - 1, 63)), shr_i64(h(-9223372036854775807 - 1), h(63) as u32));  #> -1
+    same(st(shr_u64(9223372036854775808, 63) as i64), shr_u64(h(-9223372036854775807 - 1) as u64, h(63) as u32) as i64);  #> 1
+    same(st(shl_u8(1, 7)), shl_u8(h(1) as u8, h(7) as u32));                      #> 128
+    same(st(shl_u8(3, 7)), shl_u8(h(3) as u8, h(7) as u32));                       #> 128
+    same(st(shl_i32(1, 31)), shl_i32(h(1) as i32, h(31) as u32));                  #> -2147483648
+    same(st(shl_u8_wide(255, 4)), shl_u8_wide(h(255) as u8, h(4) as u32));        #> 4080
+    same(st(shr_i8(-1, 0)), shr_i8(h(-1) as i8, h(0) as u32));                     #> -1
+    # comparisons by signedness
+    same(st(b(lt_i8(-1, 0))), b(lt_i8(h(-1) as i8, h(0) as i8)));                  #> 1
+    same(st(b(lt_u8(255, 0))), b(lt_u8(h(255) as u8, h(0) as u8)));               #> 0
+    same(st(b(ge_i64(-9223372036854775807 - 1, 9223372036854775807))), b(ge_i64(h(-9223372036854775807 - 1), h(9223372036854775807))));  #> 0
+}

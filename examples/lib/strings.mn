@@ -1,4 +1,4 @@
-# a library for `include` (see small.mn): only what is `pub` is included
+# a library for `include` (see small.mn): only what is `pub` can be named
 
 pub fun count_char = ([]u8 s, u8 c) -> u32 {
     mut u32 n = 0;

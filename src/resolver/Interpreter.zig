@@ -388,6 +388,8 @@ pub fn coerce(self: *Interpreter, value: Value, target_type: Index) Value {
         .value_type = payload_record,
         .elements = &.{payload_field},
     } });
+    const niche = static_pool.niche_case(payload_case, payload);
+    if (niche != .none) return .pooled(niche);
     return .pooled(static_pool.intern(.{ .variant_value = .{
         .case = payload_case,
         .payload = payload,

@@ -94,7 +94,7 @@ stc Opt8 O = 42;                        # a single-payload variant takes its pay
   - `v as V.Case` retags within the variant.
   - `x as V.Case` wraps a payload.
   - A payload-free case `as u32` gives its tag.
-- `tagof self` needs exactly one single-integer payload case (else `self_tag_without_niche`), and a tag must fit its tag type (else `tag_overflow`).
+- `tagof self` needs exactly one single-integer payload case (else `self_tag_without_niche`), and a tag must fit its tag type (else `tag_overflow`). A payload equal to another case's tag is that case: `Opt8.Some(255)` is `Opt8.None`.
 - Pattern matching and `??` unwrapping are in [control.md](control.md#match).
 
 ### Unions `A || B`

@@ -1,0 +1,32 @@
+# output straight from the kernel, unbuffered, for programs that end in a trap (their C stdout
+# buffer would be lost) and for programs built without the C library
+stc u64 SYS_WRITE = stcmatch $os {
+    "linux" => stcmatch $arch { "x86_64" => 1, _ => 64 },
+    "macos" => 4,
+    _ => 0,
+};
+
+pub fun say = (&u8 text, u64 length): do $syscall(SYS_WRITE, 1, text, length);
+
+pub fun say_u64 = (u64 n) {
+    mut [21]u8 digits;
+    mut u64 at = 20;
+    mut u64 rest = n;
+    digits[20] = '\n';
+    loop {
+        at -= 1;
+        digits[at] = '0' + (rest % 10) as u8;
+        rest /= 10;
+        if rest == 0: brk;
+    }
+    say(digits[at].&, 21 - at);
+}
+
+pub fun say_i64 = (i64 n) {
+    if n < 0 {
+        say("-".&, 1);
+        say_u64((0 - n) as u64);
+    } else {
+        say_u64(n as u64);
+    }
+}

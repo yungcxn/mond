@@ -1,0 +1,36 @@
+<include "lib/out.mn">;
+
+# records compared field by field: padding bytes never count, whatever they hold
+mut i64 ONE = 0;
+fun h = (i64 v) -> i64: ret v * ONE;
+type Padded = *(u8 a, u64 b, u16 c);
+variant Shape = +(Dot(u8 tag), Wide(u64 n));
+fun padded = (i64 n) -> Padded: ret Padded(n as u8, (n * 1000) as u64, (n * 7) as u16);
+fun dirty = (*Padded p) {
+    *[24]u8 bytes = p as *[24]u8;
+    for i in 0..<24: bytes.*[i] = 0xEE;
+}
+fun same = (Padded x, Padded y) -> bool: ret x == y;
+fun same_shape = (Shape x, Shape y) -> bool: ret x == y;
+fun same_rows = ([2]Padded x, [2]Padded y) -> bool: ret x == y;
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    mut Padded r;
+    dirty(r.&);
+    r = padded(h(3));
+    line_i64(if same(r, padded(h(3))): 1 else: 0);   #> 1
+    mut Padded s;
+    dirty(s.&);
+    s = Padded(3, 3000, 21);
+    line_i64(if r == s: 1 else: 0);                   #> 1
+    mut [2]Padded rows;
+    dirty(rows[0].&);
+    dirty(rows[1].&);
+    rows[0] = s;
+    rows[1] = padded(h(1));
+    line_i64(if same_rows(rows, [padded(h(3)), padded(h(1))]): 1 else: 0);   #> 1
+    # a small case in a variant sized for the large one: the bytes after its payload are padding
+    mut Shape big = Shape.Wide(h(-1) as u64);
+    big = Shape.Dot(h(5) as u8);
+    line_i64(if same_shape(big, Shape.Dot(5)): 1 else: 0);   #> 1
+}

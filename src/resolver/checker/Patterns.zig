@@ -392,7 +392,11 @@ fn covers(
     query: []const NodeId,
 ) bool {
     const resolver = self.owning_resolver();
-    if (row_count == 0) return false;
+    if (row_count == 0) {
+        if (columns.len == 0 or query[0] == 0 or !resolver.tree.props(query[0]).range) return false;
+        const bounds = self.interval(context, query[0]) orelse return false;
+        return bounds[0] > bounds[1];
+    }
     if (columns.len == 0) return true;
 
     const width = columns.len;

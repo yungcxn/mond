@@ -735,7 +735,8 @@ stcfun add_version = (*ast file, u32 v) {
 }
 <add_version(refl $file, 3)>;
 
-# j) include gets the public declarations of another file as an own tree (a copy, no refl).
+# j) include gets the declarations of another file as an own tree (a copy, no refl), the private ones
+#   under names of their own.
 #   <include "x.mn"> is an import, but the tree can be changed before
 <include "lib/math.mn">;
 

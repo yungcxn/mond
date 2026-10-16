@@ -400,6 +400,7 @@ pub const implements = type_queries.implements;
 pub const tag_type_of = type_queries.tag_type_of;
 pub const lookup_member = type_queries.lookup_member;
 pub const first_payload_case = type_queries.first_payload_case;
+pub const niche_case = type_queries.niche_case;
 pub const single_payload = type_queries.single_payload;
 pub const fits = type_queries.fits;
 pub const ast_type_of = type_queries.ast_type_of;

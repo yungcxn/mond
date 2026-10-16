@@ -146,6 +146,7 @@ pub inline fn deinit(self: *Resolver) void {
     self.doctor.diagnostics.deinit();
     self.flow.deinit();
     self.generics.deinit(self.allocator);
+    self.expressions.open_lengths.deinit(self.allocator);
     self.temporary_arena.deinit();
     if (self.rebuilt) |*rebuilt_roots| rebuilt_roots.deinit();
     self.allocator.free(self.macros.starts);
@@ -241,6 +242,7 @@ pub fn resolve(self: *Resolver) !void {
     try self.fail_on_errors();
 
     self.types.finish_inference();
+    self.expressions.report_runtime_lengths();
     try self.fail_on_errors();
 
     self.declarations.check_main();

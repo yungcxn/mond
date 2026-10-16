@@ -157,10 +157,12 @@ pub fn cast(self: Value, target_type: Index) Value {
     // a float saturates at the bounds of the integer type, NaN becomes zero
     const bit_width: u7 = integer_widths[@intFromEnum(target_type)];
     const magnitude_bits = if (is_signed(target_type)) bit_width - 1 else bit_width;
-    const maximum = std.math.ldexp(@as(f64, 1), magnitude_bits) - 1;
-    const minimum = if (is_signed(target_type)) -maximum - 1 else 0;
+    const limit = std.math.ldexp(@as(f64, 1), magnitude_bits);
+    const minimum = if (is_signed(target_type)) -limit else 0;
     const number = self.as_float();
-    const clamped = if (std.math.isNan(number)) 0 else std.math.clamp(number, minimum, maximum);
+    const largest = @as(u64, std.math.maxInt(u64)) >> @intCast(64 - magnitude_bits);
+    if (number >= limit) return int(target_type, largest);
+    const clamped = if (std.math.isNan(number)) 0 else @max(number, minimum);
 
     const bits: u64 = if (clamped < 0)
         @bitCast(std.math.lossyCast(i64, clamped))
@@ -263,16 +265,19 @@ pub fn binary(
         const left_exact = left.widened();
         const right_exact = right.widened();
         const int_type = if (is_int(result_type)) result_type else left.value_type;
+        const overflows = right_exact == -1 and
+            wrapped(int_type, -left_exact).widened() != -left_exact;
+        const divides_by_nothing = right_exact == 0 or overflows;
 
         return switch (operator) {
             .add => int(int_type, left.bits +% right.bits),
             .subtract => int(int_type, left.bits -% right.bits),
             .multiply => int(int_type, left.bits *% right.bits),
-            .divide => if (right_exact == 0)
+            .divide => if (divides_by_nothing)
                 error.Invalid
             else
                 wrapped(int_type, @divTrunc(left_exact, right_exact)),
-            .remainder => if (right_exact == 0)
+            .remainder => if (divides_by_nothing)
                 error.Invalid
             else
                 wrapped(int_type, @rem(left_exact, right_exact)),
@@ -349,8 +354,8 @@ inline fn compare(operator: BinaryOperator, left: Value, right: Value) Evaluatio
         .not_equal => boolean(!eql(left, right)),
         .less => boolean(less(left, right)),
         .greater => boolean(less(right, left)),
-        .less_equal => boolean(!less(right, left)),
-        .greater_equal => boolean(!less(left, right)),
+        .less_equal => boolean(less(left, right) or eql(left, right)),
+        .greater_equal => boolean(less(right, left) or eql(left, right)),
         .add, .subtract, .multiply, .divide, .remainder => error.NotStatic,
         .shift_left, .shift_right, .bit_or, .bit_xor, .bit_and => error.NotStatic,
         .logic_and, .logic_or, .logic_xor => error.NotStatic,

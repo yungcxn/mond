@@ -1,0 +1,46 @@
+# a closure lives in the frame that makes it: every way out of that frame is `escaping_closure`
+type IntFn = (i64) -> i64;
+type Holder = *(IntFn f);
+type Box = *(mut IntFn f);
+mut IntFn GLOBAL_F = (i64 x): x;
+fun ret_direct = (i64 k) -> IntFn: ret (i64 x): x + k;                       #! escaping_closure
+fun ret_in_record = (i64 k) -> Holder: ret Holder((i64 x): x + k);           #! escaping_closure
+fun ret_in_array = (i64 k) -> [1]IntFn: ret [(i64 x): x + k];                #! escaping_closure
+fun to_global = (i64 k) { GLOBAL_F = (i64 x): x + k; }                       #! escaping_closure
+fun through_pointer = (*IntFn out, i64 k) { out.* = (i64 x): x + k; }        #! escaping_closure
+fun into_field = (*Box b, i64 k) { b.f = (i64 x): x + k; }                   #! escaping_closure
+fun ret_param = (IntFn f) -> IntFn: ret f;                                   #! escaping_closure
+fun ret_via_match = (i64 k, u8 c) -> IntFn {
+    f = (i64 x): x + k;
+    ret match c { 0 => f, _ => (i64 x): x };                                 #! escaping_closure
+}
+fun ret_via_if = (i64 k, bool c) -> IntFn {
+    f = (i64 x): x + k;
+    g = (i64 x): x;
+    ret if c: f else: g;                                                     #! escaping_closure
+}
+fun ret_via_else = (i64 k, bool c) -> IntFn {
+    f = (i64 x): x + k;
+    g = (i64 x): x;
+    ret if c: g else: f;                                                     #! escaping_closure
+}
+fun then_block = (i64 k, bool c) -> IntFn {
+    f = (i64 x): x + k;
+    ret if c { f; } else { (i64 x): x; };                                    #! escaping_closure
+}
+fun ret_variable = (i64 k) -> IntFn {
+    mut IntFn f = (i64 x): x;
+    f = (i64 x): x + k;
+    ret f;                                                                   #! escaping_closure
+}
+fun ret_nested = (i64 k) -> IntFn {
+    outer = (i64 a) -> IntFn: ret (i64 b): a + b + k;                        #! escaping_closure
+    ret outer(1);
+}
+
+# fine: a closure capturing nothing is a plain function, a closure passed down
+fun ret_static = () -> IntFn: ret (i64 x): x * 2;
+fun apply = (IntFn f, i64 v) -> i64: ret f(v);
+fun pass_down = (i64 k) -> i64: ret apply((i64 x): x + k, 1);
+
+$main = () {}

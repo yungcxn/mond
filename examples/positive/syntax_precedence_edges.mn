@@ -1,0 +1,26 @@
+# precedence where C and mond differ or people trip: postfix `as` binds tighter than prefix `-`,
+# shifts looser than `+`, bitwise looser than comparisons (`6 & 3 == 2` is a type_mismatch, see
+# typing_literal_edges.mn), `|` looser than `^` looser than `&`, `and` tighter than `or`
+stc i32 NEG_CAST = -1 as i32;            #= NEG_CAST -1
+stc u8 NEG_OF_CAST = -1 as u8;           #= NEG_OF_CAST 255
+stc bool NOT_FIRST = !false == true;     #= NOT_FIRST true
+stc u32 SHIFT_AFTER_ADD = 1 + 2 << 3;    #= SHIFT_AFTER_ADD 24
+stc u32 MUL_MOD = 2 * 3 % 4;             #= MUL_MOD 2
+stc i32 NEG_NEG = -2 * -3;               #= NEG_NEG 6
+stc i32 DOUBLE_MINUS = - - 5;            #= DOUBLE_MINUS 5
+stc u32 DEEP = (((((((((((1)))))))))));  #= DEEP 1
+stc u32 LEFT_SUB = 10 - 4 - 3;           #= LEFT_SUB 3
+stc u32 LEFT_DIV = 100 / 10 / 5;         #= LEFT_DIV 2
+stc u32 BITWISE = 1 | 2 ^ 3 & 4;         #= BITWISE 3
+stc bool CMP_THEN_EQ = 1 < 2 == true;    #= CMP_THEN_EQ true
+stc bool AND_FIRST = true or false and false;   #= AND_FIRST true
+stc u32 NOT_SHIFT = !0 >> 28;            #= NOT_SHIFT 15
+
+# literal forms and escapes
+stc u8 HEX_CHAR = '\x41';                #= HEX_CHAR 65
+stc u8 QUOTE_CHAR = '\'';                #= QUOTE_CHAR 39
+stc u64 ZERO_BYTES = "\x00\x01".$len;    #= ZERO_BYTES 2
+stc u32 BASES = 0b1010 + 0o17 + 0xFf + 1_0;   #= BASES 290
+stc f32 SEPARATED = 1_0.2_5;             #= SEPARATED 10.25
+
+$main = () {}

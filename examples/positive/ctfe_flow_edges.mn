@@ -1,0 +1,99 @@
+# ranges reaching the largest value of their type end (examples/backend/control_flow.mn at run time)
+stcfun count_top_u8 = () -> u64 {
+    mut u64 n = 0;
+    for i in (250 as u8)..=(255 as u8): n += 1;
+    ret n;
+}
+stcfun sum_all_i8 = () -> i64 {
+    mut i64 s = 0;
+    for i in (-128 as i8)..=(127 as i8): s += i as i64;
+    ret s;
+}
+stc u64 TOP_U8 = count_top_u8();   #= TOP_U8 6
+stc i64 ALL_I8 = sum_all_i8();     #= ALL_I8 -128
+stc [3]u8 LAST_THREE = for i in (253 as u8)..=(255 as u8): i;   #= LAST_THREE [253, 254, 255]
+
+# empty and reversed ranges run no pass
+stcfun empty = () -> u64 {
+    mut u64 n = 0;
+    for 5..<5: n += 1;
+    for 6..<5: n += 1;
+    for 6..=5: n += 1;
+    ret n;
+}
+stc u64 EMPTY = empty();   #= EMPTY 0
+
+# the step of `while c, step` runs after `cont`, `brk` and `cont` act on the innermost loop
+stcfun steps = () -> i64 {
+    mut i64 i = 0;
+    mut i64 s = 0;
+    while i < 10, i += 1 {
+        if i % 3 == 0: cont;
+        s += i;
+    }
+    ret s * 100 + i;
+}
+stcfun pairs = () -> i64 {
+    mut i64 s = 0;
+    for i in 0..<5 {
+        for j in 0..<5 {
+            if j > i: brk;
+            if (i + j) % 2 == 1: cont;
+            s += 1;
+        }
+    }
+    ret s;
+}
+stc i64 STEPS = steps();   #= STEPS 2710
+stc i64 PAIRS = pairs();   #= PAIRS 9
+
+# defers run on every exit, latest first; a returned value is computed before them
+stcfun defers = (i64 mode) -> i64 {
+    mut i64 log = 0;
+    defer log = log * 10 + 1;
+    for i in 0..<3 {
+        defer log = log * 10 + 2;
+        if i == mode: brk;
+        if i == 0: cont;
+        log = log * 10 + 3;
+    }
+    if mode == 7: ret log;
+    log = log * 10 + 4;
+    ret log;
+}
+stc i64 DEFER_BRK = defers(1);    #= DEFER_BRK 224
+stc i64 DEFER_END = defers(7);    #= DEFER_END 23232
+
+# operands left to right, `and`/`or` short-circuit, an assignment's value before its place
+stcfun order = (u32 which) -> i64 {
+    mut i64 log = 0;
+    pick = (i64 d) -> i64 { log = log * 10 + d; ret d; };
+    note = (i64 d) -> bool { log = log * 10 + d; ret d % 2 == 1; };
+    mut [3]i64 cells = [0, 0, 0];
+    if which == 0: do pick(1) * 100 + pick(2) * 10 + pick(3);
+    if which == 1: do note(2) and note(4);
+    if which == 2: do note(1) or note(3);
+    if which == 3: do note(2) or note(3) and note(5);
+    if which == 4: cells[pick(2)] += pick(5);
+    if which == 5: cells[pick(2)] = pick(5);
+    ret log;
+}
+stc i64 OPERANDS = order(0);      #= OPERANDS 123
+stc i64 AND_SHORT = order(1);     #= AND_SHORT 2
+stc i64 OR_SHORT = order(2);      #= OR_SHORT 1
+stc i64 PRECEDENCE = order(3);    #= PRECEDENCE 235
+stc i64 COMPOUND = order(4);      #= COMPOUND 52
+stc i64 ASSIGN = order(5);        #= ASSIGN 52
+
+# increments give the old or the new value, a parallel assignment reads before it writes
+stcfun increments = () -> i64 {
+    mut i64 k = 1;
+    i64 old = k++;
+    i64 new = ++k;
+    mut x, y = 1, 2;
+    x, y = y, x;
+    ret old * 10000 + new * 1000 + k * 100 + x * 10 + y;
+}
+stc i64 INCREMENTS = increments();   #= INCREMENTS 13321
+
+$main = () {}

@@ -355,6 +355,20 @@ pub fn fits(pool: *const StaticPool, value: Index, type_index: Index) bool {
     return number >= 0 and number < one << bits;
 }
 
+pub fn niche_case(pool: *const StaticPool, case: Index, payload: Index) Index {
+    const variant = pool.get(case).variant_case_type.variant;
+    if (pool.tag(variant) != .variant_type) return .none;
+    if (pool.get(variant).variant_type.tag_mode != .self) return .none;
+    const field = pool.get(payload).aggregate_value.elements[0];
+    if (pool.tag(field) != .int_value) return .none;
+    for (pool.get(variant).variant_type.cases) |other| {
+        const other_case = pool.get(other).variant_case_type;
+        if (other_case.payload != .none or pool.tag(other_case.tag) != .int_value) continue;
+        if (pool.get(other_case.tag).int_value.bits == pool.get(field).int_value.bits) return other;
+    }
+    return .none;
+}
+
 pub fn first_payload_case(pool: *const StaticPool, variant: Index) Index {
     for (pool.get(variant).variant_type.cases) |case| {
         if (pool.get(case).variant_case_type.payload != .none) return case;

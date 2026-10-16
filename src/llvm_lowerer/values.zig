@@ -237,10 +237,15 @@ pub fn cast(lowerer: *LLVMLowerer, kind: StaticPool.CastKind, to: Index, source:
             llvm.LLVMBuildSIToFP(builder, value, lowered_type, "")
         else
             llvm.LLVMBuildUIToFP(builder, value, lowered_type, ""),
-        .float_to_int => if (lowerer.is_signed(to))
-            llvm.LLVMBuildFPToSI(builder, value, lowered_type, "")
-        else
-            llvm.LLVMBuildFPToUI(builder, value, lowered_type, ""),
+        .float_to_int => blk: {
+            const name = if (lowerer.is_signed(to)) "llvm.fptosi.sat" else "llvm.fptoui.sat";
+            const id = llvm.LLVMLookupIntrinsicID(name, name.len);
+            var overloads = [_]Type{ lowered_type, llvm.LLVMTypeOf(value) };
+            const function = llvm.LLVMGetIntrinsicDeclaration(lowerer.module, id, &overloads, 2);
+            const function_type = llvm.LLVMIntrinsicGetType(lowerer.context, id, &overloads, 2);
+            var arguments = [_]Value{value};
+            break :blk llvm.LLVMBuildCall2(builder, function_type, function, &arguments, 1, "");
+        },
         .float_resize => llvm.LLVMBuildFPCast(builder, value, lowered_type, ""),
         .bit_reinterpret, .bit_extend => reinterpret(lowerer, value, from, to),
         .variant_retag => retag(lowerer, from, to, value),

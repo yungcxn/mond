@@ -1,0 +1,12 @@
+# a runtime check stops the program: a remainder by zero. the line before is printed, the one after isn't
+#+
+#? trap
+<include "lib/raw.mn">;
+mut i64 ONE = 0;
+fun r = (u32 a, u32 b) -> u32: ret a % b;
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    say_u64(1);   #> 1
+    say_u64(r((7 * ONE) as u32, 0 * ONE as u32) as u64);
+    say_u64(2);
+}

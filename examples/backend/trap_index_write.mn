@@ -1,0 +1,12 @@
+# a runtime check stops the program: a write past the end through a pointer. the line before is printed, the one after isn't
+#+
+#? trap
+<include "lib/raw.mn">;
+mut i64 ONE = 0;
+fun put = (*[4]u32 p, u64 i) { p.*[i] = 9; }
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    say_u64(1);   #> 1
+    mut [4]u32 xs = [1, 2, 3, 4]; put(xs.&, (7 * ONE) as u64); say_u64(xs[0] as u64);
+    say_u64(2);
+}

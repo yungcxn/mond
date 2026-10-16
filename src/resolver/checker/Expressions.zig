@@ -15,6 +15,7 @@ const Expressions = @This();
 
 // the dereference an index reads through: `p.*[i]` reads one element of what `p` points to
 indexed_dereference: NodeId = 0,
+open_lengths: std.ArrayList(struct { node: NodeId, array_type: StaticPool.Index }) = .empty,
 
 pub fn owning_resolver(self: *Expressions) *Resolver {
     return @alignCast(@fieldParentPtr("expressions", self));
@@ -781,7 +782,7 @@ pub fn may_capture(self: *Expressions, node: NodeId) bool {
     const names_function = construct == .lambda or construct == .name;
     if (!names_function and resolver.node_static_values[node] != .none) return false;
     const value_type = static_pool.substitute_type_variables(resolver.node_types[node]);
-    if (!static_pool.holds_function_value(value_type)) return false;
+    if (construct != .branch and !static_pool.holds_function_value(value_type)) return false;
     return switch (construct) {
         .grouping, .branch, .array_literal, .record_update, .unwrap => {
             for (tree.children(node)) |child| if (self.may_capture(child)) return true;
@@ -983,13 +984,33 @@ pub fn length_is_static(
 ) bool {
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
-    const array = static_pool.pointee(array_type);
+    const array = static_pool.pointee(static_pool.substitute_type_variables(array_type));
     if (static_pool.tag(array) != .array_type) return true;
-    if (static_pool.get(array).array_type.length != StaticPool.dyn_len) return true;
+    const length = static_pool.get(array).array_type.length;
+    const is_open = static_pool.tag(length) == .type_variable;
+    if (length != StaticPool.dyn_len and !is_open) return true;
     // a length-generic body is checked once for all lengths, each realization has its own
     if (context.is_interpreted or context.is_abstract) return true;
     if (static_pool.contains_trees(array)) return true;
-    return resolver.static_values.try_evaluate(context, node) != null;
+    if (resolver.static_values.try_evaluate(context, node)) |evaluated| {
+        if (evaluated != StaticPool.dyn_len) return true;
+    }
+    if (!is_open) return false;
+    if (resolver.tree.props(node).range) return true;
+    self.open_lengths.append(resolver.allocator, .{ .node = node, .array_type = array }) catch {
+        @panic("OOM");
+    };
+    return true;
+}
+
+pub fn report_runtime_lengths(self: *Expressions) void {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    for (self.open_lengths.items) |open_length| {
+        const array = static_pool.substitute_type_variables(open_length.array_type);
+        if (static_pool.get(array).array_type.length != StaticPool.dyn_len) continue;
+        _ = resolver.report(.not_static, open_length.node, 0, 0);
+    }
 }
 
 fn builtin_lifecycle_type(

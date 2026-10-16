@@ -143,12 +143,10 @@ pub fn handle_err(self: *@This(), io: std.Io, e: anyerror) noreturn {
     @memset(linebuf[0..mark_start], ' ');
     @memset(linebuf[mark_start..mark_end], '~');
 
-    const hint: []const u8 = "TODO";
-
     const err_msg = std.fmt.bufPrint(
         &buf,
-        "\x1b[31m{s}\x1b[90m, :{d}, {s}:\x1b[0m\n{s}\n\x1b[36m{s}\x1b[0m\n",
-        .{ @errorName(e), lc, hint, self.src_bytes[lstart_cur..rend_cur], linebuf[0..mark_end] },
+        "\x1b[31m{s}\x1b[90m, :{d}:\x1b[0m\n{s}\n\x1b[36m{s}\x1b[0m\n",
+        .{ @errorName(e), lc, self.src_bytes[lstart_cur..rend_cur], linebuf[0..mark_end] },
     ) catch @panic("OOM, could not print error");
 
     std.Io.File.stdout().writeStreamingAll(io, err_msg) catch @panic("print failed");

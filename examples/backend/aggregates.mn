@@ -1,0 +1,78 @@
+<include "lib/out.mn">;
+
+# records and arrays are values: copies, swaps, sret results assigned to their own argument
+
+mut i64 ONE = 0;
+fun h = (i64 v) -> i64: ret v * ONE;
+type Pt = *(mut i64 x, mut i64 y);
+type Padded = *(u8 a, u64 b, u16 c);
+type Packed = **(u8 a, u64 b, u16 c);
+type Big = *(mut [32]i64 cells);
+
+fun swapped = (Pt p) -> Pt: ret Pt(p.y, p.x);
+fun shifted = (Pt p, i64 d) -> Pt { mut Pt q = p; q.x += d; ret q; }
+fun bump_all = (Big b) -> Big {
+    mut Big c = b;
+    for i in 0..<32: c.cells[i] += 1;
+    ret c;
+}
+fun reverse = (Big b) -> Big {
+    mut Big c;
+    for i in 0..<32: c.cells[i] = b.cells[31 - i];
+    ret c;
+}
+fun padded = (i64 n) -> Padded: ret Padded(n as u8, (n * 1000) as u64, (n * 7) as u16);
+fun scribble = (i64 n) -> i64 {
+    mut [64]u8 noise;
+    for i in 0..<64: noise[i] = (0xAB + n) as u8;
+    ret noise[n as u64] as i64;
+}
+fun packed_sum = (Packed p) -> u64: ret p.a as u64 + p.b + p.c as u64;
+fun write_through = (*Pt p, Pt value) { p.* = value; }
+
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    # a record assigned from a function of itself, through sret
+    mut Pt p = Pt(h(1), h(2));
+    p = swapped(p);
+    line_i64(p.x * 10 + p.y);                       #> 21
+    p = Pt(p.y, p.x);
+    line_i64(p.x * 10 + p.y);                       #> 12
+    p = shifted(p, h(5));
+    line_i64(p.x * 10 + p.y);                       #> 62
+    # a copy is independent of its source
+    mut Pt q = p;
+    q.x = h(9);
+    line_i64(p.x * 10 + q.x);                       #> 69
+    # a parallel swap of records
+    mut Pt a = Pt(h(1), h(1));
+    mut Pt b = Pt(h(2), h(2));
+    a, b = b, a;
+    line_i64(a.x * 10 + b.x);                       #> 21
+    # arrays from a function of themselves, element order reversed in place by value
+    mut Big big;
+    for i in 0..<32: big.cells[i] = h(i as i64);
+    big = reverse(big);
+    line_i64(big.cells[0] * 100 + big.cells[31]);   #> 3100
+    big = bump_all(reverse(big));
+    line_i64(big.cells[0] * 100 + big.cells[31]);   #> 132
+    # an array literal reading the array it is assigned to
+    mut [3]i64 xs = [h(1), h(2), h(3)];
+    xs = [xs[2], xs[0], xs[1]];
+    line_i64(xs[0] * 100 + xs[1] * 10 + xs[2]);     #> 312
+    # writing a record through a pointer to itself, from its own value
+    write_through(p.&, swapped(p));
+    line_i64(p.x * 10 + p.y);                       #> 26
+    # equality ignores padding bytes, whatever the stack held before
+    do scribble(h(3));
+    Padded one = padded(h(3));
+    do scribble(h(5));
+    Padded two = padded(h(3));
+    line_i64(if one == two: 1 else: 0);             #> 1
+    line_i64(if one == padded(h(4)): 1 else: 0);    #> 0
+    # packed fields at odd addresses
+    mut [3]Packed packs;
+    for i in 0..<3: packs[i] = Packed((i + 1) as u8, h(1000000000000) as u64, 7);
+    line_u64(packed_sum(packs[2]));                 #> 1000000000010
+    line_u64(sizeof [3]Packed);                     #> 33
+}

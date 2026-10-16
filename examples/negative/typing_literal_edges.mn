@@ -1,0 +1,36 @@
+# a literal takes the expected type only if its value fits, one past either end doesn't
+u8 above_u8 = 256;                      #! type_mismatch
+i8 above_i8 = 128;                      #! type_mismatch
+i8 below_i8 = -129;                     #! type_mismatch
+u16 above_u16 = 65536;                  #! type_mismatch
+i32 below_i32 = -2147483649;            #! type_mismatch
+u64 above_u64 = 18446744073709551616;   #! type_mismatch
+i64 below_u64 = -18446744073709551616;  #! type_mismatch
+i64 below_i64 = -9223372036854775809;   #! type_mismatch
+i64 far_below_i64 = -18446744073709551615;   #! type_mismatch
+stc untyped_below_i64 = -9223372036854775809;   #! type_mismatch
+u8 negative_unsigned = -1;              #! type_mismatch
+fun takes_u8 = (u8 x) -> u8: ret x;
+stc u8 argument_too_big = takes_u8(300);   #! type_mismatch
+
+# the ends themselves fit
+u8 top_u8 = 255;
+i8 bottom_i8 = -128;
+i64 bottom_i64 = -9223372036854775808;
+u64 top_u64 = 18446744073709551615;
+
+# operands join only within a signedness, ints and float variables don't join
+fun mixed_signs = (u8 a, i8 b) -> bool: ret a < b;          #! type_mismatch
+stc i32 mixed_add = (1 as u8) + (1 as i8);                  #! type_mismatch
+stc f32 int_and_float = 1.5 + (1 as u32);                   #! type_mismatch
+stc f64 float_remainder = 5.0 % 2.0;                        #! type_mismatch
+# bitwise binds looser than comparisons: this is `6 & (3 == 2)`
+stc u32 bitwise_after_compare = 6 & 3 == 2;                 #! type_mismatch
+
+# casts: no int to bool, `asbits` only to a type at least as large, no chain without parentheses
+stc bool int_to_bool = 1 as bool;                           #! invalid_cast
+stc u64 asbits_smaller = 1 asbits u8;                       #! invalid_cast
+stc u8 unparenthesized = 1 as u8 as u16;                    #! invalid_cast
+stc u16 parenthesized = (1 as u8) as u16;
+
+$main = () {}

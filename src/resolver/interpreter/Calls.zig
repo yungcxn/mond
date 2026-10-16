@@ -555,6 +555,8 @@ pub fn construct(self: *Calls, target: Index, arguments: []const NodeId) Value {
     // a payload that cannot be interned keeps the case value a heap block
     if (interpreter.escapes(payload)) return .block(target, first_cell, field_count);
     const payload_index = interpreter.interned(payload);
+    const niche = static_pool.niche_case(target, payload_index);
+    if (niche != .none) return .pooled(niche);
     return .pooled(static_pool.intern(.{ .variant_value = .{
         .case = target,
         .payload = payload_index,

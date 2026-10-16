@@ -768,9 +768,29 @@ fn read(self: *Trees, node: NodeId, name: []const u8) ?NodeId {
     const mark = tree.scratch.len;
     defer tree.scratch.len = mark;
     const origin = tree.first_token(tree.arg(node, 0));
+    const owner = std.math.maxInt(u32) - resolver.session.fresh_name_count;
+    resolver.session.fresh_name_count += 1;
+    const first_copied = tree.ast_nodes.len();
+    var private_names: std.ArrayList(NodeId) = .empty;
+    defer private_names.deinit(allocator);
     for (parser.global_store.items()) |root| {
-        if (parser.tree.kind(root) != .mod_pub) continue;
-        tree.scratch.push(tree.copy(&parser.tree, root, bytes, false, origin));
+        const copied = tree.copy(&parser.tree, root, bytes, false, origin);
+        tree.scratch.push(copied);
+        if (parser.tree.kind(root) == .mod_pub) continue;
+        const declared = name_view(tree, copied, def_var(tree, copied), .{});
+        if (declared == 0 or tree.kind(declared) != .identifier) continue;
+        if (tree.arg(declared, 1) == 0) continue;
+        tree.words.column(.binds)[tree.arg(declared, 1) - 1] = true;
+        private_names.append(allocator, declared) catch @panic("OOM");
+    }
+    for (first_copied..tree.ast_nodes.len()) |i| {
+        const copied: NodeId = @intCast(i);
+        if (tree.kind(copied) != .identifier or tree.arg(copied, 1) == 0) continue;
+        for (private_names.items) |declared| {
+            const text = tree.text(declared, resolver.src_bytes);
+            if (!std.mem.eql(u8, tree.text(copied, resolver.src_bytes), text)) continue;
+            tree.words.column(.owner)[tree.arg(copied, 1) - 1] = owner;
+        }
     }
 
     const included = tree.push_node(.block);

@@ -1,0 +1,89 @@
+<include "lib/out.mn">;
+
+# integers wrap, also where an optimizer would like to assume they don't: loops ending by
+# overflow, comparisons after a wrapping add, reductions and pointer walks
+mut i64 ONE = 0;
+fun h = (i64 v) -> i64: ret v * ONE;
+
+# terminates only because the counter wraps to negative
+fun steps_to_wrap = (i32 start) -> i64 {
+    mut i32 i = start;
+    mut i64 n = 0;
+    while i > 0 {
+        i += 100000000;
+        n += 1;
+    }
+    ret n;
+}
+# an unsigned counter wrapping below zero ends a downward loop
+fun down = (u32 from) -> i64 {
+    mut i64 n = 0;
+    mut u32 i = from;
+    while i <= from {
+        n += 1;
+        i -= 1;
+    }
+    ret n;
+}
+# the comparison after an add that wraps: true by math, false by the bits
+fun grows = (i32 x) -> bool: ret x + 1 > x;
+fun grows8 = (u8 x) -> bool: ret x + 1 > x;
+fun times_two_halves = (i32 x) -> i32: ret (x * 2) / 2;
+fun sum = ([1024]u32 xs) -> u32 {
+    mut u32 s = 0;
+    for x in xs: s += x;
+    ret s;
+}
+fun dot = (&[256]i16 a, &[256]i16 b) -> i64 {
+    mut i64 s = 0;
+    for i in 0..<256: s += a.*[i] as i64 * b.*[i] as i64;
+    ret s;
+}
+fun walk = (&[8]u64 xs) -> u64 {
+    mut &u64 p = xs.*[0].&;
+    mut u64 s = 0;
+    for 0..<8 {
+        s = s * 2 + p.*;
+        p = p + 1;
+    }
+    p = p - 3;
+    ret s * 10 + p.*;
+}
+fun max_index = ([16]i32 xs) -> u64 {
+    mut u64 best = 0;
+    for i in 1..<16: if xs[i] > xs[best]: best = i;
+    ret best;
+}
+fun collatz = (u64 n) -> u64 {
+    mut u64 x = n;
+    mut u64 steps = 0;
+    while x != 1, steps += 1: x = if x % 2 == 0: x / 2 else: 3 * x + 1;
+    ret steps;
+}
+fun b = (bool x) -> i64: ret if x: 1 else: 0;
+
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    line_i64(steps_to_wrap(h(2000000000) as i32));     #> 2
+    line_i64(down(h(5) as u32));                        #> 6
+    line_i64(b(grows(h(2147483647) as i32)));           #> 0
+    line_i64(b(grows8(h(255) as u8)));                  #> 0
+    line_i64(times_two_halves(h(1500000000) as i32) as i64);  #> -647483648
+    mut [1024]u32 xs;
+    for i in 0..<1024: xs[i] = (h(i as i64) * 4194304) as u32;
+    line_u64(sum(xs) as u64);                           #> 2147483648
+    mut [256]i16 a;
+    mut [256]i16 c;
+    for i in 0..<256 {
+        a[i] = (h(i as i64) - 128) as i16;
+        c[i] = (h(i as i64) * 128) as i16;
+    }
+    line_i64(dot(a.&, c.&));                            #> 176865280
+    mut [8]u64 ws;
+    for i in 0..<8: ws[i] = h(i as i64) as u64 % 2;
+    line_u64(walk(ws.&));                               #> 851
+    mut [16]i32 ys;
+    for i in 0..<16: ys[i] = ((h(i as i64) * 7919) % 101) as i32;
+    line_u64(max_index(ys));                            #> 12
+    line_u64(collatz(h(27) as u64));                    #> 111
+}

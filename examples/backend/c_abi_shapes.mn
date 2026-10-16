@@ -1,0 +1,91 @@
+<include "lib/out.mn">;
+#+ -lc lib/clib.c lib/abi.c
+
+# records the calling conventions classify differently, arguments past the registers, narrow
+# ints extended by the caller, and mond functions called back by c, also with records
+# (examples/backend/lib/abi.c)
+
+type FloatInt = *(f32 f, i32 i);
+type IntDouble = *(i64 i, f64 d);
+type Quad = *(f64 a, f64 b, f64 c, f64 d);
+type Five = *(f32 a, f32 b, f32 c, f32 d, f32 e);
+type Three = *(u8 a, u8 b, u8 c);
+type Shorts = *([3]u16 v);
+type Narrow = *(bool flag, i8 small, i16 mid);
+type CharDouble = *(u8 c, f64 d);
+
+fun abi_float_int = (FloatInt x) -> i64;
+fun abi_make_float_int = (i32 i) -> FloatInt;
+fun abi_int_double = (IntDouble x) -> i64;
+fun abi_make_int_double = (i64 i) -> IntDouble;
+fun abi_quad = (Quad q) -> f64;
+fun abi_make_quad = (f64 base) -> Quad;
+fun abi_five = (Five f) -> f64;
+fun abi_make_five = (f32 x) -> Five;
+fun abi_three = (Three t) -> u32;
+fun abi_make_three = (u8 x) -> Three;
+fun abi_shorts = (Shorts s) -> u32;
+fun abi_narrow = (Narrow n) -> i32;
+fun abi_char_double = (CharDouble x) -> f64;
+fun abi_many = (i64 a, f64 b, i64 c, f64 d, i64 e, f64 f, i64 g, f64 h, i64 i, f64 j, i64 k,
+    f64 l, i64 m, f64 n, i32 o, f32 p, i8 q, u16 r) -> i64;
+fun abi_minus_one8 = () -> i8;
+fun abi_max8 = () -> u8;
+fun abi_min16 = () -> i16;
+fun abi_max16 = () -> u16;
+fun abi_not = (bool b) -> bool;
+fun abi_narrow_args = (i8 a, u8 b, i16 c, u16 d) -> i32;
+fun abi_fold = ((i64, i64) -> i64 f, i64 count) -> i64;
+fun abi_call_float = ((f64, f32) -> f64 f, f64 x) -> f64;
+fun abi_call_record = ((IntDouble) -> i64 f, i64 x) -> i64;
+fun abi_sort3 = (*i32 xs, (&i32, &i32) -> i32 less) -> i32;
+fun abi_call_maker = ((i64) -> IntDouble f, i64 x) -> i64;
+fun abi_call_quad = ((f64, Quad) -> Quad f, f64 x) -> f64;
+type Step = (i64) -> i64;
+fun clib_apply = (Step function, i64 value) -> i64;
+
+fun add = (i64 acc, i64 i) -> i64: ret acc * 2 + i;
+fun mix = (f64 x, f32 y) -> f64: ret x * 4.0 + y as f64;
+fun unpack = (IntDouble r) -> i64: ret r.i * 100 + (r.d * 100.0) as i64;
+fun less = (&i32 a, &i32 b) -> i32: ret if a.* < b.*: 1 else: 0;
+fun make = (i64 x) -> IntDouble: ret IntDouble(x * 2, 0.5);
+fun shift = (f64 x, Quad q) -> Quad: ret Quad(q.a + x, q.b + x, q.c + x, q.d + x);
+fun twice = (i64 x) -> i64: ret x * 2;
+fun thrice = (i64 x) -> i64: ret x * 3;
+stc [2]Step STEPS = [twice, thrice];
+
+$main = () {
+    line_i64(abi_float_int(FloatInt(2.5, 7)));                       #> 32
+    fi = abi_make_float_int(6);
+    line_i64((fi.f * 10.0) as i64 * 100 + fi.i as i64);              #> 2994
+    line_i64(abi_int_double(IntDouble(5, 1.25)));                    #> 130
+    id = abi_make_int_double(10);
+    line_i64(id.i * 1000 + (id.d * 100.0) as i64);                   #> 20250
+    line_i64(abi_five(Five(1.0, 2.0, 3.0, 4.0, 0.5)) as i64);        #> 60
+    five = abi_make_five(2.0);
+    line_i64((five.a + five.d + five.e * 10.0) as i64);              #> -16
+    line_u64(abi_three(Three(1, 2, 3)) as u64);                      #> 10203
+    t = abi_make_three(7);
+    line_u64((t.a as u64) * 10000 + (t.b as u64) * 100 + t.c as u64);  #> 70809
+    line_u64(abi_shorts(Shorts([1, 2, 3])) as u64);                   #> 3002001
+    line_i64(abi_narrow(Narrow(true, -2, -300)) as i64);             #> 99500
+    line_i64(abi_char_double(CharDouble(65, 0.5)) as i64);           #> 65
+    line_i64(abi_many(1, 0.5, 2, 0.5, 3, 0.5, 4, 0.5, 5, 0.5, 6, 0.5, 7, 0.5, 8, 0.5, -9, 10));  #> 41
+    line_i64(abi_minus_one8() as i64);                               #> -1
+    line_u64(abi_max8() as u64);                                     #> 255
+    line_i64(abi_min16() as i64);                                    #> -32768
+    line_u64(abi_max16() as u64);                                    #> 65535
+    line_u64(if abi_not(false): 1 else: 0);                          #> 1
+    line_i64(abi_narrow_args(-1, 255, -1000, 65535) as i64);         #> 64789
+    line_i64(abi_fold(add, 4));                                      #> 26
+    line_i64(abi_call_float(mix, 2.0) as i64);                       #> 8
+    mut [3]i32 xs = [3, 1, 2];
+    line_i64(abi_sort3(xs[0].&, less) as i64);                       #> 123
+    line_i64(abi_quad(Quad(1.0, 2.0, 3.0, 4.0)) as i64);             #> 4321
+    q = abi_make_quad(5.0);
+    line_i64((q.a + q.b * 10.0 + q.c * 100.0 + q.d * 1000.0) as i64);  #> 8765
+    line_i64(abi_call_record(unpack, 3));                            #> 325
+    line_i64(abi_call_maker(make, 4));                               #> 850
+    line_i64(abi_call_quad(shift, 1.0) as i64);                      #> 5432
+    line_i64(clib_apply(STEPS[1], 1) + clib_apply((i64 x): x + 1, 1));   #> 5
+}

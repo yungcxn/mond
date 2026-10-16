@@ -294,6 +294,8 @@ fn retag(self: *Types, node: NodeId, value: Value, target: Index) Value {
         .value_type = target_payload,
         .elements = interpreter.pool_indices.buffer[mark..interpreter.pool_indices.len],
     } });
+    const niche = static_pool.niche_case(target, payload);
+    if (niche != .none) return .pooled(niche);
     const retagged = static_pool.intern(.{
         .variant_value = .{ .case = target, .payload = payload },
     });

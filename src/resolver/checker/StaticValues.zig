@@ -121,6 +121,10 @@ pub fn literal_value(self: *StaticValues, node: NodeId, negated: bool) StaticPoo
                     if (resolver.doctor.has_report_at(literal)) return .poison_type;
                     return resolver.report(.type_mismatch, literal, .none, .u64_type);
                 };
+            if (is_negated and bits > 1 << 63) {
+                if (resolver.doctor.has_report_at(literal)) return .poison_type;
+                return resolver.report(.type_mismatch, literal, .none, .i64_type);
+            }
             if (is_negated) {
                 const int = StaticPool.IntValue{ .value_type = .i64_type, .bits = 0 -% bits };
                 return static_pool.intern(.{ .int_value = int });

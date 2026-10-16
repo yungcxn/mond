@@ -504,6 +504,13 @@ pub fn check_function_result(self: *Declarations, context: *FunctionContext, bod
     if (resolver.tree.kind(body) != .block) {
         _ = resolver.expressions.check(context, body, context.return_type);
         resolver.expressions.reject_escape(context, body);
+        const open_result = static_pool.substitute_type_variables(context.return_type);
+        const is_endless = resolver.tree.kind(body) == .loop or
+            resolver.tree.kind(body) == .loop_with_repeat_stmt;
+        const is_never = is_endless and resolver.node_types[body] == .never_type;
+        if (is_never and static_pool.tag(open_result) == .type_variable) {
+            _ = static_pool.unify(context.return_type, .never_type);
+        }
         return;
     }
 

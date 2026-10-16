@@ -38,6 +38,7 @@ const SequenceWalk = struct {
     // the index into a range or an array, stepped after each iteration
     counter: u32 = none,
     counter_type: Index = .none,
+    last: Ref = .none,
     element: DeclPool.Index = .none,
     // the array walked or the iterator asked for its elements, `none` for a range
     sequence: Ref = .none,
@@ -1992,6 +1993,12 @@ fn loop(self: *HighLowerer, node: NodeId) Ref {
         const counter = walk.counter;
         const counter_type = walk.counter_type;
         const current = self.read_current(counter);
+        if (walk.last != .none) {
+            const stepping = self.builder.new_block();
+            const is_last = self.builder.emit_refs(.eq, .bool_type, current, walk.last);
+            self.builder.branch_if(is_last, exit, stepping);
+            self.builder.go_to(stepping);
+        }
         const one = self.builder.constant_int(counter_type, 1);
         self.write_current(counter, self.builder.emit_refs(.add, counter_type, current, one));
     }
@@ -2032,6 +2039,10 @@ fn enter_range_head(self: *HighLowerer, for_loop: ForLoop, walk: *SequenceWalk) 
             const one = self.builder.constant_int(element_type, 1);
             span = self.builder.emit_refs(.add, element_type, span, one);
         }
+        const is_empty = self.builder.emit_refs(if (range.incl) .lt else .le, .bool_type, end, low);
+        const zero = self.builder.constant_int(element_type, 0);
+        const choices = self.builder.list(&.{ @intFromEnum(zero), @intFromEnum(span) });
+        span = self.builder.emit(.select, element_type, @intFromEnum(is_empty), choices);
         const resize = @intFromEnum(StaticPool.CastKind.int_resize);
         const length = if (element_type == .u64_type)
             span
@@ -2054,6 +2065,7 @@ fn enter_range_head(self: *HighLowerer, for_loop: ForLoop, walk: *SequenceWalk) 
     }
     walk.counter = counter;
     walk.counter_type = element_type;
+    if (range.incl) walk.last = end;
 }
 
 fn enter_array_head(self: *HighLowerer, for_loop: ForLoop, walk: *SequenceWalk) void {

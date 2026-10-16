@@ -1,0 +1,84 @@
+<include "lib/out.mn">;
+
+# static data in the executable (nested records and cases, payload-free cases alone, in arrays,
+# records and unions, escapes, a zero byte in a string), mutable globals, text compared and matched
+mut i64 ONE = 0;
+fun h = (i64 v) -> i64: ret v * ONE;
+
+type Pt = *(i32 x, i32 y);
+variant Shape = +(Square(u32 side), Line(Pt from, Pt to), Nothing);
+stc [3]Shape SHAPES = [Shape.Square(4), Shape.Line(Pt(1, 2), Pt(-3, 4)), Shape.Nothing];
+variant Plain = +(A, B, C);
+variant Mix = Shape || Plain;
+variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+type Holder = *(Shape s, u32 k);
+stc Shape ALONE = Shape.Nothing;
+stc Plain ONE_PLAIN = Plain.C;
+stc [2]Plain PLAIN = [Plain.C, Plain.B];
+stc Holder HELD = Holder(Shape.Nothing, 5);
+stc [2]Mix MIXED = [Plain.B, Shape.Nothing];
+stc [2]Opt8 OPTS = [Opt8.None, Opt8.Some(3)];
+stc [2][3]u8 GRID = [[1, 2, 3], [4, 5, 6]];
+stc []u8 GREETING = "hi\n\t\"\\\x41\0z";
+mut [4]i64 HISTORY = [10, 20, 30, 40];
+mut Pt ORIGIN = Pt(7, 8);
+stc u64 TABLE_LEN = 300;
+mut [TABLE_LEN]u16 TABLE;
+mut i64 CALLS = 0;
+
+fun score = (Shape s) -> i64: ret match s {
+    Shape.Square(side) => side as i64,
+    Shape.Line(a, b) => (a.x * 1000 + a.y * 100 + b.x * 10 + b.y) as i64,
+    Shape.Nothing => -1,
+};
+fun bump = () -> i64 { CALLS += 1; ret CALLS; }
+fun plain_id = (Plain p) -> u64: ret match p { Plain.A => 0, Plain.B => 1, Plain.C => 2 };
+fun mix_id = (Mix m) -> u64: ret match m { Shape.Nothing => 1, Plain.B => 2, _ => 3 };
+fun opt_id = (Opt8 o) -> u64: ret match o { Opt8.Some(x) => x as u64, Opt8.None => 9 };
+fun move_origin = (*Pt p) { p.* = Pt(p.y, p.x); }
+fun equal_text = ([4]u8 a, [4]u8 b) -> bool: ret a == b;
+fun keyword = (&u8 word) -> i64: ret match word { "if" => 1, "else" => 2, "" => 3, _ => 0 };
+fun zeros = ([8]u8 xs) -> u64 {
+    mut u64 n = 0;
+    for x in xs: if x == 0: n += 1;
+    ret n;
+}
+
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    # static data with nested records and cases, written into the executable
+    mut i64 s = 0;
+    for shape in SHAPES: s = s * 10000 + score(shape);
+    line_i64(s);                                        #> 411739999
+    line_i64(score(ALONE) * 10 + score(HELD.s));         #> -11
+    line_u64(ALONE.$tag as u64 * 100 + ONE_PLAIN.$tag as u64 * 10 + HELD.s.$tag as u64);  #> 222
+    line_u64(plain_id(PLAIN[h(0) as u64]) * 10 + plain_id(ONE_PLAIN));                    #> 22
+    line_u64(mix_id(MIXED[0]) * 10 + mix_id(MIXED[1]));  #> 21
+    line_u64(opt_id(OPTS[0]) * 10 + opt_id(OPTS[1]));    #> 93
+    line_u64((GRID[h(1) as u64][h(2) as u64]) as u64);   #> 6
+    # escapes in strings, a zero byte inside one
+    line_u64(GREETING.$len);                             #> 9
+    mut u64 sum = 0;
+    for c in GREETING: sum += c as u64;
+    line_u64(sum);                                      #> 541
+    # mutable globals, written at run time
+    HISTORY[h(2) as u64] += 5;
+    line_i64(HISTORY[0] + HISTORY[2]);                  #> 45
+    move_origin(ORIGIN.&);
+    line_i64((ORIGIN.x * 10 + ORIGIN.y) as i64);        #> 87
+    for i in 0..<TABLE_LEN: TABLE[i] = (i * i) as u16;
+    line_u64(TABLE[299] as u64);                        #> 23865
+    do bump();
+    do bump();
+    line_i64(bump());                                   #> 3
+    # text compared as arrays and matched as strings
+    [4]u8 word = "abcd";
+    mut [4]u8 other = "abcd";
+    line_i64(if equal_text(word, other): 1 else: 0);    #> 1
+    other[h(3) as u64] = 'e';
+    line_i64(if equal_text(word, other): 1 else: 0);    #> 0
+    line_i64(keyword("else"));                          #> 2
+    line_i64(keyword("elsewhere"));                     #> 0
+    line_i64(keyword(""));                              #> 3
+    line_u64(zeros([0, 1, 0, 2, 0, 3, 0, 4]));          #> 4
+}

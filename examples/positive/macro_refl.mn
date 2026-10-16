@@ -71,7 +71,7 @@ stcfun getter = (&ast(type) t, u64 i) -> ast(fun): ret quote: (@(t.$name) v) -> 
 fun pair_b = <getter(refl Pair, 1)>;
 stc u32 pb = pair_b(Pair(a = 1)); #= pb 7
 
-# `include` takes the public declarations of a file, an edited copy of them as well
+# `include` takes the declarations of a file, an edited copy of them as well
 <include "../lib/math.mn">;
 stc u32 g = gcd(12, 18); #= g 6
 stcfun renamed = (ast lib) -> ast {

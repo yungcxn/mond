@@ -1176,8 +1176,8 @@ fn call_function(self: *LLVMLowerer, function_index: u32, mark: usize, result_sl
         const pool_type = self.ir.functions.column(.ty)[function_index];
         const fixed = self.fixed_parameters[function_index];
         const context = self.context;
-        // records go to c through a scratch slot of the registers' size, 16 bytes fit them all
-        const scratch_type = llvm.LLVMArrayType2(llvm.LLVMInt8TypeInContext(context), 16);
+        // records go to c through a scratch slot of the registers' size, 32 bytes fit them all
+        const scratch_type = llvm.LLVMArrayType2(llvm.LLVMInt8TypeInContext(context), 32);
         for (self.value_stack.items[mark..], 0..) |*argument, i| {
             const parameter = self.pool.get(pool_type).function_type.parameters[i];
             const passing = c_abi.classify(self, parameter);
@@ -1240,10 +1240,105 @@ fn c_function_pointer(self: *LLVMLowerer, closure_value: Value) Value {
     if (llvm.LLVMIsConstant(closure_value) != 0) {
         const thunk_of_value = llvm.LLVMGetOperand(closure_value, 0);
         for (self.thunks, 0..) |known, i| {
-            if (known == thunk_of_value) return self.functions[i];
+            if (known == thunk_of_value) return self.c_entry(@intCast(i));
         }
     }
     std.debug.panic("c takes only functions without captures, named directly", .{});
+}
+
+fn c_entry(self: *LLVMLowerer, function_index: u32) Value {
+    const function = self.functions[function_index];
+    const pool_type = self.ir.functions.column(.ty)[function_index];
+    const parameter_count = self.pool.get(pool_type).function_type.parameters.len;
+    const result_type = self.pool.get(pool_type).function_type.return_type;
+    var has_record = self.types.is_in_memory(result_type);
+    for (0..parameter_count) |i| {
+        const parameter = self.pool.get(pool_type).function_type.parameters[i];
+        has_record = has_record or self.types.is_in_memory(parameter);
+    }
+    if (!has_record) return function;
+
+    var name_length: usize = 0;
+    const function_name = llvm.LLVMGetValueName2(function, &name_length);
+    const length = @min(name_length, self.name_buffer.len - 2);
+    @memcpy(self.name_buffer[0..length], function_name[0..length]);
+    @memcpy(self.name_buffer[length..][0..2], ".c");
+    self.name_buffer[length + 2] = 0;
+    if (llvm.LLVMGetNamedFunction(self.module, &self.name_buffer)) |known| return known;
+
+    const has_result = Types.has_value(result_type);
+    const result_passing: c_abi.Passing = if (has_result)
+        c_abi.classify(self, result_type)
+    else
+        .{ .how = .direct, .lowered = self.types.unit };
+    const by_slot = has_result and result_passing.how == .indirect;
+    const first = @intFromBool(by_slot);
+    const mark = self.type_stack.items.len;
+    defer self.type_stack.shrinkRetainingCapacity(mark);
+    if (by_slot) self.type_stack.append(self.allocator, self.types.pointer) catch @panic("OOM");
+    for (0..parameter_count) |i| {
+        const parameter = self.pool.get(pool_type).function_type.parameters[i];
+        const lowered = c_abi.classify(self, parameter).lowered;
+        self.type_stack.append(self.allocator, lowered) catch @panic("OOM");
+    }
+    const lowered_result = if (by_slot or !has_result)
+        llvm.LLVMVoidTypeInContext(self.context)
+    else
+        result_passing.lowered;
+    const parameters = self.type_stack.items[mark..];
+    const entry_type =
+        llvm.LLVMFunctionType(lowered_result, parameters.ptr, @intCast(parameters.len), 0);
+    const entry = llvm.LLVMAddFunction(self.module, &self.name_buffer, entry_type);
+    llvm.LLVMSetLinkage(entry, llvm.LLVMInternalLinkage);
+    self.add_function_attributes(entry);
+    if (by_slot) self.add_result_attributes(entry, result_type);
+    self.add_c_attributes(entry, llvm.LLVMAttributeReturnIndex, result_type);
+    for (0..parameter_count) |i| {
+        const parameter = self.pool.get(pool_type).function_type.parameters[i];
+        self.add_c_attributes(entry, @intCast(first + i + 1), parameter);
+    }
+
+    const builder = llvm.LLVMCreateBuilderInContext(self.context);
+    defer llvm.LLVMDisposeBuilder(builder);
+    const block = llvm.LLVMAppendBasicBlockInContext(self.context, entry, "");
+    llvm.LLVMPositionBuilderAtEnd(builder, block);
+    const scratch_type = llvm.LLVMArrayType2(llvm.LLVMInt8TypeInContext(self.context), 32);
+    const value_mark = self.value_stack.items.len;
+    defer self.value_stack.shrinkRetainingCapacity(value_mark);
+    const in_memory = self.results_in_memory.isSet(function_index);
+    var result_slot: Value = null;
+    if (in_memory) {
+        result_slot = if (by_slot)
+            llvm.LLVMGetParam(entry, 0)
+        else
+            llvm.LLVMBuildAlloca(builder, scratch_type, "");
+        llvm.LLVMSetAlignment(result_slot, 16);
+        self.value_stack.append(self.allocator, result_slot) catch @panic("OOM");
+    }
+    for (0..parameter_count) |i| {
+        const parameter = self.pool.get(pool_type).function_type.parameters[i];
+        var argument = llvm.LLVMGetParam(entry, @intCast(first + i));
+        if (c_abi.classify(self, parameter).how == .coerced) {
+            const scratch = llvm.LLVMBuildAlloca(builder, scratch_type, "");
+            llvm.LLVMSetAlignment(scratch, 16);
+            _ = llvm.LLVMBuildStore(builder, argument, scratch);
+            argument = scratch;
+        }
+        self.value_stack.append(self.allocator, argument) catch @panic("OOM");
+    }
+    const arguments = self.value_stack.items[value_mark..];
+    const function_type = self.function_types[function_index];
+    const count: c_uint = @intCast(arguments.len);
+    const called = llvm.LLVMBuildCall2(builder, function_type, function, arguments.ptr, count, "");
+    if (!has_result or by_slot) {
+        _ = llvm.LLVMBuildRetVoid(builder);
+    } else if (in_memory) {
+        const loaded = llvm.LLVMBuildLoad2(builder, lowered_result, result_slot, "");
+        _ = llvm.LLVMBuildRet(builder, loaded);
+    } else {
+        _ = llvm.LLVMBuildRet(builder, called);
+    }
+    return entry;
 }
 
 pub fn build_call(
@@ -1303,6 +1398,9 @@ pub fn operand(self: *LLVMLowerer, ref: Ref) Value {
 // the pool type of an operand, a global's is the type of what it holds
 pub fn type_of_ref(self: *LLVMLowerer, ref: Ref) Index {
     if (ref.is_global()) return self.ir.globals.column(.ty)[ref.index()];
+    if (ref.is_const() and self.pool.tag(ref.value()) == .variant_case_type) {
+        return self.pool.get(ref.value()).variant_case_type.variant;
+    }
     if (ref.is_const()) return self.pool.type_of(ref.value());
     return self.ir.insts.column(.ty)[self.function.first_inst + @intFromEnum(ref)];
 }

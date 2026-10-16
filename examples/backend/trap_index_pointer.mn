@@ -1,0 +1,12 @@
+# a runtime check stops the program: an index past the end through a pointer to an array. the line before is printed, the one after isn't
+#+
+#? trap
+<include "lib/raw.mn">;
+mut i64 ONE = 0;
+fun at = (&[4]u32 p, u64 i) -> u32: ret p.*[i];
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    say_u64(1);   #> 1
+    [4]u32 xs = [1, 2, 3, 4]; say_u64(at(xs.&, (4 * ONE) as u64) as u64);
+    say_u64(2);
+}

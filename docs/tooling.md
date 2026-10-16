@@ -30,11 +30,11 @@ zig build lsp                       # the language server, into lsp/vscode and l
 | `-i` `--inspect` | declarations by name, `#index` or `:line`; nothing is built |
 | `-h` `--help` | the flags and modes; also shown when `mond` gets no arguments |
 
-Diagnostics go to stderr as `file:line:column: code operands`. `$main` returns the exit code, and takes nothing, the arguments as `&[]&u8`, or `(argc, &&u8 argv)` (see [basics](basics.md#program)).
+Diagnostics go to stderr as `file:line:column: code operands`. `$main` returns the exit code, and takes nothing or `(argc, &&u8 argv)` (see [basics](basics.md#program)).
 
 Records, arrays and variants live in memory: they are passed by address and returned through a pointer the caller gives. LLVM's passes promote small ones to registers in every mode but `none`.
 
-The runtime checks stop the program with a trap (a debugger shows the line) on a division by zero (and the smallest integer divided by `-1`), a shift by the width or more, an index past the end of an array, and on reaching code that can't be reached, like a failing `x??`. Without them these are undefined behavior. Debug symbols (`-d`) are independent of the mode: `-m none -d` is what other compilers call a debug build.
+The runtime checks stop the program with a trap (a debugger shows the line) on a division or remainder by zero (and of the smallest integer by `-1`), a shift by the width or more, an index past the end of an array, and on reaching code that can't be reached, like a failing `x??`. Without them these are undefined behavior. At compile time the same operations have no value (`static_eval_failed`). Debug symbols (`-d`) are independent of the mode: `-m none -d` is what other compilers call a debug build.
 
 ### C functions
 
@@ -65,10 +65,13 @@ Every `.mn` file under `examples/` and every ```` ```mond ```` block in `docs/` 
 | `#: name type` | the type of `name` |
 | `#> text` | (backend tests) the next line the program prints |
 | `#+ arguments` | (backend tests) what the program is built with instead of `-lc lib/clib.c` |
+| `#? exit N` | (backend tests) the exit code, else `0` |
+| `#? trap` | (backend tests) a runtime check stops the program, in the modes that keep the checks |
+| `#? args a b` | (backend tests) the arguments the program is run with |
 
 These markers count anywhere in a comment. Values print as they are stored: a variant as `+(..).Case[payload]`, a computed `[]u8` as numbers, a string literal as text. Files in `examples/negative/` must mark at least one diagnostic. The docs must name every keyword, tree kind and diagnostic in backticks, so a new feature fails the tests until it is documented.
 
-The programs in `examples/backend/` are built and run after that, in the modes `none`, `safe` and `default`: each must exit with `0` and print exactly its `#> text` lines, in order. `examples/backend/lib/out.mn` gives them output through the C library: each is built with `-lc examples/backend/lib/clib.c`, or with the arguments after its `#+` marker (files relative to `examples/backend`).
+The programs in `examples/backend/` are built and run after that, in the modes `none`, `safe`, `default`, `aggressive` and `minsize`: each must print exactly its `#> text` lines, in order, and end as its `#?` lines say. A `#? trap` program is run only in the modes that keep the checks; in the others its failing check is undefined behavior, so it is only built. `examples/backend/lib/raw.mn` writes unbuffered through `$syscall`, for programs that trap (C's buffered output would be lost) or are built without the C library. `examples/backend/lib/out.mn` gives them output through the C library: each is built with `-lc examples/backend/lib/clib.c`, or with the arguments after its `#+` marker (files relative to `examples/backend`).
 
 ## Editor
 
@@ -124,7 +127,7 @@ Lexing and parsing stop at the first error (`LexingError_*`, `Expected*`, `Illeg
 | `use_before_initialization` | a read before every path wrote it |
 | `destructure_type_conflict` | the names of a multi-assignment need different types |
 | `missing_main` | there is no `$main` |
-| `invalid_main` | `$main` has another signature than `()`, `(&[]&u8 arguments)` or `(argc, &&u8 argv)`, or another result than nothing, an integer or `never` |
+| `invalid_main` | `$main` has another signature than `()` or `(argc, &&u8 argv)`, or another result than nothing, an integer or `never` |
 | `stray_unquote` | `@` outside a quote |
 | `frozen_declaration` | a write to a declaration that is already resolved, or a write outside a splice |
 | `macro_error` | a macro called `$error` |

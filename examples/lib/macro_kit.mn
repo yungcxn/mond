@@ -1,8 +1,11 @@
-# a library for `include` with macros of its own (see macro_include.mn): only what is `pub` is included
+# a library for `include` with macros of its own (see macro_include.mn): only what is `pub` can be named
 
 pub stcfun twice_of = (ast(u32) e) -> ast(u32): ret quote: @e * 2;
 pub type Celsius = *(i32 degrees);
 pub variant Mood = +(Calm, Angry);
 pub stc u32 kit_version = 3;
+pub fun kit_answer = () -> u32: ret secret_factor() * kit_secret;
 
 stcfun hidden_macro = () -> ast: ret quote: 0;
+fun secret_factor = () -> u32: ret 6;
+stc u32 kit_secret = 7;

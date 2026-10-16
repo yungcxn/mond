@@ -1,0 +1,77 @@
+# integer casts at compile time: from signed they sign-extend, from unsigned zero-extend,
+# narrowing keeps the low bits (examples/backend/conversions.mn checks the same at run time)
+stc i8 M1 = -1;
+stc i64 SEXT = M1 as i64;            #= SEXT -1
+stc u64 SEXT_U = M1 as u64;          #= SEXT_U 18446744073709551615
+stc u16 SEXT_16 = M1 as u16;         #= SEXT_16 65535
+stc u8 FF = 255;
+stc i64 ZEXT = FF as i64;            #= ZEXT 255
+stc i8 REINT = FF as i8;             #= REINT -1
+stc u8 LOW = 511 as u8;              #= LOW 255
+stc i32 LOW32 = 4294967295 as i32;   #= LOW32 -1
+stc u16 TWO = (300 as u8) as u16;    #= TWO 44
+stc i16 WIDEN = -300;
+stc i64 WIDENED = WIDEN;             #= WIDENED -300
+stc u16 UWIDE = 65535;
+stc i64 UWIDENED = UWIDE;            #= UWIDENED 65535
+stc u8 FROM_BOOL = true as u8;       #= FROM_BOOL 1
+stc f32 FROM_BOOL_F = true as f32;   #= FROM_BOOL_F 1
+
+# narrow operations stay narrow: `!`, unary minus and shifts keep the type's width
+stc u8 NOT8 = !(0x0F as u8);         #= NOT8 240
+stc i16 NOT16 = !(0 as i16);         #= NOT16 -1
+stc u8 NEG8 = -(1 as u8);            #= NEG8 255
+stc u8 SHL8 = (3 as u8) << 7;        #= SHL8 128
+stc i8 SHR8 = (-128 as i8) >> 7;     #= SHR8 -1
+stc u8 SHRU8 = (128 as u8) >> 7;     #= SHRU8 1
+stc u32 SHL_WIDE = (255 as u8) << (4 as u32);   #= SHL_WIDE 4080
+stc bool SIGNED_LT = (-1 as i8) < (0 as i8);    #= SIGNED_LT true
+stc bool UNSIGNED_LT = (255 as u8) < (0 as u8); #= UNSIGNED_LT false
+
+# integers to floats round to the nearest, ties to even
+stc f64 U64F = 18446744073709551615 as f64;   #= U64F 18446744073709552000
+stc u64 TIE = (9007199254740993 as f64) as u64; #= TIE 9007199254740992
+stc f32 F24 = 16777217 as f32;                 #= F24 16777216
+stc f64 I64F = -9223372036854775808 as f64;    #= I64F -9223372036854776000
+
+# floats: negative zero, narrowing, half precision
+stc f64 ZERO = 0.0;
+stc f64 NEG_ZERO = -ZERO;
+stc bool ZEROS_EQUAL = NEG_ZERO == ZERO;       #= ZEROS_EQUAL true
+stc u64 NEG_ZERO_BITS = NEG_ZERO asbits u64;   #= NEG_ZERO_BITS 9223372036854775808
+stc f64 POINT_ONE = 0.1;
+stc u32 F32_BITS = (POINT_ONE as f32) asbits u32;   #= F32_BITS 1036831949
+stc f16 HALF_TIE = 2048.0 + 1.0;               #= HALF_TIE 2048
+stc u16 HALF_INF = (65504.0 as f16 + 32.0 as f16) asbits u16;   #= HALF_INF 31744
+stc i32 HALF_INT = (1.5 as f16) as i32;         #= HALF_INT 1
+stc f32 F32_MUL = 16777215.0 * 3.0;            #= F32_MUL 50331644
+
+# float to int at the edges of the integer types, the 64-bit ones too
+stc u64 U64_SAT = 18446744073709551615.0 as u64;   #= U64_SAT 18446744073709551615
+stc f64 INF = 1.0 / 0.0;
+stc i64 I64_SAT = INF as i64;                      #= I64_SAT 9223372036854775807
+stc i64 I64_BIG = 10000000000000000000.0 as i64;   #= I64_BIG 9223372036854775807
+stc i64 I64_LOW = -INF as i64;                     #= I64_LOW -9223372036854775808
+stc f32 F32_TOP = 2147483648.0;
+stc i32 I32_SAT = F32_TOP as i32;                  #= I32_SAT 2147483647
+stc i8 I8_TRUNC = -1.9 as i8;                      #= I8_TRUNC -1
+stc i64 NEG_HALF = -0.5 as i64;                    #= NEG_HALF 0
+
+# comparisons with NaN are false, except `!=`
+stc f64 NAN = 0.0 / 0.0;
+stc bool NAN_LT = NAN < 1.0;          #= NAN_LT false
+stc bool NAN_LE = NAN <= 1.0;         #= NAN_LE false
+stc bool NAN_GT = NAN > 1.0;          #= NAN_GT false
+stc bool NAN_GE = NAN >= 1.0;         #= NAN_GE false
+stc bool NAN_LE2 = 1.0 <= NAN;        #= NAN_LE2 false
+stc bool NAN_GE2 = 1.0 >= NAN;        #= NAN_GE2 false
+stc bool NAN_NE = NAN != NAN;         #= NAN_NE true
+stcfun at_least = (f64 a, f64 b) -> bool: ret a >= b;
+stc bool NAN_CALLED = at_least(NAN, 0.0);   #= NAN_CALLED false
+stc bool EQUAL_GE = at_least(1.0, 1.0);     #= EQUAL_GE true
+
+# `asbits` widening fills zeros, also from a negative narrow integer
+stc u16 BITS_I8 = (-1 as i8) asbits u16;       #= BITS_I8 255
+stc u64 BITS_F32 = (-1.0 as f32) asbits u64;   #= BITS_F32 3212836864
+
+$main = () {}

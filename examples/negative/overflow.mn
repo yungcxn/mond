@@ -1,10 +1,11 @@
-# arithmetic wraps around the width of its type, a shift past the width has no value
+# arithmetic wraps around the width of its type, a shift past the width and the smallest integer
+# divided by -1 have no value
 stc u8 X = 200 + 100; #= X 44
 stc u32 A = 1 << 32; #! static_eval_failed
 stc u32 M = 4294967295 * 3; #= M 4294967293
 
-stcfun low = (i64 a, i64 b) -> i64: ret a / b;
-stc i64 LO = low(-9223372036854775807 - 1, -1); #= LO -9223372036854775808
+stcfun low = (i64 a, i64 b) -> i64: ret a / b; #! static_eval_failed
+stc i64 LO = low(-9223372036854775807 - 1, -1);
 stcfun sq = (i32 x) -> i32: ret x * x;
 stc i32 BIG = sq(100000); #= BIG 1410065408
 stc i32 FINE = sq(46340); #= FINE 2147395600

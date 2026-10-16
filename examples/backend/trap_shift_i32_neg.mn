@@ -1,0 +1,12 @@
+# a runtime check stops the program: an i32 shifted by a negative amount. the line before is printed, the one after isn't
+#+
+#? trap
+<include "lib/raw.mn">;
+mut i64 ONE = 0;
+fun s = (i32 a, i32 n) -> i32: ret a << n;
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    say_u64(1);   #> 1
+    say_i64(s(1, (-1 * ONE) as i32) as i64);
+    say_u64(2);
+}

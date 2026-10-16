@@ -476,11 +476,19 @@ fn define_variant(
         payloads.count += 1;
     }
 
-    // variants are always tagged, without tagof by the smallest tag type for their case count
+    // variants are always tagged, without tagof by the smallest tag type holding their tags
     const is_self_tagged = tagof != 0 and resolver.tree.kind(tagof) == .identifier_self;
     const mode: StaticPool.VariantTagMode = if (is_self_tagged) .self else .int;
     const tag_type: StaticPool.Index = blk: {
-        if (tagof == 0) break :blk StaticPool.smallest_tag_type(cases.len);
+        if (tagof == 0) {
+            var tag_count: u64 = cases.len;
+            for (cases) |case| {
+                const tag = static_pool.get(case).variant_case_type.tag;
+                if (static_pool.tag(tag) != .int_value) continue;
+                tag_count = @max(tag_count, static_pool.get(tag).int_value.bits +| 1);
+            }
+            break :blk StaticPool.smallest_tag_type(tag_count);
+        }
         if (mode != .self) break :blk self.type_from_node(context, tagof);
 
         // the one payload type encodes the other cases in bit patterns it never uses

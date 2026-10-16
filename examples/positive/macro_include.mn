@@ -1,4 +1,4 @@
-# `include` of a library with macros, types and values of its own: only what is `pub`
+# `include` of a library with macros, types and values of its own: only what is `pub` can be named
 <include "../lib/macro_kit.mn">;
 stc u32 tw = <twice_of(quote: 21)>; #= tw 42
 stc i32 deg = Celsius(degrees = 5).degrees; #= deg 5
@@ -6,8 +6,13 @@ stc u32 kv = kit_version; #= kv 3
 fun calm = (Mood m) -> bool: ret match m { Mood.Calm => true, Mood.Angry => false };
 stc bool cm = calm(Mood.Calm); #= cm true
 
+# a public function uses the library's private ones, which keep out of the including program's way
+fun secret_factor = () -> u32: ret 1;
+stc u32 answer = kit_answer(); #= answer 42
+stc u32 own = secret_factor(); #= own 1
+
 # the included tree, read before it is spliced
-stc u64 kit_decls = (include "../lib/macro_kit.mn").$decls.$len; #= kit_decls 4
+stc u64 kit_decls = (include "../lib/macro_kit.mn").$decls.$len; #= kit_decls 8
 stc []u8 kit_first = (include "../lib/macro_kit.mn").$decls[0].$name.$src; #= kit_first "twice_of"
 
 # an edited copy spread into the program: its declarations side by side

@@ -1,0 +1,71 @@
+<include "lib/out.mn">;
+
+# templates realized per type and length-generic functions per length (sizes, alignments and
+# nesting differ), traits realized per argument type, methods writing self, wider `asbits`
+mut i64 ONE = 0;
+fun h = (i64 v) -> i64: ret v * ONE;
+
+type Box = (type T): *(mut T value, mut u32 count) !{
+    fun put = (T v) { self.value = v; self.count += 1; }
+    fun get = () -> T: ret self.value;
+}
+fun sum = (&[]i64 xs) -> i64 {
+    mut i64 s = 0;
+    for x in xs: s += x;
+    ret s * 1000 + xs.$len as i64;
+}
+fun last = ([]u8 xs) -> u8: ret xs[xs.$len - 1];
+trait Shape = !{
+    fun area = () -> i64;
+    fun twice = () -> i64: ret self.area() * 2;
+}
+type Sq = *(i64 side) implof Shape !{ fun area = () -> i64: ret self.side * self.side; }
+type Tri = *(u8 b, u8 hgt) implof Shape !{
+    fun area = () -> i64: ret (self.b as i64 * self.hgt as i64) / 2;
+    fun twice = () -> i64: ret -1;
+}
+fun total_twice = (&Shape a, &Shape b) -> i64: ret a.twice() * 1000 + b.twice();
+type Counter = *(mut u64 n) !{
+    fun add = (u64 k) -> u64 { self.n += k; ret self.n; }
+}
+fun grow = (*Counter c) -> u64 { do c.add(2); ret c.add(3); }
+fun f32_bits_wide = (f32 x) -> u64: ret x asbits u64;
+fun u8_bits_wide = (u8 x) -> u32: ret x asbits u32;
+fun i8_bits_wide = (i8 x) -> u16: ret x asbits u16;
+
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    # one realization per type: different sizes and alignments behind the same code
+    mut Box(u8) small = Box(u8).$init();
+    small.put(h(250) as u8);
+    small.put(small.get() + 10);
+    line_u64(small.get() as u64 * 10 + small.count as u64);   #> 42
+    mut Box([5]i64) wide = Box([5]i64).$init();
+    wide.put([h(1), h(2), h(3), h(4), h(5)]);
+    line_i64(wide.get()[4] * 10 + wide.count as i64);         #> 51
+    mut Box(Box(u16)) nested = Box(Box(u16)).$init();
+    mut Box(u16) inner = Box(u16).$init();
+    inner.put(h(7) as u16);
+    nested.put(inner);
+    line_u64(nested.get().get() as u64);                       #> 7
+    line_u64(sizeof Box(u8) + sizeof Box([5]i64) * 100);      #> 4808
+    # one realization per length
+    [3]i64 three = [h(1), h(2), h(3)];
+    [5]i64 five = [h(1), h(1), h(1), h(1), h(1)];
+    line_i64(sum(three.&));                                    #> 6003
+    line_i64(sum(five.&));                                     #> 5005
+    line_u64(last("xyz") as u64 + last("ab") as u64 * 1000);   #> 98122
+    # trait parameters realized per argument type, an overridden default
+    Sq sq = Sq(h(3));
+    Tri tri = Tri(h(4) as u8, h(5) as u8);
+    line_i64(total_twice(sq.&, tri.&));                        #> 17999
+    line_i64(total_twice(tri.&, sq.&));                        #> -982
+    # methods writing through self, a pointer passed down
+    mut Counter c = Counter(h(10) as u64);
+    line_u64(grow(c.&));                                       #> 15
+    line_u64(c.n);                                             #> 15
+    # `asbits` to a wider type fills the extra bytes with zeros
+    line_u64(f32_bits_wide(-(h(1) as f32)));                   #> 3212836864
+    line_u64(u8_bits_wide(h(255) as u8) as u64);               #> 255
+    line_u64(i8_bits_wide(h(-1) as i8) as u64);                #> 255
+}

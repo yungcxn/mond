@@ -649,7 +649,13 @@ fn call_declared(
             arguments.types[i],
             self.type_named_argument(argument, parameter_type),
         );
-        if (calls_c) resolver.expressions.reject_escape(context, resolver.tree.arg_value(argument));
+        if (!calls_c) continue;
+        const value = resolver.tree.arg_value(argument);
+        resolver.expressions.reject_escape(context, value);
+        const is_function = resolver.static_pool.tag(parameter_type) == .function_type;
+        if (is_function and resolver.static_values.try_evaluate(context, value) == null) {
+            _ = resolver.report(.not_static, value, 0, 0);
+        }
     }
 
     // the call names its dispatch group's head: the lowerer walks `next_overload` from there

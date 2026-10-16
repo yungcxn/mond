@@ -1,0 +1,102 @@
+<include "lib/out.mn">;
+
+# conversions and floats, each case folded at compile time (`st`) and computed at run time on
+# inputs the optimizer can't see (scaled by ONE, set from argc); `same` prints both if they differ
+mut i64 ONE = 0;
+fun h = (i64 v) -> i64: ret v * ONE;
+fun hf = (f64 v) -> f64: ret v * ONE as f64;
+fun printf = (&u8 format, i64 a, i64 b) -> i32;
+fun printf = (&u8 format) -> i32;
+# `st` takes a static argument: its call is evaluated by the compiler
+stcfun st = (i64 v) -> i64: ret v;
+fun same = (i64 compile_time, i64 run_time) {
+    if compile_time == run_time {
+        printf("%lld\n", run_time, 0);
+    } else {
+        printf("%lld != compile time %lld\n", run_time, compile_time);
+    }
+}
+fun b = (bool x) -> i64: ret if x: 1 else: 0;
+
+fun i8_to_i64 = (i8 a) -> i64: ret a as i64;
+fun i8_to_u64 = (i8 a) -> u64: ret a as u64;
+fun i8_to_u16 = (i8 a) -> u16: ret a as u16;
+fun u8_to_i64 = (u8 a) -> i64: ret a as i64;
+fun u8_to_i8 = (u8 a) -> i8: ret a as i8;
+fun i32_to_u8 = (i32 a) -> u8: ret a as u8;
+fun u64_to_i32 = (u64 a) -> i32: ret a as i32;
+fun widen_i16 = (i16 a) -> i64 { i64 w = a; ret w; }
+fun widen_u16 = (u16 a) -> i64 { i64 w = a; ret w; }
+fun bool_to_u8 = (bool x) -> u8: ret x as u8;
+fun f_to_u8 = (f64 x) -> u8: ret x as u8;
+fun f_to_i8 = (f64 x) -> i8: ret x as i8;
+fun f_to_i32 = (f64 x) -> i32: ret x as i32;
+fun f_to_u64 = (f64 x) -> u64: ret x as u64;
+fun f_to_i64 = (f64 x) -> i64: ret x as i64;
+fun f32_to_i32 = (f32 x) -> i32: ret x as i32;
+fun u64_to_f64_bits = (u64 a) -> u64: ret (a as f64) asbits u64;
+fun u64_to_f32_bits = (u64 a) -> u32: ret (a as f32) asbits u32;
+fun i64_to_f64_bits = (i64 a) -> u64: ret (a as f64) asbits u64;
+fun f64_eq = (f64 a, f64 c) -> bool: ret a == c;
+fun f64_ne = (f64 a, f64 c) -> bool: ret a != c;
+fun f64_lt = (f64 a, f64 c) -> bool: ret a < c;
+fun f64_ge = (f64 a, f64 c) -> bool: ret a >= c;
+fun f64_div_bits = (f64 a, f64 c) -> u64: ret (a / c) asbits u64;
+fun neg_zero_bits = (f64 a) -> u64: ret (-a) asbits u64;
+fun f32_round = (f64 a) -> u32: ret (a as f32) asbits u32;
+fun f16_add_bits = (f16 a, f16 c) -> u16: ret (a + c) asbits u16;
+fun f16_to_i32 = (f16 a) -> i32: ret a as i32;
+fun f32_mul = (f32 a, f32 c) -> u32: ret (a * c) asbits u32;
+
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    # integers: sign extension from signed, zero extension from unsigned, truncation
+    same(st(i8_to_i64(-1)), i8_to_i64(h(-1) as i8));                   #> -1
+    same(st(i8_to_u64(-1) as i64), i8_to_u64(h(-1) as i8) as i64);     #> -1
+    same(st(i8_to_u16(-1) as i64), i8_to_u16(h(-1) as i8) as i64);     #> 65535
+    same(st(u8_to_i64(255)), u8_to_i64(h(255) as u8));                 #> 255
+    same(st(u8_to_i8(200) as i64), u8_to_i8(h(200) as u8) as i64);     #> -56
+    same(st(i32_to_u8(-1) as i64), i32_to_u8(h(-1) as i32) as i64);    #> 255
+    same(st(i32_to_u8(511) as i64), i32_to_u8(h(511) as i32) as i64);  #> 255
+    same(st(u64_to_i32(4294967295) as i64), u64_to_i32(h(4294967295) as u64) as i64);  #> -1
+    same(st(widen_i16(-300)), widen_i16(h(-300) as i16));              #> -300
+    same(st(widen_u16(65535)), widen_u16(h(65535) as u16));            #> 65535
+    same(st(bool_to_u8(true) as i64), bool_to_u8(h(1) == 1) as i64);   #> 1
+    # floats to integers round toward zero and saturate, NaN gives 0
+    same(st(f_to_u8(255.9) as i64), f_to_u8(hf(255.9)) as i64);        #> 255
+    same(st(f_to_i8(-1.9) as i64), f_to_i8(hf(-1.9)) as i64);          #> -1
+    same(st(f_to_i64(-0.5)), f_to_i64(hf(-0.5)));                      #> 0
+    same(st(f_to_u8(300.0) as i64), f_to_u8(hf(300.0)) as i64);        #> 255
+    same(st(f_to_u8(-5.0) as i64), f_to_u8(hf(-5.0)) as i64);          #> 0
+    same(st(f_to_i8(-200.0) as i64), f_to_i8(hf(-200.0)) as i64);      #> -128
+    same(st(f_to_i32(10000000000.0)), f_to_i32(hf(10000000000.0)));  #> 2147483647
+    same(st(f_to_u64(18446744073709551615.0) as i64), f_to_u64(hf(18446744073709551615.0)) as i64);  #> -1
+    same(st(f32_to_i32(2147483648.0)), f32_to_i32(hf(2147483648.0) as f32));  #> 2147483647
+    same(st(f_to_i64(1.0 / 0.0)), f_to_i64(hf(1.0) / hf(0.0)));        #> 9223372036854775807
+    f64 nan = hf(0.0) / hf(0.0);
+    same(st(f_to_i32(0.0 / 0.0)), f_to_i32(nan));                      #> 0
+    same(st(f_to_u64(0.0 / 0.0) as i64), f_to_u64(nan) as i64);        #> 0
+    # integers to floats round to nearest even
+    same(st(u64_to_f64_bits(18446744073709551615) as i64), u64_to_f64_bits(h(-1) as u64) as i64);  #> 4895412794951729152
+    same(st(u64_to_f64_bits(9007199254740993) as i64), u64_to_f64_bits(h(9007199254740993) as u64) as i64);  #> 4845873199050653696
+    same(st(u64_to_f32_bits(16777217) as i64), u64_to_f32_bits(h(16777217) as u64) as i64);  #> 1266679808
+    same(st(i64_to_f64_bits(-9223372036854775807 - 1) as i64), i64_to_f64_bits(h(-9223372036854775807 - 1)) as i64);  #> -4332462841530417152
+    # comparisons with NaN are false, but `!=` is true; zero equals negative zero
+    same(st(b(f64_eq(0.0 / 0.0, 0.0 / 0.0))), b(f64_eq(nan, nan)));  #> 0
+    same(st(b(f64_ne(0.0 / 0.0, 0.0 / 0.0))), b(f64_ne(nan, nan)));  #> 1
+    same(st(b(f64_lt(0.0 / 0.0, 1.0))), b(f64_lt(nan, hf(1.0))));  #> 0
+    same(st(b(f64_ge(0.0 / 0.0, 1.0))), b(f64_ge(nan, hf(1.0))));  #> 0
+    same(st(b(f64_ge(1.0, 0.0 / 0.0))), b(f64_ge(hf(1.0), nan)));  #> 0
+    same(st(b(f64_ge(1.0, 1.0))), b(f64_ge(hf(1.0), hf(1.0))));    #> 1
+    same(st(b(f64_eq(0.0, -0.0))), b(f64_eq(hf(0.0), -hf(0.0))));  #> 1
+    same(st(neg_zero_bits(0.0) as i64), neg_zero_bits(hf(0.0)) as i64);  #> -9223372036854775808
+    same(st(f64_div_bits(1.0, 0.0) as i64), f64_div_bits(hf(1.0), hf(0.0)) as i64);  #> 9218868437227405312
+    same(st(f64_div_bits(-1.0, 0.0) as i64), f64_div_bits(-hf(1.0), hf(0.0)) as i64);  #> -4503599627370496
+    # rounding to narrower floats, and arithmetic in them
+    same(st(f32_round(0.1) as i64), f32_round(hf(0.1)) as i64);  #> 1036831949
+    same(st(f32_round(16777217.0) as i64), f32_round(hf(16777217.0)) as i64);  #> 1266679808
+    same(st(f32_mul(16777215.0, 3.0) as i64), f32_mul(hf(16777215.0) as f32, hf(3.0) as f32) as i64);  #> 1279262719
+    same(st(f16_add_bits(2048.0, 1.0) as i64), f16_add_bits(hf(2048.0) as f16, hf(1.0) as f16) as i64);  #> 26624
+    same(st(f16_add_bits(65504.0, 32.0) as i64), f16_add_bits(hf(65504.0) as f16, hf(32.0) as f16) as i64);  #> 31744
+    same(st(f16_to_i32(1.5) as i64), f16_to_i32(hf(1.5) as f16) as i64);  #> 1
+}

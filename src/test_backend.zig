@@ -1,5 +1,7 @@
 // the backend tests: every program in examples/backend is built by `mond` in the modes below and
-// run, and must exit with 0 and print exactly its `#> line` markers, in order
+// run, and must print exactly its `#> line` markers, in order, and exit as its `#?` markers say:
+// `#? exit N` with N (else 0), `#? trap` stopped by a runtime check where the mode keeps them (in
+// the other modes it is undefined behavior and not run), `#? args a b` runs it with arguments
 const std = @import("std");
 
 const reset = "\x1b[0m";
@@ -15,8 +17,18 @@ const output_path = ".zig-cache/backend-tests";
 // what a program is built with unless a `#+` marker names it: the c library, and the c functions
 // of c_interop.mn, compiled by `mond` with the c compiler
 const default_arguments = [_][]const u8{ "-lc", "examples/backend/lib/clib.c" };
-// unoptimized and optimized with the runtime checks, and optimized without them
-const modes = [_][]const u8{ "none", "safe", "default" };
+// unoptimized and optimized with the runtime checks, and optimized without them: for speed at
+// -O2 and -O3, and for size at -Oz
+const modes = [_][]const u8{ "none", "safe", "default", "aggressive", "minsize" };
+// the modes keeping the runtime checks
+const checked_modes = [_][]const u8{ "none", "safe" };
+
+// how a program has to end, and what it is run with
+const Ending = struct {
+    exit_code: u8 = 0,
+    traps: bool = false,
+    arguments: []const []const u8 = &.{},
+};
 const time_limit: std.Io.Timeout = .{ .duration = .{
     .raw = .fromSeconds(60),
     .clock = .awake,
@@ -53,7 +65,8 @@ pub fn main(init: std.process.Init) !void {
         }
     }.less_than);
 
-    const rule = "\n{s} (built in modes none, safe and default, must print its `#>` lines)\n";
+    const rule = "\n{s} (built in modes none, safe, default, aggressive and minsize, " ++
+        "must print its `#>` lines and end as its `#?` lines say)\n";
     try writer.print(bold ++ rule ++ reset, .{directory_path});
     var counts: [2]usize = .{ 0, 0 };
     for (names.items) |name| {
@@ -65,8 +78,10 @@ pub fn main(init: std.process.Init) !void {
         const source = try directory.readFileAlloc(io, name, arena, .limited(50 << 20));
         const expected = try expected_output(arena, source);
         const build_with = try build_arguments(arena, source);
+        const ending = try expected_ending(arena, source);
         for (modes) |mode| {
-            const passed = try check(writer, arena, io, mond, name, mode, expected, build_with);
+            const passed =
+                try check(writer, arena, io, mond, name, mode, expected, build_with, ending);
             counts[@intFromBool(!passed)] += 1;
         }
     }
@@ -89,6 +104,27 @@ fn expected_output(arena: std.mem.Allocator, source: []const u8) ![]const u8 {
         try output.append(arena, '\n');
     }
     return output.items;
+}
+
+// the `#? exit N`, `#? trap` and `#? args ..` markers
+fn expected_ending(arena: std.mem.Allocator, source: []const u8) !Ending {
+    var ending: Ending = .{};
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        const at = std.mem.indexOf(u8, line, "#? ") orelse continue;
+        var words = std.mem.tokenizeAny(u8, line[at + "#? ".len ..], " \r");
+        const kind = words.next() orelse continue;
+        if (std.mem.eql(u8, kind, "exit")) {
+            ending.exit_code = try std.fmt.parseInt(u8, words.next() orelse "0", 10);
+        } else if (std.mem.eql(u8, kind, "trap")) {
+            ending.traps = true;
+        } else if (std.mem.eql(u8, kind, "args")) {
+            var arguments: std.ArrayList([]const u8) = .empty;
+            while (words.next()) |word| try arguments.append(arena, word);
+            ending.arguments = arguments.items;
+        }
+    }
+    return ending;
 }
 
 // the arguments after `#+ `, files relative to examples/backend, else `default_arguments`
@@ -119,6 +155,7 @@ fn check(
     mode: []const u8,
     expected: []const u8,
     arguments: []const []const u8,
+    ending: Ending,
 ) !bool {
     const stem = name[0 .. name.len - ".mn".len];
     const source_path = try std.fs.path.join(arena, &.{ directory_path, name });
@@ -135,8 +172,26 @@ fn check(
     }
 
     defer std.Io.Dir.cwd().deleteFile(io, executable) catch {};
-    const ran = try std.process.run(arena, io, .{ .argv = &.{executable}, .timeout = time_limit });
-    if (!exited_cleanly(ran.term)) {
+    const is_checked = for (checked_modes) |checked| {
+        if (std.mem.eql(u8, checked, mode)) break true;
+    } else false;
+    // a failing check without the checks is undefined behavior: built, not run
+    if (ending.traps and !is_checked) {
+        const skipped_format = "  " ++ green ++ "✓" ++ reset ++ " {s} -m {s}  " ++
+            dim ++ "built, traps only with checks" ++ reset ++ "\n";
+        try writer.print(skipped_format, .{ name, mode });
+        return true;
+    }
+    var run_argv: std.ArrayList([]const u8) = .empty;
+    try run_argv.append(arena, executable);
+    try run_argv.appendSlice(arena, ending.arguments);
+    const ran = try std.process.run(arena, io, .{ .argv = run_argv.items, .timeout = time_limit });
+    const ended_as_expected = switch (ran.term) {
+        .exited => |code| !ending.traps and code == ending.exit_code,
+        .signal => ending.traps,
+        else => false,
+    };
+    if (!ended_as_expected) {
         const status = try std.fmt.allocPrint(arena, "ended with {any}", .{ran.term});
         try report(writer, name, mode, status, ran.stdout);
         return false;

@@ -1,0 +1,22 @@
+# what has no value at compile time (and traps at run time): a division by zero, the smallest
+# integer divided by -1, a shift by the width or more (the narrow type's width, not the promoted
+# one), an index past either end, a failing `??`
+stc u32 divide_by_zero = 1 / (1 - 1);                  #! static_eval_failed
+stc i8 narrow_divide_by_zero = (-128 as i8) / (0 as i8);   #! static_eval_failed
+stc u8 shift_u8_width = (200 as u8) >> 8;              #! static_eval_failed
+stc i16 shift_i16_width = (1 as i16) << 16;            #! static_eval_failed
+stc i32 shift_negative = 1 << -1;                      #! static_eval_failed
+stc i8 min_by_minus_one = (-128 as i8) / (-1 as i8);   #! static_eval_failed
+stc i64 min_remainder = (-9223372036854775807 - 1) % -1;   #! static_eval_failed
+stc i8 min_by_one = (-128 as i8) / (1 as i8);
+stc [3]u8 ARR = [1, 2, 3];
+stc u8 past_end = ARR[3];                              #! static_eval_failed
+stc u8 before_start = ARR[-1];                         #! static_eval_failed
+stc u8 last_fits = ARR[2];
+variant Opt = +(Some(u32), None);
+stcfun unwrap = (Opt o) -> u32: ret o??;               #! static_eval_failed
+stc u32 failed_unwrap = unwrap(Opt.None);
+stc u32 fine_unwrap = unwrap(Opt.Some(3));
+stc u8 shift_below_width = (200 as u8) >> 7;
+
+$main = () {}

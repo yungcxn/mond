@@ -1,0 +1,136 @@
+<include "lib/out.mn">;
+
+# loops, jumps, defers, short-circuits and the order of evaluation
+mut i64 ONE = 0;
+fun h = (i64 v) -> i64: ret v * ONE;
+mut i64 LOG = 0;
+fun note = (i64 digit) -> bool { LOG = LOG * 10 + digit; ret digit % 2 == 1; }
+fun pick = (i64 digit) -> i64 { LOG = LOG * 10 + digit; ret digit; }
+
+fun count_u8_top = () -> u64 {
+    mut u64 n = 0;
+    for i in (h(250) as u8)..=(h(255) as u8): n += 1;
+    ret n;
+}
+fun sum_i8_all = () -> i64 {
+    mut i64 s = 0;
+    for i in (h(-128) as i8)..=(h(127) as i8): s += i as i64;
+    ret s;
+}
+fun count_u64_top = () -> u64 {
+    mut u64 n = 0;
+    for i in (h(-3) as u64)..=(h(-1) as u64) {
+        if i == h(-2) as u64: cont;
+        n += 1;
+    }
+    ret n;
+}
+fun collected = (u64 lo, u64 hi) -> u64 {
+    []u64 values = for i in lo..<hi: i * 2;
+    mut u64 s = 0;
+    for i in 0..<(if hi > lo: hi - lo else: 0): s += values[i];
+    ret s;
+}
+fun collected_signed = (i32 lo, i32 hi) -> i64 {
+    []i64 values = for i in lo..=hi: i as i64;
+    mut i64 s = 0;
+    for i in 0..<(if hi >= lo: (hi - lo + 1) as u64 else: 0): s += values[i];
+    ret s;
+}
+fun empty_ranges = () -> u64 {
+    mut u64 n = 0;
+    for i in (h(5) as u64)..<(h(5) as u64): n += 1;
+    for i in (h(6) as u64)..<(h(5) as u64): n += 1;
+    for i in (h(6) as u64)..=(h(5) as u64): n += 1;
+    ret n;
+}
+fun step_after_cont = () -> i64 {
+    mut i64 i = 0;
+    mut i64 s = 0;
+    while i < h(10), i += 1 {
+        if i % 3 == 0: cont;
+        s += i;
+    }
+    ret s * 100 + i;
+}
+fun nested_brk = () -> i64 {
+    mut i64 s = 0;
+    for i in 0..<h(5) {
+        for j in 0..<h(5) {
+            if j > i: brk;
+            if (i + j) % 2 == 1: cont;
+            s += 1;
+        }
+    }
+    ret s;
+}
+fun defers = (i64 mode) -> i64 {
+    LOG = 0;
+    defer LOG = LOG * 10 + 1;
+    for i in 0..<h(3) {
+        defer LOG = LOG * 10 + 2;
+        if i == mode: brk;
+        if i == 0: cont;
+        LOG = LOG * 10 + 3;
+    }
+    if mode == 7: ret LOG;
+    LOG = LOG * 10 + 4;
+    ret LOG;
+}
+fun ret_before_defer = () -> i64 {
+    mut i64 x = h(5);
+    defer x = 99;
+    ret x;
+}
+fun loop_value = () -> u64 {
+    mut u64 n = 0;
+    loop {
+        n += 1;
+        if n == h(7) as u64: brk;
+    }
+    ret n;
+}
+
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    # ranges up to the largest value of their type end, also through `cont`
+    line_u64(count_u8_top());                 #> 6
+    line_i64(sum_i8_all());                   #> -128
+    line_u64(count_u64_top());                #> 2
+    # empty ranges run no pass, collected ones with run-time bounds are empty
+    line_u64(empty_ranges());                 #> 0
+    line_u64(collected(h(2) as u64, h(5) as u64));          #> 18
+    line_u64(collected(h(6) as u64, h(5) as u64));          #> 0
+    line_i64(collected_signed(h(-3) as i32, h(2) as i32));  #> -3
+    line_i64(collected_signed(h(2) as i32, h(-3) as i32));  #> 0
+    # the step runs after `cont` too
+    line_i64(step_after_cont());              #> 2710
+    line_i64(nested_brk());                   #> 9
+    # defers on every exit, latest first; a returned value is computed before them
+    line_i64(defers(1));                      #> 224
+    line_i64(defers(7));                      #> 23232
+    line_i64(ret_before_defer());             #> 5
+    line_u64(loop_value());                   #> 7
+    # `and` and `or` short-circuit, operands left to right
+    LOG = 0;
+    bool x = note(2) and note(4);
+    line_i64(LOG);                            #> 2
+    LOG = 0;
+    bool y = note(1) or note(3);
+    line_i64(LOG);                            #> 1
+    LOG = 0;
+    bool z = note(2) or note(3) and note(5);
+    line_i64(LOG);                            #> 235
+    # operands and arguments are evaluated left to right, an assignment's value before its place
+    LOG = 0;
+    i64 sum = pick(1) * 100 + pick(2) * 10 + pick(3);
+    line_i64(LOG * 1000 + sum);               #> 123123
+    LOG = 0;
+    mut [3]i64 cells = [0, 0, 0];
+    cells[pick(2)] += pick(5);
+    line_i64(LOG * 1000 + cells[2]);          #> 52005
+    mut i64 k = h(1);
+    i64 old = k++;
+    i64 new = ++k;
+    line_i64(old * 100 + new * 10 + k);       #> 133
+}

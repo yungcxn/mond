@@ -1,0 +1,83 @@
+# tags: signed, past one byte (the automatic tag type holds the largest tag), niches (a payload
+# equal to a tag is that case), unions; payload-free cases in static data
+variant Signed = +(Low = -5, Mid, High = 120) tagof i8;
+stc i8 LOW_TAG = Signed.Low.$tag;     #= LOW_TAG -5
+stc i8 MID_TAG = Signed.Mid.$tag;     #= MID_TAG -4
+variant Wide = +(A, B, Last = 1000) tagof u16;
+stc u16 LAST_TAG = Wide.Last.$tag;    #= LAST_TAG 1000
+stc u64 WIDE_SIZE = sizeof Wide;      #= WIDE_SIZE 2
+variant Auto = +(A, B, Last = 1000);
+stc u64 AUTO_SIZE = sizeof Auto;      #= AUTO_SIZE 2
+variant Huge = +(Only = 70000);
+stc u64 HUGE_SIZE = sizeof Huge;      #= HUGE_SIZE 4
+variant Byte = +(First, Top = 255);
+stc u64 BYTE_SIZE = sizeof Byte;      #= BYTE_SIZE 1
+variant Opt16 = +(Some(i16), None = -1) tagof self;
+stc u64 OPT16_SIZE = sizeof Opt16;    #= OPT16_SIZE 2
+stcfun opt16 = (Opt16 o) -> i64: ret match o { Opt16.Some(x) => x as i64, Opt16.None => -1000 };
+stc i64 SOME_M2 = opt16(Opt16.Some(-2));   #= SOME_M2 -2
+stc i64 NONE16 = opt16(Opt16.None);        #= NONE16 -1000
+stc i64 SOME_M1 = opt16(Opt16.Some(-1));   #= SOME_M1 -1000
+variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+stcfun opt8 = (Opt8 o) -> i64: ret match o { Opt8.Some(x) => x as i64, Opt8.None => -1 };
+stc i64 SOME_255 = opt8(Opt8.Some(255));   #= SOME_255 -1
+stc Opt8 COERCED = 255;
+stc i64 COERCED_ID = opt8(COERCED);        #= COERCED_ID -1
+stc u8 TOP = 255;
+stc i64 CAST_ID = opt8(TOP as Opt8.Some);  #= CAST_ID -1
+stc i64 SOME_254 = opt8(Opt8.Some(254));   #= SOME_254 254
+
+variant Plain = +(P0, P1, P2);
+variant Shape = +(Square(u32 side), Dot, Nothing);
+type Holder = *(Shape s, u32 k);
+stc [2]Plain PLAIN = [Plain.P2, Plain.P1];
+stc u8 PLAIN_TAG = PLAIN[0].$tag;     #= PLAIN_TAG 2
+stc Holder HELD = Holder(Shape.Dot, 5);
+stc u8 HELD_TAG = HELD.s.$tag;        #= HELD_TAG 1
+
+variant X = +(X0, X1(u32));
+variant Y = +(Y0(u64), Y1);
+variant XY = X || Y;
+stcfun which = (XY v) -> u64: ret match v { X.X0 => 1, X.X1(k) => k as u64 + 10, Y.Y0(k) => k + 100, Y.Y1 => 1000 };
+stc u64 UNION = which(X.X0) + which(X.X1(5)) + which(Y.Y0(7)) + which(Y.Y1);   #= UNION 1123
+
+# records and arrays are values: copies, swaps, a record from a function of itself
+type Pt = *(mut i64 x, mut i64 y);
+stcfun swapped = (Pt p) -> Pt: ret Pt(p.y, p.x);
+stcfun copies = () -> i64 {
+    mut Pt p = Pt(1, 2);
+    p = swapped(p);
+    p = Pt(p.y, p.x);
+    mut Pt q = p;
+    q.x = 9;
+    mut Pt a = Pt(1, 1);
+    mut Pt b = Pt(2, 2);
+    a, b = b, a;
+    mut [3]i64 xs = [1, 2, 3];
+    xs = [xs[2], xs[0], xs[1]];
+    ret p.x * 100000 + q.x * 10000 + a.x * 1000 + xs[0] * 100 + xs[1] * 10 + xs[2];
+}
+stc i64 COPIES = copies();   #= COPIES 192312
+
+# layouts: natural alignment, packing, arrays of records
+type Padded = *(u8 a, u64 b, u16 c);
+type Packed = **(u8 a, u64 b, u16 c);
+stc u64 PADDED = sizeof Padded;            #= PADDED 24
+stc u64 PACKED = sizeof Packed;            #= PACKED 11
+stc u64 PACKED3 = sizeof [3]Packed;        #= PACKED3 33
+stc u64 PACKED_ALIGN = alignof Packed;     #= PACKED_ALIGN 1
+type Inner = *(u8 a, u16 b);
+type Outer = *(u8 c, Inner i, u8 d);
+stc u64 OUTER = sizeof Outer;              #= OUTER 8
+stc u64 OUTER_ALIGN = alignof Outer;       #= OUTER_ALIGN 2
+
+# equality field by field, nested arrays element by element
+stc bool PAD_EQ = Padded(3, 3000, 21) == Padded(3, 3000, 21);   #= PAD_EQ true
+stc bool PAD_NE = Padded(3, 3000, 21) == Padded(3, 3000, 22);   #= PAD_NE false
+stc [2][2]u8 GRID_A = [[1, 2], [3, 4]];
+stc bool GRID_EQ = GRID_A == [[1, 2], [3, 4]];                  #= GRID_EQ true
+stc bool GRID_NE = GRID_A == [[1, 2], [4, 3]];                  #= GRID_NE false
+stc bool CASES_EQ = Shape.Square(2) == Shape.Square(2);         #= CASES_EQ true
+stc bool CASES_NE = Shape.Square(2) == Shape.Dot;               #= CASES_NE false
+
+$main = () {}

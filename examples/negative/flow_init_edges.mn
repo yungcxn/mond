@@ -1,0 +1,29 @@
+# a variable is written on every path before it is read: a `while` body may not run, a `for` body
+# neither; a `never` branch, a `loop` before its `brk` and every arm of a match count
+fun in_while = (bool c) -> u32 {
+    mut u32 x;
+    while c { x = 1; }
+    ret x;          #! use_before_initialization
+}
+fun in_for = () -> u32 {
+    mut u32 x;
+    for i in 0..<3: x = i;
+    ret x;          #! use_before_initialization
+}
+fun else_returns = (bool c) -> u32 {
+    mut u32 x;
+    if c: x = 1 else: ret 0;
+    ret x;
+}
+fun every_arm = (u8 v) -> u32 {
+    mut u32 x;
+    match v { 0..=127 => x = 1, 128..=255 => x = 2 };
+    ret x;
+}
+fun loop_then_brk = () -> u32 {
+    mut u32 x;
+    loop { x = 5; brk; }
+    ret x;
+}
+
+$main = () {}

@@ -1,0 +1,18 @@
+# integer ranges must cover every value up to the ends of the type, a reversed range covers none
+fun gap_at_254 = (u8 x) -> u8: ret match x { 0..=253 => 0, 255 => 1 };              #! non_exhaustive_match
+fun gap_at_zero = (i8 x) -> u8: ret match x { ..<0 => 0, 1.. => 1 };               #! non_exhaustive_match
+fun reversed = (u8 x) -> u8: ret match x { 10..=5 => 0, 0..=4 => 1, 11..=255 => 2 }; #! non_exhaustive_match redundant_match_arm
+fun after_open_end = (u64 x) -> u8: ret match x { 0 => 0, 1.. => 1, 5 => 2 };      #! redundant_match_arm
+fun empty_exclusive = (u8 x) -> u8: ret match x { 0..<0 => 0, 0..=255 => 1 };   #! redundant_match_arm
+fun empty_reversed = (u8 x) -> u8: ret match x { 10..=5 => 0, _ => 1 };          #! redundant_match_arm
+type P = *(bool a, bool b);
+fun record_gap = (P p) -> u8: ret match p { P(true, _) => 1, P(false, true) => 2 }; #! non_exhaustive_match
+
+# complete: up to the top, around zero, both ends of u64, a record by its fields
+fun to_top = (u8 x) -> u8: ret match x { 0..=254 => 0, 255 => 1 };
+fun around_zero = (i8 x) -> u8: ret match x { -128..=-1 => 0, 0..=127 => 1 };
+fun whole_u64 = (u64 x) -> u8: ret match x { 0 => 0, 1..=18446744073709551615 => 1 };
+fun three_parts = (i64 x) -> u8: ret match x { ..=-1 => 0, 0 => 1, 1.. => 2 };
+fun record_full = (P p) -> u8: ret match p { P(true, _) => 1, P(_, true) => 2, P(false, false) => 3 };
+
+$main = () {}

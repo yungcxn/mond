@@ -1,0 +1,12 @@
+# a runtime check stops the program: the remainder of the smallest i64 by -1, which overflows like its quotient. the line before is printed, the one after isn't
+#+
+#? trap
+<include "lib/raw.mn">;
+mut i64 ONE = 0;
+fun r = (i64 a, i64 b) -> i64: ret a % b;
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    say_u64(1);   #> 1
+    say_i64(r((-9223372036854775807 - 1) * ONE, -1 * ONE));
+    say_u64(2);
+}

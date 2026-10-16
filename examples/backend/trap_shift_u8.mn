@@ -1,0 +1,12 @@
+# a runtime check stops the program: a u8 shifted by its width 8 (not the width it is promoted to). the line before is printed, the one after isn't
+#+
+#? trap
+<include "lib/raw.mn">;
+mut i64 ONE = 0;
+fun s = (u8 a, u8 n) -> u8: ret a >> n;
+$main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    say_u64(1);   #> 1
+    say_u64(s(200, (8 * ONE) as u8) as u64);
+    say_u64(2);
+}

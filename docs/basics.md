@@ -202,6 +202,7 @@ stc u32 FORMS = forms();  #= FORMS 41
 
 - `pub` marks what an `include` takes (see [metaprogramming.md](metaprogramming.md#error-include)).
 - `x++` / `x--` give the old value, `++x` / `--x` the new one.
+- Operands and arguments are evaluated left to right. An assignment evaluates its value before its place: in `a[i()] += f()`, `f()` runs first.
 - `name = v` writes the visible `name`, or declares it if there is none. A typed or modified declaration (`mut`, `stc`, `pub`) always declares, and may shadow.
 - Everything is immutable unless declared `mut`. A write needs every part writable: a `mut` field of a writable owner, an element of a writable array, or a write through a `*` pointer.
 - A scalar declared without a value must be written on every path before it is read. Arrays and records without a value are zeroed.

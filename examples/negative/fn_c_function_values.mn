@@ -1,0 +1,11 @@
+# c takes a function value as a c function pointer, so it must be a static function: named, from
+# a static table by a static index, or written without captures
+type Step = (i64) -> i64;
+fun clib_apply = (Step function, i64 value) -> i64;
+fun twice = (i64 x) -> i64: ret x * 2;
+fun thrice = (i64 x) -> i64: ret x * 3;
+stc [2]Step TABLE = [twice, thrice];
+fun by_runtime_index = (u32 i) -> i64: ret clib_apply(TABLE[i as u64], 7);   #! not_static
+fun by_parameter = (Step f) -> i64: ret clib_apply(f, 7);                   #! escaping_closure not_static
+fun static_ones = () -> i64: ret clib_apply(twice, 7) + clib_apply(TABLE[1], 1) + clib_apply((i64 x): x, 1);
+$main = () {}

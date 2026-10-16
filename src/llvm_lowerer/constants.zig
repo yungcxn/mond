@@ -18,7 +18,10 @@ pub fn operand(lowerer: *LLVMLowerer, value: Index) Value {
     const pool = lowerer.pool;
     if (pool.tag(value) == .function_value) return lower(lowerer, value, .none);
     if (pool.tag(value) == .string_value) return string_pointer(lowerer, value);
-    const value_type = pool.type_of(value);
+    const value_type = if (pool.tag(value) == .variant_case_type)
+        pool.get(value).variant_case_type.variant
+    else
+        pool.type_of(value);
     if (!lowerer.types.is_in_memory(value_type)) return lower(lowerer, value, value_type);
 
     const slot = &lowerer.value_globals[@intFromEnum(value)];
@@ -81,6 +84,7 @@ pub fn lower(lowerer: *LLVMLowerer, value: Index, expected: Index) Value {
             return lower_aggregate(lowerer, value, aggregate_type);
         },
         .variant_value => |variant| lower_variant(lowerer, variant, into),
+        .variant_case_type => lower_variant(lowerer, .{ .case = value, .payload = .none }, into),
         .function_value => |declaration| {
             const function = lowerer.function_of_declaration[@intFromEnum(declaration)];
             return pair(lowerer, lowerer.thunk(function), llvm.LLVMConstNull(types.pointer));
