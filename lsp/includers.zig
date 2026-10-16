@@ -62,7 +62,7 @@ pub fn is_included(io: std.Io, allocator: std.mem.Allocator, path: []const u8) b
             const spans = lexer.tokens.column(.span);
             const includer_directory = std.fs.path.dirname(includer) orelse ".";
             for (kinds, 0..) |kind, i| {
-                if (kind != .kw_include or i + 1 >= kinds.len) continue;
+                if (kind != .kw_include and kind != .kw_includeraw or i + 1 >= kinds.len) continue;
                 if (kinds[i + 1] != .val_string) continue;
                 const written = std.mem.trim(u8, source[spans[i + 1][0]..spans[i + 1][1]], "\"");
                 const parts = [_][]const u8{ includer_directory, written };
@@ -75,7 +75,7 @@ pub fn is_included(io: std.Io, allocator: std.mem.Allocator, path: []const u8) b
     return false;
 }
 
-test "a file another file includes is a library, one only named in a comment is not" {
+test "a file another file includes (or includes raw) is a library, one only named in a comment is not" {
     const io = std.testing.io;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -86,18 +86,21 @@ test "a file another file includes is a library, one only named in a comment is 
     try workspace.dir.createDirPath(io, ".git");
     try workspace.dir.createDirPath(io, "lib");
     const library_source = "# include \"b.mn\"\npub fun f = () {}\n";
-    const program_source = "<include \"lib/a.mn\">;\n$main = () {}\n";
+    const program_source = "<include \"lib/a.mn\">;\n<includeraw \"lib/c.mn\">;\n$main = () {}\n";
     try workspace.dir.writeFile(io, .{ .sub_path = "lib/a.mn", .data = library_source });
     try workspace.dir.writeFile(io, .{ .sub_path = "lib/b.mn", .data = "pub fun g = () {}\n" });
+    try workspace.dir.writeFile(io, .{ .sub_path = "lib/c.mn", .data = "fun h = () {}\n" });
     try workspace.dir.writeFile(io, .{ .sub_path = "main.mn", .data = program_source });
 
     var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
     const root = root_buffer[0..try workspace.dir.realPath(io, &root_buffer)];
     const library = try std.fs.path.join(allocator, &.{ root, "lib", "a.mn" });
     const mentioned = try std.fs.path.join(allocator, &.{ root, "lib", "b.mn" });
+    const raw = try std.fs.path.join(allocator, &.{ root, "lib", "c.mn" });
     const program = try std.fs.path.join(allocator, &.{ root, "main.mn" });
 
     try std.testing.expect(is_included(io, allocator, library));
     try std.testing.expect(!is_included(io, allocator, mentioned));
+    try std.testing.expect(is_included(io, allocator, raw));
     try std.testing.expect(!is_included(io, allocator, program));
 }

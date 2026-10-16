@@ -173,6 +173,7 @@ pub const Node = struct {
         .{ "Splice", "splice", struct { subnode: NodeId } },
         .{ "Reflect", "refl", struct { subnode: NodeId } },
         .{ "Include", "include", struct { subnode: NodeId } },
+        .{ "IncludeRaw", "include_raw", struct { subnode: NodeId } },
         .{ "VariableDefinition", "def_var", struct { type: NodeId, identifier: NodeId } },
         .{ "Assignment", "assign", struct { assignee: NodeId, assigned: NodeId } },
         .{ "AssignmentTyped", "assign_typed", struct { def_var: NodeId, assigned: NodeId } },

@@ -24,7 +24,7 @@ A statement ends with `;` unless its last token is `}`. There are no empty state
 
 A name is `[A-Za-z_$][A-Za-z0-9_]*`. A leading `$` marks builtin names (`$main`, `$init`, `$len`, `$it`, `$0`, ...), and you may declare `$` names of your own. `self` is the receiver in methods. Keywords:
 
-`fun` `stcfun` `inlfun` `type` `variant` `trait` `mut` `stc` `pub` `ret` `brk` `cont` `defer` `deinit` `if` `else` `stcif` `match` `stcmatch` `while` `stcwhile` `for` `stcfor` `loop` `stcloop` `in` `do` `where` `stcwhere` `implof` `tagof` `assertsize` `as` `asbits` `oftype` `typeof` `sizeof` `alignof` `with` `and` `or` `xor` `true` `false` `self` `quote` `refl` `include` `ast` `bool` `u8` `u16` `u32` `u64` `i8` `i16` `i32` `i64` `f16` `f32` `f64`
+`fun` `stcfun` `inlfun` `type` `variant` `trait` `mut` `stc` `pub` `ret` `brk` `cont` `defer` `deinit` `if` `else` `stcif` `match` `stcmatch` `while` `stcwhile` `for` `stcfor` `loop` `stcloop` `in` `do` `where` `stcwhere` `implof` `tagof` `assertsize` `as` `asbits` `oftype` `typeof` `sizeof` `alignof` `with` `and` `or` `xor` `true` `false` `self` `quote` `refl` `include` `includeraw` `ast` `bool` `u8` `u16` `u32` `u64` `i8` `i16` `i32` `i64` `f16` `f32` `f64`
 
 ## Literals
 
@@ -200,7 +200,7 @@ fun forms = () -> u32 {
 stc u32 FORMS = forms();  #= FORMS 41
 ```
 
-- `pub` marks what an `include` takes (see [metaprogramming.md](metaprogramming.md#error-include)).
+- `pub` marks what an `include` lets the program name, `includeraw` lets it name everything (see [metaprogramming.md](metaprogramming.md#error-include)).
 - `x++` / `x--` give the old value, `++x` / `--x` the new one.
 - Operands and arguments are evaluated left to right. An assignment evaluates its value before its place: in `a[i()] += f()`, `f()` runs first.
 - `name = v` writes the visible `name`, or declares it if there is none. A typed or modified declaration (`mut`, `stc`, `pub`) always declares, and may shadow.

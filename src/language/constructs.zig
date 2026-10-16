@@ -114,7 +114,7 @@ const construct_table = .{
     .{ .deinit, .{.deinit} },
     .{ .deferred_deinit, .{.inlined_defer_deinit} },
     .{ .unwrap, .{ .selftag_unwrap, .selftag_unwrap_fallback, .selftag_arrow, .labelarrow } },
-    .{ .macro, .{ .quote, .splice, .refl, .include, .unquote, .unquote_list, .paste } },
+    .{ .macro, .{ .quote, .splice, .refl, .include, .include_raw, .unquote, .unquote_list, .paste } },
     .{ .lambda, .{.def_fun} },
     .{ .type_expression, .{
         .type_array,          .type_array_unlengthed, .type_ptr,   .type_ptrmut,

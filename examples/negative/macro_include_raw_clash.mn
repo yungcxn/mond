@@ -1,0 +1,5 @@
+# what `includeraw` declares without `pub` is a name of the program like any other, written twice it clashes
+stc u32 kit_secret = 1;
+<includeraw "../lib/macro_kit.mn">; #! duplicate_declaration
+
+$main = () {}

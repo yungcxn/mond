@@ -4,7 +4,7 @@ multi-purpose system programming language with functional and oop concepts
 
 w.i.p.
 
-The [docs](docs/README.md) are always in sync with the compiler source and its feature set: their code is compiled by `zig build test`.
+The [docs](docs/README.md) are always in sync with the compiler source and its feature set: their code is checked by `zig build test`.
 
 ## Philosophy
 
@@ -16,5 +16,5 @@ The [docs](docs/README.md) are always in sync with the compiler source and its f
 
 1. DONE: Build a basic compiler that transpiles into as-primitive-as-possible C
 2. DONE: Replace the backend with a custom IR
-3. DONE: Add LLVM as Backend and finally compile working executables
-4. Self-hosting
+3. DONE: Add LLVM backend and finally compile working executables
+4. NEXT: Self-hosting

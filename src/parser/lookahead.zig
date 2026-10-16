@@ -58,6 +58,7 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_<")] = &eval.splice;
     t[@intFromEnum(Lexer.Token.Kind.kw_refl)] = &eval.source(.refl);
     t[@intFromEnum(Lexer.Token.Kind.kw_include)] = &eval.source(.include);
+    t[@intFromEnum(Lexer.Token.Kind.kw_includeraw)] = &eval.source(.include_raw);
     t[@intFromEnum(Lexer.Token.Kind.kw_type)] = &eval.type_type;
     t[@intFromEnum(Lexer.Token.Kind.kw_trait)] = &eval.type_trait;
     t[@intFromEnum(Lexer.Token.Kind.kw_variant)] = &eval.type_variant;

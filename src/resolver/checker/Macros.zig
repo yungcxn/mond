@@ -84,7 +84,7 @@ pub fn infer(self: *Macros, context: *FunctionContext, node: NodeId, expected: I
         .quote => self.infer_quote(context, node, expected),
         .splice => self.splice(context, node),
         .refl => self.refl(node),
-        .include => self.infer_include(context, node),
+        .include, .include_raw => self.infer_include(context, node),
         // a hole is typed by the quote around it, anywhere else it means nothing
         .unquote, .unquote_list, .paste => {
             if (self.quoting > 0) return resolver.node_types[node];

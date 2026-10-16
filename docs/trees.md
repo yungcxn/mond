@@ -203,6 +203,7 @@ The last column is the name `mond -b` prints in its tree dump.
 | `Splice` | `<e>` | subnode | splice |
 | `Reflect` | `refl x` | subnode | refl |
 | `Include` | `include "f"` | subnode | include |
+| `IncludeRaw` | `includeraw "f"` | subnode | include_raw |
 | `VariableDefinition` | `T x` (declared name) | type, identifier | def_var |
 | `Assignment` | `x = v` | assignee, assigned | assign |
 | `AssignmentTyped` | `T x = v` | def_var, assigned | assign_typed |

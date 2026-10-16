@@ -74,6 +74,7 @@ pub const Token = struct {
         kw_quote,
         kw_refl,
         kw_include,
+        kw_includeraw,
 
         // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
         @"pct_(",

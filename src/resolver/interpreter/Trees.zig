@@ -29,7 +29,7 @@ pub fn evaluate(self: *Trees, node: NodeId) Value {
         .quote => self.evaluate_quote(node),
         .splice => self.splice(node),
         .refl => self.reflect(node),
-        .include => self.include(node),
+        .include, .include_raw => self.include(node),
         else => interpreter.fail(node, .stray_unquote, 0, 0),
     };
 }
@@ -728,7 +728,8 @@ fn array_type_tree(self: *Trees, token: u32, array: StaticPool.ArrayType) ?NodeI
     return tree.push_node_with(.type_array, .{ .length = length, .type = element });
 }
 
-// `include "f.mn"`: a block of copies of the public declarations of a file next to the compiled one
+// `include "f.mn"`: a block of copies of the declarations of a file next to the compiled one, the
+// ones without `pub` under names of their own. `includeraw` copies them under the names written
 fn include(self: *Trees, node: NodeId) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
@@ -771,12 +772,13 @@ fn read(self: *Trees, node: NodeId, name: []const u8) ?NodeId {
     const owner = std.math.maxInt(u32) - resolver.session.fresh_name_count;
     resolver.session.fresh_name_count += 1;
     const first_copied = tree.ast_nodes.len();
+    const raw = tree.kind(node) == .include_raw;
     var private_names: std.ArrayList(NodeId) = .empty;
     defer private_names.deinit(allocator);
     for (parser.global_store.items()) |root| {
         const copied = tree.copy(&parser.tree, root, bytes, false, origin);
         tree.scratch.push(copied);
-        if (parser.tree.kind(root) == .mod_pub) continue;
+        if (raw or parser.tree.kind(root) == .mod_pub) continue;
         const declared = name_view(tree, copied, def_var(tree, copied), .{});
         if (declared == 0 or tree.kind(declared) != .identifier) continue;
         if (tree.arg(declared, 1) == 0) continue;
