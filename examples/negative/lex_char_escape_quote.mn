@@ -1,1 +1,1 @@
-u8 c = '\'; #! LexingError_CharNothingAfterEscape
+u8 c = '\'; #! CharNothingAfterEscape

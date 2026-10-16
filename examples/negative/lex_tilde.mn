@@ -1,1 +1,1 @@
-i32 x = ~1; #! LexingError_InvalidPunctuator
+i32 x = ~1; #! InvalidPunctuator

@@ -30,7 +30,7 @@ zig build lsp                       # the language server, into lsp/vscode and l
 | `-i` `--inspect` | declarations by name, `#index` or `:line`; nothing is built |
 | `-h` `--help` | the flags and modes; also shown when `mond` gets no arguments |
 
-Diagnostics go to stderr as `file:line:column: code operands`. `$main` returns the exit code, and takes nothing or `(argc, &&u8 argv)` (see [basics](basics.md#program)).
+Diagnostics go to stderr as `file:line:column: code operands`, which editors and vim's `:make` jump to; a lexing or parse error shows its line below, the token marked with `~`. One in included code names the included file and then the include as `file:line:column: included here`. Colors only go to a terminal. `$main` returns the exit code, and takes nothing or `(argc, &&u8 argv)` (see [basics](basics.md#program)).
 
 Records, arrays and variants live in memory: they are passed by address and returned through a pointer the caller gives. LLVM's passes promote small ones to registers in every mode but `none`.
 
@@ -81,7 +81,7 @@ A file that another file includes isn't asked for a `$main`.
 
 ## Diagnostics
 
-Lexing and parsing stop at the first error (`LexingError_*`, `Expected*`, `Illegal*`, `NoRuleFound`), and then nothing is resolved, so a test file with a parse error reports only that error. Resolving reports everything it finds. Only `redundant_match_arm` is a warning; everything else is an error.
+Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctuator`, or `Expected*`, `Illegal*`, `NoRuleFound`), and then nothing is resolved, so a test file with a parse error reports only that error. Resolving reports everything it finds. Only `redundant_match_arm` is a warning; everything else is an error.
 
 | code | when |
 |---|---|

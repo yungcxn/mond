@@ -5,6 +5,16 @@ const anywspace = [_]u8{ ' ', '\t', '\r', '\n' };
 
 pub const TextSpan = @Vector(2, u32);
 
+pub const LexingError = error{
+    InvalidEscape,
+    CharScanEOF,
+    IllegalEmptyChar,
+    CharNothingAfterEscape,
+    StringScanEOF,
+    InvalidPunctuator,
+    EmptyFile,
+};
+
 pub const Token = struct {
     tk: Kind,
     span: TextSpan,
@@ -243,11 +253,11 @@ inline fn take_esc(self: *@This(), char: u8) !bool {
 inline fn escape(self: *@This(), c: u8) !void {
     switch (c) {
         'n', 't', 'r', '0', '\\', '\'', '"' => {},
-        'x' => for (0..2) |_| switch (self.pop_srcbyte() orelse return error.LexingError_InvalidEscape) {
+        'x' => for (0..2) |_| switch (self.pop_srcbyte() orelse return LexingError.InvalidEscape) {
             '0'...'9', 'a'...'f', 'A'...'F' => {},
-            else => return error.LexingError_InvalidEscape,
+            else => return LexingError.InvalidEscape,
         },
-        else => return error.LexingError_InvalidEscape,
+        else => return LexingError.InvalidEscape,
     }
 }
 
@@ -332,19 +342,19 @@ inline fn gen_next_tok(self: *@This()) !bool {
             '\'' => { // val_char
                 const cursor0 = self.cursor;
 
-                const c1 = self.pop_srcbyte() orelse return error.LexingError_CharScanEOF;
+                const c1 = self.pop_srcbyte() orelse return LexingError.CharScanEOF;
                 switch (c1) {
-                    '\'' => return error.LexingError_IllegalEmptyChar,
+                    '\'' => return LexingError.IllegalEmptyChar,
                     '\\' => {
-                        const c2 = self.pop_srcbyte() orelse return error.LexingError_CharScanEOF;
-                        if (c2 == '\'' and self.peek_srcbyte() != '\'') return error.LexingError_CharNothingAfterEscape;
+                        const c2 = self.pop_srcbyte() orelse return LexingError.CharScanEOF;
+                        if (c2 == '\'' and self.peek_srcbyte() != '\'') return LexingError.CharNothingAfterEscape;
                         try self.escape(c2);
                     },
                     else => {},
                 }
 
-                if ((self.pop_srcbyte() orelse return error.LexingError_CharScanEOF) != '\'') {
-                    return error.LexingError_CharScanEOF;
+                if ((self.pop_srcbyte() orelse return LexingError.CharScanEOF) != '\'') {
+                    return LexingError.CharScanEOF;
                 }
 
                 self.cursor -= 1;
@@ -355,7 +365,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 const cursor0 = self.cursor;
                 if (try self.take_esc('"')) {
                     self.push_tok(.val_string, cursor0);
-                } else return error.LexingError_StringScanEOF;
+                } else return LexingError.StringScanEOF;
                 self.cursor += 1;
             },
             'a'...'z', 'A'...'Z', '_', '$' => { // literal or keyword
@@ -398,7 +408,7 @@ inline fn gen_next_tok(self: *@This()) !bool {
                 if (found) |punct| {
                     self.cursor = cursor0 + len;
                     self.push_tok(punct, cursor0);
-                } else return error.LexingError_InvalidPunctuator;
+                } else return LexingError.InvalidPunctuator;
             },
         }
 
@@ -407,20 +417,54 @@ inline fn gen_next_tok(self: *@This()) !bool {
     return false;
 }
 
-pub fn gen_tokens(self: *@This()) !void {
-    if (!self.safe_skip_set(anywspace)) return error.LexingError_EmptyFile;
+pub fn gen_tokens(self: *@This()) LexingError!void {
+    if (!self.safe_skip_set(anywspace)) return LexingError.EmptyFile;
     while (try self.gen_next_tok()) {}
 }
 
-pub fn handle_err(self: *@This(), io: std.Io, e: anyerror) noreturn {
-    var buf: [1024]u8 = undefined;
+pub fn handle_err(self: *@This(), io: std.Io, path: []const u8, e: anyerror) noreturn {
+    const at: u32 = @intCast(self.cursor -| 1);
+    print_error(io, path, self.src_bytes, .{ at, at + 1 }, @errorName(e));
+    return std.process.exit(1);
+}
+
+pub fn print_error(io: std.Io, path: []const u8, src: []const u8, problem_span: TextSpan, name: []const u8) void {
+    const src_len: u32 = @intCast(src.len);
+
+    var lstart_cur: u32 = @min(problem_span[0], src_len);
+    while (lstart_cur != 0) {
+        if (src[lstart_cur - 1] == '\n') break;
+
+        lstart_cur -= 1;
+    }
+
+    var rend_cur: u32 = @min(@max(problem_span[1], lstart_cur), src_len);
+    while (rend_cur != src_len) {
+        if (src[rend_cur] == '\n') break;
+
+        rend_cur += 1;
+    }
+
+    var lc: u32 = 1;
+    for (src[0..lstart_cur]) |b| {
+        if (b == '\n') lc += 1;
+    }
+
+    var buf: [4096]u8 = undefined;
+    var linebuf: [1024]u8 = undefined;
+    const shown_end = @min(rend_cur, lstart_cur + @as(u32, linebuf.len));
+    const mark_start = @min(problem_span[0] -| lstart_cur, @as(u32, linebuf.len));
+    const mark_end = @min(@max(problem_span[1] -| lstart_cur, mark_start + 1), @as(u32, linebuf.len));
+    for (linebuf[0..mark_start], src[lstart_cur..][0..mark_start]) |*m, b| m.* = if (b == '\t') '\t' else ' ';
+    @memset(linebuf[mark_start..mark_end], '~');
+
+    const colored = std.Io.File.stderr().isTty(io) catch false;
+    const red, const cyan, const reset = if (colored) .{ "\x1b[1;31m", "\x1b[36m", "\x1b[0m" } else .{ "", "", "" };
     const err_msg = std.fmt.bufPrint(
         &buf,
-        "{s}, on token: '{c}' (pos={d})",
-        .{ @errorName(e), self.src_bytes[self.cursor - 1], self.cursor - 1 },
+        "{s}:{d}:{d}: {s}{s}{s}\n{s}\n{s}{s}{s}\n",
+        .{ path, lc, problem_span[0] -| lstart_cur + 1, red, name, reset, src[lstart_cur..shown_end], cyan, linebuf[0..mark_end], reset },
     ) catch @panic("OOM, could not print error");
 
-    std.Io.File.stdout().writeStreamingAll(io, err_msg) catch @panic("print failed");
-
-    return std.process.exit(1);
+    std.Io.File.stderr().writeStreamingAll(io, err_msg) catch @panic("print failed");
 }

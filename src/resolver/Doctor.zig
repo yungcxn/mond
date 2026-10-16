@@ -88,7 +88,7 @@ const definition_table = .{
     .{ "stray_unquote", .@"error", no_operand, no_operand },
     .{ "frozen_declaration", .@"error", operand(.declaration, "of"), no_operand },
     .{ "macro_error", .@"error", operand(.name, ""), no_operand },
-    .{ "include_failed", .@"error", operand(.name, ""), no_operand },
+    .{ "include_failed", .@"error", operand(.name, "file"), operand(.name, "because") },
     .{ "endless_expansion", .@"error", no_operand, no_operand },
 };
 

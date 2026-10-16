@@ -1,1 +1,1 @@
-u8 c = '\xZZ'; #! LexingError_InvalidEscape
+u8 c = '\xZZ'; #! InvalidEscape

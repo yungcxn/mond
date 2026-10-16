@@ -738,37 +738,66 @@ fn include(self: *Trees, node: NodeId) Value {
         resolver.tree.text(path, resolver.src_bytes)
     else
         self.text_of(interpreter.evaluate(path)) orelse return .poison;
-    const included = self.read(node, name) orelse {
-        return interpreter.fail(node, .include_failed, resolver.name_pool.intern_copy(name), 0);
+    const included = switch (self.read(node, name)) {
+        .included => |block| block,
+        .failed => |failure| {
+            const file = resolver.name_pool.intern_copy(name);
+            const reason = resolver.name_pool.intern_copy(@errorName(failure.reason));
+            return interpreter.fail(failure.at, .include_failed, file, reason);
+        },
     };
     return self.tree_value(.ast_type, included);
 }
 
 const max_include_bytes = 50 << 20;
 
-fn read(self: *Trees, node: NodeId, name: []const u8) ?NodeId {
+const Read = union(enum) { included: NodeId, failed: struct { at: NodeId, reason: anyerror } };
+
+fn read(self: *Trees, node: NodeId, name: []const u8) Read {
     const resolver = self.owning_interpreter().owning_resolver();
     const tree = resolver.tree;
     const allocator = resolver.allocator;
 
     const directory = std.fs.path.dirname(resolver.session.path) orelse ".";
-    const path = std.fs.path.join(allocator, &.{ directory, name }) catch return null;
-    defer allocator.free(path);
-    const io = resolver.session.io orelse return null;
+    const path = std.fs.path.resolve(allocator, &.{ directory, name }) catch |err| {
+        return .{ .failed = .{ .at = node, .reason = err } };
+    };
+    const io = resolver.session.io orelse {
+        allocator.free(path);
+        return .{ .failed = .{ .at = node, .reason = error.NoIo } };
+    };
     const limit: std.Io.Limit = .limited(max_include_bytes);
-    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, limit) catch return null;
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, limit) catch |err| {
+        allocator.free(path);
+        return .{ .failed = .{ .at = node, .reason = err } };
+    };
     defer allocator.free(bytes);
+    const region = tree.text_bytes.len;
+    tree.text_bytes.append(bytes);
+    const length: u32 = @intCast(bytes.len);
+    resolver.session.files.append(allocator, .{ .path = path, .at = region, .len = length }) catch {
+        @panic("OOM");
+    };
+    const origin = tree.first_token(tree.arg(node, 0));
 
     var lexer = Lexer{ .src_bytes = bytes, .tokens = .init(allocator, 1024) };
     defer lexer.tokens.deinit();
-    lexer.gen_tokens() catch return null;
+    lexer.gen_tokens() catch |err| {
+        const at = tree.push_word(.identifier, origin, "", 0, false);
+        tree.words.column(.at)[tree.words.len() - 1] = region + (lexer.cursor -| 1);
+        return .{ .failed = .{ .at = at, .reason = err } };
+    };
     var parser = Parser.init(allocator, lexer.tokens, bytes, lexer.tokens.column(.span));
     defer parser.deinit();
-    parser.build_ast() catch return null;
+    parser.build_ast() catch |err| {
+        const at = tree.push_word(.identifier, origin, "", 0, false);
+        const failing = lexer.tokens.column(.span)[parser.tok_cursor -| 1];
+        tree.words.column(.at)[tree.words.len() - 1] = region + failing[0];
+        return .{ .failed = .{ .at = at, .reason = err } };
+    };
 
     const mark = tree.scratch.len;
     defer tree.scratch.len = mark;
-    const origin = tree.first_token(tree.arg(node, 0));
     const owner = std.math.maxInt(u32) - resolver.session.fresh_name_count;
     resolver.session.fresh_name_count += 1;
     const first_copied = tree.ast_nodes.len();
@@ -776,7 +805,19 @@ fn read(self: *Trees, node: NodeId, name: []const u8) ?NodeId {
     var private_names: std.ArrayList(NodeId) = .empty;
     defer private_names.deinit(allocator);
     for (parser.global_store.items()) |root| {
-        const copied = tree.copy(&parser.tree, root, bytes, false, origin);
+        const first_of_root = tree.ast_nodes.len();
+        const copied = tree.copy(&parser.tree, root, bytes, false, null);
+        for (first_of_root..tree.ast_nodes.len()) |i| {
+            const leaf: NodeId = @intCast(i);
+            const span = parser.tree.span_store[tree.token(leaf) orelse continue];
+            tree.words.push(.{
+                .at = region + span[0],
+                .len = span[1] - span[0],
+                .owner = 0,
+                .binds = false,
+            });
+            tree.ast_nodes.column(.args)[leaf] = .{ origin, tree.words.len() };
+        }
         tree.scratch.push(copied);
         if (raw or parser.tree.kind(root) == .mod_pub) continue;
         const declared = name_view(tree, copied, def_var(tree, copied), .{});
@@ -797,7 +838,7 @@ fn read(self: *Trees, node: NodeId, name: []const u8) ?NodeId {
 
     const included = tree.push_node(.block);
     tree.set_children(included, tree.scratch.buffer[mark..tree.scratch.len]);
-    return included;
+    return .{ .included = included };
 }
 
 // views of trees: a declaration, function, type, field or parameter by its parts, a node by fields

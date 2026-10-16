@@ -1,1 +1,1 @@
-u8 c = ''; #! LexingError_IllegalEmptyChar
+u8 c = ''; #! IllegalEmptyChar

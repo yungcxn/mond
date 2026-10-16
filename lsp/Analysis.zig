@@ -457,7 +457,7 @@ test "macros expand before anything is linked, made names link nowhere" {
 
     const failing = try arena.allocator().dupe(u8, "<include \"nope.mn\">;\n$main = () {}");
     const message = analyze(arena.allocator(), failing).diagnostics[0].message;
-    try std.testing.expectEqualStrings("include_failed   `nope.mn`", message);
+    try std.testing.expectEqualStrings("include_failed  file `nope.mn`  because `NoIo`", message);
 }
 
 test "macros: the meta syntax is a macro, code by its role, splices and stcfuns by what they mean" {

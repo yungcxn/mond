@@ -1,1 +1,1 @@
-u8 c = '\n #! LexingError_CharScanEOF
+u8 c = '\n #! CharScanEOF

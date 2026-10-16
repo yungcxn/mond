@@ -322,17 +322,18 @@ pub fn main(init: std.process.Init) void {
     const started = std.Io.Timestamp.now(io, .awake);
     var lexer = Lexer{ .src_bytes = source_bytes, .tokens = .init(alloc, 10000) };
     defer lexer.tokens.deinit();
-    lexer.gen_tokens() catch |err| return lexer.handle_err(io, err);
+    lexer.gen_tokens() catch |err| return lexer.handle_err(io, source_path, err);
 
     var parser = Parser.init(alloc, lexer.tokens, source_bytes, lexer.tokens.column(.span));
     defer parser.deinit();
-    parser.build_ast() catch |err| parser.handle_err(io, err);
+    parser.build_ast() catch |err| parser.handle_err(io, source_path, err);
 
     stage = .{ .parsed = .{ io, &parser } };
 
     var resolver = Resolver.init(alloc, &parser.tree, source_bytes, parser.global_store.items());
     defer resolver.deinit();
     resolver.session.io, resolver.session.path = .{ io, source_path };
+    defer resolver.session.deinit(alloc);
     const resolved = resolver.resolve() != error.ResolveFailed;
 
     stage = .none;

@@ -44,6 +44,14 @@ pub const Session = struct {
     watch: ?Watch = null,
     // names `$fresh` and hygiene made so far, so no later pass makes one again
     fresh_name_count: u32 = 0,
+    files: std.ArrayList(File) = .empty,
+
+    pub const File = struct { path: []const u8, at: u32, len: u32 };
+
+    pub fn deinit(self: *Session, allocator: std.mem.Allocator) void {
+        for (self.files.items) |file| allocator.free(file.path);
+        self.files.deinit(allocator);
+    }
 };
 
 pub const FunctionContext = struct {

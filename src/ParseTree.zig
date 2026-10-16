@@ -685,8 +685,9 @@ pub fn copy(self: *@This(), src: *const ParseTree, n0: NodeId, src_bytes: []cons
             const w = src.arg(n, 1);
             const tok = at orelse src.arg(n, 0);
             if (w == 0 and at == null) return self.push_data_node(nk, tok);
-            if (w == 0 or self != src) return self.push_word(nk, tok, src.text(n, src_bytes), 0, false);
-            self.words.push(self.words.get(w - 1).?);
+            if (w == 0) return self.push_word(nk, tok, src.text(n, src_bytes), 0, false);
+            const word = src.words.get(w - 1).?;
+            self.words.push(if (self == src) word else .{ .at = word.at, .len = word.len, .owner = 0, .binds = false });
             const c = self.push_data_node(nk, tok);
             self.ast_nodes.column(.args)[c][1] = self.words.len();
             return c;
@@ -785,6 +786,7 @@ fn same_word(self: *const @This(), x: u32, y: u32) bool {
 pub fn rebuild(self: *@This(), alloc: std.mem.Allocator, roots: *DynamicBuffer(NodeId), src_bytes: []const u8) void {
     var t = ParseTree.init(alloc, self.span_store);
     t.macros = self.macros;
+    t.text_bytes.append(self.text_bytes.items());
     _ = t.push_node(.none);
     const old = roots.len;
     for (0..old) |i| {
