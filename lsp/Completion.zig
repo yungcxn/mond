@@ -9,7 +9,7 @@ const NamePool = mond.NamePool;
 const Kind = mond.Lexer.Token.Kind;
 const lookahead = mond.Parser.lookahead;
 
-// completion of the api of trees: views, children, `$len`, the kinds after `ast.`, builtins
+// completion of the api of trees: views, children, the kinds after `ast.`, builtins
 // it goes by the text before the cursor and the last names known, typed text rarely parses
 
 pub const Item = struct {
@@ -23,8 +23,8 @@ pub const Item = struct {
 // lsp numbers the kinds of completions
 const Class = enum(u8) { function = 3, field = 5, property = 10, enum_member = 20 };
 
-// where a name is offered: after `$`, after `refl $`, after the `.` of a tree or of a list
-const Offered = enum { dollar, refl, tree, list };
+// where a name is offered: while typing a name starting with `__`, after the `.` of a tree
+const Offered = enum { compiler, tree };
 
 // what is offered: its text, its type and what it is
 pub const Entry = struct {
@@ -32,7 +32,7 @@ pub const Entry = struct {
     ty: []const u8,
     doc: []const u8 = "",
     class: Class,
-    offered: Offered = .dollar,
+    offered: Offered = .compiler,
 };
 
 const view_entries = blk: {
@@ -59,36 +59,6 @@ const view_entries = blk: {
 fn entry_of(comptime name: NamePool.Index) ?Entry {
     const label = NamePool.predefined_text(name);
     return switch (name) {
-        .fresh => .{
-            .label = label,
-            .ty = "([]u8 name) -> ast.Identifier",
-            .doc = "a name like no other",
-            .class = .function,
-        },
-        .asterr => .{
-            .label = label,
-            .ty = "(ast at, []u8 message)",
-            .doc = "ends the expansion with an error at the tree",
-            .class = .function,
-        },
-        .crash => .{
-            .label = label,
-            .ty = "([]u8 message)",
-            .doc = "a compile error with its static message wherever it is checked or run",
-            .class = .function,
-        },
-        .@"asm" => .{
-            .label = label,
-            .ty = "([]u8 code)",
-            .doc = "machine code in place, its text static",
-            .class = .function,
-        },
-        .syscall => .{
-            .label = label,
-            .ty = "(u64 number, ..) -> i64",
-            .doc = "a call of the kernel: its result, or -errno",
-            .class = .function,
-        },
         .os => .{
             .label = label,
             .ty = "[]u8",
@@ -101,22 +71,8 @@ fn entry_of(comptime name: NamePool.Index) ?Entry {
             .doc = "the machine the program is built for: \"aarch64\", \"x86_64\"",
             .class = .property,
         },
-        .file => .{
-            .label = label,
-            .ty = "*ast",
-            .doc = "the program: `refl $file` reads and writes its declarations",
-            .class = .property,
-            .offered = .refl,
-        },
-        .len => .{
-            .label = label,
-            .ty = "u64",
-            .doc = "its length",
-            .class = .property,
-            .offered = .list,
-        },
-        .empty, .underscore, .it, .self, .init, .deinit, .main, .has_next, .next, .tag => null,
-        .wall => null,
+        .empty, .underscore, .it, .self, .init, .deinit, .main, .has_next, .next, .len => null,
+        .fresh, .crash, .@"asm", .syscall, .wall => null,
         .none, _ => null,
         inline else => for (view_entries) |entry| {
             if (std.mem.eql(u8, entry.label, label)) break entry;
@@ -191,12 +147,9 @@ pub fn offer(
     if (word_start > 0 and source[word_start - 1] == '.') {
         const shape = shape_before_dot(source, word_start - 1, cursor, names);
         switch (shape.holds) {
-            .none => {},
+            .none, .list => {},
             .kinds => for (kind_entries) |entry| {
                 try items.append(allocator, item_of(entry, replaced));
-            },
-            .list => for (predefined_entries) |entry| {
-                if (entry.offered == .list) try items.append(allocator, item_of(entry, replaced));
             },
             .tree => {
                 for (view_entries) |entry| try items.append(allocator, item_of(entry, replaced));
@@ -216,14 +169,9 @@ pub fn offer(
         return items.items;
     }
 
-    if (typed.len > 0 and typed[0] == '$') {
-        const before_word = std.mem.trimEnd(u8, source[0..word_start], " ");
-        var start = before_word.len;
-        while (start > 0 and is_word_byte(before_word[start - 1])) start -= 1;
-        const after_refl = Kind.kw_from_str(before_word[start..]) == .kw_refl;
+    if (std.mem.startsWith(u8, typed, "__")) {
         for (predefined_entries) |entry| {
-            const is_offered = entry.offered == .dollar or entry.offered == .refl and after_refl;
-            if (is_offered) try items.append(allocator, item_of(entry, replaced));
+            if (entry.offered == .compiler) try items.append(allocator, item_of(entry, replaced));
         }
     }
     return items.items;
@@ -389,7 +337,7 @@ fn shape_of_type(written: []const u8) Shape {
     return .{ .holds = if (is_list) .list else .tree, .kind = kind };
 }
 
-// what a member (`$params`, `lhs`), an index or a call of `shape` makes
+// what a member (`params`, `lhs`), an index or a call of `shape` makes
 fn shape_after_step(shape: Shape, step: []const u8) Shape {
     switch (shape.holds) {
         .list => {
@@ -398,17 +346,16 @@ fn shape_after_step(shape: Shape, step: []const u8) Shape {
         },
         .tree => {
             if (step[0] == '[' or step[0] == '(') return .{};
-            // a child by its field name
-            if (step[0] != '$') return .{ .holds = .tree };
             for (Macros.views) |view| {
-                if (!std.mem.eql(u8, step[1..], @tagName(view.name))) continue;
+                if (!std.mem.eql(u8, step, @tagName(view.name))) continue;
                 return switch (view.gives) {
                     .tree => .{ .holds = .tree },
                     .list => .{ .holds = .list },
                     .text, .flag => .{},
                 };
             }
-            return .{};
+            // a child by its field name
+            return .{ .holds = .tree };
         },
         .none, .kinds => return .{},
     }
@@ -461,32 +408,29 @@ test "the api of trees by the type of what is before the dot" {
     const allocator = arena.allocator();
     const source = "" ++
         "stcfun f = (*ast(fun) g, ast.BinaryAdd e, []ast xs) -> u64 {\n" ++
-        "    mut ast out = g.$body;\n" ++
-        "    ret out.$src.$len + g.$params[0].$name.$src.$len + e.lhs.$src.$len + xs.$len + " ++
-        "(refl f).$params.$len + ast.Identifier(\"x\").$src.$len;\n" ++
+        "    mut ast out = g.body;\n" ++
+        "    ret lenof out.src + lenof g.params[0].name.src + lenof e.lhs.src + lenof xs + " ++
+        "lenof (refl f).params + lenof ast.Identifier(\"x\").src;\n" ++
         "}\n" ++
-        "$main = () {}";
-    const all_views = "$src $children $name $type $value $params $ret $body $fields $cases " ++
-        "$methods $implof $default $where $mut $decls ";
+        "main = () {}";
+    const all_views = "src children name type assigned params rettype body fields cases " ++
+        "methods traits defval guard ismut decls ";
     // a written local, a parameter, a list view element, a view, a child, a group, a made node
-    for ([_]u32{ 12, 26, 37, 43, 61, 92, 127 }) |character| {
+    for ([_]u32{ 18, 32, 42, 47, 65, 97, 132 }) |character| {
         const labels = try offered_labels(allocator, source, 2, character);
         try std.testing.expectEqualStrings(all_views, labels);
     }
-    // a tree of a kind has its children, a list its length, text nothing
+    // a tree of a kind has its children
     const with_children = all_views ++ "lhs rhs ";
-    try std.testing.expectEqualStrings(with_children, try offered_labels(allocator, source, 2, 57));
-    try std.testing.expectEqualStrings("$len ", try offered_labels(allocator, source, 2, 76));
-    try std.testing.expectEqualStrings("$len ", try offered_labels(allocator, source, 2, 100));
-    try std.testing.expectEqualStrings("", try offered_labels(allocator, source, 2, 48));
+    try std.testing.expectEqualStrings(with_children, try offered_labels(allocator, source, 2, 61));
 }
 
-test "the kinds after `ast.`, the builtins after `$`" {
+test "the kinds after `ast.`, the compiler's names after `__`" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     const source = "stc ast x = ast.BinaryAdd(quote: 1, quote: 2);\n" ++
-        "stc ast y = $fresh(\"t\");\nstc ast z = refl $file;\n";
+        "stc u64 n = lenof __os;\n";
     const result = Analysis.analyze(allocator, try allocator.dupe(u8, source));
     const kinds = try offer(allocator, source, .{ .line = 0, .character = 16 }, result.decls);
     try std.testing.expectEqual(Node.case_names.len, kinds.len);
@@ -494,13 +438,11 @@ test "the kinds after `ast.`, the builtins after `$`" {
         if (!std.mem.eql(u8, kind.label, "BinaryAdd")) continue;
         try std.testing.expectEqualStrings("(lhs, rhs)", kind.detail);
     }
-    const builtin_labels = try offered_labels(allocator, source, 1, 14);
-    const builtin_names = "$fresh $asterr $crash $asm $syscall $os $arch ";
-    try std.testing.expectEqualStrings(builtin_names, builtin_labels);
-    const after_refl = try offered_labels(allocator, source, 2, 18);
-    try std.testing.expectEqualStrings(builtin_names ++ "$file ", after_refl);
-    // the word typed is replaced, its `$` too
-    const builtins = try offer(allocator, source, .{ .line = 2, .character = 18 }, result.decls);
-    try std.testing.expectEqual(@as(u32, 17), builtins[0].textEdit.range.start.character);
-    try std.testing.expectEqualStrings("a name like no other", described("$fresh").?.doc);
+    const compiler_names = try offered_labels(allocator, source, 1, 20);
+    try std.testing.expectEqualStrings("__os __arch ", compiler_names);
+    // the word typed is replaced, its `__` too
+    const builtins = try offer(allocator, source, .{ .line = 1, .character = 20 }, result.decls);
+    try std.testing.expectEqual(@as(u32, 18), builtins[0].textEdit.range.start.character);
+    const os_doc = "the system the program is built for: \"macos\", \"linux\"";
+    try std.testing.expectEqualStrings(os_doc, described("__os").?.doc);
 }

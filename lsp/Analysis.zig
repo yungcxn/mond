@@ -234,7 +234,7 @@ fn resolve(self: *Analysis, lexer: *Lexer) ?*Resolver {
         found.first_operand,
         found.second_operand,
     ) |code, node, first_operand, second_operand| {
-        // a file other files include needs no `$main` of its own
+        // a file other files include needs no `main` of its own
         // the editor shows no `missing_main` for it
         if (code == .missing_main and self.io != null) {
             if (includers.is_included(self.io.?, self.allocator, self.path)) continue;
@@ -306,7 +306,7 @@ test "tokens and diagnostics" {
     defer arena.deinit();
     const source = try arena.allocator().dupe(
         u8,
-        "fun f = (i32 x) -> i32: ret x; # é\n$main = () { s = \"𝄞\"; f(1, 2); }\n",
+        "fun f = (i32 x) -> i32: ret x; # é\nmain = () { s = \"𝄞\"; f(1, 2); }\n",
     );
     const result = analyze(arena.allocator(), source);
     // line and column relative to the token before, length, type, modifiers
@@ -314,7 +314,7 @@ test "tokens and diagnostics" {
         .{ 0, 0, 3, .type, 0 },     .{ 0, 4, 1, .function, 0 },  .{ 0, 2, 1, .operator, 0 },
         .{ 0, 3, 3, .type, 0 },     .{ 0, 4, 1, .parameter, 1 }, .{ 0, 3, 2, .operator, 0 },
         .{ 0, 3, 3, .type, 0 },     .{ 0, 5, 3, .keyword, 0 },   .{ 0, 4, 1, .parameter, 1 },
-        .{ 0, 3, 3, .comment, 0 },  .{ 1, 0, 5, .function, 0 },  .{ 0, 6, 1, .operator, 0 },
+        .{ 0, 3, 3, .comment, 0 },  .{ 1, 0, 4, .keyword, 0 },   .{ 0, 5, 1, .operator, 0 },
         .{ 0, 7, 1, .variable, 1 }, .{ 0, 2, 1, .operator, 0 },  .{ 0, 2, 4, .string, 0 },
         .{ 0, 6, 1, .function, 0 }, .{ 0, 2, 1, .number, 0 },    .{ 0, 3, 1, .number, 0 },
     };
@@ -327,7 +327,7 @@ test "tokens and diagnostics" {
     const diagnostic = result.diagnostics[0];
     const expected_message = "wrong_arity  arguments 2  parameters 1";
     try std.testing.expectEqualStrings(expected_message, diagnostic.message);
-    try std.testing.expectEqual(Position{ .line = 1, .character = 23 }, diagnostic.range.start);
+    try std.testing.expectEqual(Position{ .line = 1, .character = 22 }, diagnostic.range.start);
 }
 
 test "links and outline" {
@@ -337,16 +337,16 @@ test "links and outline" {
         \\type Point = *(mut i32 x, i32 y);
         \\variant Shape = +(Circle(f32 r), Rect);
         \\fun f = (Point p) -> i32: ret p.x;
-        \\$main = () { Point q = Point(x = 1, y = 2); s = Shape.Circle(r = 1.0); f(q); }
+        \\main = () { Point q = Point(x = 1, y = 2); s = Shape.Circle(r = 1.0); f(q); }
     );
     const result = analyze(arena.allocator(), source);
     try std.testing.expectEqual(0, result.diagnostics.len);
     // a name at line and character, the name it means, where that is declared
     const expected = [_]struct { u32, u32, []const u8, u32, u32 }{
         .{ 0, 23, "x", 0, 23 },    .{ 2, 15, "p", 2, 15 },      .{ 2, 30, "p", 2, 15 },
-        .{ 2, 32, "x", 0, 23 },    .{ 3, 29, "x", 0, 23 },      .{ 3, 36, "y", 0, 30 },
-        .{ 3, 48, "Shape", 1, 8 }, .{ 3, 54, "Circle", 1, 18 }, .{ 3, 61, "r", 1, 29 },
-        .{ 3, 71, "f", 2, 4 },     .{ 3, 73, "q", 3, 19 },
+        .{ 2, 32, "x", 0, 23 },    .{ 3, 28, "x", 0, 23 },      .{ 3, 35, "y", 0, 30 },
+        .{ 3, 47, "Shape", 1, 8 }, .{ 3, 53, "Circle", 1, 18 }, .{ 3, 60, "r", 1, 29 },
+        .{ 3, 70, "f", 2, 4 },     .{ 3, 72, "q", 3, 18 },
     };
     for (expected) |name| {
         const declaration = result.decls[(try link_at(result, name[0], name[1]))[3]];
@@ -370,7 +370,7 @@ test "links and outline" {
     var writer: std.Io.Writer = .fixed(&buffer);
     try tree.write(&writer, result, result.outline);
     const written = writer.buffered();
-    try std.testing.expectEqualStrings("Point(x()y())Shape(Circle(r())Rect())f()$main()", written);
+    try std.testing.expectEqualStrings("Point(x()y())Shape(Circle(r())Rect())f()main()", written);
 }
 
 test "names the resolver never met" {
@@ -385,11 +385,11 @@ test "names the resolver never met" {
         \\fun mixed = (u32 a) -> u32: ret a;
         \\fun mixed = (u32 a, u32 b = 5) -> u32: ret a + b;
         \\stcfun code = (Res r) -> u32: ret match r { Res.Ok(v) => v, _ => 0 };
-        \\$main = () { print("x"); u32 m = mixed(1, b = 2); u64 l = "ab".$len; }
+        \\main = () { print("x"); u32 m = mixed(1, b = 2); u64 l = lenof "ab"; }
     );
     const result = analyze(arena.allocator(), source);
     try std.testing.expectEqual(0, result.diagnostics.len);
-    // a name at line and character, the name it means and where that is declared, a builtin nowhere
+    // a name at line and character, the name it means and where that is declared
     const expected = [_]struct { u32, u32, []const u8, ?Position }{
         // a signature without body
         .{ 0, 17, "fmt", .{ .line = 0, .character = 17 } },
@@ -400,8 +400,7 @@ test "names the resolver never met" {
         // an arm never matched
         .{ 7, 57, "v", .{ .line = 7, .character = 51 } },
         // in another overload
-        .{ 8, 42, "b", .{ .line = 6, .character = 24 } },
-        .{ 8, 63, "$len", null },
+        .{ 8, 41, "b", .{ .line = 6, .character = 24 } },
     };
     for (expected) |name| {
         const declaration = result.decls[(try link_at(result, name[0], name[1]))[3]];
@@ -416,15 +415,15 @@ test "the target, machine code and alignment" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const source = try arena.allocator().dupe(u8,
-        \\stc u64 KNOWN = (stcmatch $os { "macos" => 1, _ => 2 }) + $arch.$len;
-        \\fun relax = () { $asm("nop"); }
+        \\stc u64 KNOWN = (stcmatch __os { "macos" => 1, _ => 2 }) + lenof __arch;
+        \\fun relax = () { asm "nop"; }
         \\stc u64 A = alignof u64;
-        \\$main = () { relax(); }
+        \\main = () { relax(); }
     );
     const result = analyze(arena.allocator(), source);
     try std.testing.expectEqual(0, result.diagnostics.len);
-    // `$os` and `$arch` are declared by the compiler, nowhere in the source
-    for ([_]struct { u32, []const u8 }{ .{ 26, "$os" }, .{ 58, "$arch" } }) |name| {
+    // `__os` and `__arch` are declared by the compiler, nowhere in the source
+    for ([_]struct { u32, []const u8 }{ .{ 26, "__os" }, .{ 65, "__arch" } }) |name| {
         const declaration = result.decls[(try link_at(result, 0, name[0]))[3]];
         try std.testing.expectEqualStrings(name[1], declaration.name);
         try std.testing.expectEqual(null, declaration.selectionRange);
@@ -438,12 +437,12 @@ test "a crash reports its text where it is, of every static text" {
         \\stc &u8 POINTER = "pointer";
         \\type Holder = *([5]u8 text);
         \\stc Holder HOLDER = Holder(text = "field");
-        \\stcfun checked = (u32 n) -> u32: ret if n > 3: $crash("too big") else: n;
+        \\stcfun checked = (u32 n) -> u32: ret if n > 3: crash "too big" else: n;
         \\stc u32 BIG = checked(9);
-        \\$crash(POINTER);
-        \\$crash(HOLDER.text);
-        \\stcif false: $crash("pruned");
-        \\$main = () {}
+        \\crash POINTER;
+        \\crash HOLDER.text;
+        \\stcif false: crash "pruned";
+        \\main = () {}
     );
     const result = analyze(arena.allocator(), source);
     const expected = [_]struct { u32, u32, []const u8 }{
@@ -464,7 +463,7 @@ test "a crash reports its text where it is, of every static text" {
 test "a name reported undefined stays unlinked" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const text = "$main = () { { i32 inner = 1; } i32 b = inner; }";
+    const text = "main = () { { i32 inner = 1; } i32 b = inner; }";
     const source = try arena.allocator().dupe(u8, text);
     const result = analyze(arena.allocator(), source);
     const message = result.diagnostics[0].message;
@@ -478,7 +477,7 @@ test "macros expand before anything is linked, made names link nowhere" {
     const source = try arena.allocator().dupe(
         u8,
         "stcfun twice = (ast e) -> ast: ret quote { tmp = @e; ret tmp + tmp; };\n" ++
-            "fun f = () -> u32: <twice(quote: 21)>;\n$main = () {}",
+            "fun f = () -> u32: <twice(quote: 21)>;\nmain = () {}",
     );
     const result = analyze(arena.allocator(), source);
     try std.testing.expectEqual(0, result.diagnostics.len);
@@ -487,7 +486,7 @@ test "macros expand before anything is linked, made names link nowhere" {
         try std.testing.expect(std.mem.indexOfScalar(u8, declaration.name, '`') == null);
     }
 
-    const failing = try arena.allocator().dupe(u8, "<include \"nope.mn\">;\n$main = () {}");
+    const failing = try arena.allocator().dupe(u8, "<include \"nope.mn\">;\nmain = () {}");
     const message = analyze(arena.allocator(), failing).diagnostics[0].message;
     try std.testing.expectEqualStrings("include_failed  file `nope.mn`  because `NoIo`", message);
 }
@@ -499,11 +498,11 @@ test "macros: the meta syntax is a macro, code by its role, splices and stcfuns 
         "stcfun twice = (ast(u32) e) -> ast(u32): ret quote: @e + @e;\n" ++
         "fun f = (u32 a) -> bool: ret <twice(quote: a)> < a;\n" ++
         "stcfun unused = (ast e) -> ast: ret match e { " ++
-        "quote: @x + 0 => x, quote: 0 + @x => $fresh(\"t\"), _ => e };\n" ++
+        "quote: @x + 0 => x, quote: 0 + @x => fresh \"t\", _ => e };\n" ++
         "stcfun kids = (ast e) -> ast: ret match e { " ++
-        "ast.BinaryAdd(l, r) | ast.BinaryMultiply(l, r) => e with (lhs = r), _ => e.$src };\n" ++
+        "ast.BinaryAdd(l, r) | ast.BinaryMultiply(l, r) => e with (lhs = r), _ => e.src };\n" ++
         "fun g = () -> u32: ret <kids(quote: 1 * 2)>;\n" ++
-        "$main = () {}");
+        "main = () {}");
     const result = analyze(arena.allocator(), source);
     try std.testing.expectEqual(0, result.diagnostics.len);
     var classes: [4][128]?struct { Type, u32 } = @splat(@splat(null));
@@ -519,13 +518,13 @@ test "macros: the meta syntax is a macro, code by its role, splices and stcfuns 
     // `kids` matched only the second alternative, the splice is gone from the last pass
     // a `<` after a splice compares
     const expected = [_]struct { u32, u32, Type }{
-        .{ 0, 7, .function },    .{ 0, 25, .parameter },  .{ 0, 45, .macro },
-        .{ 0, 52, .macro },      .{ 0, 53, .parameter },  .{ 1, 29, .macro },
-        .{ 1, 30, .function },   .{ 1, 43, .parameter },  .{ 1, 45, .macro },
-        .{ 1, 47, .operator },   .{ 2, 42, .parameter },  .{ 2, 54, .variable },
-        .{ 2, 63, .variable },   .{ 2, 78, .variable },   .{ 2, 83, .function },
-        .{ 2, 101, .parameter }, .{ 3, 48, .enumMember }, .{ 3, 58, .variable },
-        .{ 3, 61, .variable },   .{ 3, 102, .property },  .{ 3, 108, .variable },
+        .{ 0, 7, .function },   .{ 0, 25, .parameter },  .{ 0, 45, .macro },
+        .{ 0, 52, .macro },     .{ 0, 53, .parameter },  .{ 1, 29, .macro },
+        .{ 1, 30, .function },  .{ 1, 43, .parameter },  .{ 1, 45, .macro },
+        .{ 1, 47, .operator },  .{ 2, 42, .parameter },  .{ 2, 54, .variable },
+        .{ 2, 63, .variable },  .{ 2, 78, .variable },   .{ 2, 83, .macro },
+        .{ 2, 99, .parameter }, .{ 3, 48, .enumMember }, .{ 3, 58, .variable },
+        .{ 3, 61, .variable },  .{ 3, 102, .property },  .{ 3, 108, .variable },
         .{ 3, 119, .property },
     };
     for (expected) |token| try std.testing.expectEqual(token[2], classes[token[0]][token[1]].?[0]);
@@ -546,4 +545,30 @@ test "macros: the meta syntax is a macro, code by its role, splices and stcfuns 
         if (!is_fresh_call) continue;
         try std.testing.expect(result.decls[found[3]].selectionRange.?.start.character == 78);
     }
+}
+
+test "main and the protocol methods are keywords, a free function of the same name is not" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\type R = *(mut u32 n) !{ init = () -> R: ret R(0); next = () -> u32: ret self.n; };
+        \\type P = *(u32 a);
+        \\fun next = () -> u32: ret 1;
+        \\main = () { mut R r = R.init(); u32 v = r.next() + next(); P p = P.init(); }
+    );
+    const result = analyze(arena.allocator(), source);
+    try std.testing.expectEqual(0, result.diagnostics.len);
+    var classes: [4][128]?Type = @splat(@splat(null));
+    var line: u32, var character: u32 = .{ 0, 0 };
+    for (0..result.data.len / 5) |i| {
+        const encoded = result.data[i * 5 ..][0..5];
+        line += encoded[0];
+        character = if (encoded[0] == 0) character + encoded[1] else encoded[1];
+        classes[line][character] = @enumFromInt(encoded[3]);
+    }
+    const expected = [_]struct { u32, u32, Type }{
+        .{ 0, 25, .keyword }, .{ 0, 51, .keyword }, .{ 2, 4, .function },  .{ 3, 0, .keyword },
+        .{ 3, 24, .keyword }, .{ 3, 42, .keyword }, .{ 3, 51, .function }, .{ 3, 67, .keyword },
+    };
+    for (expected) |token| try std.testing.expectEqual(token[2], classes[token[0]][token[1]].?);
 }

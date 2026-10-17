@@ -23,4 +23,4 @@ fun f = (bool c, u32 n) {
     mut u32 p;
     u32 q = p ?? 0; #! use_before_initialization type_mismatch
 }
-$main = () {}
+main = () {}

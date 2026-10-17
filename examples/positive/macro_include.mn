@@ -12,14 +12,14 @@ stc u32 answer = kit_answer(); #= answer 42
 stc u32 own = secret_factor(); #= own 1
 
 # the included tree, read before it is spliced
-stc u64 kit_decls = (include "../lib/macro_kit.mn").$decls.$len; #= kit_decls 8
-stc []u8 kit_first = (include "../lib/macro_kit.mn").$decls[0].$name.$src; #= kit_first "twice_of"
+stc u64 kit_decls = lenof (include "../lib/macro_kit.mn").decls; #= kit_decls 8
+stc []u8 kit_first = (include "../lib/macro_kit.mn").decls[0].name.src; #= kit_first "twice_of"
 
 # an edited copy spread into the program: its declarations side by side
 stcfun renamed_lcm = (ast lib) -> ast {
     mut ast out = lib;
-    out.$decls[1].$name = ast.Identifier("m_lcm");
-    ret quote { @..out.$decls; };
+    out.decls[1].name = ast.Identifier("m_lcm");
+    ret quote { @..out.decls; };
 }
 <renamed_lcm(include "../lib/math.mn")>;
 stc u32 ml = m_lcm(8, 12); #= ml 24
@@ -32,7 +32,7 @@ stcfun library = ([]u8 name) -> ast: ret include name;
 stc u8 fc = first_char("zebra"); #= fc 122
 fun count_as = ([]u8 s) -> u32: ret count_char(s, 'a');
 
-$main = () {
+main = () {
     u32 a = count_as("banana");
     u32 b = m_lcm(3, 4);
 }

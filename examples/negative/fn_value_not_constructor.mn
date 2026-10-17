@@ -5,4 +5,4 @@ fun f = (Rec r, V.B c) {
     Rec q = r(1); #! not_callable
     V.B d = c(2); #! not_callable
 }
-$main = () {}
+main = () {}

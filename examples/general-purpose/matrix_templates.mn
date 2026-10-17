@@ -42,7 +42,7 @@ stcfun products = () -> u32 {
 
 stcfun identity = (type M): () -> M {
     mut M out;
-    for i in 0..<out.rows.$len as u32: out.set(i, i, 1);
+    for i in 0..<lenof out.rows as u32: out.set(i, i, 1);
     ret out;
 }
 
@@ -67,7 +67,7 @@ stc i64 NG = negatives(); #= NG 97990
 stc u64 SZ = sizeof Matrix(u16, 3, 5); #= SZ 30
 stc u64 SF = sizeof Matrix(f32, 4, 4); #= SF 64
 
-$main = () {
+main = () {
     Matrix(u32, 2, 2) m = Matrix(u32, 2, 2)(rows = [[1, 2], [3, 4]]);
     sq = matmul(u32, 2, 2, 2)(m, m); #: sq *([2][2]u32 rows)
     tr = transpose(u32, 2, 2)(sq); #: tr *([2][2]u32 rows)

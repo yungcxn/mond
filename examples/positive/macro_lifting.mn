@@ -9,7 +9,7 @@ stc bool off = <quote: @(1 > 2)>; #= off false
 stc []u8 tab = <quote: @("a\tb")>;
 stc u8 tab_byte = tab[1]; #= tab_byte 9
 stc []u8 nl = <quote: @("a\nb")>;
-stc u64 nl_len = nl.$len; #= nl_len 3
+stc u64 nl_len = lenof nl; #= nl_len 3
 stc []u8 quoted = <quote: @("\"\\")>; #= quoted ""\"
 stc []u8 empty = <quote: @("")>; #= empty ""
 
@@ -41,7 +41,7 @@ stc u64 box_of_grid = <quote: sizeof @(Box(Grid(3)))>; #= box_of_grid 8
 stc u64 ptr_box = <quote: sizeof @(*Box(u8))>; #= ptr_box 8
 stcfun pick = (u32 n): ret if n > 0: Rec else: u8;
 stc u64 picked = sizeof pick(1); #= picked 8
-stcfun picked_name = () -> []u8 { ast t = quote: @(pick(1)); ret t.$src; }
+stcfun picked_name = () -> []u8 { ast t = quote: @(pick(1)); ret t.src; }
 stc []u8 pn = picked_name(); #= pn "Rec"
 
 # names and texts made from texts a macro changed
@@ -55,17 +55,17 @@ stc u32 made = <made_from_text()>(); #= made 4
 stcfun fresh_from_text = () -> ast {
     mut []u8 stem = "ab";
     stem[1] = 'z';
-    ast.Identifier v = $fresh(stem);
-    ret quote: @(v.$src);
+    ast.Identifier v = fresh stem;
+    ret quote: @(v.src);
 }
 stc []u8 fresh_text = <fresh_from_text()>;
 stc u8 fresh_second = fresh_text[1]; #= fresh_second 122
 stcfun fresh_twice = () -> ast {
-    ast.Identifier stem = $fresh("q");
-    ast.Identifier again = ast.Identifier(stem.$src);
+    ast.Identifier stem = fresh "q";
+    ast.Identifier again = ast.Identifier(stem.src);
     ret quote { @again = 2; ret @again + 1; };
 }
 fun twice_named = () -> u32: <fresh_twice()>;
 stc u32 tn = twice_named(); #= tn 3
 
-$main = () {}
+main = () {}

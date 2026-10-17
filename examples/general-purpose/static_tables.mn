@@ -102,7 +102,7 @@ stc []u32 POW2 = stcwhile P2 <= 100: { u32 cur = P2; P2 = P2 * 2; cur; } #= POW2
 stc type WIDE = stcif sizeof Word(20) == 4: Word(40) else: u8; #= WIDE u64
 stc u64 WBYTES = sizeof Word(1) + sizeof Word(9) * 10 + sizeof Word(17) * 100 + sizeof Word(64) * 1000; #= WBYTES 8421
 
-$main = () {
+main = () {
     Word(12) w = 4000; #: w u16
     Shape(2) s = Shape(2)(f0 = 1, f1 = 2);
     x = s.f1; #: x u16

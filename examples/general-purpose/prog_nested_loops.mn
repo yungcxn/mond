@@ -85,7 +85,7 @@ fun digital_root = (u64 n) -> u64 {
 fun first_negative = (&[]i32 xs) -> i64 {
     mut i64 bal = 0;
     mut u64 i = 0;
-    while i < xs.$len, i += 1 {
+    while i < lenof xs, i += 1 {
         bal += xs.*[i] as i64;
         if bal < 0: ret i as i64;
     }
@@ -113,7 +113,7 @@ stcfun loop_collect = () -> []u32 {
 fun balanced = (&[]u8 s) -> i32 {
     mut [16]u8 stack;
     mut u32 top = 0;
-    for i in 0..<s.$len {
+    for i in 0..<lenof s {
         u8 c = s.*[i];
         match c {
             '(' | '[' | '{' => {
@@ -131,7 +131,7 @@ fun balanced = (&[]u8 s) -> i32 {
             _ => cont,
         }
     }
-    ret if top == 0: -1 else: s.$len as i32;
+    ret if top == 0: -1 else: lenof s as i32;
 }
 
 stcfun s_triples = () -> u32: ret triples(30) * 100 + triples(5);
@@ -167,7 +167,7 @@ stc []u32 SKIP = skipped_squares(); #= SKIP [1, 4, 16, 25, 49, 64, 100]
 stc []u32 COLL = loop_collect(); #= COLL [82, 41, 62, 31, 94, 47, 71, 91, 61, 92, 46, 23, 70, 35, 53, 80, 40, 20, 10, 5, 16, 8, 4, 2, 1]
 stc i64 BAL = s_balanced(); #= BAL 912141109
 
-$main = () -> i64 {
+main = () -> i64 {
     [4][4]i32 m = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]];
     t = triples(20); #: t u32
     g = goldbach(50); #: g u32

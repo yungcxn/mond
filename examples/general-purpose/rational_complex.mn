@@ -279,9 +279,9 @@ fun orient = (Vec2 a, Vec2 b, Vec2 c) -> i32 {
 
 fun area2 = (&[]Vec2 pts) -> i64 {
     mut i64 s = 0;
-    for i in 0..<pts.$len {
+    for i in 0..<lenof pts {
         Vec2 p = pts.*[i];
-        Vec2 q = pts.*[(i + 1) % pts.$len];
+        Vec2 q = pts.*[(i + 1) % lenof pts];
         s += (p.x as i64) * (q.y as i64) - (q.x as i64) * (p.y as i64);
     }
     ret s;
@@ -389,4 +389,4 @@ stc i64 Q5 = Quat(1, 2, 3, 4).mul(Quat(-2, 0, 5, 1)).key(); #= Q5 -21210297
 stc i64 Q6 = Quat(1, 2, 3, 4).mul(Quat(1, 0, 0, 0)).key(); #= Q6 1020304
 stc i64 Q7 = Quat(0, 0, 0, 0).mul(Quat(9, 9, 9, 9)).key(); #= Q7 0
 
-$main = () {}
+main = () {}

@@ -17,16 +17,16 @@ stc ast name_with = (quote: x) with (rhs = quote: 1); #! unknown_named_argument
 # made nodes: a name from a text, children from trees
 stc ast bad_made = ast.Identifier(5); #! type_mismatch
 stc ast bad_made_child = ast.BinaryAdd(quote: 1, 2); #! type_mismatch
-stc ast bad_fresh = $fresh(5); #! type_mismatch
+stc ast bad_fresh = fresh 5; #! type_mismatch
 
-# `$asterr` takes a tree and a text, an ill-typed one reports only that
-stc ast bad_error = $asterr(5, "x"); #! type_mismatch
-stc ast bad_error_text = $asterr(quote: x, 5); #! type_mismatch
+# `crash` at a tree takes a tree and a text, an ill-typed one reports only that
+stc ast bad_error = crash (5, "x"); #! type_mismatch
+stc ast bad_error_text = crash (quote: x, 5); #! type_mismatch
 
 # a list of `ast.Kind` reports the element that is not of the kind
-stcfun only_names = ([]ast.Identifier xs) -> u64: ret xs.$len;
+stcfun only_names = ([]ast.Identifier xs) -> u64: ret lenof xs;
 stc u64 on = only_names([quote: a, quote: 1]); #! type_mismatch
 stc ast bad_include = include 5; #! type_mismatch
 stc ast bad_refl = refl 5; #! undefined_name
 
-$main = () {}
+main = () {}

@@ -35,7 +35,7 @@ top: bool = false,
 quoting: u32 = 0,
 // a splice is evaluated, the only time the program may be written
 splicing: u32 = 0,
-// the node `refl $file` reads, made on demand
+// the node a bare `refl` reads, made on demand
 file: NodeId = 0,
 // where the subtree of each root starts, made once a pass by the first write into the program
 starts: []NodeId = &.{},
@@ -334,14 +334,14 @@ pub fn end_splice(self: *Macros, live: bool, mark: usize, result_type: Index) In
     return result_type;
 }
 
-// `refl x`: the declaration of `x` as a tree to read and write, `refl $file` the program
+// `refl x`: the declaration of `x` as a tree to read and write, a bare `refl` the program
 // nothing gets resolved by it
 fn refl(self: *Macros, node: NodeId) Index {
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
     const reflected = resolver.tree.arg(node, 0);
+    if (resolver.tree.kind(reflected) == .none) return static_pool.pointer_to(.ast_type, true);
     const name = resolver.name_pool.name_of_node(reflected);
-    if (name == .file) return static_pool.pointer_to(.ast_type, true);
 
     const declaration = if (name == .none)
         .none
@@ -381,7 +381,7 @@ pub fn tree_kind_member(self: *Macros, node: NodeId, name: NamePool.Index) Index
     return resolver.static_pool.ast_type_of(.none, @as(u16, @intFromEnum(kind)) + 1);
 }
 
-// the views of trees (`x.$name`), what each gives and is: the checker types them by it, the
+// the views of trees (`x.name`), what each gives and is: the checker types them by it, the
 // language server offers them
 pub const View = struct {
     name: NamePool.Index,
@@ -397,23 +397,36 @@ pub const views = [_]View{
         .doc = "the name of a declaration, parameter, field or case",
     },
     .{ .name = .type, .gives = .tree, .doc = "the type of a declaration, parameter or field" },
-    .{ .name = .value, .gives = .tree, .doc = "what a declaration declares" },
+    .{ .name = .assigned, .gives = .tree, .doc = "what a declaration declares" },
     .{ .name = .params, .gives = .list, .doc = "the parameters of a function" },
-    .{ .name = .ret, .gives = .tree, .doc = "the return type of a function" },
+    .{ .name = .rettype, .gives = .tree, .doc = "the return type of a function" },
     .{ .name = .body, .gives = .tree, .doc = "the body of a function" },
     .{ .name = .fields, .gives = .list, .doc = "the fields of a type" },
     .{ .name = .cases, .gives = .list, .doc = "the cases of a variant" },
     .{ .name = .methods, .gives = .list, .doc = "the methods of a type or trait" },
-    .{ .name = .implof, .gives = .list, .doc = "the traits a type implements" },
-    .{ .name = .default, .gives = .tree, .doc = "the default of a parameter or field" },
-    .{ .name = .where, .gives = .tree, .doc = "the condition of a parameter or field" },
-    .{ .name = .mut, .gives = .flag, .doc = "whether a parameter or field is mut" },
+    .{ .name = .traits, .gives = .list, .doc = "the traits a type implements" },
+    .{ .name = .defval, .gives = .tree, .doc = "the default of a parameter or field" },
+    .{ .name = .guard, .gives = .tree, .doc = "the condition of a parameter or field" },
+    .{ .name = .ismut, .gives = .flag, .doc = "whether a parameter or field is mut" },
     .{
         .name = .decls,
         .gives = .list,
-        .doc = "the declarations of a block, an include or `refl $file`",
+        .doc = "the declarations of a block, an include or a bare `refl`",
     },
 };
+
+comptime {
+    @setEvalBranchQuota(100_000);
+    for (views) |view| for (ParseTree.Node.nk_field_names) |fields| for (fields) |field| {
+        const mirrors = switch (view.name) {
+            .name, .type, .body, .assigned => true,
+            else => false,
+        };
+        if (!mirrors and std.mem.eql(u8, field, @tagName(view.name))) {
+            @compileError("the view `" ++ field ++ "` hides the child of that name");
+        }
+    };
+}
 
 // a member of a tree: a view or a child by its field name (`cond`, `lhs`). it is written when the
 // tree is reached through a `*ast` (as a field through a `*T`), the elements of a list view of one
@@ -437,7 +450,7 @@ pub fn tree_member(self: *Macros, base: Index, name: NamePool.Index) Index {
     return .ast_type;
 }
 
-// what is written into an element of a list view (`t.$fields[0] = x`): a tree, the element is
+// what is written into an element of a list view (`t.fields[0] = x`): a tree, the element is
 // replaced by it
 pub fn tree_place_type(self: *Macros, node: NodeId, value_type: Index) Index {
     const resolver = self.owning_resolver();
@@ -490,8 +503,8 @@ pub fn check_tree_call(
     return target;
 }
 
-// `$fresh("tmp")`: a name no other name is, `$asterr(tree, "..")` stops the expansion with an error
-// at the tree
+// `fresh "tmp"`: a name no other name is, `crash (tree, "..")` stops the expansion with an error at
+// the tree
 pub fn check_builtin(
     self: *Macros,
     context: *FunctionContext,
@@ -632,7 +645,7 @@ pub fn root_of(self: *Macros, node: NodeId) NodeId {
     return 0;
 }
 
-// `[]u8`: what `$src` is and builtins take
+// `[]u8`: what `.src` is and builtins take
 pub fn string_type(self: *Macros) Index {
     return self.owning_resolver().static_pool.intern(.{
         .array_type = .{ .length = StaticPool.dyn_len, .element = .u8_type },

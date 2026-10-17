@@ -1,5 +1,5 @@
-variant Light = +(Red, Green, Yellow) tagof u8 !{
-    fun next = () -> Light: ret match self {
+variant Light = +(Red, Green, Yellow) tagtype u8 !{
+    next = () -> Light: ret match self {
         Light.Red => Light.Green,
         Light.Green => Light.Yellow,
         Light.Yellow => Light.Red,
@@ -8,14 +8,14 @@ variant Light = +(Red, Green, Yellow) tagof u8 !{
     fun stop = () -> bool: ret self == Light.Red;
 }
 
-variant Level = +(Low = 3, Mid = 7, High = 20) tagof u8;
+variant Level = +(Low = 3, Mid = 7, High = 20) tagtype u8;
 
-variant Coin = +(Nickel = 5, Dime = 10, Quarter = 25) tagof u8;
+variant Coin = +(Nickel = 5, Dime = 10, Quarter = 25) tagtype u8;
 
-variant Vend = +(Idle, Has(u32 cents), Dispensing(u8 slot, u32 change), Broken) tagof u8 !{
+variant Vend = +(Idle, Has(u32 cents), Dispensing(u8 slot, u32 change), Broken) tagtype u8 !{
     fun insert = (Coin c) -> Vend: ret match self {
-        Vend.Idle => Vend.Has(c.$tag as u32),
-        Vend.Has(n) => Vend.Has(n + c.$tag as u32),
+        Vend.Idle => Vend.Has(tagof c as u32),
+        Vend.Has(n) => Vend.Has(n + tagof c as u32),
         _ => self.*,
     }
     fun press = (u8 which) -> Vend: ret match self {
@@ -34,10 +34,10 @@ variant Small = +(A, B);
 variant Big = +(C, D(u8), E);
 variant Joined = Small || Big;
 
-variant Cmd = +(Move(i32 dx, i32 dy), Turn(bool left), Say(u8 ch), Stop) tagof u8;
+variant Cmd = +(Move(i32 dx, i32 dy), Turn(bool left), Say(u8 ch), Stop) tagtype u8;
 
-variant Tri = +(No, Maybe(Opt2), Yes) tagof u8;
-variant Opt2 = +(Some(u8), None = 0xFF) tagof self;
+variant Tri = +(No, Maybe(Opt2), Yes) tagtype u8;
+variant Opt2 = +(Some(u8), None = 0xFF) tagtype self;
 
 fun classify = (Joined j) -> u32: ret match j {
     Small.A => 1,
@@ -94,7 +94,7 @@ fun casts = (Level a, Coin c) -> u32: ret a as u32 * 100 + c as u32;
 stc u32 CS = casts(Level.High, Coin.Dime); #= CS 2010
 
 stcfun tags = () -> u32 {
-    ret Level.Mid.$tag as u32 * 100 + Coin.Dime.$tag as u32 * 10 + Light.Yellow.$tag as u32;
+    ret tagof Level.Mid as u32 * 100 + tagof Coin.Dime as u32 * 10 + tagof Light.Yellow as u32;
 }
 
 stcfun equality = () -> u32 {
@@ -149,6 +149,6 @@ stc i32 CM = commands(); #= CM 20501
 stc u32 NE = nested(); #= NE 1005170
 stc u64 SZ = sizes(); #= SZ 112122
 
-$main = () {
+main = () {
     u32 c = casts(Level.High, Coin.Dime);
 }

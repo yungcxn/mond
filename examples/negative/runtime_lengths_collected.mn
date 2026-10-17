@@ -3,10 +3,10 @@ fun collected = (u64 lo, u64 hi) -> u64 {
     []u64 values = for i in lo..<hi: i * 2;
     mut u64 n = 0;
     for v in values: n += v;                                     #! not_static
-    ret n + values.$len;                                         #! not_static
+    ret n + lenof values;                                         #! not_static
 }
 fun indexed = (u64 lo, u64 hi) -> u64 {
     []u64 values = for i in lo..<hi: i * 2;
     ret values[0];
 }
-$main = () {}
+main = () {}

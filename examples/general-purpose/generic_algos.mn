@@ -189,7 +189,7 @@ stcfun lambdas = () -> u32 {
 
 stc u32 LA = lambdas(); #= LA 2563250
 
-$main = () {
+main = () {
     Point p = Point(1, 2);
     d = p.dist(Point(4, 6)); #: d u32
     n = p.near(Point(2, 2), 3); #: n bool

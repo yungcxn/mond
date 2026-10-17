@@ -17,6 +17,6 @@ fun spliced_statement = () -> u32 {
 stcfun broken = (*ast file) {
     u32 x = true; #! type_mismatch
 }
-<broken(refl $file)>;
+<broken(refl)>;
 
-$main = () {}
+main = () {}

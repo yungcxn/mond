@@ -13,7 +13,7 @@ fun gcd = (u64 a, u64 b) -> u64 {
     ret x;
 }
 
-$main = () {
+main = () {
     puts("arithmetic");     #> arithmetic
     line_u64(fib(20));      #> 6765
     line_u64(gcd(84, 36));  #> 12

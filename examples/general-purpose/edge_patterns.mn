@@ -1,6 +1,6 @@
-variant Expr = +(Lit(i64 v), Neg(u32 inner), Bin(u8 op, u32 l, u32 r), Var(u8 name), Nil) tagof u8;
-variant Cell = +(Empty, Wall, Door(bool open), Item(u8 kind, u32 qty)) tagof u8;
-variant Pt = +(At(i32 x, i32 y), Off) tagof u8;
+variant Expr = +(Lit(i64 v), Neg(u32 inner), Bin(u8 op, u32 l, u32 r), Var(u8 name), Nil) tagtype u8;
+variant Cell = +(Empty, Wall, Door(bool open), Item(u8 kind, u32 qty)) tagtype u8;
+variant Pt = +(At(i32 x, i32 y), Off) tagtype u8;
 type Line = *(Pt a, Pt b);
 type Ent = *(Cell cell, u8 hp);
 
@@ -96,7 +96,7 @@ fun nested_match = (Cell a, Cell b) -> u32: ret match a {
     _ => 3000,
 }
 
-variant Small = +(Some(u8), None = 0xFF) tagof self;
+variant Small = +(Some(u8), None = 0xFF) tagtype self;
 
 fun small_sum = (Small a, Small b) -> u32 {
     x = a ?? 0;
@@ -162,4 +162,4 @@ stc u32 SWH = small_while(Small.Some(3), Small.Some(2)) * 1000 + small_while(Sma
 stc i32 LA = label_arrows(6, 7) + label_arrows(-3, 4) * 10 + label_arrows(1, 2) * 1000; #= LA -1820
 stc u32 EE = early_exit(Small.Some(9)) + early_exit(Small.None) * 1000; #= EE 999009
 
-$main = () {}
+main = () {}

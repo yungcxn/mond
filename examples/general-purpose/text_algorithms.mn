@@ -1,5 +1,5 @@
 fun copy = (*[]u8 dst, &[]u8 src) {
-    for i in 0..<src.$len: dst.*[i] = src.*[i];
+    for i in 0..<lenof src: dst.*[i] = src.*[i];
 }
 
 fun roman_value = (u8 c) -> u32: ret match c {
@@ -9,9 +9,9 @@ fun roman_value = (u8 c) -> u32: ret match c {
 
 fun from_roman = (&[]u8 s) -> u32 {
     mut i64 total = 0;
-    for i in 0..<s.$len {
+    for i in 0..<lenof s {
         i64 v = roman_value(s.*[i]);
-        if i + 1 < s.$len and roman_value(s.*[i + 1]) > v as u32: total -= v else: total += v;
+        if i + 1 < lenof s and roman_value(s.*[i + 1]) > v as u32: total -= v else: total += v;
     }
     ret total as u32;
 }
@@ -42,7 +42,7 @@ fun to_roman = (u32 n, *[16]u8 out) -> u32 {
 fun luhn = (&[]u8 digits) -> bool {
     mut u32 sum = 0;
     mut bool dbl = false;
-    mut u64 i = digits.$len;
+    mut u64 i = lenof digits;
     while i > 0 {
         i -= 1;
         mut u32 d = (digits.*[i] - '0') as u32;
@@ -67,15 +67,15 @@ fun b64_char = (u32 v) -> u8: ret match v {
 fun base64 = (&[]u8 data, *[32]u8 out) -> u32 {
     mut u32 n = 0;
     mut u64 i = 0;
-    while i < data.$len {
+    while i < lenof data {
         u32 b0 = data.*[i] as u32;
-        u32 b1 = if i + 1 < data.$len: data.*[i + 1] as u32 else: 0;
-        u32 b2 = if i + 2 < data.$len: data.*[i + 2] as u32 else: 0;
+        u32 b1 = if i + 1 < lenof data: data.*[i + 1] as u32 else: 0;
+        u32 b2 = if i + 2 < lenof data: data.*[i + 2] as u32 else: 0;
         u32 triple = (b0 << 16) | (b1 << 8) | b2;
         out.*[n] = b64_char((triple >> 18) & 63);
         out.*[n + 1] = b64_char((triple >> 12) & 63);
-        out.*[n + 2] = if i + 1 < data.$len: b64_char((triple >> 6) & 63) else: '=';
-        out.*[n + 3] = if i + 2 < data.$len: b64_char(triple & 63) else: '=';
+        out.*[n + 2] = if i + 1 < lenof data: b64_char((triple >> 6) & 63) else: '=';
+        out.*[n + 3] = if i + 2 < lenof data: b64_char(triple & 63) else: '=';
         n += 4;
         i += 3;
     }
@@ -85,7 +85,7 @@ fun base64 = (&[]u8 data, *[32]u8 out) -> u32 {
 fun prefix_table = (&[]u8 p, *[16]u32 t) {
     t.*[0] = 0;
     mut u32 k = 0;
-    for i in 1..<p.$len {
+    for i in 1..<lenof p {
         while k > 0 and p.*[k] != p.*[i]: k = t.*[k - 1];
         if p.*[k] == p.*[i]: k += 1;
         t.*[i] = k;
@@ -100,7 +100,7 @@ fun kmp_count = (&[]u8 text, &[]u8 pat) -> u32 {
     for c in text.* {
         while k > 0 and pat.*[k] != c: k = t[k - 1];
         if pat.*[k] == c: k += 1;
-        if k == pat.$len {
+        if k == lenof pat {
             found += 1;
             k = t[k - 1];
         }
@@ -109,18 +109,18 @@ fun kmp_count = (&[]u8 text, &[]u8 pat) -> u32 {
 }
 
 fun glob = (&[]u8 pat, &[]u8 s, u64 pi, u64 si) -> bool {
-    if pi == pat.$len: ret si == s.$len;
+    if pi == lenof pat: ret si == lenof s;
     if pat.*[pi] == '*' {
-        for skip in si..=s.$len: if glob(pat, s, pi + 1, skip): ret true;
+        for skip in si..=lenof s: if glob(pat, s, pi + 1, skip): ret true;
         ret false;
     }
-    if si == s.$len: ret false;
+    if si == lenof s: ret false;
     if pat.*[pi] == '?' or pat.*[pi] == s.*[si]: ret glob(pat, s, pi + 1, si + 1);
     ret false;
 }
 
 fun rot13 = (*[]u8 s) {
-    for i in 0..<s.$len {
+    for i in 0..<lenof s {
         u8 c = s.*[i];
         if c >= 'a' and c <= 'z': s.*[i] = 'a' + (c - 'a' + 13) % 26;
         if c >= 'A' and c <= 'Z': s.*[i] = 'A' + (c - 'A' + 13) % 26;
@@ -159,7 +159,7 @@ fun parse_csv_sum = (&[]u8 line) -> i32 {
 
 fun lcp_len = (&[]u8 a, &[]u8 b, &[]u8 c) -> u32 {
     mut u32 n = 0;
-    while n < a.$len and n < b.$len and n < c.$len {
+    while n < lenof a and n < lenof b and n < lenof c {
         if a.*[n] != b.*[n] or a.*[n] != c.*[n]: brk;
         n += 1;
     }
@@ -177,9 +177,9 @@ fun letter_freq = (&[]u8 s) -> u32 {
 fun run_length = (&[]u8 s, *[32]u8 out) -> u32 {
     mut u32 n = 0;
     mut u64 i = 0;
-    while i < s.$len {
+    while i < lenof s {
         mut u64 j = i;
-        while j < s.$len and s.*[j] == s.*[i]: j += 1;
+        while j < lenof s and s.*[j] == s.*[i]: j += 1;
         out.*[n] = '0' + (j - i) as u8;
         out.*[n + 1] = s.*[i];
         n += 2;
@@ -252,4 +252,4 @@ stc u32 LC = lcp_len("interstellar".&, "internet".&, "interval".&); #= LC 5
 stc u32 LF = letter_freq("the quick brown fox jumps over the lazy dog".&); #= LF 1404
 stc u32 RL = runs(); #= RL 8336243
 
-$main = () {}
+main = () {}

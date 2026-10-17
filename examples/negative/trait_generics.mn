@@ -53,4 +53,4 @@ fun use = () {
     u32 h = Half(1).from(Half(2)); #! type_mismatch
 }
 
-$main = () {}
+main = () {}

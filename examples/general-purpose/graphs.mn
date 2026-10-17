@@ -242,4 +242,4 @@ stc u64 TS = run_topo(false); #= TS 450231
 stc u64 TC = run_topo(true); #= TC 0
 stc u32 KR = run_kruskal(); #= KR 241
 
-$main = () {}
+main = () {}

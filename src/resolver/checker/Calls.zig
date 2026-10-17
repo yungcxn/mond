@@ -71,10 +71,12 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
     }
 
     const callee = tree.arg(node, 0);
-    // `$asm("..")`: machine code put where it stands, its text static. it runs only at run time
-    const calls_assembly = tree.kind(callee) == .identifier and
-        resolver.name_pool.name_of_node(callee) == .@"asm";
-    if (calls_assembly) {
+    const builtin = if (tree.kind(node) == .builtin_call)
+        resolver.name_pool.name_of_node(callee)
+    else
+        .none;
+    // `asm ".."`: machine code put where it stands, its text static. it runs only at run time
+    if (builtin == .@"asm") {
         if (arguments.len != 1) return resolver.report(.wrong_arity, node, arguments.len, 1);
         const text = tree.arg_value(arguments[0]);
         _ = resolver.expressions.check(context, text, resolver.macros.string_type());
@@ -85,11 +87,9 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
         return .unit_type;
     }
 
-    // `$syscall(number, ..)`: a call of the kernel with up to six ints or pointers, its result or
+    // `syscall (number, ..)`: a call of the kernel with up to six ints or pointers, its result or
     // -errno. it runs only at run time
-    const calls_kernel = tree.kind(callee) == .identifier and
-        resolver.name_pool.name_of_node(callee) == .syscall;
-    if (calls_kernel) {
+    if (builtin == .syscall) {
         if (arguments.len == 0 or arguments.len > 7) {
             return resolver.report(.wrong_arity, node, arguments.len, 7);
         }
@@ -109,36 +109,31 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
         return .i64_type;
     }
 
-    // `$fresh(..)` and `$asterr(..)` belong to the macros
-    const names_builtin = tree.kind(callee) == .identifier and
-        tree.text(callee, resolver.src_bytes)[0] == '$';
-    if (names_builtin) {
-        const name = resolver.name_pool.name_of_node(callee);
-        switch (name) {
-            .fresh, .asterr => if (tree.macros) {
-                return resolver.macros.check_builtin(context, node, name, arguments);
-            },
-            .crash => {
-                if (arguments.len != 1) {
-                    return resolver.report(.wrong_arity, node, arguments.len, 1);
-                }
-                const message = tree.arg_value(arguments[0]);
-                const message_type = static_pool.substitute_type_variables(
-                    resolver.expressions.infer(context, message, .none),
-                );
-                const is_text = static_pool.array_element(message_type) == .u8_type or
-                    static_pool.is_pointer(message_type) and
-                        static_pool.pointee(message_type) == .u8_type;
-                if (!is_text and message_type != .poison_type) {
-                    const expected = resolver.macros.string_type();
-                    _ = resolver.report(.type_mismatch, message, message_type, expected);
-                } else if (is_text and !context.is_interpreted) {
-                    _ = resolver.interpreter.evaluate_static(context, node);
-                }
-                return .never_type;
-            },
-            else => {},
+    // `fresh ".."` and `crash (at, "..")` take trees, they belong to the macros
+    if (builtin == .fresh) return resolver.macros.check_builtin(context, node, builtin, arguments);
+    if (builtin == .crash and arguments.len == 2) {
+        const crash_type = resolver.macros.check_builtin(context, node, builtin, arguments);
+        if (!context.is_interpreted) _ = resolver.interpreter.evaluate_static(context, node);
+        return crash_type;
+    }
+    if (builtin == .crash) {
+        if (arguments.len != 1) {
+            return resolver.report(.wrong_arity, node, arguments.len, 1);
         }
+        const message = tree.arg_value(arguments[0]);
+        const message_type = static_pool.substitute_type_variables(
+            resolver.expressions.infer(context, message, .none),
+        );
+        const is_text = static_pool.array_element(message_type) == .u8_type or
+            static_pool.is_pointer(message_type) and
+                static_pool.pointee(message_type) == .u8_type;
+        if (!is_text and message_type != .poison_type) {
+            const expected = resolver.macros.string_type();
+            _ = resolver.report(.type_mismatch, message, message_type, expected);
+        } else if (is_text and !context.is_interpreted) {
+            _ = resolver.interpreter.evaluate_static(context, node);
+        }
+        return .never_type;
     }
 
     const callee_type = resolver.expressions.infer(context, callee, .none);
@@ -1021,7 +1016,7 @@ pub fn overload_for(
     return declaration;
 }
 
-// `T.$init()` / `x.$deinit()` of a type that declares neither: a default value, nothing
+// `T.init()` / `x.deinit()` of a type that declares neither: a default value, nothing
 pub fn builtin_member_of(
     self: *Calls,
     callee: NodeId,

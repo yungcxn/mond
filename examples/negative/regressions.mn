@@ -19,8 +19,8 @@ stcfun probes = () -> u32 {
 }
 u32 PROBED = probes();
 
-stcfun joined = (&[]u8 a, &[]u8 b) -> u64: ret a.$len + b[0];
+stcfun joined = (&[]u8 a, &[]u8 b) -> u64: ret lenof a + b[0];
 stc [2]u8 AB = "ab";
 stc u64 JOINED = joined(AB.&, "x".&); #! not_static not_static
 
-$main = () {}
+main = () {}

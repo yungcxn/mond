@@ -145,7 +145,7 @@ stc u32 UN = unexpected(); #= UN 509501
 stc u32 ID = idents(); #= ID 35
 stc u32 NU = numbers(); #= NU 271
 
-$main = () -> u32 {
+main = () -> u32 {
     mut Number n = Number();
     mut Ident i = Ident();
     [2]Ev evs = [Ev.Open, Ev.Connect(7)];

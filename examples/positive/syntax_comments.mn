@@ -7,7 +7,7 @@ stc u32 B = 4;#= B 4
 stc []u8 S = "# not a comment"; #: S [15]u8
 stc u8 C = '#'; #= C 35
 ###### several hashes
-$main = () {
+main = () {
     # inside a block
     u32 x = A; # trailing
 }

@@ -22,6 +22,6 @@ stc u32 L0 = lone(0); #! no_matching_overload
 stc u32 L1 = lone(1);
 stc u32 G0 = g1(0); #! no_matching_overload
 
-$main = () {
+main = () {
     u32 a = g3(1);
 }

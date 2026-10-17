@@ -33,7 +33,7 @@ fun mix = (bool c) {
 
 `brk` and `cont` act on the innermost loop, also from inside a `match` used as a value. They take no value and no label. The step of `while c, step` is one statement.
 
-A sequence is a range, an array, a string, a pointer to an array, or any value with `$has_next() -> bool` and `$next() -> T`.
+A sequence is a range, an array, a string, a pointer to an array, or any value with `has_next() -> bool` and `next() -> T`.
 
 ```mond
 stcfun demo = () -> u32 {
@@ -51,8 +51,8 @@ stc u32 D = demo();   #= D 6629
 
 ```mond
 type Countdown = *(mut u32 n) !{
-    $has_next = () -> bool: ret self.n > 0;
-    $next = () -> u32 { self.n -= 1; ret self.n; }
+    has_next = () -> bool: ret self.n > 0;
+    next = () -> u32 { self.n -= 1; ret self.n; }
 }
 stcfun drain = () -> u32 {
     mut u32 s = 0;
@@ -158,7 +158,7 @@ stc i32 U = or_zero(Opt.Some(5)) + bound(Opt.None) + parts();   #= U 19
 
 ## defer, deinit
 
-`defer s` runs `s` when the enclosing block ends, latest first, on every exit (fall-through, `ret`, `brk`, `cont`). A `ret` value is computed before the defers run. `deinit x` runs `x`'s `$deinit`, after which `x` counts as unwritten. `e defer deinit` deinitializes a copy at the end of the block.
+`defer s` runs `s` when the enclosing block ends, latest first, on every exit (fall-through, `ret`, `brk`, `cont`). A `ret` value is computed before the defers run. `deinit x` runs `x`'s `deinit`, after which `x` counts as unwritten. `e defer deinit` deinitializes a copy at the end of the block.
 
 ```mond
 stcfun order = () -> u32 {
@@ -172,7 +172,7 @@ stc u32 O = order();   #= O 321
 ## Initialization and returns
 
 - A scalar local declared without a value must be `mut`, and it must be written on every path before it's read. `if` without `else`, loop bodies and `_ => {}` don't count as writing. A `never` branch (such as `else: ret`) does count.
-- A block body that declares a result must end every path with `ret` or `never`; otherwise it's `missing_ret`. `$main` and unit functions may fall off the end.
+- A block body that declares a result must end every path with `ret` or `never`; otherwise it's `missing_ret`. `main` and unit functions may fall off the end.
 
 ```mond
 fun maybe = (bool c) -> u32 {

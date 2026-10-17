@@ -1,6 +1,6 @@
 type P = *(i32 x, i32 y);
 type T3 = *(u8 a, u16 b, u32 c);
-variant Res = +(Ok(u32 v, u32 w), Err(u8), None) tagof u8;
+variant Res = +(Ok(u32 v, u32 w), Err(u8), None) tagtype u8;
 
 stcfun swap_sum = () -> i32: ret (P(3, 4) <- a, b).x * 0 + a * 10 + b;
 stcfun mixed = () -> u32: ret (T3(1, 2, 3) <- a, b, c).c + (a as u32) * 100 + (b as u32) * 10;
@@ -21,7 +21,7 @@ stc u32 A1 = arm(Res.Ok(4, 2)); #= A1 6
 stc u32 A2 = arm(Res.Err(3)); #= A2 300
 stc u32 A3 = arm(Res.None); #= A3 1
 
-$main = () {
+main = () {
     s = (T3(1, 2, 3) <- a, b, c).a; #: s u8
     w = (P(1, 2) <- x, y).x + x + y; #: w i32
 }

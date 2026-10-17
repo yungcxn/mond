@@ -83,7 +83,7 @@ stc u32 DW = describe(Wide); #= DW 1
 stc u32 DU = describe(u64); #= DU 8
 
 # every evaluated definition is a new nominal type
-stcfun fresh = () -> bool: ret *(u8 a) == *(u8 a);
+stcfun make_fresh = () -> bool: ret *(u8 a) == *(u8 a);
 
 # computed types in type positions resolve at execution
 stcfun typed = (u32 bits) -> u64 {
@@ -94,7 +94,7 @@ stcfun typed = (u32 bits) -> u64 {
     [b]T buf;
     mut [b]T full;
     full[b - 1] = 7;
-    ret (v as u64) + buf.$len * 1000 + ((1000 as T) as u64) * 1000000 + (full[b - 1] as u64) * 1000000000;
+    ret (v as u64) + lenof buf * 1000 + ((1000 as T) as u64) * 1000000 + (full[b - 1] as u64) * 1000000000;
 }
 
 type G = Grid(3); #= G [6]u32
@@ -114,11 +114,11 @@ stc u32 C = code(u32) + code(i64) * 10; #= C 84
 stc u32 N = cases(true); #= N 110
 stc bool SP = speaks(true); #= SP true
 stc bool SU = speaks(false); #= SU false
-stc bool FR = fresh(); #= FR false
+stc bool FR = make_fresh(); #= FR false
 stc u64 T8 = typed(8); #= T8 7232008044
 stc u64 T9 = typed(9); #= T9 8000009300
 
-$main = () {
+main = () {
     O o = O.Some(5);
     P p = P(lo = 1, hi = 2);
 }

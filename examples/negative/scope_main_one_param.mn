@@ -1,1 +1,1 @@
-$main = (i32 argc) {} #! invalid_main
+main = (i32 argc) {} #! invalid_main

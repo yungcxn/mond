@@ -39,4 +39,4 @@ fun f = () {
     u8 h1 = -(-256); #! type_mismatch
 }
 
-$main = () {}
+main = () {}

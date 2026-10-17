@@ -33,7 +33,7 @@ stc u64 FA = fact(10); #= FA 3628800
 stc u8 TH = third(1, 2, 3); #= TH 3
 stc u32 CH = choose(false); #= CH 2
 
-$main = () {
+main = () {
     op = add; #: op (i32, i32) -> i32
     s = op(1, 2); #: s i32
     inc = adder(1); #: inc (i32) -> i32

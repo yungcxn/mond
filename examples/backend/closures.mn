@@ -10,7 +10,7 @@ stc [3]IntFn TABLE = [scaled(1), scaled(2), scaled(3)];
 
 # closures use the frame around them and are passed down
 fun sum_with = (&[4]i64 xs, i64 k) -> i64 {
-    add_k = (i64 x): x + k;
+    fun add_k = (i64 x): x + k;
     mut i64 s = 0;
     for x in xs: s += apply(add_k, x);
     ret s;
@@ -19,12 +19,12 @@ fun sum_with = (&[4]i64 xs, i64 k) -> i64 {
 # a mutable local is captured by reference
 fun count_calls = (u64 n) -> i64 {
     mut i64 count = 0;
-    bump = (i64 x) -> i64 { count += 1; ret x; };
+    fun bump = (i64 x) -> i64 { count += 1; ret x; };
     for 0..<n: do apply(bump, 0);
     ret count;
 }
 
-$main = () {
+main = () {
     line_i64(scaled(3)(7));                          #> 21
     line_i64(compose(scaled(3), scaled(2))(5));      #> 30
     line_i64(apply((i64 x): x + 1, 41));             #> 42
@@ -35,7 +35,7 @@ $main = () {
     for i in 0..<3: total += TABLE[i](10);           # static functions, a runtime index
     line_i64(total);                                 #> 60
     for i in 0..<3 {
-        times_i = (i64 x): x * i as i64;             # made anew on each pass
+        fun times_i = (i64 x): x * i as i64;             # made anew on each pass
         total += apply(times_i, 1);
     }
     line_i64(total);                                 #> 63

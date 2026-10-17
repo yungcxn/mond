@@ -17,4 +17,4 @@ fun f = (u32 n) {
 }
 stcfun sel = (u32 x) -> u32: ret stcmatch x { 0 => 10, 1 => 11, _ => 12 }; #! redundant_stc
 stc u32 S = sel(1);
-$main = () {}
+main = () {}

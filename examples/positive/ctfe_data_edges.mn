@@ -1,10 +1,10 @@
 # tags: signed, past one byte (the automatic tag type holds the largest tag), niches (a payload
 # equal to a tag is that case), unions; payload-free cases in static data
-variant Signed = +(Low = -5, Mid, High = 120) tagof i8;
-stc i8 LOW_TAG = Signed.Low.$tag;     #= LOW_TAG -5
-stc i8 MID_TAG = Signed.Mid.$tag;     #= MID_TAG -4
-variant Wide = +(A, B, Last = 1000) tagof u16;
-stc u16 LAST_TAG = Wide.Last.$tag;    #= LAST_TAG 1000
+variant Signed = +(Low = -5, Mid, High = 120) tagtype i8;
+stc i8 LOW_TAG = tagof Signed.Low;     #= LOW_TAG -5
+stc i8 MID_TAG = tagof Signed.Mid;     #= MID_TAG -4
+variant Wide = +(A, B, Last = 1000) tagtype u16;
+stc u16 LAST_TAG = tagof Wide.Last;    #= LAST_TAG 1000
 stc u64 WIDE_SIZE = sizeof Wide;      #= WIDE_SIZE 2
 variant Auto = +(A, B, Last = 1000);
 stc u64 AUTO_SIZE = sizeof Auto;      #= AUTO_SIZE 2
@@ -12,13 +12,13 @@ variant Huge = +(Only = 70000);
 stc u64 HUGE_SIZE = sizeof Huge;      #= HUGE_SIZE 4
 variant Byte = +(First, Top = 255);
 stc u64 BYTE_SIZE = sizeof Byte;      #= BYTE_SIZE 1
-variant Opt16 = +(Some(i16), None = -1) tagof self;
+variant Opt16 = +(Some(i16), None = -1) tagtype self;
 stc u64 OPT16_SIZE = sizeof Opt16;    #= OPT16_SIZE 2
 stcfun opt16 = (Opt16 o) -> i64: ret match o { Opt16.Some(x) => x as i64, Opt16.None => -1000 };
 stc i64 SOME_M2 = opt16(Opt16.Some(-2));   #= SOME_M2 -2
 stc i64 NONE16 = opt16(Opt16.None);        #= NONE16 -1000
 stc i64 SOME_M1 = opt16(Opt16.Some(-1));   #= SOME_M1 -1000
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
 stcfun opt8 = (Opt8 o) -> i64: ret match o { Opt8.Some(x) => x as i64, Opt8.None => -1 };
 stc i64 SOME_255 = opt8(Opt8.Some(255));   #= SOME_255 -1
 stc Opt8 COERCED = 255;
@@ -31,9 +31,9 @@ variant Plain = +(P0, P1, P2);
 variant Shape = +(Square(u32 side), Dot, Nothing);
 type Holder = *(Shape s, u32 k);
 stc [2]Plain PLAIN = [Plain.P2, Plain.P1];
-stc u8 PLAIN_TAG = PLAIN[0].$tag;     #= PLAIN_TAG 2
+stc u8 PLAIN_TAG = tagof PLAIN[0];     #= PLAIN_TAG 2
 stc Holder HELD = Holder(Shape.Dot, 5);
-stc u8 HELD_TAG = HELD.s.$tag;        #= HELD_TAG 1
+stc u8 HELD_TAG = tagof HELD.s;        #= HELD_TAG 1
 
 variant X = +(X0, X1(u32));
 variant Y = +(Y0(u64), Y1);
@@ -80,4 +80,4 @@ stc bool GRID_NE = GRID_A == [[1, 2], [4, 3]];                  #= GRID_NE false
 stc bool CASES_EQ = Shape.Square(2) == Shape.Square(2);         #= CASES_EQ true
 stc bool CASES_NE = Shape.Square(2) == Shape.Dot;               #= CASES_NE false
 
-$main = () {}
+main = () {}

@@ -23,4 +23,4 @@ stc u8 SP = spin(1, 10); #= SP 245
 
 fun at_runtime = (i8 a, u32 b) -> i8: ret a + (b as i8) * 2; #: at_runtime (i8, u32) -> i8
 
-$main = () {}
+main = () {}

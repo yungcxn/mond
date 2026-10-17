@@ -87,7 +87,7 @@ stcfun self_append = () -> u64 {
     mut []ast xs = [quote: 1, quote: 2];
     xs += xs;
     xs += xs;
-    ret xs.$len;
+    ret lenof xs;
 }
 stc u64 sa = self_append(); #= sa 8
 
@@ -113,13 +113,13 @@ stc i32 cb = clamp_byte(300); #= cb 255
 variant Op = +(Add, Sub, Mul);
 stcfun dispatcher = (&ast(variant) v) -> ast(fun) {
     mut []ast arms = [];
-    for c in v.$cases: arms += quote: @(v.$name).@(c.$name) => @(c.$name.$src.$len);
-    ret quote: (@(v.$name) op) -> u64: ret match op { @..arms };
+    for c in v.cases: arms += quote: @(v.name).@(c.name) => @(lenof c.name.src);
+    ret quote: (@(v.name) op) -> u64: ret match op { @..arms };
 }
 fun op_len = <dispatcher(refl Op)>;
 stc u64 ol = op_len(Op.Mul); #= ol 3
 
-$main = () {
+main = () {
     u32 a = run_unrolled(2);
     i32 b = clamp_byte(-4);
     u64 c = op_len(Op.Sub);

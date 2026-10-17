@@ -16,4 +16,4 @@ fun f = (bool c, u8 x, i8 s, f32 fl, R r, V v) {
     i8 b12 = if c: x else: s; #! type_mismatch
 }
 
-$main = () {}
+main = () {}

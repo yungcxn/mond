@@ -1,4 +1,4 @@
-variant Found = +(Steps(u32 n), Blocked) tagof u8;
+variant Found = +(Steps(u32 n), Blocked) tagtype u8;
 
 type Maze = *(&[]u8 src, u32 w, u32 h) !{
     fun at = (i32 r, i32 c) -> u8 {
@@ -213,4 +213,4 @@ stc u64 PC5 = maze_paths("..........\n..........\n..........\n..........\n......
 stc u64 PC6 = maze_paths(".\n".&, 1, 1); #= PC6 1
 stc u64 PC7 = maze_paths("..\n.#\n".&, 2, 2); #= PC7 0
 
-$main = () {}
+main = () {}

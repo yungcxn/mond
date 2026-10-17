@@ -45,4 +45,4 @@ fun runtime = (u8 n) {
     i8 r4 = -64 * 3;
 }
 
-$main = () {}
+main = () {}

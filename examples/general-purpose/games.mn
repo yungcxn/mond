@@ -1,4 +1,4 @@
-variant Move = +(Rock, Paper, Scissors) tagof u8;
+variant Move = +(Rock, Paper, Scissors) tagtype u8;
 
 type Ttt = *(mut [9]i32 c, mut u32 nodes) !{
     fun winner = () -> i32 {
@@ -158,7 +158,7 @@ fun nim_sum = (&[]u32 piles) -> u32 {
 fun nim_move = (&[]u32 piles) -> u32 {
     u32 s = nim_sum(piles);
     if s == 0: ret 0;
-    for i in 0..<piles.$len {
+    for i in 0..<lenof piles {
         u32 target = piles.*[i] ^ s;
         if target < piles.*[i]: ret (i as u32 + 1) * 1000 + (piles.*[i] - target);
     }
@@ -177,7 +177,7 @@ fun nim_game = (*[]u32 piles, bool first_perfect) -> u32 {
         if perfect and mv != 0 {
             piles.*[mv / 1000 - 1] -= mv % 1000;
         } else {
-            for i in 0..<piles.$len {
+            for i in 0..<lenof piles {
                 if piles.*[i] > 0 {
                     piles.*[i] -= 1;
                     brk;
@@ -399,7 +399,7 @@ stc bool GO2 = is_over(1); #= GO2 true
 stc bool GO3 = is_over(2); #= GO3 false
 stc bool GO4 = is_over(3); #= GO4 false
 
-variant Cell = +(Empty, Red, Blue) tagof u8;
+variant Cell = +(Empty, Red, Blue) tagtype u8;
 
 type Drop = *(mut [20]i32 c, mut [5]u32 h, mut u32 moves) !{
     fun drop = (u32 col, i32 who) -> i32 {
@@ -579,4 +579,4 @@ stc i32 P8 = duel(Rando(s = 7), Rando(s = 8), 30); #= P8 9
 stc i32 P9 = duel(Loser(), Rando(s = 1), 25); #= P9 0
 stc i32 PA = duel(Rocky(), Rocky(), 0); #= PA 0
 
-$main = () {}
+main = () {}

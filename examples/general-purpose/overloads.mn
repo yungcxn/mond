@@ -156,7 +156,7 @@ stc u32 SZ = sizes(); #= SZ 108
 stc u32 BT = by_argument_type(); #= BT 250251
 stc u32 TC = through_calls(); #= TC 21
 
-$main = () {
+main = () {
     u32 x = pair(0, c = 1); #: x u32
     u32 y = pair(0, b = 1) + guarded(5);
 }

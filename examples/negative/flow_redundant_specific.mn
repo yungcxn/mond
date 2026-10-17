@@ -27,4 +27,4 @@ fun f = (V v, W w, u8 n, i8 s, R r, Lo || Hi u, bool t) {
     match r { R(3, true) => 0, R(_, false) => 1, R(4, _) => 2, _ => 3 }
 }
 
-$main = () {}
+main = () {}

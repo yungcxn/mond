@@ -3,9 +3,9 @@ fun total = (&[]u32 a) -> u32 {
     for x in a: s += x;
     ret s;
 }
-fun fill = (*[]u8 a, u8 v) { for i in 0..<a.$len: a[i] = v; }
-fun copy_in = ([]u16 a) -> u64: ret a.$len;
-fun two = (&[]u8 a, &[]u8 b) -> u64: ret a.$len * 100 + b.$len;
+fun fill = (*[]u8 a, u8 v) { for i in 0..<lenof a: a[i] = v; }
+fun copy_in = ([]u16 a) -> u64: ret lenof a;
+fun two = (&[]u8 a, &[]u8 b) -> u64: ret lenof a * 100 + lenof b;
 
 fun f = () {
     [3]u32 w = [1, 2, 3];
@@ -29,7 +29,7 @@ fun f = () {
     u32 e = total([].&);
 }
 
-fun pick = ([]u16 a) -> u64: ret a.$len;
+fun pick = ([]u16 a) -> u64: ret lenof a;
 fun pick = (bool b) -> u64: ret 0;
 
 # a failed argument must not fix the length of a length-generic parameter for later calls
@@ -50,4 +50,4 @@ stc u64 LE = lens(); #= LE 203035
 stc u64 CI = copy_in([1, 2, 3, 4]); #= CI 4
 stc u64 CJ = copy_in([9]); #= CJ 1
 
-$main = () {}
+main = () {}

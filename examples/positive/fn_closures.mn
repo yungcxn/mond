@@ -9,7 +9,7 @@ fun apply_n = ((i32) -> i32 f, u32 n, i32 x) -> i32 {
 # a mutable local is captured by reference, an immutable one by value
 stcfun by_ref = () -> i32 {
     mut i32 count = 0;
-    inc = (): count += 1;
+    fun inc = (): count += 1;
     inc();
     inc();
     inc();
@@ -18,14 +18,14 @@ stcfun by_ref = () -> i32 {
 
 stcfun by_value = () -> i32 {
     i32 base = 10;
-    add = (i32 x): x + base;
+    fun add = (i32 x): x + base;
     ret add(1) + add(2);
 }
 
 stcfun shared_state = () -> i32 {
     mut i32 total = 0;
-    add = (i32 v): total += v;
-    get = (): total;
+    fun add = (i32 v): total += v;
+    fun get = (): total;
     add(5);
     add(7);
     ret get();
@@ -33,7 +33,7 @@ stcfun shared_state = () -> i32 {
 
 stcfun nested_capture = () -> i32 {
     i32 a = 1;
-    outer = (i32 b, i32 c): a * 100 + b * 10 + c;
+    fun outer = (i32 b, i32 c): a * 100 + b * 10 + c;
     ret outer(2, 3);
 }
 
@@ -50,19 +50,19 @@ stcfun composed = () -> i32 {
 
 stcfun aggregate_capture = () -> i32 {
     [3]i32 arr = [4, 5, 6];
-    sum = (): arr[0] + arr[1] + arr[2];
+    fun sum = (): arr[0] + arr[1] + arr[2];
     ret sum();
 }
 
 stcfun capture_param = (i32 k) -> i32 {
-    times = (i32 x): x * k;
+    fun times = (i32 x): x * k;
     ret times(times(2));
 }
 
 stcfun loop_closures = () -> i32 {
     mut i32 acc = 0;
     for i in 0..<4 {
-        step = (i32 x): x + i as i32;
+        fun step = (i32 x): x + i as i32;
         acc = step(acc);
     }
     ret acc;
@@ -70,7 +70,7 @@ stcfun loop_closures = () -> i32 {
 
 stcfun sees_later_writes = () -> i32 {
     mut i32 x = 1;
-    g = (): x;
+    fun g = (): x;
     x = 5;
     ret g();
 }
@@ -86,12 +86,12 @@ stc i32 CP = capture_param(3); #= CP 18
 stc i32 LC = loop_closures(); #= LC 6
 stc i32 SL = sees_later_writes(); #= SL 5
 
-$main = () {
+main = () {
     mut i32 c = 0;
-    inc = (): c += 1; #: inc () -> ()
+    fun inc = (): c += 1; #: inc () -> ()
     inc();
     stc add = make_adder(1); #: add (i32) -> i32
     r = apply_n(add, 3, 1); #: r i32
     stc pair = compose(add, add); #: pair (i32) -> i32
-    twice = (i32 x): pair(pair(x)); #: twice (i32) -> i32
+    fun twice = (i32 x): pair(pair(x)); #: twice (i32) -> i32
 }

@@ -4,7 +4,7 @@
 <include "lib/raw.mn">;
 mut i64 ONE = 0;
 fun d = (i8 a, i8 b) -> i8: ret a / b;
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     say_u64(1);   #> 1
     say_i64(d((-128 * ONE) as i8, (-1 * ONE) as i8) as i64);

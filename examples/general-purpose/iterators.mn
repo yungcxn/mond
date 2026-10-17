@@ -1,6 +1,6 @@
 type Fib = *(mut u64 a = 0, mut u64 b = 1) !{
-    $has_next = () -> bool: ret true;
-    $next = () -> u64 {
+    has_next = () -> bool: ret true;
+    next = () -> u64 {
         u64 r = self.a;
         self.a = self.b;
         self.b = r + self.b;
@@ -9,8 +9,8 @@ type Fib = *(mut u64 a = 0, mut u64 b = 1) !{
 }
 
 type Step = *(mut i32 at, i32 end, i32 by) !{
-    $has_next = () -> bool: ret if self.by > 0: self.at < self.end else: self.at > self.end;
-    $next = () -> i32 {
+    has_next = () -> bool: ret if self.by > 0: self.at < self.end else: self.at > self.end;
+    next = () -> i32 {
         i32 v = self.at;
         self.at += self.by;
         ret v;
@@ -18,8 +18,8 @@ type Step = *(mut i32 at, i32 end, i32 by) !{
 }
 
 type Bytes = *(&[]u8 data, u64 length, mut u64 at) !{
-    $has_next = () -> bool: ret self.at < self.length;
-    $next = () -> u8 {
+    has_next = () -> bool: ret self.at < self.length;
+    next = () -> u8 {
         u8 v = self.data.*[self.at];
         self.at += 1;
         ret v;
@@ -27,27 +27,27 @@ type Bytes = *(&[]u8 data, u64 length, mut u64 at) !{
 }
 
 type Take = (type I): *(mut I inner, mut u32 left) !{
-    $has_next = () -> bool: ret self.left > 0 and self.inner.$has_next();
-    $next = () -> u64 {
+    has_next = () -> bool: ret self.left > 0 and self.inner.has_next();
+    next = () -> u64 {
         self.left -= 1;
-        ret self.inner.$next();
+        ret self.inner.next();
     }
 }
 
 type Countdown = *(mut u32 n) !{
-    $has_next = () -> bool: ret self.n > 0;
-    $next = () -> u32 {
+    has_next = () -> bool: ret self.n > 0;
+    next = () -> u32 {
         self.n -= 1;
         ret self.n;
     }
 }
 
 type Evens = *(mut u32 at, u32 end) !{
-    $has_next = () -> bool {
+    has_next = () -> bool {
         while self.at < self.end and self.at % 2 == 1: self.at += 1;
         ret self.at < self.end;
     }
-    $next = () -> u32 {
+    next = () -> u32 {
         u32 v = self.at;
         self.at += 1;
         ret v;
@@ -116,7 +116,7 @@ stcfun empty_iteration = () -> u32 {
 stcfun manual = () -> u32 {
     mut Countdown c = Countdown(n = 3);
     mut u32 s = 0;
-    while c.$has_next(): s = s * 10 + c.$next();
+    while c.has_next(): s = s * 10 + c.next();
     ret s;
 }
 
@@ -136,4 +136,4 @@ stc u32 EI = empty_iteration(); #= EI 7
 stc u32 MA = manual(); #= MA 210
 stc [5]u32 CO = collected(); #= CO [16, 9, 4, 1, 0]
 
-$main = () {}
+main = () {}

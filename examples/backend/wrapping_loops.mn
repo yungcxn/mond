@@ -62,7 +62,7 @@ fun collatz = (u64 n) -> u64 {
 }
 fun b = (bool x) -> i64: ret if x: 1 else: 0;
 
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     line_i64(steps_to_wrap(h(2000000000) as i32));     #> 2
     line_i64(down(h(5) as u32));                        #> 6

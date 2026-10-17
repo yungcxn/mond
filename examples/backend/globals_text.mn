@@ -10,7 +10,7 @@ variant Shape = +(Square(u32 side), Line(Pt from, Pt to), Nothing);
 stc [3]Shape SHAPES = [Shape.Square(4), Shape.Line(Pt(1, 2), Pt(-3, 4)), Shape.Nothing];
 variant Plain = +(A, B, C);
 variant Mix = Shape || Plain;
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
 type Holder = *(Shape s, u32 k);
 stc Shape ALONE = Shape.Nothing;
 stc Plain ONE_PLAIN = Plain.C;
@@ -44,20 +44,20 @@ fun zeros = ([8]u8 xs) -> u64 {
     ret n;
 }
 
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     # static data with nested records and cases, written into the executable
     mut i64 s = 0;
     for shape in SHAPES: s = s * 10000 + score(shape);
     line_i64(s);                                        #> 411739999
     line_i64(score(ALONE) * 10 + score(HELD.s));         #> -11
-    line_u64(ALONE.$tag as u64 * 100 + ONE_PLAIN.$tag as u64 * 10 + HELD.s.$tag as u64);  #> 222
+    line_u64(tagof ALONE as u64 * 100 + tagof ONE_PLAIN as u64 * 10 + tagof HELD.s as u64);  #> 222
     line_u64(plain_id(PLAIN[h(0) as u64]) * 10 + plain_id(ONE_PLAIN));                    #> 22
     line_u64(mix_id(MIXED[0]) * 10 + mix_id(MIXED[1]));  #> 21
     line_u64(opt_id(OPTS[0]) * 10 + opt_id(OPTS[1]));    #> 93
     line_u64((GRID[h(1) as u64][h(2) as u64]) as u64);   #> 6
     # escapes in strings, a zero byte inside one
-    line_u64(GREETING.$len);                             #> 9
+    line_u64(lenof GREETING);                             #> 9
     mut u64 sum = 0;
     for c in GREETING: sum += c as u64;
     line_u64(sum);                                      #> 541

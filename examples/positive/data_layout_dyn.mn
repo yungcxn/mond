@@ -8,4 +8,4 @@ stc u64 SP = sizeof &[]u8; #= SP 8
 stc u64 SM = sizeof *[]u64; #= SM 8
 stc u64 SA = sizeof []u8; #= SA 8
 
-$main = () {}
+main = () {}

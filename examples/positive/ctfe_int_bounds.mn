@@ -73,4 +73,4 @@ stc u32 B6 = 0xF0F0 ^ 0xFF00; #= B6 4080
 stc u32 B7 = 0xF0F0 & 0xFF00 | 0x000F; #= B7 61455
 stc i8 B8 = -1 & 0x0F; #= B8 15
 
-$main = () {}
+main = () {}

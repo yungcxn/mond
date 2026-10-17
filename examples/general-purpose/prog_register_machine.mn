@@ -13,7 +13,7 @@ variant Ins = +(
     Beq(u8 a, u8 b, u32 to),
     J(u32 to),
     Halt,
-) tagof u8;
+) tagtype u8;
 
 type Cpu = *(mut [8]i32 r, mut [16]i32 mem, mut u32 pc = 0, mut u32 steps = 0, mut bool trapped = false) !{
     fun exec = (Ins i) -> bool {
@@ -46,7 +46,7 @@ type Cpu = *(mut [8]i32 r, mut [16]i32 mem, mut u32 pc = 0, mut u32 steps = 0, m
 fun boot = () -> Cpu: ret Cpu(r = [0, 0, 0, 0, 0, 0, 0, 0], mem = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
 fun run = (*Cpu c, &[]Ins prog) -> i32 {
-    while c.pc as u64 < prog.$len and c.steps < 2000 {
+    while c.pc as u64 < lenof prog and c.steps < 2000 {
         if !c.exec(prog.*[c.pc]): brk;
     }
     ret c.r[0];
@@ -155,7 +155,7 @@ stc u32 TR = trap_prog(); #= TR 331
 stc u32 SP = spin_prog(); #= SP 2000
 stc u64 PK = pack(); #= PK 73183485489513488
 
-$main = () -> i32 {
+main = () -> i32 {
     mut Cpu c = boot();
     [3]Ins p = [Ins.Li(0, 4), Ins.Mul(0, 0, 0), Ins.Halt];
     v = run(c.&, p.&); #: v i32

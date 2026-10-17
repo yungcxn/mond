@@ -22,4 +22,4 @@ fun g = (Nope q) { #! undefined_name
     match q { 1 => 0, "s" => 1, V.A => 2 }
     u8 r = match q { 1 => 0 }
 }
-$main = () {}
+main = () {}

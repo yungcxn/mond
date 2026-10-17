@@ -2,4 +2,4 @@
 stcfun forever = () -> ast: ret quote: <forever()>;
 stc u32 never = <forever()>; #! endless_expansion
 
-$main = () {}
+main = () {}

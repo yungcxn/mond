@@ -1,1 +1,1 @@
-$main = (&[]&u8 arguments) -> u8 { ret 0; } #! invalid_main
+main = (&[]&u8 arguments) -> u8 { ret 0; } #! invalid_main

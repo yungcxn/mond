@@ -19,4 +19,4 @@ stc u32 failed_unwrap = unwrap(Opt.None);
 stc u32 fine_unwrap = unwrap(Opt.Some(3));
 stc u8 shift_below_width = (200 as u8) >> 7;
 
-$main = () {}
+main = () {}

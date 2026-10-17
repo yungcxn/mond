@@ -1,14 +1,14 @@
 # machine code and calls of the kernel: static text, registers only, at run time only
-fun dynamic_text = (bool c) { $asm(if c: "nop" else: "nop"); }   #! not_static
-fun two_texts = () { $asm("nop", "nop"); }                         #! wrong_arity
-fun no_number = () -> i64: ret $syscall();                         #! wrong_arity
-fun too_many = () -> i64: ret $syscall(1, 2, 3, 4, 5, 6, 7, 8);    #! wrong_arity
-fun a_float = () -> i64: ret $syscall(1, 2.5);                     #! type_mismatch
-stcfun early = () -> i64: ret $syscall(1);                         #! not_static
+fun dynamic_text = (bool c) { asm (if c: "nop" else: "nop"); }   #! not_static
+fun two_texts = () { asm ("nop", "nop"); }                         #! wrong_arity
+fun no_number = () -> i64: ret syscall ();                         #! wrong_arity
+fun too_many = () -> i64: ret syscall (1, 2, 3, 4, 5, 6, 7, 8);    #! wrong_arity
+fun a_float = () -> i64: ret syscall (1, 2.5);                     #! type_mismatch
+stcfun early = () -> i64: ret syscall 1;                         #! not_static
 stc i64 EARLY = early();
 fun spin = () -> u32 {
-    $asm("nop");                                                   #! not_static
+    asm "nop";                                                   #! not_static
     ret 1;
 }
 stc u32 SPUN = spin();
-$main = () {}
+main = () {}

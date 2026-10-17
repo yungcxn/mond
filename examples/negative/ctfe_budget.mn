@@ -31,4 +31,4 @@ stc []u32 FOREVER = stcloop 1; #! static_eval_failed
 stcfun never = () -> u32 { while true {} ret 0; }
 stc u32 NV = never(); #! static_eval_failed
 
-$main = () {}
+main = () {}

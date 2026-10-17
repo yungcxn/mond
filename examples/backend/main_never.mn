@@ -1,18 +1,18 @@
-# a `$main` that never returns ends the process itself, without the C library
+# a `main` that never returns ends the process itself, without the C library
 <include "lib/raw.mn">;
 #+
 #? exit 42
 
-stc u64 SYS_EXIT = stcmatch $os { "linux" => stcmatch $arch { "x86_64" => 60, _ => 93 }, "macos" => 1, _ => 0 };
+stc u64 SYS_EXIT = stcmatch __os { "linux" => stcmatch __arch { "x86_64" => 60, _ => 93 }, "macos" => 1, _ => 0 };
 
 fun finish = (u64 code) {
-    do $syscall(SYS_EXIT, code);
+    do syscall (SYS_EXIT, code);
 }
 
 # an endless loop is `never`, a function made of one returns `never`, which fits any type
 fun serve = (u64 code): loop { finish(code); };
 
-$main = (): loop {
+main = (): loop {
     say_u64(7);                              #> 7
     u64 code = serve(42);
 };

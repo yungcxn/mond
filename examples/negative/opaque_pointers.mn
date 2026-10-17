@@ -19,4 +19,4 @@ fun direct = (Shelf s) -> u8: ret s.bytes[1];              #! unstorable_derefer
 fun by_value = (Named n, Shelf s) { Named m = n; }         #! trait_outside_parameter
 
 stc u64 SHELF = sizeof Shelf;   #= SHELF 40
-$main = () {}
+main = () {}

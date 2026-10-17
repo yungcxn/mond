@@ -74,14 +74,14 @@ fn splice(self: *Trees, node: NodeId) Value {
     return .poison;
 }
 
-// `refl f`: the declaration's tree, `refl $file` the whole file
+// `refl f`: the declaration's tree, a bare `refl` the whole file
 fn reflect(self: *Trees, node: NodeId) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
     const reflected_type = self.type_at(node);
 
     const declaration = interpreter.node_info(.declaration, node);
-    // `refl $file`: a block of the roots, made once a pass
+    // a bare `refl`: a block of the roots, made once a pass
     if (declaration == .none and resolver.macros.file == 0) {
         resolver.macros.file = resolver.tree.push_node(.block);
         resolver.tree.set_children(resolver.macros.file, resolver.roots);
@@ -375,11 +375,12 @@ fn fill_name(self: *Trees, node: NodeId, owner: u32, mode: Mode) NodeId {
     const copy = if (fits) buffer[0..text.len] else resolver.temporary_slice(u8, text.len);
     @memcpy(copy, text);
 
-    // `_` and the compiler's `$` names are no names of the quote
+    // `_`, the compiler's `$` names and the protocol names are no names of the quote
     const own = mode != .label and
         text.len > 0 and
         text[0] != '$' and
-        !std.mem.eql(u8, text, "_");
+        !std.mem.eql(u8, text, "_") and
+        !NamePool.is_protocol(text);
     const hygiene = if (own) owner else 0;
     const binds = own and (mode == .binds or mode == .pattern);
     return tree.push_word(.identifier, tree.arg(node, 0), copy, hygiene, binds);
@@ -890,14 +891,15 @@ fn view(self: *Trees, node: NodeId, name: NamePool.Index) ?NodeId {
     const found: NodeId = switch (name) {
         .name => name_view(tree, node, declared, parameter),
         .type => if (declared != 0) tree.arg(declared, 0) else parameter.ty,
-        .value => if (subject_node != node) subject_node else 0,
-        .default => parameter.default,
-        .where => parameter.where,
+        .assigned => if (subject_node != node) subject_node else 0,
+        .defval => parameter.default,
+        .guard => parameter.where,
         .body => if (tree.kind(subject_node) == .def_fun) tree.arg(subject_node, 1) else 0,
-        .ret => return_type_view(tree, subject_node),
-        else => self.field_view(node, name),
+        .rettype => return_type_view(tree, subject_node),
+        else => 0,
     };
-    return if (found == 0) null else found;
+    const child = if (found == 0) self.field_view(node, name) else found;
+    return if (child == 0) null else child;
 }
 
 fn name_view(
@@ -960,12 +962,12 @@ fn list(self: *Trees, node: NodeId, name: NamePool.Index, grow: bool) ?NodeId {
             return tree.arg(tree.arg(subject_node, 0), 0);
         },
         .fields, .cases => return member_list(tree, subject_node, name),
-        .methods, .implof => return self.trait_list(subject_node, name, grow),
+        .methods, .traits => return self.trait_list(subject_node, name, grow),
         else => return null,
     }
 }
 
-// `$fields` of a record, `$cases` of a variant
+// `.fields` of a record, `.cases` of a variant
 fn member_list(tree: *const ParseTree, subject_node: NodeId, name: NamePool.Index) ?NodeId {
     const core = ParseTree.Def.from_node(tree, subject_node).core;
     const wanted: Kind = if (name == .fields)
@@ -982,7 +984,7 @@ fn member_list(tree: *const ParseTree, subject_node: NodeId, name: NamePool.Inde
     return if (defines_type) tree.arg(core, 0) else null;
 }
 
-// `$methods` and `$implof` of a trait or of the trait part of a type
+// `.methods` and `.traits` of a trait or of the trait part of a type
 fn trait_list(self: *Trees, subject_node: NodeId, name: NamePool.Index, grow: bool) ?NodeId {
     const resolver = self.owning_interpreter().owning_resolver();
     const tree = resolver.tree;
@@ -1020,7 +1022,7 @@ fn trait_list(self: *Trees, subject_node: NodeId, name: NamePool.Index, grow: bo
     return tuple;
 }
 
-// `x.$name`, `x.cond`: a view or child of `x`, `x.$src` its text, list views as `[]ast`
+// `x.name`, `x.cond`: a view or child of `x`, `x.src` its text, list views as `[]ast`
 pub fn member(self: *Trees, node: NodeId, base: Value) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
@@ -1031,11 +1033,11 @@ pub fn member(self: *Trees, node: NodeId, base: Value) Value {
     const member_type = self.type_at(node);
     switch (name) {
         .src => return .pooled(resolver.static_pool.intern(.{ .string_value = self.src_of(root) })),
-        .mut => {
+        .ismut => {
             const kind = tree.kind(root);
             return .boolean(is_parameter(kind) and ParseTree.Param.from_node(tree, root).is_mut);
         },
-        .children, .decls, .fields, .cases, .methods, .params, .implof => {
+        .children, .decls, .fields, .cases, .methods, .params, .traits => {
             const static_pool = &resolver.static_pool;
             const children = if (name == .children) tree.children(root) else blk: {
                 const list_node = self.list(root, name, false) orelse {
@@ -1127,6 +1129,8 @@ const operator_tokens = std.EnumArray(Kind, [2]u8).initDefault(.{ 0, 0 }, .{
     .dec_prefix = .{ 1, 0 },
     .sizeof = .{ 1, 0 },
     .alignof = .{ 1, 0 },
+    .lenof = .{ 1, 0 },
+    .tagof = .{ 1, 0 },
     .typeof = .{ 1, 0 },
     .if_then = .{ 1, 0 },
     .stcif_then = .{ 1, 0 },
@@ -1200,7 +1204,7 @@ pub fn case(self: *Trees, node: NodeId) Value {
     return .pooled(resolver.static_pool.ast_type_of(.none, root_kind_code(kind)));
 }
 
-// `x.v = y`, `x.* = y`, `x.$decls[i] = y` make the node there a landed copy of `y`
+// `x.v = y`, `x.* = y`, `x.decls[i] = y` make the node there a landed copy of `y`
 // false when the place is no tree place
 pub fn write(self: *Trees, node: NodeId, value: Value) bool {
     const interpreter = self.owning_interpreter();
@@ -1209,7 +1213,7 @@ pub fn write(self: *Trees, node: NodeId, value: Value) bool {
     if (kind != .member and kind != .dereference and kind != .array_index) return false;
 
     const base = tree.arg(node, 0);
-    // a tree place is in a tree, or for `x.$decls[i]` in a list view of the tree `x`
+    // a tree place is in a tree, or for `x.decls[i]` in a list view of the tree `x`
     const static_pool = &interpreter.owning_resolver().static_pool;
     const is_tree_place = static_pool.is_tree(interpreter.checked_type(base)) or
         (kind == .array_index and
@@ -1248,15 +1252,15 @@ fn grown_view(self: *Trees, at: NodeId, root: NodeId, name: NamePool.Index) ?Nod
     const kind = tree.kind(root);
     const of_function = @intFromEnum(kind) <= @intFromEnum(Kind.partial__fun_def_param_where_else);
     const slot: Kind = switch (name) {
-        .default => if (of_function)
+        .defval => if (of_function)
             .partial__fun_def_param_default
         else
             .partial__type_def_param_default,
-        .where => if (of_function)
+        .guard => if (of_function)
             .partial__fun_def_param_where
         else
             .partial__type_def_param_where,
-        .ret => {
+        .rettype => {
             const function = subject(tree, root);
             if (tree.kind(function) != .def_fun) return null;
             const header = tree.arg(function, 0);
@@ -1525,7 +1529,7 @@ fn made_node(self: *Trees, node: NodeId, kind: Kind, values: []const Index) ?Nod
     return made;
 }
 
-// `$fresh("tmp")`: a name like no other, `$asterr(tree, "..")` ends evaluating with an error there
+// `fresh "tmp"`: a name like no other, `crash (tree, "..")` ends evaluating with an error there
 pub fn builtin(self: *Trees, node: NodeId, name: NamePool.Index, arguments: []const NodeId) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
@@ -1556,7 +1560,7 @@ pub fn builtin(self: *Trees, node: NodeId, name: NamePool.Index, arguments: []co
 
     const at = self.node_of(first) orelse return .poison;
     const text = resolver.name_pool.intern_copy(self.text_of(message) orelse return .poison);
-    resolver.doctor.report(.asterr, at, text, 0);
+    resolver.doctor.report(.crash, at, text, 0);
     return .poison;
 }
 

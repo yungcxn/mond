@@ -42,7 +42,7 @@ pub const Session = struct {
     path: []const u8 = "",
     // called before the tree is rebuilt
     watch: ?Watch = null,
-    // names `$fresh` and hygiene made so far, so no later pass makes one again
+    // names `fresh` and hygiene made so far, so no later pass makes one again
     fresh_name_count: u32 = 0,
     files: std.ArrayList(File) = .empty,
 
@@ -165,7 +165,7 @@ pub inline fn deinit(self: *Resolver) void {
 }
 
 pub fn resolve(self: *Resolver) !void {
-    // nodes made in the last pass (quotes, `refl $file`) need rows too, for whoever walks the tree
+    // nodes made in the last pass (quotes, `refl`) need rows too, for whoever walks the tree
     defer self.grow_node_tables();
 
     var passes: u32 = 0;
@@ -227,7 +227,7 @@ pub fn resolve(self: *Resolver) !void {
         var roots = self.rebuilt orelse
             DynamicBuffer(ParseTree.NodeId).init(self.allocator, capacity);
         self.rebuilt = null;
-        // a pass ends with the roots of `refl $file` when a macro read or wrote them
+        // a pass ends with the roots of a bare `refl` when a macro read or wrote them
         const final_roots = if (self.macros.file != 0)
             self.tree.manychildren(self.macros.file)
         else

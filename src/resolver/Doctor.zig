@@ -35,6 +35,7 @@ const definition_table = .{
     .{ "uninferable_type", .@"error", operand(.type, "type"), no_operand },
     .{ "not_a_type", .@"error", operand(.type, "type"), no_operand },
     .{ "not_callable", .@"error", operand(.type, "type"), no_operand },
+    .{ "invalid_operand", .@"error", operand(.name, "of"), operand(.type, "type") },
     .{ "wrong_arity", .@"error", operand(.count, "arguments"), operand(.count, "parameters") },
     .{ "unknown_named_argument", .@"error", operand(.name, "name"), operand(.type, "of") },
     .{ "no_matching_overload", .@"error", operand(.count, "arguments"), no_operand },
@@ -63,6 +64,7 @@ const definition_table = .{
     .{ "missing_ret", .@"error", no_operand, no_operand },
     .{ "redundant_ret", .@"error", no_operand, no_operand },
     .{ "redundant_fun", .@"error", no_operand, no_operand },
+    .{ "missing_keyword", .@"error", operand(.name, "keyword"), no_operand },
     .{ "unrealized_template", .@"error", no_operand, no_operand },
     .{ "trait_outside_parameter", .@"error", operand(.type, "type"), no_operand },
     .{ "unstorable_dereference", .@"error", operand(.type, "pointer"), no_operand },
@@ -84,10 +86,9 @@ const definition_table = .{
     },
     .{ "missing_main", .@"error", no_operand, no_operand },
     .{ "invalid_main", .@"error", operand(.type, "type"), no_operand },
-    // macros: stray `@`, writes into resolved declarations, `$asterr`, includes, endless expansion
+    // macros: stray `@`, writes into resolved declarations, includes, endless expansion
     .{ "stray_unquote", .@"error", no_operand, no_operand },
     .{ "frozen_declaration", .@"error", operand(.declaration, "of"), no_operand },
-    .{ "asterr", .@"error", operand(.name, ""), no_operand },
     .{ "crash", .@"error", operand(.name, ""), no_operand },
     .{ "include_failed", .@"error", operand(.name, "file"), operand(.name, "because") },
     .{ "endless_expansion", .@"error", no_operand, no_operand },

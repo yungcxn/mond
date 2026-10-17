@@ -97,7 +97,7 @@ type P = Poly(8);
 
 fun poly = (&[]i64 cs) -> P {
     mut P p;
-    for i in 0..<cs.$len: p.c[i] = cs.*[i];
+    for i in 0..<lenof cs: p.c[i] = cs.*[i];
     ret p;
 }
 
@@ -190,4 +190,4 @@ stc i64 T7A = chebyshev(7).eval(1); #= T7A 1
 stc i64 T6E = chebyshev(6).eval(3); #= T6E 19601
 stc i64 T0 = chebyshev(0).eval(5); #= T0 1
 
-$main = () {}
+main = () {}

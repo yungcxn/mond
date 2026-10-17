@@ -47,7 +47,7 @@ stc [3]u32 ARR = [10, 20, 30];
 stc u32 IDX_MUL = ARR[1] * 2; #= IDX_MUL 40
 stc u32 IDX_NEG = ARR[2] - ARR[0]; #= IDX_NEG 20
 
-$main = () {
+main = () {
     mut i32 x = 1;
     x += 2 * 3;
     i32 y = x++ + ++x;

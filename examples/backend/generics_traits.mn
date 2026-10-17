@@ -12,9 +12,9 @@ type Box = (type T): *(mut T value, mut u32 count) !{
 fun sum = (&[]i64 xs) -> i64 {
     mut i64 s = 0;
     for x in xs: s += x;
-    ret s * 1000 + xs.$len as i64;
+    ret s * 1000 + lenof xs as i64;
 }
-fun last = ([]u8 xs) -> u8: ret xs[xs.$len - 1];
+fun last = ([]u8 xs) -> u8: ret xs[lenof xs - 1];
 trait Shape = !{
     fun area = () -> i64;
     fun twice = () -> i64: ret self.area() * 2;
@@ -33,18 +33,18 @@ fun f32_bits_wide = (f32 x) -> u64: ret x asbits u64;
 fun u8_bits_wide = (u8 x) -> u32: ret x asbits u32;
 fun i8_bits_wide = (i8 x) -> u16: ret x asbits u16;
 
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     # one realization per type: different sizes and alignments behind the same code
-    mut Box(u8) small = Box(u8).$init();
+    mut Box(u8) small = Box(u8).init();
     small.put(h(250) as u8);
     small.put(small.get() + 10);
     line_u64(small.get() as u64 * 10 + small.count as u64);   #> 42
-    mut Box([5]i64) wide = Box([5]i64).$init();
+    mut Box([5]i64) wide = Box([5]i64).init();
     wide.put([h(1), h(2), h(3), h(4), h(5)]);
     line_i64(wide.get()[4] * 10 + wide.count as i64);         #> 51
-    mut Box(Box(u16)) nested = Box(Box(u16)).$init();
-    mut Box(u16) inner = Box(u16).$init();
+    mut Box(Box(u16)) nested = Box(Box(u16)).init();
+    mut Box(u16) inner = Box(u16).init();
     inner.put(h(7) as u16);
     nested.put(inner);
     line_u64(nested.get().get() as u64);                       #> 7

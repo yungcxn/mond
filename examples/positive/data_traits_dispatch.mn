@@ -54,7 +54,7 @@ stc bool O4 = Bit.One oftype Base; #= O4 true
 stc bool O5 = Num(v = 1) oftype Num; #= O5 true
 stc bool O6 = Num(v = 1) oftype Over; #= O6 false
 
-$main = () {
+main = () {
     Num n = Num(v = 1);
     t = via_ref(n.&); #: t u32
     x = n.add(n); #: x u32

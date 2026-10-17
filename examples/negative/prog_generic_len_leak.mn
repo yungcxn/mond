@@ -1,5 +1,5 @@
 # a rejected call of a length generic function must not fix the length for later calls
-fun len_of = (&[]i32 xs, i32 v) -> u64: ret xs.$len + v as u64;
+fun len_of = (&[]i32 xs, i32 v) -> u64: ret lenof xs + v as u64;
 
 fun bad_scalar = () -> u64 {
     [3]i32 a = [1, 2, 3];
@@ -18,4 +18,4 @@ fun good_after = () -> u64 {
     ret len_of(c.&, 0) + len_of(d.&, 1);
 }
 
-$main = () {}
+main = () {}

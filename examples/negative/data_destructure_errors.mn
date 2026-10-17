@@ -1,5 +1,5 @@
 type P = *(i32 x, i32 y);
-variant Res = +(Ok(u32 v, u32 w), Err(u8), None) tagof u8;
+variant Res = +(Ok(u32 v, u32 w), Err(u8), None) tagtype u8;
 
 fun f = (Res r) {
     i32 a = (P(1, 2) <- p, q, extra).x; #! type_mismatch
@@ -10,4 +10,4 @@ fun f = (Res r) {
     u32 g = match r { Res.Ok <- v, w => v + w, _ => w } #! undefined_name
 }
 
-$main = () {}
+main = () {}

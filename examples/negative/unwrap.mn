@@ -1,4 +1,4 @@
-variant O = +(Some(u8), None) tagof u8;
+variant O = +(Some(u8), None) tagtype u8;
 type R = *(i32 a, i32 b);
 
 fun f = (O o, i32 n) {

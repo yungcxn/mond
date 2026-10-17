@@ -61,6 +61,7 @@ pub fn infer(
         .type_test => self.infer_type_test(context, node),
         .type_of => self.infer_static_query(context, node, .type_type),
         .size_of => self.infer_static_query(context, node, .u64_type),
+        .length_or_tag => self.infer_length_or_tag(context, node),
         .branch => resolver.flow.check_if(context, node, expected),
         .loop => resolver.flow.check_loop(context, node, expected),
         .range => self.infer_range(context, node, expected),
@@ -896,6 +897,29 @@ pub fn check(
     return self.expect_type(node, node_type, expected);
 }
 
+fn infer_length_or_tag(
+    self: *Expressions,
+    context: *FunctionContext,
+    node: NodeId,
+) StaticPool.Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const operand_type = self.infer(context, resolver.tree.arg(node, 0), .none);
+    if (operand_type == .poison_type) return operand_type;
+
+    const owner = static_pool.pointee(static_pool.substitute_type_variables(operand_type));
+    const is_length = resolver.tree.kind(node) == .lenof;
+    if (is_length and static_pool.tag(owner) == .array_type) {
+        if (self.length_is_static(context, owner, node)) return .u64_type;
+        return resolver.report(.not_static, node, 0, 0);
+    }
+    const is_value = static_pool.tag(operand_type) != .meta_type;
+    const tag_type = static_pool.tag_type_of(owner);
+    if (!is_length and is_value and tag_type != .none) return tag_type;
+    const operator = resolver.name_pool.intern(if (is_length) "lenof" else "tagof");
+    return resolver.report(.invalid_operand, node, operator, operand_type);
+}
+
 fn infer_member_access(
     self: *Expressions,
     context: *FunctionContext,
@@ -961,16 +985,8 @@ fn infer_member_access(
             static_pool.trait_method_declaration(trait_method),
         ),
         .case => |case_type| case_type,
-        .builtin_len => if (self.length_is_static(context, base_type, node))
-            .u64_type
-        else
-            resolver.report(.not_static, node, 0, 0),
-        .builtin_tag => if (on_type)
-            resolver.report(.unknown_member, node, name, base_type)
-        else
-            static_pool.tag_type_of(base_type),
         .builtin_init, .builtin_deinit => self.builtin_lifecycle_type(base_type, name),
-        .none => resolver.report(.unknown_member, node, name, base_type),
+        .none, .builtin_len => resolver.report(.unknown_member, node, name, base_type),
     };
 }
 

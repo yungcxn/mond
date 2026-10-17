@@ -22,4 +22,4 @@ fun f = (bool c, V v, i32 n) {
     i32 dd = do unit_fn(); #! type_mismatch
     i32 rr = if c: 1 else: ret;
 }
-$main = () {}
+main = () {}

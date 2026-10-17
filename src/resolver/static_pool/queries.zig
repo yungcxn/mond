@@ -326,7 +326,6 @@ pub fn lookup_member(pool: *StaticPool, type_index: Index, name: NamePool.Index)
         else => .none,
     };
     if (found != .none) return found;
-    if (name == .tag and pool.tag_type_of(owner) != .none) return .builtin_tag;
     const nominal = pool.tag(owner) == .record_type or pool.tag(owner) == .variant_type;
     if (nominal and name == .init) return .builtin_init;
     if (nominal and name == .deinit) return .builtin_deinit;

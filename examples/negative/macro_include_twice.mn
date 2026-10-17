@@ -3,4 +3,4 @@
 <include "../lib/math.mn">; #! ambiguous_overload ambiguous_overload
 <include "../lib/math.mn">; #! duplicate_declaration duplicate_declaration ambiguous_overload ambiguous_overload
 
-$main = () {}
+main = () {}

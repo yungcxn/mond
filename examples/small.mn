@@ -122,28 +122,28 @@ type AddableVec2D = *(mut i32 x, mut i32 y) implof Addable, SubtractableT(Addabl
 
 # real example, `Iterable` is a builtin
 trait Iterable = (type T): !{
-    $next = () -> T;
-    $has_next = () -> bool;
+    next = () -> T;
+    has_next = () -> bool;
 }
 
 type ByteStream = *(*u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
-    $init = (*u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
-    $deinit = () {} # could be left out
+    init = (*u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
+    deinit = () {} # could be left out
 
     # for Iterable(u8)
-    $next = () -> u8: ret self.buf[self.cursor++];
-    $has_next = () -> bool: ret self.cursor < self.len;
+    next = () -> u8: ret self.buf[self.cursor++];
+    has_next = () -> bool: ret self.cursor < self.len;
 
     pub fun pop = () -> Opt8: ret if self.cursor >= self.len: Opt8.None else: self.buf[self.cursor++];
 }
 
 # a real template
 type Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iterable(Child) !{
-    $init = (*Child in_buf, u32 len): ret Stream(Child)(buf = in_buf, cursor = 0, len = len);
-    $deinit = () {} # could be left out
+    init = (*Child in_buf, u32 len): ret Stream(Child)(buf = in_buf, cursor = 0, len = len);
+    deinit = () {} # could be left out
 
-    $next = () -> Child: ret self.buf[self.cursor++];
-    $has_next = () -> bool: ret self.cursor < self.len;
+    next = () -> Child: ret self.buf[self.cursor++];
+    has_next = () -> bool: ret self.cursor < self.len;
 
     pub fun pop = () -> Opt(Child): ret if self.cursor >= self.len: Opt(Child).None else: self.buf[self.cursor++];
 }
@@ -171,14 +171,14 @@ variant Register = ++(
     AsInt(i32)                      = 0x01,
     AsFloat(f32)                    = 0x02,
     AsBytes(u8 a, u8 b, u8 c, u8 d) = 0x03,
-) tagof u8;
+) tagtype u8;
 
 # C) tagged heterogenic abstract variant
 variant Event = +(
     Click(i32 x, i32 y) = 0x01,
     Key(u8)             = 0x02,
     Close               = 0x00,
-) tagof u8;
+) tagtype u8;
 
 # D) homogenic unionvariant (tagged by default)
 variant AnyFixed32 = ++(                                  # could also be +, as that implies here ++
@@ -195,17 +195,17 @@ variant AnyPrintable = +(
 );
 
 # F) self-tagged variant
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self assertsize u8;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self assertsize u8;
 
 variant CommonCode = +(
     Ok  = 0x0,
     OOM = 0x1,
     EOF = 0x2,
     Undefined(u8),
-) tagof self;
+) tagtype self;
 
 # the other builtin for any type
-variant Opt = (type T): ++(Some(T), None) tagof u8;
+variant Opt = (type T): ++(Some(T), None) tagtype u8;
 
 # use A): 
 Direction dir = Direction.North;                            # Direction.North is a value, not a type
@@ -255,7 +255,7 @@ variant FamilyMember = +(
     Parent(&u8 name, mut i32 age where age >= 18 else age = 18) = 0x01,
     Child(&u8 name, mut i32 age, mut bool is_student = false) = 0x02,
     Pet(mut [10]u8 name, &u8 species) = 0x03,
-) tagof u8;
+) tagtype u8;
 
 
 
@@ -289,7 +289,7 @@ fun add = (i32 a, i32 b) -> i32 { ret a + b; }
 fun add = (f32 a, f32 b) -> f32 { ret a + b; }
 
 # true overloading through different array lengths --- pointer allow here 0-copy + free type cast
-fun recv_sum = (&[]u8 arr)  -> u32: ret recv_sum(arr as &[arr.$len-1]u8) + arr.*[arr.$len-1];
+fun recv_sum = (&[]u8 arr)  -> u32: ret recv_sum(arr as &[lenof arr-1]u8) + arr.*[lenof arr-1];
 fun recv_sum = (&[1]u8 arr) -> u32: ret arr.*[0];
 fun recv_sum = (&[0]u8 arr) -> u32: ret 0;
 
@@ -338,9 +338,9 @@ fun test2 = () {
     mut [4]u8 arr = [1, 2, 3, 4];
     arr[0] = 42;
 
-    []u8 induced_len = [5, 6, 7, 8, 9];                                      # induced_len.$len == 5
+    []u8 induced_len = [5, 6, 7, 8, 9];                                      # lenof induced_len == 5
 
-    []u8 str = "Hello, world!";                                                     # str.$len == 13
+    []u8 str = "Hello, world!";                                                     # lenof str == 13
     &u8 str2 = "Hello, world!";                                                            # with \0
     # *u8 str3 = "Hello, world!"; is illegal, as string literals are immutable
 }
@@ -357,7 +357,7 @@ fun test2 = () {
 ### CONTROL FLOW AND SUGARS ###
 fun calc_something = () -> i32: ret 42;
 
-$main = () {
+main = () {
     # no statements exist in this languages -> from if to loop everything is an expression.
 
     # if-else unassigned
@@ -444,7 +444,7 @@ $main = () {
     }
 
     # for assigned
-    mut [arr3.$len]u32 arr4;
+    mut [lenof arr3]u32 arr4;
     arr4 = for arr3: $it * 2;
 
     # stcfor - allows emitting length info -> no predefinition needed
@@ -593,7 +593,7 @@ fun meta_test = () {
 
     # parametrized quote/macro, compile time error if the trees are not bare identifiers (case types).
     #   value is no tree, @value lifts it into a literal
-    param_macro_add = (ast.Identifier identifierx, ast.Identifier identifiery, i32 value): quote:
+    fun param_macro_add = (ast.Identifier identifierx, ast.Identifier identifiery, i32 value): quote:
         @identifierx + @identifiery + @value;
 
     # nothing is quoted automatically, the caller decides what stays code. `quote: realvar1` is written
@@ -618,15 +618,15 @@ fun meta_test = () {
     <aif(quote: maybe, quote: print("got %d", it), quote: print("nothing"))>;
 
     # refl gives a *ast to the live declaration of whatever it names
-    stc []u8 decl_text = (refl realvar1).$src;                                         # "realvar1 = 42"
-    # (refl realvar1).$value = quote: 0; is illegal: a declaration freezes as soon as it is resolved
+    stc []u8 decl_text = (refl realvar1).src;                                         # "realvar1 = 42"
+    # (refl realvar1).assigned = quote: 0; is illegal: a declaration freezes as soon as it is resolved
 }
 
 # a) control flow: c's assert, but the condition comes as a tree so its source comes along (#cond in c).
-#   trees and not text -> `!@cond` needs no parentheses. $asterr reports at the user's code, not here
+#   trees and not text -> `!@cond` needs no parentheses. `crash (at, ..)` reports at the user's code, not here
 stcfun assert = (ast(bool) cond) -> ast(()): ret match cond {
-    ast.BooleanTrue | ast.BooleanFalse => $asterr(cond, "assertion on a constant"),
-    _ => quote { if !@cond: print("assertion failed: %s", @cond.$src); },
+    ast.BooleanTrue | ast.BooleanFalse => crash (cond, "assertion on a constant"),
+    _ => quote { if !@cond: print("assertion failed: %s", @cond.src); },
 }
 
 # b) anaphoric: @value is a param -> unquoted, `it` exists nowhere here -> bound where aif lands
@@ -634,12 +634,12 @@ stcfun aif = (ast(Opt8) value, ast then, ast otherwise) -> ast(()): ret quote {
     if @value ?<- @it { @then; } else { @otherwise; }
 }
 
-# c) gensym: all quotes of one expansion share their names, $fresh gives distinct ones (one per var)
+# c) gensym: all quotes of one expansion share their names, `fresh` gives distinct ones (one per var)
 stcfun rotate = ([]ast.Identifier vars) -> ast(()) {
-    []ast.Identifier temps = for vars: $fresh("temp");
+    []ast.Identifier temps = for vars: fresh "temp";
     mut []ast moves = [];                                            # []ast grows with += at compile-time
-    for i in 0..<vars.$len: moves += quote: @temps[i] = @vars[i];
-    for i in 0..<vars.$len: moves += quote: @vars[i] = @temps[(i + 1) % vars.$len];
+    for i in 0..<lenof vars: moves += quote: @temps[i] = @vars[i];
+    for i in 0..<lenof vars: moves += quote: @vars[i] = @temps[(i + 1) % lenof vars];
     ret quote { @..moves; };                                         # @.. splices a list in place
 }
 
@@ -657,18 +657,18 @@ stcfun simplify = (ast(i32) e) -> ast(i32): ret match e {
 
 # views on trees are $-members (like ParseTree's Param/Def/Loop/Branch), written through a *ast like
 #   fields through a *T, the elements of a list view of a *ast are *ast:
-#   any:              $src, $children
-#   fun:              $name, $params, $ret, $body
-#   type, variant:    $name, $fields / $cases, $implof, $methods
-#   field, param:     $name, $type, $default, $where, $mut
-#   variable:         $name, $type, $value
-#   file, include:    $decls
+#   any:              .src, .children
+#   fun:              .name, .params, .rettype, .body
+#   type, variant:    .name, .fields / .cases, .traits, .methods
+#   field, param:     .name, .type, .defval, .guard, .ismut
+#   variable:         .name, .type, .assigned
+#   file, include:    .decls
 
 # e) generating match arms: one arm per case, the variant is only read -> &ast
 stcfun gen_name_of = (&ast(variant) v) -> ast(fun) {
     mut []ast arms = [];
-    for c in v.$cases: arms += quote: @(v.$name).@(c.$name) => @c.$name.$src;
-    ret quote: (@v.$name value) -> &u8: ret match value { @..arms };
+    for c in v.cases: arms += quote: @(v.name).@(c.name) => @c.name.src;
+    ret quote: (@v.name value) -> &u8: ret match value { @..arms };
 }
 
 fun direction_name = <gen_name_of(refl Direction)>;                              # like realizing a template
@@ -676,8 +676,8 @@ fun direction_name = <gen_name_of(refl Direction)>;                             
 # f) refl edits the program: everything resolving Person sees the getters (the !{} is created if missing).
 #   top-level <> run in source order before anything is resolved, a unit result expands to nothing
 stcfun gen_getters = (*ast(type) t) {
-    for field in t.$fields: t.$methods += quote:
-        pub fun get_@(field.$name) = () -> @field.$type: ret self.@(field.$name);    # get_ ## name in c
+    for field in t.fields: t.methods += quote:
+        pub fun get_@(field.name) = () -> @field.type: ret self.@(field.name);    # get_ ## name in c
 }
 <gen_getters(refl Person)>;
 
@@ -691,49 +691,49 @@ trait Equatable = !{
 
 stcfun derive_eq = (*ast(type) t) {
     mut ast(bool) all = quote: true;
-    for field in t.$fields: all = quote: @all and self.@(field.$name) == other.@(field.$name);
-    t.$implof += quote: Equatable;
-    t.$methods += quote: fun eq = ((typeof self) other) -> bool: ret @all;
+    for field in t.fields: all = quote: @all and self.@(field.name) == other.@(field.name);
+    t.traits += quote: Equatable;
+    t.methods += quote: fun eq = ((typeof self) other) -> bool: ret @all;
 }
 <derive_eq(refl AddablePointI32)>;
 
 # h) rewriting functions in place: every call of add_i32 traces now, also the ones above
 stcfun trace = (*ast(fun) f) {
-    f.$body = quote {                                    # the quote is built before the assignment
-        print("-> %s", @f.$name.$src);
-        defer print("<- %s", @f.$name.$src);
-        @f.$body;
+    f.body = quote {                                    # the quote is built before the assignment
+        print("-> %s", @f.name.src);
+        defer print("<- %s", @f.name.src);
+        @f.body;
     };
 }
 <trace(refl add_i32)>;
 
-# i) the file itself: $file is this file, the runner is generated from every `test_` function in it
+# i) the file itself: a bare refl is this file, the runner is generated from every `test_` function in it
 fun test_add = () -> bool: ret add_i32(1, 2) == 3;
 fun test_templ = () -> bool: ret sub_from_templ(3, 2) == 1;
 
 fun starts_with = ([]u8 s, []u8 prefix) -> bool {
-    if s.$len < prefix.$len: ret false;
-    for i in 0..<prefix.$len: if s[i] != prefix[i]: ret false;
+    if lenof s < lenof prefix: ret false;
+    for i in 0..<lenof prefix: if s[i] != prefix[i]: ret false;
     ret true;
 }
 
 stcfun gen_test_runner = (&ast file) -> ast(fun) {
     mut []ast checks = [];
-    for d in file.$decls {
-        if d oftype ast(fun) and starts_with(d.$name.$src, "test_") {
-            checks += quote: if !@(d.$name)(): print("FAILED: %s", @d.$name.$src);
+    for d in file.decls {
+        if d oftype ast(fun) and starts_with(d.name.src, "test_") {
+            checks += quote: if !@(d.name)(): print("FAILED: %s", @d.name.src);
         }
     }
     ret quote: () { @..checks; };
 }
 
-fun run_tests = <gen_test_runner(refl $file)>;
+fun run_tests = <gen_test_runner(refl)>;
 
 # and new top-level declarations, they are as global as the written ones
 stcfun add_version = (*ast file, u32 v) {
-    file.$decls += quote: pub fun version = () -> u32: ret @v;
+    file.decls += quote: pub fun version = () -> u32: ret @v;
 }
-<add_version(refl $file, 3)>;
+<add_version(refl, 3)>;
 
 # j) include gets the declarations of another file as an own tree (a copy, no refl), the private ones
 #   under names of their own.
@@ -742,21 +742,21 @@ stcfun add_version = (*ast file, u32 v) {
 
 stcfun traced_all = (ast lib) -> ast {
     mut ast out = lib;
-    for i in 0..<out.$decls.$len: if out.$decls[i] oftype ast(fun): trace(out.$decls[i].&);
+    for i in 0..<lenof out.decls: if out.decls[i] oftype ast(fun): trace(out.decls[i].&);
     ret out;
 }
 <traced_all(include "lib/strings.mn")>;
 
 # k) nothing is read-only: every case carries its DefTable fields (IfThen: cond, then; VariableDefinition:
 #   type, identifier; FunctionCall: callable, fun_param_tuple; ...), the list views grow with +=. raw fields
-#   are plain `ast` so any tree fits, it is checked once the declaration gets resolved. $children reaches
+#   are plain `ast` so any tree fits, it is checked once the declaration gets resolved. .children reaches
 #   all of them generically
 stcfun walk = (*ast t, (*ast) -> () visit) {
     visit(t);
-    for c in t.$children: walk(c, visit);                               # into what is there after visit
+    for c in t.children: walk(c, visit);                               # into what is there after visit
 }
 
-fun same = ([]u8 a, []u8 b) -> bool: ret a.$len == b.$len and starts_with(a, b);
+fun same = ([]u8 a, []u8 b) -> bool: ret lenof a == lenof b and starts_with(a, b);
 
 fun legacy_min = (i16 a, i16 b) -> i16 {
     mut i16 acc = a;
@@ -765,17 +765,17 @@ fun legacy_min = (i16 a, i16 b) -> i16 {
 }
 
 stcfun modernize = (*ast(fun) f) {
-    f.$name = ast.Identifier("modern_min");                                    # identifiers are cases too
+    f.name = ast.Identifier("modern_min");                                    # identifiers are cases too
     walk(f, (*ast n): match n.* {
         ast.TypeSignedInteger16 => n.* = quote: i32,                           # params, return and local
-        ast.Identifier => if same(n.$src, "acc"): n.* = ast.Identifier("result"),       # a var, everywhere
+        ast.Identifier => if same(n.src, "acc"): n.* = ast.Identifier("result"),       # a var, everywhere
         ast.BinaryGreater(lhs, rhs) => n.* = ast.BinaryGreaterOrEqual(lhs, rhs),             # an operator
         ast.IfThen(cond, then) => n.cond = quote: @cond and @b != 0,     # @cond: the binder, @b: lands
         _ => {},
     });
-    f.$body = quote {                                                              # and the body itself
+    f.body = quote {                                                              # and the body itself
         print("min of %d and %d", @a, @b);
-        @..f.$body;                                                # @.. flattens a block, @ would nest it
+        @..f.body;                                                # @.. flattens a block, @ would nest it
     };
 }
 <modernize(refl legacy_min)>;
@@ -789,6 +789,6 @@ stcfun modernize = (*ast(fun) f) {
 
 # same for types: fields, their types, defaults, wheres
 stcfun widen = (*ast(type) t) {
-    for field in t.$fields: field.$type = quote: u32;
+    for field in t.fields: field.type = quote: u32;
 }
 <widen(refl Packed)>;                                                             # **(u32 a, u32 b, u32 c)

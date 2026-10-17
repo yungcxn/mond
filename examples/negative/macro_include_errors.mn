@@ -6,4 +6,4 @@ stc u32 hidden = <hidden_macro()>; #! undefined_name
 stc u32 secret = kit_secret; #! undefined_name
 <include "../lib/stray_unquote.mn">; #! stray_unquote
 
-$main = () {}
+main = () {}

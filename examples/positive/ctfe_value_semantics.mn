@@ -73,4 +73,4 @@ stc u32 SH = shared(); #= SH 7733
 stc u32 LC = loop_copy(); #= LC 66
 stc u32 TX = text(); #= TX 97122
 
-$main = () {}
+main = () {}

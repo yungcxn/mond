@@ -3,7 +3,7 @@ type Box = (type T): *(mut T value, mut u32 count) !{
     fun get = () -> T: ret self.value;
 }
 
-variant Opt = (type T): ++(Some(T), None) tagof u8;
+variant Opt = (type T): ++(Some(T), None) tagtype u8;
 
 trait Source = (type T): !{
     fun left = () -> u32;
@@ -78,7 +78,7 @@ stc u32 UW = unwrap_or(Opt(u16).Some(4)) + unwrap_or(Opt(u8).Some(3)); #= UW 43
 stc u32 WR = wrapped(Box(u16)(value = 1, count = 5)); #= WR 9
 stc u32 NT = narrow_count(Box(u8)(value = 1, count = 3)) + narrow_count(Box(u16)(value = 1, count = 3)) * 10; #= NT 63
 
-$main = () {
+main = () {
     mut Box(i32) a = Box(i32)(value = 1, count = 7);
     Box(u8) c = Box(u8)(value = 2, count = 9);
     u32 x = count_of(a) + count_of(c) + twice(c); #: x u32

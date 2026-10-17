@@ -27,7 +27,7 @@ type Cfg = *(
 ) !{
     fun build = (&[]u8 edges) {
         mut u32 i = 0;
-        while (i as u64) + 1 < edges.$len {
+        while (i as u64) + 1 < lenof edges {
             u8 c = edges.*[i];
             if c == ' ' {
                 i += 1;
@@ -144,7 +144,7 @@ type Cfg = *(
     }
 }
 
-fun fresh = (u32 n) -> Cfg {
+fun make_fresh = (u32 n) -> Cfg {
     [10]u32 a;
     [10]u32 b;
     [10]u32 c;
@@ -154,20 +154,20 @@ fun fresh = (u32 n) -> Cfg {
 }
 
 fun reachable = (&[]u8 edges, u32 n) -> u32 {
-    mut Cfg g = fresh(n);
+    mut Cfg g = make_fresh(n);
     g.build(edges);
     ret g.reach();
 }
 
 fun dominators = (&[]u8 edges, u32 n) -> [10]u32 {
-    mut Cfg g = fresh(n);
+    mut Cfg g = make_fresh(n);
     g.build(edges);
     do g.doms();
     ret g.dom;
 }
 
 fun idoms = (&[]u8 edges, u32 n) -> [10]i32 {
-    mut Cfg g = fresh(n);
+    mut Cfg g = make_fresh(n);
     g.build(edges);
     do g.doms();
     mut [10]i32 out;
@@ -176,7 +176,7 @@ fun idoms = (&[]u8 edges, u32 n) -> [10]i32 {
 }
 
 fun loops = (&[]u8 edges, u32 n) -> [10]u32 {
-    mut Cfg g = fresh(n);
+    mut Cfg g = make_fresh(n);
     g.build(edges);
     u32 all = g.doms();
     mut [10]u32 out;
@@ -191,28 +191,28 @@ fun loops = (&[]u8 edges, u32 n) -> [10]u32 {
 }
 
 fun back_edge_count = (&[]u8 edges, u32 n) -> u32 {
-    mut Cfg g = fresh(n);
+    mut Cfg g = make_fresh(n);
     g.build(edges);
     do g.doms();
     ret g.back_edges();
 }
 
 fun live_in = (&[]u8 edges, u32 n, &[]u8 use, &[]u8 def) -> [10]u32 {
-    mut Cfg g = fresh(n);
+    mut Cfg g = make_fresh(n);
     g.build(edges);
     g.live(use, def);
     ret g.lin;
 }
 
 fun live_out = (&[]u8 edges, u32 n, &[]u8 use, &[]u8 def) -> [10]u32 {
-    mut Cfg g = fresh(n);
+    mut Cfg g = make_fresh(n);
     g.build(edges);
     g.live(use, def);
     ret g.lout;
 }
 
 fun bad_edges = (&[]u8 edges, u32 n) -> u32 {
-    mut Cfg g = fresh(n);
+    mut Cfg g = make_fresh(n);
     g.build(edges);
     ret g.bad;
 }
@@ -269,4 +269,4 @@ stc u32 G49 = bad_edges("01 19".&, 4); #= G49 1
 stc u32 G50 = bad_edges("05 50".&, 3); #= G50 1
 stc u32 G51 = bad_edges("01 12".&, 3); #= G51 0
 
-$main = () {}
+main = () {}

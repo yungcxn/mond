@@ -93,7 +93,7 @@ fun fresh_alloc = (&[]u8 s, &[]u8 e) -> Alloc {
     [12]i32 reg;
     [12]bool active;
     [12]bool done;
-    ret Alloc(s = s, e = e, n = s.$len as u32, reg = reg, active = active, done = done, spills = 0);
+    ret Alloc(s = s, e = e, n = lenof s as u32, reg = reg, active = active, done = done, spills = 0);
 }
 
 fun pressure = (&[]u8 s, &[]u8 e) -> u32 {
@@ -153,7 +153,7 @@ fun interval_graph = (&[]u8 s, &[]u8 e) -> [12]u32 {
 fun edge_graph = (&[]u8 edges, u32 n) -> [12]u32 {
     mut [12]u32 adj;
     mut u32 i = 0;
-    while (i as u64) + 1 < edges.$len {
+    while (i as u64) + 1 < lenof edges {
         if edges.*[i] == ' ' {
             i += 1;
             cont;
@@ -171,7 +171,7 @@ fun edge_graph = (&[]u8 edges, u32 n) -> [12]u32 {
 
 fun color_intervals = (&[]u8 s, &[]u8 e) -> [12]u32 {
     [12]u32 adj = interval_graph(s, e);
-    ret color(adj.&, s.$len as u32);
+    ret color(adj.&, lenof s as u32);
 }
 
 fun color_edges = (&[]u8 edges, u32 n) -> [12]u32 {
@@ -221,4 +221,4 @@ stc [12]u32 A39 = color_edges("00 01 11".&, 3); #= A39 [0, 1, 0, 0, 0, 0, 0, 0, 
 stc [12]u32 A40 = color_edges("01 12 20 23".&, 4); #= A40 [1, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 stc [12]u32 A41 = color_edges("01 09".&, 3); #= A41 [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-$main = () {}
+main = () {}

@@ -15,7 +15,7 @@ fun fall = () -> u32 {
 
 fun early = (bool stop) -> u32 {
     mut Log l = Log(v = 0);
-    inner = (*Log p, bool s) {
+    fun inner = (*Log p, bool s) {
         defer p.push(1);
         if s: ret;
         p.push(2);
@@ -44,6 +44,6 @@ stc u32 E1 = s_early(true); #= E1 1
 stc u32 E2 = s_early(false); #= E2 21
 stc u32 LO = s_looped(); #= LO 199399
 
-$main = () {
+main = () {
     u32 r = fall() + early(true) + looped();
 }

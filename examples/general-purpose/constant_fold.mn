@@ -13,7 +13,7 @@ variant Ins = +(
     Shr(u8 d, u8 a, u8 k),
     AndI(u8 d, u8 a, u32 m),
     Out(u8 a),
-) tagof u8;
+) tagtype u8;
 
 fun log2_exact = (u32 v) -> u32 {
     if v < 2 or (v & (v - 1)) != 0: ret 99;
@@ -331,11 +331,11 @@ type Opt = *(
 
 fun report = (&[]Ins prog, u32 x, u32 y) -> [9]u32 {
     mut [24]Ins code;
-    for i in 0..<prog.$len: code[i] = prog.*[i];
+    for i in 0..<lenof prog: code[i] = prog.*[i];
     mut [16]bool known;
     mut [16]u32 kv;
     mut [16]u8 alias;
-    mut Opt o = Opt(code = code, n = prog.$len as u32, known = known, kv = kv, alias = alias, folded = 0, simplified = 0, strength = 0, copies = 0, dead = 0);
+    mut Opt o = Opt(code = code, n = lenof prog as u32, known = known, kv = kv, alias = alias, folded = 0, simplified = 0, strength = 0, copies = 0, dead = 0);
     u32 before = live_count(prog);
     u32 hb = run(prog, x, y);
     for 0..<4 {
@@ -374,4 +374,4 @@ stc [9]u32 O24 = report([Ins.Const(0, 3), Ins.Const(0, 4), Ins.Add(1, 0, 0), Ins
 stc [9]u32 O25 = report([Ins.Input(0, 0), Ins.Const(1, 3), Ins.Const(2, 4), Ins.Add(3, 1, 2), Ins.Mul(4, 0, 3), Ins.Out(4)].&, 6, 0); #= O25 [6, 4, 1, 0, 0, 0, 2, 42, 42]
 stc [9]u32 O26 = report([Ins.Input(0, 0), Ins.Copy(1, 0), Ins.Add(0, 0, 1), Ins.Add(2, 0, 1), Ins.Out(2)].&, 10, 0); #= O26 [5, 5, 0, 0, 0, 1, 0, 30, 30]
 
-$main = () {}
+main = () {}

@@ -1,6 +1,6 @@
 # `@..xs` takes the items between those before and after it, the ones after still have to match
 stcfun middle = (ast e) -> u64: ret match e {
-    quote: f(@..xs, 9) => xs.$len,
+    quote: f(@..xs, 9) => lenof xs,
     _ => 99,
 }
 stc u64 m1 = middle(quote: f(1, 2, 9)); #= m1 2
@@ -8,7 +8,7 @@ stc u64 m2 = middle(quote: f(1, 2, 3)); #= m2 99
 stc u64 m3 = middle(quote: f(9)); #= m3 0
 stc u64 m4 = middle(quote: f()); #= m4 99
 stcfun inner = (ast e) -> u64: ret match e {
-    quote: [@_, @..rest, @_] => rest.$len,
+    quote: [@_, @..rest, @_] => lenof rest,
     _ => 99,
 }
 stc u64 i0 = inner(quote: [1, 2]); #= i0 0
@@ -17,7 +17,7 @@ stc u64 i_short = inner(quote: [1]); #= i_short 99
 
 # statements of a block, by shape
 stcfun statements = (ast e) -> u64: ret match e {
-    quote { @first; @..rest; } => rest.$len,
+    quote { @first; @..rest; } => lenof rest,
     _ => 99,
 }
 stc u64 s3 = statements(quote { a(); b(); c(); }); #= s3 2
@@ -50,10 +50,10 @@ stc u32 c1 = calls(quote: f(1)); #= c1 1
 stc u32 c2 = calls(quote: a.b(1)); #= c2 2
 stc u32 c3 = calls(quote: 1); #= c3 3
 stcfun deep = (ast e) -> []u8: ret match e {
-    ast.BinaryAdd(_, ast.BinaryMultiply(l, _)) => l.$src,
+    ast.BinaryAdd(_, ast.BinaryMultiply(l, _)) => l.src,
     _ => "",
 }
 stc []u8 d1 = deep(quote: 1 + abc * 2); #= d1 "abc"
 stc []u8 d2 = deep(quote: 1 + abc); #= d2 ""
 
-$main = () {}
+main = () {}

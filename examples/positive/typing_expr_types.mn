@@ -34,7 +34,7 @@ fun f = (u8 a, u16 b, i8 c, i64 d, f32 x, f64 y, bool t, *u32 pm, &u32 pr, [4]u1
     p1 = pm.*; #: p1 u32
     p2 = pr.*; #: p2 u32
     p3 = arr[1]; #: p3 u16
-    p4 = arr.$len; #: p4 u64
+    p4 = lenof arr; #: p4 u64
     p5 = arr.&; #: p5 &[4]u16
     p6 = pm + 1; #: p6 *u32
     p7 = 2 + pr; #: p7 &u32
@@ -50,4 +50,4 @@ fun f = (u8 a, u16 b, i8 c, i64 d, f32 x, f64 y, bool t, *u32 pm, &u32 pr, [4]u1
     g2 = a..=b; #: g2 []u16
 }
 
-$main = () {}
+main = () {}

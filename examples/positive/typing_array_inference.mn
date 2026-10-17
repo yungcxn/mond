@@ -5,15 +5,15 @@ fun sum = (&[]u32 xs) -> u32 {
     ret s;
 }
 
-fun drain = ([0]f32 xs) -> u64: ret xs.$len;
+fun drain = ([0]f32 xs) -> u64: ret lenof xs;
 
 stc []u8 GREETING = "hello"; #: GREETING [5]u8
 stc []i16 NEG = [-1, -2]; #: NEG [2]i16
 stc [][]u8 GRID = [[1, 2], [3, 4], [5, 6]]; #: GRID [3][2]u8
-stc u64 GLEN = GRID.$len; #= GLEN 3
-stc u64 ILEN = GRID[0].$len; #= ILEN 2
+stc u64 GLEN = lenof GRID; #= GLEN 3
+stc u64 ILEN = lenof GRID[0]; #= ILEN 2
 
-$main = () {
+main = () {
     []u32 a = [1, 2, 3]; #: a [3]u32
     []u32 b = []; #: b [0]u32
     c = []; #: c [0]i8

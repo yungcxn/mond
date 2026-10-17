@@ -162,4 +162,4 @@ stc u32 XR = random_run(); #= XR 1686884341
 stc u32 LC = lcg_run(); #= LC 2981369574
 stc u32 DI = distribution(); #= DI 56544545
 
-$main = () {}
+main = () {}

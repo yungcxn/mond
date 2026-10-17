@@ -1,7 +1,7 @@
-type Res = *(mut u32 n) !{ $deinit = () { self.n = 0; } }
+type Res = *(mut u32 n) !{ deinit = () { self.n = 0; } }
 type Plain = *(u32 n);
 variant Kind = +(A, B);
-variant Owned = +(A, B) !{ $deinit = () {} }
+variant Owned = +(A, B) !{ deinit = () {} }
 
 fun f = (*Res rp, &Plain pp) {
     mut Res r = Res(n = 1);
@@ -26,4 +26,4 @@ fun f = (*Res rp, &Plain pp) {
     deinit arr; #! no_deinit
 }
 
-$main = () {}
+main = () {}

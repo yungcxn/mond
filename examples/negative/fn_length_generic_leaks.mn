@@ -1,6 +1,6 @@
 # a failed call must not fix the length of a length-generic parameter for later calls
-fun total = (&[]u32 a) -> u64: ret a.$len;
-fun copy_in = ([]u16 a) -> u64: ret a.$len;
+fun total = (&[]u32 a) -> u64: ret lenof a;
+fun copy_in = ([]u16 a) -> u64: ret lenof a;
 fun copy_in = (bool b) -> u64: ret 0;
 fun f = () {
     [3]u8 b = [1, 2, 3];
@@ -13,4 +13,4 @@ fun f = () {
     u64 ok3 = copy_in([1, 2, 3, 4]);
     u64 ok4 = copy_in([1]);
 }
-$main = () {}
+main = () {}

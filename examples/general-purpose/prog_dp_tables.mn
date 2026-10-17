@@ -2,7 +2,7 @@
 
 # minimal scalar multiplications for a chain of matrices with the given dimensions
 fun matrix_chain = (&[]u64 dims) -> u64 {
-    u64 n = dims.$len - 1;
+    u64 n = lenof dims - 1;
     mut [8][8]u64 cost;
     for len in 2..=n {
         for i in 0..=(n - len) {
@@ -19,7 +19,7 @@ fun matrix_chain = (&[]u64 dims) -> u64 {
 
 # longest palindromic subsequence, filled by increasing span
 fun lps = (&[]u8 s) -> u32 {
-    u64 n = s.$len;
+    u64 n = lenof s;
     if n == 0: ret 0;
     mut [16][16]u32 t;
     for i in 0..<n: t[i][i] = 1;
@@ -36,9 +36,9 @@ fun lps = (&[]u8 s) -> u32 {
 fun lcsubstr = (&[]u8 a, &[]u8 b) -> u32 {
     mut [17]u32 prev;
     mut u32 best = 0;
-    for i in 1..=a.$len {
+    for i in 1..=lenof a {
         mut [17]u32 cur;
-        for j in 1..=b.$len {
+        for j in 1..=lenof b {
             if a.*[i - 1] == b.*[j - 1] {
                 cur[j] = prev[j - 1] + 1;
                 if cur[j] > best: best = cur[j];
@@ -136,7 +136,7 @@ stc u32 EGG = eggs(); #= EGG 100806
 stc u64 PATHS = grids(); #= PATHS 700080
 stc u32 SQ = squares(); #= SQ 204
 
-$main = () -> u64 {
+main = () -> u64 {
     [3]u64 d = [2, 3, 4];
     m = matrix_chain(d.&); #: m u64
     ret m + lps("abcba".&) as u64 + egg_drop(2, 10) as u64;

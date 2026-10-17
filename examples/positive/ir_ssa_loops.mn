@@ -51,6 +51,6 @@ stc u32 F = s_swap(10); #= F 55
 stc u32 S1 = s_short(0, 5); #= S1 1
 stc u32 S2 = s_short(2, 9); #= S2 2
 
-$main = () {
+main = () {
     u32 r = nested(6) + early(12) + swap_loop(10) + short_circuit(0, 5);
 }

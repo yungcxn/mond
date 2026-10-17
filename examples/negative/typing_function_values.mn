@@ -27,7 +27,7 @@ fun f = (u8 n) {
     u16 c8 = a2(n);
     u8 c9 = a2(n); #! type_mismatch
     g = inc; #: g (u8) -> u8
-    h = (i64 a, bool b): if b: a else: 0; #: h (i64, bool) -> i64
+    fun h = (i64 a, bool b): if b: a else: 0; #: h (i64, bool) -> i64
 }
 
-$main = () {}
+main = () {}

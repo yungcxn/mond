@@ -16,4 +16,4 @@ fun twice_plain = (u32 a) -> u32: ret 3; #! duplicate_declaration
 fun guarded_else = (u32 a where a > 0 else ret 0) -> u32: ret 1;
 fun guarded_else = (u32 a) -> u32: ret 2; #! duplicate_declaration
 
-$main = () {}
+main = () {}

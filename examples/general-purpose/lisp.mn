@@ -1,4 +1,4 @@
-variant Val = +(Nil, Int(i64 v), Bool(bool b), Sym(u32 id), Pair(u32 at), Err(u32 code)) tagof u8;
+variant Val = +(Nil, Int(i64 v), Bool(bool b), Sym(u32 id), Pair(u32 at), Err(u32 code)) tagtype u8;
 
 fun iv = (Val v) -> i64: ret match v {
     Val.Int(n) => n,
@@ -45,7 +45,7 @@ type Lisp = *(
 
     fun sym_is = (u32 id, &[]u8 w) -> bool {
         u32 n = self.se[id] - self.sb[id];
-        if n as u64 != w.$len: ret false;
+        if n as u64 != lenof w: ret false;
         for k in 0..<n {
             if self.src.*[self.sb[id] + k] != w.*[k]: ret false;
         }
@@ -405,10 +405,10 @@ fun evals_to = (&[]u8 src, &[]u8 want) -> bool {
     [8]u32 e1;
     [8]Val e2;
     [64]u8 buf;
-    mut Lisp l = Lisp(src = src, length = src.$len, pos = 0, cars = c1, cdrs = c2, ncell = 0, sb = b1, se = b2, nsym = 0, en = e1, ev = e2, nenv = 0, out = buf, nout = 0);
+    mut Lisp l = Lisp(src = src, length = lenof src, pos = 0, cars = c1, cdrs = c2, ncell = 0, sb = b1, se = b2, nsym = 0, en = e1, ev = e2, nenv = 0, out = buf, nout = 0);
     Val r = l.run();
     l.print(r);
-    if l.nout as u64 != want.$len: ret false;
+    if l.nout as u64 != lenof want: ret false;
     for i in 0..<l.nout {
         if l.out[i] != want.*[i]: ret false;
     }
@@ -423,7 +423,7 @@ fun cells_after_read = (&[]u8 src) -> u32 {
     [8]u32 e1;
     [8]Val e2;
     [64]u8 buf;
-    mut Lisp l = Lisp(src = src, length = src.$len, pos = 0, cars = c1, cdrs = c2, ncell = 0, sb = b1, se = b2, nsym = 0, en = e1, ev = e2, nenv = 0, out = buf, nout = 0);
+    mut Lisp l = Lisp(src = src, length = lenof src, pos = 0, cars = c1, cdrs = c2, ncell = 0, sb = b1, se = b2, nsym = 0, en = e1, ev = e2, nenv = 0, out = buf, nout = 0);
     do l.read();
     ret l.ncell;
 }
@@ -483,4 +483,4 @@ stc u32 L52 = cells_after_read("(1 2 3)".&); #= L52 3
 stc u32 L53 = cells_after_read("(1 (2 3)".&); #= L53 2
 stc u32 L54 = cells_after_read("(quote (a b (c d)))".&); #= L54 7
 
-$main = () {}
+main = () {}

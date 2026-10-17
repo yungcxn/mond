@@ -1,7 +1,7 @@
 <include "lib/out.mn">;
 
 variant Shape = +(Circle(u32 r), Rect(u32 w, u32 h), Dot);
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
 variant A = +(X, Y(u32));
 variant B = +(Z(u64), W);
 variant AB = A || B;
@@ -26,7 +26,7 @@ fun grow = (Shape s) -> Shape: ret match s {
     _ => s,
 };
 
-$main = () {
+main = () {
     line_u64(area(Shape.Circle(2)) as u64);           #> 12
     line_u64(area(Shape.Rect(3, 4)) as u64);          #> 12
     line_u64(area(Shape.Dot) as u64);                 #> 0
@@ -44,7 +44,7 @@ $main = () {
     line_u64(area(s) as u64);                         #> 6
     line_u64(if Shape.Rect(1, 2) == Shape.Rect(1, 2): 1 else: 0);  #> 1
     line_u64(if Shape.Rect(1, 2) == Shape.Rect(2, 1): 1 else: 0);  #> 0
-    line_u64(Shape.Dot.$tag as u64);                  #> 2
+    line_u64(tagof Shape.Dot as u64);                  #> 2
     # a case value copied twice keeps its size
     rect = Shape.Rect(5, 6);
     Shape copy = rect;

@@ -1,5 +1,5 @@
 # matches lower to switches on tags and integers, with guards falling back to pattern tests
-variant Op = +(Add(i32 a, i32 b), Neg(i32 v), Lit(i32 v), Nop) tagof u8;
+variant Op = +(Add(i32 a, i32 b), Neg(i32 v), Lit(i32 v), Nop) tagtype u8;
 
 fun eval = (Op o) -> i32: ret match o {
     Op.Add(a, b) => a + b,
@@ -37,7 +37,7 @@ stc []u8 B = stcfor x in XS: s_bucket(x); #= B [0, 1, 2, 3, 3, 4, 4]
 stc [5]i8 YS = [-128, -1, 0, 1, 127];
 stc []i8 SG = stcfor y in YS: s_sign(y); #= SG [-1, -1, 0, 1, 1]
 
-$main = () {
+main = () {
     i32 r = eval(Op.Lit(3));
     u8 b = bucket(42);
     i8 s = sign(-3);

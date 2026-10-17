@@ -10,14 +10,14 @@ fun sign = (i32 x where x == 0) -> i32: ret 0;
 fun sign = (i32 x) -> i32: ret 1;
 fun safe_div = (u32 a, u32 b where b != 0 else ret 0) -> u32: ret a / b;
 
-$main = () {
+main = () {
     line_i64(apply(twice, 21));                   #> 42
     mut i64 base = 10;
-    add_base = (i64 x): x + base;
+    fun add_base = (i64 x): x + base;
     base = 20;
     line_i64(apply(add_base, 1));                 #> 21
     i64 k = 3;
-    times_k = (i64 x): x * k;
+    fun times_k = (i64 x): x * k;
     line_i64(apply(times_k, 5));                  #> 15
     line_u64(chain(1) as u64);                    #> 124
     line_u64(chain(1, c = 9) as u64);             #> 129

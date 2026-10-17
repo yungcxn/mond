@@ -1,5 +1,5 @@
 variant Res = +(Ok(i32), Err(u8));
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
 
 # `??` and `?<-` unwrap the first case with a payload, any other case is empty
 stcfun checked = (i32 v) -> Res: ret if v < 0: Res.Err(1) else: Res.Ok(v * 2);
@@ -24,6 +24,6 @@ stc u8 DI = direct(); #= DI 9
 stcfun either = (Res r) -> i32: ret match r { Res.Ok(v) => v, Res.Err(e) => -(e as i32) };
 stc i32 E1 = either(Res.Ok(4)) * 10 + either(Res.Err(2)); #= E1 38
 
-$main = () {}
+main = () {}
 fun wrap = (u8 v) -> Opt8: ret v;
 stc u8 W1 = wrap(4) ?? 0; #= W1 4

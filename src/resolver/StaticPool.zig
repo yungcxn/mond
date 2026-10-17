@@ -120,7 +120,6 @@ pub const Member = union(enum) {
     trait_method: struct { trait: Index, index: u32 },
     case: Index,
     builtin_len,
-    builtin_tag,
     builtin_init,
     builtin_deinit,
 };

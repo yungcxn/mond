@@ -53,12 +53,12 @@ type Lexer = *(&[]u8 source, u64 length, mut u64 at = 0) !{
     fun peek = () -> u8: ret if self.at < self.length: self.source.*[self.at] else: 0;
 
     fun spells = (u64 start, &[]u8 word) -> bool {
-        if self.at - start != word.$len: ret false;
-        for i in 0..<word.$len: if self.source.*[start + i] != word.*[i]: ret false;
+        if self.at - start != lenof word: ret false;
+        for i in 0..<lenof word: if self.source.*[start + i] != word.*[i]: ret false;
         ret true;
     }
 
-    fun next = () -> Token {
+    next = () -> Token {
         while self.peek() == ' ' or self.peek() == '\t': self.at += 1;
         u8 c = self.peek();
         if c == 0: ret Token.End;
@@ -90,15 +90,15 @@ type Lexer = *(&[]u8 source, u64 length, mut u64 at = 0) !{
 # the variables, and the line being run; for each statement of the line it gives its outcome
 type Calculator = *(mut [26]i64 variables, mut Lexer lexer, mut Token token = Token.End) !{
     fun feed = (&[]u8 line) {
-        self.lexer = Lexer(line, line.$len);
+        self.lexer = Lexer(line, lenof line);
         self.advance();
     }
 
     fun advance = () { self.token = self.lexer.next(); }
 
-    $has_next = () -> bool: ret self.token != Token.End;
+    has_next = () -> bool: ret self.token != Token.End;
 
-    $next = () -> Outcome {
+    next = () -> Outcome {
         mut Outcome outcome = self.statement();
         if self.token != Token.Split and self.token != Token.End: outcome = Fault.Syntax;
         match outcome {
@@ -204,7 +204,7 @@ fun read_line = (*[256]u8 line) -> bool {
     ret true;
 }
 
-$main = () {
+main = () {
     mut Calculator calculator;
     mut [256]u8 line;
     while read_line(line.&) {

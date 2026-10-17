@@ -9,4 +9,4 @@ fun f = () {
     (u16) -> u16 wide = single; #! type_mismatch
 }
 
-$main = () {}
+main = () {}

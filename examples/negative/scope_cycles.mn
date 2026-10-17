@@ -21,4 +21,4 @@ type AB = *(BA b); #! recursive_by_value_type
 type BA = *(AB a);
 type AR = *([2]AR kids); #! recursive_by_value_type
 variant L = +(Cons(u32 h, L t), Nil); #! recursive_by_value_type
-$main = () {}
+main = () {}

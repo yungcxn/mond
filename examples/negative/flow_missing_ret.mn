@@ -20,4 +20,4 @@ fun unit_explicit = () -> () { u8 x = 1; }
 fun unit_ret = () -> () { ret; }
 fun main_like = () -> i32 { if true { ret 1; } } #! missing_ret
 
-$main = () {}
+main = () {}

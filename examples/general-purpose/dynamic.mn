@@ -3,7 +3,7 @@ fun min3 = (u32 a, u32 b, u32 c) -> u32: ret if a < b: (if a < c: a else: c) els
 
 fun knapsack = (&[]u32 w, &[]u32 v, u32 cap) -> u32 {
     mut [64]u32 best;
-    for i in 0..<w.$len {
+    for i in 0..<lenof w {
         mut u32 c = cap;
         while c >= w.*[i] {
             best[c] = max(best[c], best[c - w.*[i]] + v.*[i]);
@@ -16,25 +16,25 @@ fun knapsack = (&[]u32 w, &[]u32 v, u32 cap) -> u32 {
 
 fun lcs = (&[]u8 a, &[]u8 b) -> u32 {
     mut [16][16]u32 t;
-    for i in 1..=a.$len {
-        for j in 1..=b.$len {
+    for i in 1..=lenof a {
+        for j in 1..=lenof b {
             t[i][j] = if a.*[i - 1] == b.*[j - 1]: t[i - 1][j - 1] + 1 else: max(t[i - 1][j], t[i][j - 1]);
         }
     }
-    ret t[a.$len][b.$len];
+    ret t[lenof a][lenof b];
 }
 
 fun edit_distance = (&[]u8 a, &[]u8 b) -> u32 {
     mut [16][16]u32 t;
-    for i in 0..=a.$len: t[i][0] = i as u32;
-    for j in 0..=b.$len: t[0][j] = j as u32;
-    for i in 1..=a.$len {
-        for j in 1..=b.$len {
+    for i in 0..=lenof a: t[i][0] = i as u32;
+    for j in 0..=lenof b: t[0][j] = j as u32;
+    for i in 1..=lenof a {
+        for j in 1..=lenof b {
             u32 cost = if a.*[i - 1] == b.*[j - 1]: 0 else: 1;
             t[i][j] = min3(t[i - 1][j] + 1, t[i][j - 1] + 1, t[i - 1][j - 1] + cost);
         }
     }
-    ret t[a.$len][b.$len];
+    ret t[lenof a][lenof b];
 }
 
 fun coin_ways = (&[]u32 coins, u32 amount) -> u32 {
@@ -56,7 +56,7 @@ fun coin_min = (&[]u32 coins, u32 amount) -> i32 {
 fun lis = (&[]i32 xs) -> u32 {
     mut [32]u32 len;
     mut u32 best = 0;
-    for i in 0..<xs.$len {
+    for i in 0..<lenof xs {
         len[i] = 1;
         for j in 0..<i: if xs.*[j] < xs.*[i] and len[j] + 1 > len[i]: len[i] = len[j] + 1;
         best = max(best, len[i]);
@@ -67,7 +67,7 @@ fun lis = (&[]i32 xs) -> u32 {
 fun max_subarray = (&[]i32 xs) -> i32 {
     mut i32 best = xs.*[0];
     mut i32 cur = xs.*[0];
-    for i in 1..<xs.$len {
+    for i in 1..<lenof xs {
         cur = if cur > 0: cur + xs.*[i] else: xs.*[i];
         if cur > best: best = cur;
     }
@@ -113,10 +113,10 @@ fun grid_min_path = (&[3][3]u32 g) -> u32 {
 
 fun palindromic_substrings = (&[]u8 s) -> u32 {
     mut u32 n = 0;
-    for center in 0..<s.$len * 2 - 1 {
+    for center in 0..<lenof s * 2 - 1 {
         mut i64 l = (center / 2) as i64;
         mut i64 r = l + (center % 2) as i64;
-        while l >= 0 and r < s.$len as i64 and s.*[l as u64] == s.*[r as u64] {
+        while l >= 0 and r < lenof s as i64 and s.*[l as u64] == s.*[r as u64] {
             n += 1;
             l -= 1;
             r += 1;
@@ -148,4 +148,4 @@ stc u32 GM = grid_min_path([[1, 3, 1], [1, 5, 1], [4, 2, 1]].&); #= GM 7
 stc u32 PS = palindromic_substrings("aaa".&); #= PS 6
 stc u32 PS1 = palindromic_substrings("abcba".&); #= PS1 7
 
-$main = () {}
+main = () {}

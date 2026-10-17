@@ -35,4 +35,4 @@ fun cases = () {
     i32 c = arr[2];
 }
 
-$main = () {}
+main = () {}

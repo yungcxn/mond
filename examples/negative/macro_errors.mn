@@ -9,10 +9,10 @@ stcfun only_names = (ast.Identifier x) -> ast: ret x;
 stc u32 not_name = <only_names(quote: 1 + 2)>; #! type_mismatch
 stc ast too_few = ast.BinaryAdd(quote: 1); #! wrong_arity
 stc ast no_case = ast.NoSuchKind; #! unknown_member
-stc ast no_name = $fresh(); #! wrong_arity
+stc ast no_name = fresh (); #! wrong_arity
 
 # views a tree has not, values that are no code
-stcfun bad_view = (ast e) -> ast: ret e.$nope; #! unknown_member
+stcfun bad_view = (ast e) -> ast: ret e.nope; #! unknown_member
 stc ast viewed = bad_view(quote: x);
 type Pair = *(u32 a, u32 b);
 stc Pair lifted = <quote: @(Pair(a = 1, b = 2))>; #! not_static
@@ -37,7 +37,7 @@ stc u32 used = use_ref();
 stc ast unknown = refl nowhere; #! undefined_name
 <include "missing.mn">; #! include_failed
 
-$main = () {}
+main = () {}
 
 # a tree made with `@` outside a quote is stray where it lands
 stc u32 a = 1;

@@ -33,7 +33,7 @@ stc []u16 UNLEN = [3, 4, 5]; #: UNLEN [3]u16
 stc [2][2]u8 GRID = [[1, 2], [3, 4]]; #= GRID [[1, 2], [3, 4]]
 stc []u8 NONE = []; #: NONE [0]u8
 
-$main = () {
+main = () {
     mut i32 x, y = 1, 2;
     x, y = 3, 4;
     z = x; #: z i32

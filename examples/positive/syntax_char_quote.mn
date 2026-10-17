@@ -3,6 +3,6 @@ stc u8 QUOTE = '\''; #= QUOTE 39
 stc []u8 QS = "\'"; #: QS [1]u8
 stc u8 Q1 = QS[0]; #= Q1 39
 
-$main = () {
+main = () {
     u8 q = '\'';
 }

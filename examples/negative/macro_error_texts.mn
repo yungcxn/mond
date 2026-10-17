@@ -1,9 +1,9 @@
-# `$asterr` reports any text, one a macro changed too
+# `crash` at a tree reports any text, one a macro changed too
 stcfun picky = (ast e) -> ast {
     mut []u8 text = "abc";
     text[0] = 'x';
-    ret $asterr(e, text);
+    ret crash (e, text);
 }
-fun reported = () -> u32: ret <picky(quote: 1)>; #! asterr
+fun reported = () -> u32: ret <picky(quote: 1)>; #! crash
 
-$main = () {}
+main = () {}

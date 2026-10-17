@@ -186,7 +186,7 @@ const capabilities = .{
         .referencesProvider = true,
         .documentSymbolProvider = true,
         .hoverProvider = true,
-        .completionProvider = .{ .triggerCharacters = &[_][]const u8{ ".", "$" } },
+        .completionProvider = .{ .triggerCharacters = &[_][]const u8{ ".", "_" } },
     },
     .serverInfo = .{ .name = "mond-lsp" },
 };

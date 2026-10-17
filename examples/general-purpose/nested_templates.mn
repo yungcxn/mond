@@ -1,4 +1,4 @@
-variant Opt = (type T): ++(Some(T), None) tagof u8;
+variant Opt = (type T): ++(Some(T), None) tagtype u8;
 
 type Pair = (type A, type B): *(A first, B second);
 
@@ -67,7 +67,7 @@ stc u64 SQ = sizeof Pair(u8, Pair(u16, u32)); #= SQ 12
 stc u64 SO = sizeof Opt(Opt(u8)); #= SO 3
 stc u64 SS = sizeof Stack(Stack(u8, 2), 3); #= SS 28
 
-$main = () {
+main = () {
     Opt(Opt(u8)) o = Opt(Opt(u8)).Some(Opt(u8).None);
     f = flatten(o); #: f ++(Some, None)
     d = depth(o); #: d u32

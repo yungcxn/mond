@@ -20,4 +20,4 @@ fun run_swap = (i32 x, i32 y) -> i32 {
 }
 stc i32 S = swapped(1, 2); #= S 21
 stc i32 R = rotated(); #= R 231
-$main = () { i32 r = run_swap(1, 2); }
+main = () { i32 r = run_swap(1, 2); }

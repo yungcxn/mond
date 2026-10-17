@@ -9,4 +9,4 @@ stc u32 L = lone(0); #! no_matching_overload
 stc u32 S = solo(0); #! no_matching_overload
 stc u32 L1 = lone(1); #= L1 1
 stc u32 F = fine(0) * 10 + fine(5); #= F 21
-$main = () {}
+main = () {}

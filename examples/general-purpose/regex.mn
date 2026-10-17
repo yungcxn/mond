@@ -103,7 +103,7 @@ type Re = *(&[]u8 re, u64 re_length, &[]u8 t, u64 t_length) !{
 }
 
 fun find = (&[]u8 re, &[]u8 t) -> [2]i32 {
-    mut Re m = Re(re = re, re_length = re.$len, t = t, t_length = t.$len);
+    mut Re m = Re(re = re, re_length = lenof re, t = t, t_length = lenof t);
     ret m.span();
 }
 
@@ -113,13 +113,13 @@ fun test = (&[]u8 re, &[]u8 t) -> bool {
 }
 
 fun count = (&[]u8 re, &[]u8 t) -> u32 {
-    mut Re m = Re(re = re, re_length = re.$len, t = t, t_length = t.$len);
+    mut Re m = Re(re = re, re_length = lenof re, t = t, t_length = lenof t);
     if !m.valid(): ret 0;
-    bool anchored = re.$len > 0 and re.*[0] == '^';
+    bool anchored = lenof re > 0 and re.*[0] == '^';
     u32 first = if anchored: 1 else: 0;
     mut u32 n = 0;
     mut u32 s = 0;
-    while (s as u64) <= t.$len {
+    while (s as u64) <= lenof t {
         if anchored and s > 0: brk;
         i32 r = m.here(first, s);
         if r < 0 {
@@ -181,4 +181,4 @@ stc u32 R46 = count("ab*".&, "abbabab".&); #= R46 3
 stc u32 R47 = count("[".&, "a".&); #= R47 0
 stc bool R48 = test("a+".&, "caab".&); #= R48 true
 
-$main = () {}
+main = () {}

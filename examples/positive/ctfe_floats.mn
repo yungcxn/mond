@@ -47,4 +47,4 @@ stc bool M3 = 3 > 2.5; #= M3 true
 stc M4 = 1 + 0.5; #: M4 f32
 stc M5 = 0.5 + 1; #: M5 f32
 
-$main = () {}
+main = () {}

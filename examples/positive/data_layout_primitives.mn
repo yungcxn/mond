@@ -22,4 +22,4 @@ stc u64 SBOOLS = sizeof [3]bool; #= SBOOLS 3
 stc u64 SNEST = sizeof [2][2][2]u32; #= SNEST 32
 stc u64 SPTRS = sizeof [3]&u8; #= SPTRS 24
 
-$main = () {}
+main = () {}

@@ -12,6 +12,7 @@ pub const LexingError = error{
     CharNothingAfterEscape,
     StringScanEOF,
     InvalidPunctuator,
+    ReservedName,
     EmptyFile,
 };
 
@@ -28,6 +29,7 @@ pub const Token = struct {
         kw_do,
         kw_self,
         kw_tagof,
+        kw_tagtype,
         kw_and,
         kw_xor,
         kw_or,
@@ -39,6 +41,7 @@ pub const Token = struct {
         kw_typeof,
         kw_sizeof,
         kw_alignof,
+        kw_lenof,
         kw_where,
         kw_pub,
         kw_inlfun,
@@ -85,6 +88,10 @@ pub const Token = struct {
         kw_refl,
         kw_include,
         kw_includeraw,
+        kw_crash,
+        kw_asm,
+        kw_syscall,
+        kw_fresh,
 
         // punctuators, must be of form @"pct_..." or for unclear: @"xpct_..."
         @"pct_(",
@@ -375,6 +382,12 @@ inline fn gen_next_tok(self: *@This()) !bool {
                     'a'...'z', 'A'...'Z', '_', '0'...'9' => continue,
                     else => break,
                 };
+                const name = self.src_bytes[cursor0..self.cursor];
+                const is_positional = name.len > 1 and
+                    std.mem.indexOfNone(u8, name[1..], "0123456789") == null;
+                if (name[0] == '$' and !is_positional and !std.mem.eql(u8, name, "$it")) {
+                    return LexingError.ReservedName;
+                }
 
                 if (Token.Kind.kw_from_str(self.src_bytes[cursor0..self.cursor])) |found_kw| {
                     self.push_tok(found_kw, cursor0);

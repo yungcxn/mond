@@ -21,4 +21,4 @@ stc type K = stcmatch u32 { u8 => u16, u16 => u32 } #! non_exhaustive_match
 stc u32 L = stcmatch 2 { 1 => 1, 2 => undefined_name } #! undefined_name
 stc bool M = stcmatch 1 { 1 => 5, _ => true } #! type_mismatch
 
-$main = () {}
+main = () {}

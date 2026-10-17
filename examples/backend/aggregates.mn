@@ -30,7 +30,7 @@ fun scribble = (i64 n) -> i64 {
 fun packed_sum = (Packed p) -> u64: ret p.a as u64 + p.b + p.c as u64;
 fun write_through = (*Pt p, Pt value) { p.* = value; }
 
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     # a record assigned from a function of itself, through sret
     mut Pt p = Pt(h(1), h(2));

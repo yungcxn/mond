@@ -14,7 +14,7 @@ stc f32 RT = roundtrip(2.5); #= RT 2.5
 fun raw = (f32 x) -> u64: ret x asbits u64; #: raw (f32) -> u64
 fun same = (f32 x) -> i32: ret x asbits i32;
 
-$main = () {
+main = () {
     u64 r = raw(1.0);
     i32 s = same(1.0);
 }

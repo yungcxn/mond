@@ -4,8 +4,8 @@ fun hidden = () -> u32 {
     ret secret; #! undefined_name
 }
 
-# `$asterr` reports at the code it is given
-stcfun picky = (ast e) -> ast: ret $asterr(e, "not this");
-fun reported = () -> u32: ret <picky(quote: 1)>; #! asterr
+# `crash` at a tree reports at the code it is given
+stcfun picky = (ast e) -> ast: ret crash (e, "not this");
+fun reported = () -> u32: ret <picky(quote: 1)>; #! crash
 
-$main = () {}
+main = () {}

@@ -22,4 +22,4 @@ stcfun mix = (u8 x) -> u32 {
 }
 stc u32 MX = mix(5); #= MX 311
 
-$main = () { u32 r = mix(1); }
+main = () { u32 r = mix(1); }

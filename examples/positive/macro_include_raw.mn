@@ -7,7 +7,7 @@ stc u32 hidden = <hidden_macro()>; #= hidden 0
 stc u32 tw = <twice_of(quote: 4)>; #= tw 8
 
 # the same tree as `include`, only its names differ once spliced
-stc u64 decls = (includeraw "../lib/macro_kit.mn").$decls.$len; #= decls 8
+stc u64 decls = lenof (includeraw "../lib/macro_kit.mn").decls; #= decls 8
 stc bool raw = (quote: includeraw "f.mn") oftype ast.IncludeRaw; #= raw true
 
-$main = () {}
+main = () {}

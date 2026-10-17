@@ -1,9 +1,9 @@
-# a `$main` with a result may fall off its end, which returns 0
+# a `main` with a result may fall off its end, which returns 0
 <include "lib/out.mn">;
 #? args x
 #? exit 0
 
-$main = (u32 argc, &&u8 argv) -> u8 {
+main = (u32 argc, &&u8 argv) -> u8 {
     if argc > 5: ret 9;
     puts("fell off");                        #> fell off
 }

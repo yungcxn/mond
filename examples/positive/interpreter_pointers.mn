@@ -41,10 +41,10 @@ stcfun traits = () -> u32 {
     ret measure(a) + measure(b);
 }
 
-# anything with $has_next and $next is iterable
+# anything with has_next and next is iterable
 type Range = *(mut u32 at, u32 end) !{
-    $has_next = () -> bool: ret self.at < self.end;
-    $next = () -> u32 {
+    has_next = () -> bool: ret self.at < self.end;
+    next = () -> u32 {
         self.at += 1;
         ret self.at - 1;
     }
@@ -66,7 +66,7 @@ stcfun iterate_once = () -> u32 {
     ret c * 100 + s;
 }
 
-type Log = *(mut u32 v) !{ $deinit = () { self.v = 99; } }
+type Log = *(mut u32 v) !{ deinit = () { self.v = 99; } }
 
 stcfun defers = () -> u32 {
     mut u32 out = 1;
@@ -112,7 +112,7 @@ stcfun narrowing = () -> u32 {
     *u32 p = b[0].&;
     (p + 1).* = 7;
     [2]u32 w = (p + 1) as [2]u32;
-    ret mid[0] + (mid.$len as u32) * 1000 + head[1] * 10000 + b[2] * 1000000 + w[0] * 10000000 + b[1] * 100000000;
+    ret mid[0] + (lenof mid as u32) * 1000 + head[1] * 10000 + b[2] * 1000000 + w[0] * 10000000 + b[1] * 100000000;
 }
 
 # a parameter narrows like a local
@@ -189,7 +189,7 @@ stc u32 ON = once(); #= ON 206
 stc u32 SP = stepping(); #= SP 3
 stc u32 AL = aliased(); #= AL 8
 
-$main = () {
+main = () {
     mut [4]u32 x = [1, 2, 3, 4];
     u32 r = at_runtime(x.&);
 }

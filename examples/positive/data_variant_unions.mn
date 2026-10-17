@@ -9,9 +9,9 @@ stc u64 SAB = sizeof AB; #= SAB 1
 stc u64 SABC = sizeof ABC; #= SABC 8
 stc u64 SCA = sizeof CA; #= SCA 8
 
-stcfun tag_ab = (AB v) -> u8: ret v.$tag;
-stcfun tag_abc = (ABC v) -> u8: ret v.$tag;
-stcfun tag_ca = (CA v) -> u8: ret v.$tag;
+stcfun tag_ab = (AB v) -> u8: ret tagof v;
+stcfun tag_abc = (ABC v) -> u8: ret tagof v;
+stcfun tag_ca = (CA v) -> u8: ret tagof v;
 
 stc u8 T1 = tag_ab(A.X); #= T1 5
 stc u8 T2 = tag_ab(A.Y); #= T2 6
@@ -29,8 +29,8 @@ variant P4 = +(d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, 
 variant P5 = +(e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12, e13, e14, e15, e16, e17, e18, e19, e20, e21, e22, e23, e24, e25, e26, e27, e28, e29, e30, e31, e32, e33, e34, e35, e36, e37, e38, e39, e40, e41, e42, e43, e44, e45, e46, e47, e48, e49, e50, e51, e52, e53, e54, e55, e56, e57, e58, e59, e60, e61, e62, e63);
 variant Huge = P1 || P2 || P3 || P4 || P5;
 stc u64 SH = sizeof Huge; #= SH 2
-stcfun tag_huge = (Huge h) -> u16: ret h.$tag;
+stcfun tag_huge = (Huge h) -> u16: ret tagof h;
 stc u16 TH = tag_huge(P5.e63); #= TH 319
 stc u16 TH2 = tag_huge(P1.a0); #= TH2 0
 
-$main = () {}
+main = () {}

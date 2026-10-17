@@ -13,7 +13,7 @@ fun dirty = (*Padded p) {
 fun same = (Padded x, Padded y) -> bool: ret x == y;
 fun same_shape = (Shape x, Shape y) -> bool: ret x == y;
 fun same_rows = ([2]Padded x, [2]Padded y) -> bool: ret x == y;
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     mut Padded r;
     dirty(r.&);

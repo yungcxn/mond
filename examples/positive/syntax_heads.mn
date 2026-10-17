@@ -22,12 +22,12 @@ stc i32 H = heads(5); #= H 11121014
 
 # outside heads a group followed by `:` or `{` starts a function
 fun lam = (i32 n) -> i32 {
-    f = (i32 a): a * n;
-    g = (i32 a) { ret a + n; };
+    fun f = (i32 a): a * n;
+    fun g = (i32 a) { ret a + n; };
     ret f(2) + g(3);
 }
 
-$main = () {
+main = () {
     i32 v = lam(4);
     if (v > 0) {}
     while (false) {}

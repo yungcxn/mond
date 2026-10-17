@@ -33,7 +33,7 @@ fun printf = (&u8 format, f64 number) -> i32;
 
 fun triple = (i64 x) -> i64: ret x * 3;
 
-$main = () {
+main = () {
     line_i64(clib_negate8(5) as i64);                         #> -5
     line_u64(clib_double16(300) as u64);                      #> 600
     line_u64(if clib_is_even(42): 1 else: 0);                 #> 1

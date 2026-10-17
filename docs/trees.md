@@ -13,7 +13,7 @@ Most metaprogramming doesn't need this table: quotes, quote patterns and [views]
 | `x = v` | `Assignment(assignee, assigned)` |
 | `T x = v` | `AssignmentTyped(def_var: VariableDefinition(type, identifier), assigned)` |
 | `fun f = (..) -> R: b` | `AssignmentTyped` whose type is `TypeFunction` and whose value is a `FunctionDefinition` |
-| `mut` / `stc` / `pub` .. | a `Modifier*` around the declaration (views like `$name` see through it) |
+| `mut` / `stc` / `pub` .. | a `Modifier*` around the declaration (views like `name` see through it) |
 | `*(fields)` | `TypeDefinition`; its fields are the children of its `param_tuple` |
 | `if c: a else: b` | `IfElse(if_then: IfThen(cond, then))` with the else part as the second child |
 
@@ -27,9 +27,9 @@ stcfun kind_of = (ast e) -> u32: ret match e {
 stc u32 K1 = kind_of(quote: x = 1);          #= K1 1
 stc u32 K2 = kind_of(quote: u32 x = 1);      #= K2 2
 stc u32 K3 = kind_of(quote: mut u32 x = 1);  #= K3 3
-stcfun rhs_text = (ast e) -> []u8: ret e.rhs.$src;
+stcfun rhs_text = (ast e) -> []u8: ret e.rhs.src;
 stc []u8 R = rhs_text(quote: a + b * c);     #= R "b * c"
-stcfun cond_text = (ast e) -> []u8: ret match e { ast.IfElse(ast.IfThen(c, _), _) => c.$src, _ => "" };
+stcfun cond_text = (ast e) -> []u8: ret match e { ast.IfElse(ast.IfThen(c, _), _) => c.src, _ => "" };
 stc []u8 C = cond_text(quote: if ready: 1 else: 2);   #= C "ready"
 stcfun is_fun = (ast e) -> bool: ret match e {
     ast.AssignmentTyped(ast.VariableDefinition(ast.TypeFunction, _), ast.FunctionDefinition) => true,
@@ -62,6 +62,8 @@ The last column is the name `mond -b` prints in its tree dump.
 | `TypeOf` | `typeof e` | subnode | typeof |
 | `SizeOf` | `sizeof e` | subnode | sizeof |
 | `AlignOf` | `alignof e` | subnode | alignof |
+| `LengthOf` | `lenof e` | subnode | lenof |
+| `TagOf` | `tagof e` | subnode | tagof |
 | `TypeArray` | `[N]T` | length, type | type_array |
 | `TypeArrayUnlengthed` | `[]T` | type | type_array_unlengthed |
 | `NegateNumerical` | `-e` | subnode | neg_num |
@@ -127,7 +129,7 @@ The last column is the name `mond -b` prints in its tree dump.
 | `TypeDefinitionWithTrait` | `*(..) implof T !{..}` | def_type, def_trait | def_type_implof |
 | `VariantDefinition` | `+(cases)` | param_tuple | def_variant |
 | `VariantDefinitionUnionsized` | `++(cases)` | param_tuple | def_variant_unionsized |
-| `VariantDefinitionWithTag` | `.. tagof T` | def_variant, tagof | def_variant_tagof |
+| `VariantDefinitionWithTag` | `.. tagtype T` | def_variant, tagtype | def_variant_tagtype |
 | `VariantDefinitionWithAssertedSize` | `.. assertsize N` | def_variant, assertsize | def_variant_assertsize |
 | `VariantDefinitionWithTrait` | `+(..) implof T !{..}` | def_variant, def_trait | def_variant_implof |
 | `TraitDefinition` | `!{ members }` | body | def_trait |
@@ -148,6 +150,7 @@ The last column is the name `mond -b` prints in its tree dump.
 | `UnifyVariants` | `A || B` | left_type, right_type | unify_variants |
 | `With` | `e with (f = v)` | value, fun_call_param_tuple | with |
 | `FunctionCall` | `f(args)` | callable, fun_param_tuple | fun_call |
+| `BuiltinCall` | `crash x`, `asm x`, `syscall (..)`, `fresh x` | callable, fun_param_tuple | builtin_call |
 | `FunctionCallParameterTuple` | argument list | list | partial__fun_call_param_tuple |
 | `FunctionCallAssignedParameter` | `name = v` (argument) | identifier, value | partial__fun_call_assigned_param |
 | `ArrayIndexing` | `a[i]` | indexable, index | array_index |

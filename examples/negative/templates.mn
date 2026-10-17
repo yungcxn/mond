@@ -29,7 +29,7 @@ stc u64 SB = size(Box); #! type_mismatch
 stc u64 S5 = size(5); #! type_mismatch
 stc u64 VU = vsize(u8); #! type_mismatch
 
-$main = () {
+main = () {
     Box(i32) a = Box(i32)(value = 1, count = 2);
     u32 t = count_of(a);
     u32 m = mixed(u8, a);

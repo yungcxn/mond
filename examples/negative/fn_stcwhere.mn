@@ -29,4 +29,4 @@ fun f = (u32 n) {
 
 stc u32 S5 = nonzero(5); #= S5 20
 
-$main = () {}
+main = () {}

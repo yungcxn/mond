@@ -2,4 +2,4 @@
 stc u32 kit_secret = 1;
 <includeraw "../lib/macro_kit.mn">; #! duplicate_declaration
 
-$main = () {}
+main = () {}

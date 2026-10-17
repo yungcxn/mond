@@ -1,3 +1,4 @@
+const std = @import("std");
 const Parser = @import("../Parser.zig");
 const Lexer = @import("../Lexer.zig");
 const ParseTree = @import("../ParseTree.zig");
@@ -529,11 +530,11 @@ pub fn variant(p: *Parser) anyerror!NodeId {
     var node = p.tree.push_node(parent);
     p.tree.set_children(node, Node.LayoutStruct(.def_variant){ .param_tuple = param_tuple });
 
-    if (try p.peek_eq_tok(.kw_tagof)) {
+    if (try p.peek_eq_tok(.kw_tagtype)) {
         p.tok_cursor += 1;
-        node = p.tree.push_node_with(.def_variant_tagof, .{
+        node = p.tree.push_node_with(.def_variant_tagtype, .{
             .def_variant = node,
-            .tagof = try any(p, .forbid_assign, 0),
+            .tagtype = try any(p, .forbid_assign, 0),
         });
     }
 
@@ -611,6 +612,29 @@ pub fn fun_call(p: *Parser, lhs: NodeId) anyerror!NodeId {
     });
 }
 
+pub fn builtin_call(p: *Parser) anyerror!NodeId {
+    const callee = p.tree.push_data_node(.identifier, p.tok_cursor - 1);
+    if (try p.peek_eq_tok(.@"pct_(")) {
+        p.tok_cursor += 1;
+        const outer = .{ p.head, p.angle };
+        p.head = false;
+        p.angle = false;
+        defer p.head, p.angle = outer;
+        return p.tree.push_node_with(.builtin_call, .{
+            .callable = callee,
+            .fun_param_tuple = try partial.fun_call_param_tuple(p),
+        });
+    }
+    const arguments = p.tree.push_node(.partial__fun_call_param_tuple);
+    const mark = p.scratch.len;
+    p.scratch.push(try any(p, .forbid_assign, lookahead.prec_unary + 1));
+    p.close(arguments, mark);
+    return p.tree.push_node_with(.builtin_call, .{
+        .callable = callee,
+        .fun_param_tuple = arguments,
+    });
+}
+
 pub fn array_index(p: *Parser, lhs: NodeId) anyerror!NodeId {
     const index = try any(p, .forbid_assign, 0);
     try p.eat_assert_tok(.@"pct_]");
@@ -622,7 +646,10 @@ pub fn member(p: *Parser, lhs: NodeId) anyerror!NodeId {
         .identifier => try identifier(p),
         .kw_self => p.tree.push_node(.identifier_self),
         .@"xpct_@" => try unquote(p),
-        else => return error.IllegalMemberName,
+        else => |kind| if (std.mem.startsWith(u8, @tagName(kind), "kw_"))
+            try identifier(p)
+        else
+            return error.IllegalMemberName,
     };
     return p.tree.push_node_with(.member, .{ .parent = lhs, .member = name });
 }
@@ -729,6 +756,11 @@ pub fn selftag_unwrap(p: *Parser, lhs: NodeId) anyerror!NodeId {
     });
 }
 
+pub fn deinit(p: *Parser) anyerror!NodeId {
+    if (try p.peek_eq_tok(.@"xpct_=")) return identifier(p);
+    return p.tree.push_node_with(.deinit, .{ .subnode = try any(p, .forbid_assign, 0) });
+}
+
 pub fn defer_(p: *Parser) anyerror!NodeId {
     return p.tree.push_node_with(.@"defer", .{ .defered = try any(p, .allow_assign, 0) });
 }
@@ -780,6 +812,15 @@ pub fn source(comptime kind: Node.Kind) fn (parser: *Parser) anyerror!NodeId {
             return templ_prefix(kind, lookahead.prec_unary + 1)(p);
         }
     }.eval;
+}
+
+pub fn refl(p: *Parser) anyerror!NodeId {
+    const named = lookahead.pre[@intFromEnum(try p.peek_tok())] != null;
+    const reflected = if (named)
+        try any(p, .forbid_assign, lookahead.prec_unary + 1)
+    else
+        p.tree.push_node(.none);
+    return p.tree.push_node_with(.refl, .{ .subnode = reflected });
 }
 
 // `quote: <expr or statement>` and `quote { .. }`: the code itself as a value. outside of a pattern `quote: <pattern> => <body>` is an arm
@@ -893,7 +934,7 @@ pub fn ee_assign(p: *Parser, early_lhs: NodeId) anyerror!NodeId {
     }
 
     // `early_lhs` was not the assignee but its type, the assignee follows
-    try p.eat_assert_tok(.identifier);
+    if (try p.peek_eq_tok(.kw_deinit)) p.tok_cursor += 1 else try p.eat_assert_tok(.identifier);
     var named = try identifier(p);
     if (try p.peek_eq_tok(.@"pct_,")) {
         // cursor should be right at first comma

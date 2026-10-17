@@ -2,9 +2,9 @@ fun apply = ((i32) -> i32 f, i32 x) -> i32: ret f(x);
 stcfun compose = ((i32) -> i32 f, (i32) -> i32 g): (i32 x): f(g(x));
 stcfun counter = (i32 start): (i32 step): start + step;
 
-$main = () {
+main = () {
     stc i32 base = 10;
-    add_base = (i32 x): x + base; #: add_base (i32) -> i32
+    fun add_base = (i32 x): x + base; #: add_base (i32) -> i32
     r = apply(add_base, 5); #: r i32
     both = compose((i32 x): x * 2, add_base); #: both (i32) -> i32
     v = both(1); #: v i32

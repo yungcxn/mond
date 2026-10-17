@@ -5,4 +5,4 @@ fun okay = (u32 n): ret if n == 0: 1 else: okay(n - 1) + 1;
 fun okay_match = (u32 n): ret match n { 0 => 1, _ => okay_match(n - 1) * 2 };
 fun bad_match = (u32 n): ret match n { 0 => true, 1 => false, _ => bad_match(n - 1) + 1 }; #! type_mismatch type_mismatch
 stc u32 OK = okay(4) * 100 + okay_match(3); #= OK 508
-$main = () {}
+main = () {}

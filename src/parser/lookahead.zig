@@ -12,6 +12,12 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_typeof)] = &eval.templ_prefix(.typeof, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.kw_sizeof)] = &eval.templ_prefix(.sizeof, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.kw_alignof)] = &eval.templ_prefix(.alignof, prec_unary + 1);
+    t[@intFromEnum(Lexer.Token.Kind.kw_lenof)] = &eval.templ_prefix(.lenof, prec_unary + 1);
+    t[@intFromEnum(Lexer.Token.Kind.kw_tagof)] = &eval.templ_prefix(.tagof, prec_unary + 1);
+    t[@intFromEnum(Lexer.Token.Kind.kw_crash)] = &eval.builtin_call;
+    t[@intFromEnum(Lexer.Token.Kind.kw_asm)] = &eval.builtin_call;
+    t[@intFromEnum(Lexer.Token.Kind.kw_syscall)] = &eval.builtin_call;
+    t[@intFromEnum(Lexer.Token.Kind.kw_fresh)] = &eval.builtin_call;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = &eval.templ_prefix(.neg_num, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_!")] = &eval.templ_prefix(.neg_logic, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_++")] = &eval.templ_prefix(.inc_prefix, prec_unary + 1);
@@ -22,7 +28,7 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_true)] = &eval.true_;
     t[@intFromEnum(Lexer.Token.Kind.kw_false)] = &eval.false_;
     t[@intFromEnum(Lexer.Token.Kind.kw_do)] = &eval.templ_prefix(.do, 0);
-    t[@intFromEnum(Lexer.Token.Kind.kw_deinit)] = &eval.templ_prefix(.deinit, 0);
+    t[@intFromEnum(Lexer.Token.Kind.kw_deinit)] = &eval.deinit;
     t[@intFromEnum(Lexer.Token.Kind.kw_defer)] = &eval.defer_;
     t[@intFromEnum(Lexer.Token.Kind.kw_cont)] = &eval.cont;
     t[@intFromEnum(Lexer.Token.Kind.kw_brk)] = &eval.brk;
@@ -56,7 +62,7 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_quote)] = &eval.quote;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_@")] = &eval.unquote;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_<")] = &eval.splice;
-    t[@intFromEnum(Lexer.Token.Kind.kw_refl)] = &eval.source(.refl);
+    t[@intFromEnum(Lexer.Token.Kind.kw_refl)] = &eval.refl;
     t[@intFromEnum(Lexer.Token.Kind.kw_include)] = &eval.source(.include);
     t[@intFromEnum(Lexer.Token.Kind.kw_includeraw)] = &eval.source(.include_raw);
     t[@intFromEnum(Lexer.Token.Kind.kw_type)] = &eval.type_type;
@@ -89,6 +95,7 @@ pub const macro_syntax = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_refl)] = true;
     t[@intFromEnum(Lexer.Token.Kind.kw_include)] = true;
     t[@intFromEnum(Lexer.Token.Kind.kw_includeraw)] = true;
+    t[@intFromEnum(Lexer.Token.Kind.kw_fresh)] = true;
     break :blk t;
 };
 
@@ -120,7 +127,7 @@ pub inline fn assign_follows(p: *Parser) bool {
     var cur = p.tok_cursor;
     while (p.tokens.get_field(.tk, cur)) |tk| : (cur += 1) switch (tk) {
         .@"xpct_=" => return true,
-        .identifier => if (cur == p.tok_cursor) return true,
+        .identifier, .kw_deinit => if (cur == p.tok_cursor) return true,
         .@"pct_," => {},
         else => return false,
     };

@@ -23,7 +23,7 @@ fun pump = (*Counter c, u32 times) -> u32 {
     ret last;
 }
 
-$main = () {
+main = () {
     Num n = Num(v = 21);
     line_u64(via_ref(n.&) as u64);            #> 42
     line_u64(via_ref(Over(v = 1).&) as u64);  #> 77

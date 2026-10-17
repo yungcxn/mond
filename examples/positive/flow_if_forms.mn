@@ -42,4 +42,4 @@ fun typing = (bool c) {
     t4 = if c: [1, 2] else: [3, 4]; #: t4 [2]u32
     t5 = if c { 1; } else { 2; }; #: t5 u32
 }
-$main = () {}
+main = () {}

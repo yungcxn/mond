@@ -19,4 +19,4 @@ stc u64 VL = via_later(4); #= VL 5
 stc u32 LP0 = local_pair(4); #= LP0 10
 stc u32 LP1 = local_pair(5); #= LP1 20
 
-$main = (): ret ra(1) + local_pair(2); #: $main () -> u32
+main = (): ret ra(1) + local_pair(2); #: main () -> u32

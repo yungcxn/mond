@@ -22,4 +22,4 @@ fun runtime = (u32 n) {
     u32 k = 0 - 1;
 }
 
-$main = () {}
+main = () {}

@@ -41,4 +41,4 @@ fun label_miss = (B b) -> u8: ret match b { B.Z <- v => v } #! non_exhaustive_ma
 fun or_ok = (N n) -> u8: ret match n { N.Leaf(_) | N.Nil => 0, N.Pair(_, _) => 1 }
 fun payload_range = (B b) -> u8: ret match b { B.Z(0..=127) => 0, B.Z(128..) => 1, B.W => 2 }
 fun payload_gap = (B b) -> u8: ret match b { B.Z(0..=127) => 0, B.Z(129..) => 1, B.W => 2 } #! non_exhaustive_match
-$main = () {}
+main = () {}

@@ -22,4 +22,4 @@ fun f = () {
     D w = P(1, 2); #! type_mismatch
 }
 
-$main = () {}
+main = () {}

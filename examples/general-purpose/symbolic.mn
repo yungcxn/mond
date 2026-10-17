@@ -1,4 +1,4 @@
-variant E = +(Num(i64 v), X, Add(u32 a, u32 b), Mul(u32 a, u32 b), Pow(u32 a, u32 k)) tagof u8;
+variant E = +(Num(i64 v), X, Add(u32 a, u32 b), Mul(u32 a, u32 b), Pow(u32 a, u32 k)) tagtype u8;
 
 type Arena = *(mut &[]u8 src, mut u64 length, mut u32 pos, mut u32 bad, mut [160]E nodes, mut u32 n, mut [96]u8 out, mut u32 nout) !{
     fun mk = (E e) -> u32 {
@@ -220,10 +220,10 @@ type Arena = *(mut &[]u8 src, mut u64 length, mut u32 pos, mut u32 bad, mut [160
 fun pipe = (&[]u8 src, &[]u8 steps, &[]u8 want) -> bool {
     [160]E blank;
     [96]u8 ob;
-    mut Arena a = Arena(src = src, length = src.$len, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
+    mut Arena a = Arena(src = src, length = lenof src, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
     mut u32 root = a.parse();
-    if a.bad != 0 or a.token() as u64 != src.$len: ret false;
-    for i in 0..<steps.$len {
+    if a.bad != 0 or a.token() as u64 != lenof src: ret false;
+    for i in 0..<lenof steps {
         match steps.*[i] {
             's' => root = a.simplify(root),
             'd' => root = a.diff(root),
@@ -231,7 +231,7 @@ fun pipe = (&[]u8 src, &[]u8 steps, &[]u8 want) -> bool {
         }
     }
     a.print(root);
-    if a.nout as u64 != want.$len: ret false;
+    if a.nout as u64 != lenof want: ret false;
     for i in 0..<a.nout {
         if a.out[i] != want.*[i]: ret false;
     }
@@ -241,17 +241,17 @@ fun pipe = (&[]u8 src, &[]u8 steps, &[]u8 want) -> bool {
 fun parses = (&[]u8 src) -> bool {
     [160]E blank;
     [96]u8 ob;
-    mut Arena a = Arena(src = src, length = src.$len, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
+    mut Arena a = Arena(src = src, length = lenof src, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
     do a.parse();
-    ret a.bad == 0 and a.token() as u64 == src.$len;
+    ret a.bad == 0 and a.token() as u64 == lenof src;
 }
 
 fun value_at = (&[]u8 src, &[]u8 steps, i64 x) -> i64 {
     [160]E blank;
     [96]u8 ob;
-    mut Arena a = Arena(src = src, length = src.$len, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
+    mut Arena a = Arena(src = src, length = lenof src, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
     mut u32 root = a.parse();
-    for i in 0..<steps.$len {
+    for i in 0..<lenof steps {
         match steps.*[i] {
             's' => root = a.simplify(root),
             'd' => root = a.diff(root),
@@ -264,9 +264,9 @@ fun value_at = (&[]u8 src, &[]u8 steps, i64 x) -> i64 {
 fun size_after = (&[]u8 src, &[]u8 steps) -> u32 {
     [160]E blank;
     [96]u8 ob;
-    mut Arena a = Arena(src = src, length = src.$len, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
+    mut Arena a = Arena(src = src, length = lenof src, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
     mut u32 root = a.parse();
-    for i in 0..<steps.$len {
+    for i in 0..<lenof steps {
         match steps.*[i] {
             's' => root = a.simplify(root),
             'd' => root = a.diff(root),
@@ -279,10 +279,10 @@ fun size_after = (&[]u8 src, &[]u8 steps) -> u32 {
 fun same_simplified = (&[]u8 s1, &[]u8 s2) -> bool {
     [160]E blank;
     [96]u8 ob;
-    mut Arena a = Arena(src = s1, length = s1.$len, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
+    mut Arena a = Arena(src = s1, length = lenof s1, pos = 0, bad = 0, nodes = blank, n = 0, out = ob, nout = 0);
     u32 r1 = a.simplify(a.parse());
     a.src = s2;
-    a.length = s2.$len;
+    a.length = lenof s2;
     a.pos = 0;
     u32 r2 = a.simplify(a.parse());
     ret a.equal(r1, r2);
@@ -335,4 +335,4 @@ stc bool S44 = same_simplified("+ x 1".&, "+ 1 x".&); #= S44 false
 stc bool S45 = same_simplified("* 2 3".&, "+ 3 3".&); #= S45 true
 stc bool S46 = same_simplified("^ x 2".&, "* x x".&); #= S46 false
 
-$main = () {}
+main = () {}

@@ -92,13 +92,13 @@ stcfun array_in_array_swap = () -> u32 {
 
 stcfun loop_value_arrays = () -> u32 {
     grid = for i in 0..<3: [i * 3, i * 3 + 1, i * 3 + 2];
-    ret grid[0][0] * 100000 + grid[1][2] * 10000 + grid[2][1] * 1000 + grid[2][2] * 100 + grid.$len as u32;
+    ret grid[0][0] * 100000 + grid[1][2] * 10000 + grid[2][1] * 1000 + grid[2][2] * 100 + lenof grid as u32;
 }
 
 stcfun nested_loop_values = () -> u32 {
     grid = for i in 0..<3: for j in 0..<2: i * 2 + j;
     [2][3]u32 typed = for i in 0..<2: for j in 0..<3: i * 3 + j;
-    ret grid[2][1] * 10000 + grid[1][0] * 1000 + grid.$len as u32 * 100 + typed[1][2] * 10 + grid[0].$len as u32;
+    ret grid[2][1] * 10000 + grid[1][0] * 1000 + lenof grid as u32 * 100 + typed[1][2] * 10 + lenof grid[0] as u32;
 }
 
 stcfun element_alias = () -> u32 {
@@ -131,4 +131,4 @@ stc u32 NV = nested_loop_values(); #= NV 52352
 stc u32 EA = element_alias(); #= EA 5200
 stc u32 SC = struct_array_copy(); #= SC 1021200
 
-$main = () {}
+main = () {}

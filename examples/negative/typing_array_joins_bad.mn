@@ -7,4 +7,4 @@ fun f = (u8 x, i8 s) {
     [2]u8 b5 = [x, -1]; #! type_mismatch
 }
 
-$main = () {}
+main = () {}

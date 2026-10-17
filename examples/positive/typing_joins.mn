@@ -46,4 +46,4 @@ fun pick = (bool c) -> i32 {
 
 stc i32 P0 = pick(false); #= P0 23
 stc i32 P1 = pick(true); #= P1 -65
-$main = () {}
+main = () {}

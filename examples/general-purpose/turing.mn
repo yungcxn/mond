@@ -1,4 +1,4 @@
-variant Move = +(L, R, S) tagof u8;
+variant Move = +(L, R, S) tagtype u8;
 
 type Rule = *(u8 w, Move m, u8 next);
 
@@ -69,8 +69,8 @@ fun bb = (u32 n, u32 limit) -> [4]u32 {
 fun increment = (&[]u8 bits) -> [2]u64 {
     [3]Rule table = [Rule(2, Move.S, 255), Rule(2, Move.S, 255), Rule(1, Move.L, 0)];
     mut [64]u8 tape;
-    for i in 0..<bits.$len: tape[8 + i] = if bits.*[i] == '1': 2 else: 1;
-    mut Tm m = Tm(rules = table.&, nsym = 3, tape = tape, head = 7 + bits.$len as u32, state = 0, steps = 0, fault = 0);
+    for i in 0..<lenof bits: tape[8 + i] = if bits.*[i] == '1': 2 else: 1;
+    mut Tm m = Tm(rules = table.&, nsym = 3, tape = tape, head = 7 + lenof bits as u32, state = 0, steps = 0, fault = 0);
     do m.run(200);
     mut u64 v = 0;
     for c in m.tape {
@@ -90,7 +90,7 @@ fun palindrome = (&[]u8 s, u32 limit) -> [2]u32 {
         Rule(0, Move.S, 250), Rule(0, Move.S, 251), Rule(0, Move.L, 3),
     ];
     mut [64]u8 tape;
-    for i in 0..<s.$len: tape[8 + i] = if s.*[i] == 'a': 1 else: 2;
+    for i in 0..<lenof s: tape[8 + i] = if s.*[i] == 'a': 1 else: 2;
     mut Tm m = Tm(rules = table.&, nsym = 3, tape = tape, head = 8, state = 0, steps = 0, fault = 0);
     do m.run(limit);
     ret [m.state, m.steps];
@@ -166,4 +166,4 @@ stc u32 T44 = unary_add(10, 7); #= T44 17
 stc [3]u32 T45 = runaway(10); #= T45 [10, 0, 26]
 stc [3]u32 T46 = runaway(100); #= T46 [48, 2, 63]
 
-$main = () {}
+main = () {}

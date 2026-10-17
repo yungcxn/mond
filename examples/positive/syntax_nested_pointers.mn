@@ -20,4 +20,4 @@ stcfun deref2 = () -> u8 {
 stc u8 D = deref2(); #= D 18
 stc bool L = true && 2 > 1; #= L true
 
-$main = () {}
+main = () {}

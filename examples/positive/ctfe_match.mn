@@ -63,4 +63,4 @@ stc u32 RNG = stcmatch 42 { 0..<10 => 1, 10..<50 => 2, _ => 3 } #= RNG 2
 stc u32 ORP = stcmatch 'b' { 'a' | 'b' => 1, _ => 2 } #= ORP 1
 stc u32 BND = stcmatch 7 { 0 => 0, n => n * 3 } #= BND 21
 
-$main = () {}
+main = () {}

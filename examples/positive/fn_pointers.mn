@@ -54,7 +54,7 @@ stc i32 CH = chains(); #= CH 73
 stc i32 FI = fields(); #= FI 1105
 stc u32 CM = compare(); #= CM 1111
 
-$main = () {
+main = () {
     i32 imm = 1;
     mut i32 m = 2;
     ri = imm.&; #: ri &i32

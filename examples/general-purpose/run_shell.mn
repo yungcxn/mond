@@ -4,9 +4,9 @@ fun printf = (&u8 fmt, u32 a);
 fun printf = (&u8 fmt, &u8 a);
 fun printf = (&u8 fmt, &u8 a, i32 b);
 
-variant Cmd = +(Echo, Add, Mul, Neg, Count, Help, Quit, Unknown) tagof u8;
+variant Cmd = +(Echo, Add, Mul, Neg, Count, Help, Quit, Unknown) tagtype u8;
 
-variant Outcome = +(Done(i32 value), Failed(u32 code), Stop) tagof u8;
+variant Outcome = +(Done(i32 value), Failed(u32 code), Stop) tagtype u8;
 
 type Shell = *(mut i32 acc = 0, mut u32 ran = 0, mut u32 failed = 0) !{
     fun note = (Outcome o) {
@@ -80,7 +80,7 @@ fun run = (Cmd c, u32 argc, &&u8 argv) -> Outcome {
     };
 }
 
-$main = (u32 argc, &&u8 argv) -> i32 {
+main = (u32 argc, &&u8 argv) -> i32 {
     mut Shell sh;
     if argc < 2 {
         printf("usage: shell <command> args\n");

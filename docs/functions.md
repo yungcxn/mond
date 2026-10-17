@@ -8,9 +8,8 @@ fun twice = (u32 x): x * 2;                   # the result type is inferred
 fun sum3 = (u32 a, u32 b, u32 c) -> u32 {     # a block returns only through `ret`
     ret a + b + c;
 }
-inc = (u32 x): x + 1;                         # no keyword needed
 fun first = (u32, u32): $0;                   # unnamed parameters are $0, $1, ..
-stc u32 R = add(1, 2) + twice(3) + sum3(1, 1, 1) + inc(0) + first(5, 6);  #= R 18
+stc u32 R = add(1, 2) + twice(3) + sum3(1, 1, 1) + first(5, 6);  #= R 17
 ```
 
 - Without `->` the result is the join of all `ret` values. A `{}` body without a value-`ret` returns `()`.
@@ -82,7 +81,7 @@ type IntFn = (i32) -> i32;
 stcfun scaled = (i32 n): (i32 x) -> i32: ret x * n;   # a function per static n
 fun apply = (IntFn f, i32 v) -> i32: ret f(v);
 fun sum_scaled = (&[3]i32 xs, i32 k) -> i32 {
-    scale = (i32 x): x * k;     # a closure: uses k of the frame around it
+    fun scale = (i32 x): x * k; # a closure: uses k of the frame around it
     mut i32 s = 0;
     for x in xs: s += apply(scale, x);
     ret s;
@@ -95,7 +94,7 @@ stc i32 P = pick(1, 5);                                   #= P 15
 
 stcfun sees_later = () -> i32 {
     mut i32 x = 1;
-    get = (): x;          # mutable locals are captured by reference
+    fun get = (): x;      # mutable locals are captured by reference
     x = 5;
     ret get();
 }
@@ -107,7 +106,7 @@ fun make_mul = (i32 n) -> IntFn: ret (i32 x): x * n;   #! escaping_closure
 - A closure is a scoped function: its captures stay in the frame that made it. So it is called, passed down as an argument, or kept in locals of that frame, but it never outlives the frame: returning it, storing it in a global or through a pointer, or giving it to C is `escaping_closure`. The same holds for a record, array or variant holding one, and for a function-typed parameter, which may be one. A function made from values comes from a `stcfun` instead, per static argument; static function values go anywhere.
 - At run time a function value is a function and the environment holding its captures (`sizeof` 16). The environment lives in the frame and is never allocated; a closure called where it is made is inlined. A closure made in a loop has one environment per frame, made anew on each pass.
 - Inside a `stcfun` body, which only runs at compile time, closures may go anywhere. One that leaves the `stcfun` must use nothing but static values (its parameters).
-- `f = (..): ..` declares a local function from that point on. `fun f = ..` in a body is hoisted to its whole block.
+- `fun f = ..` in a body is hoisted to its whole block.
 - `brk` and `cont` don't cross a function boundary.
 - There's no UFCS: `x.f()` works only for methods.
 
@@ -153,7 +152,7 @@ A function declared without a body is external: `fun malloc = (u64 n) -> *u8;`.
 
 ## Length-generic functions
 
-A parameter `[]T`, `&[]T` or `*[]T` is realized (compiled as a copy of its own) once per argument length, and `.$len` is static inside. The element type must match exactly.
+A parameter `[]T`, `&[]T` or `*[]T` is realized (compiled as a copy of its own) once per argument length, and `lenof` is static inside. The element type must match exactly.
 
 ```mond
 fun total = (&[]u32 a) -> u32 {

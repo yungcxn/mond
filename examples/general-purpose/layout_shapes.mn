@@ -15,10 +15,10 @@ type Fixed = *(u8 a, u32 b) assertsize 8;
 type Tight = **(u8 a, u32 b) assertsize 5;
 type Grid = *([2]Inner rows, u8 n) assertsize 10;
 
-variant Mix = +(Tiny(u8, u8), Word(u16), Empty) tagof u8;
-variant Long = +(Big(u64), Small(u8, u8, u8), Empty) tagof u8;
-variant Nib = +(Lo(u8), Hi(u8), Other) tagof u16;
-variant Sel = ++(Some(u32), None) tagof u8;
+variant Mix = +(Tiny(u8, u8), Word(u16), Empty) tagtype u8;
+variant Long = +(Big(u64), Small(u8, u8, u8), Empty) tagtype u8;
+variant Nib = +(Lo(u8), Hi(u8), Other) tagtype u16;
+variant Sel = ++(Some(u32), None) tagtype u8;
 
 stc u64 S1 = sizeof Pk; #= S1 6
 stc u64 S2 = sizeof Sorted; #= S2 4
@@ -119,7 +119,7 @@ stcfun equal_types = () -> u32 {
 stc u32 TC = type_checks(); #= TC 11111011
 stc u32 EQ = equal_types(); #= EQ 100101
 
-$main = () {
+main = () {
     Line l = Line(cells = [Cell(1), Cell(2), Cell(3), Cell(4)]);
     n = sizeof l; #: n u64
     b = l.bytes(); #: b u32

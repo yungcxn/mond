@@ -4,7 +4,7 @@ fun printf = (&u8 fmt, u32 a);
 fun printf = (&u8 fmt, &u8 a);
 fun printf = (&u8 fmt, u32 a, u32 b);
 
-variant Kind = +(Fizz, Buzz, FizzBuzz, Num(u32)) tagof u8;
+variant Kind = +(Fizz, Buzz, FizzBuzz, Num(u32)) tagtype u8;
 
 type Tally = *(mut u32 fizz, mut u32 buzz, mut u32 both, mut u32 plain) !{
     fun record = (Kind k) {
@@ -104,7 +104,7 @@ fun longest_collatz = (u32 limit) -> u32 {
     ret best;
 }
 
-$main = (u32 argc, &&u8 argv) -> i32 {
+main = (u32 argc, &&u8 argv) -> i32 {
     mut Tally tally = Tally(fizz = 0, buzz = 0, both = 0, plain = 0);
     limit = if argc > 1: 30 else: 15; #: limit u32
     fizzbuzz(limit, tally.&);
@@ -113,7 +113,7 @@ $main = (u32 argc, &&u8 argv) -> i32 {
     primes = print_primes(50); #: primes u32
     twins = twin_pairs(100); #: twins u32
     best = longest_collatz(30); #: best u32
-    bump = (u32 x): x + primes;
+    fun bump = (u32 x): x + primes;
     shifted = bump(twins); #: shifted u32
     ret if total == limit and primes == 15: 0 else: 1;
 }

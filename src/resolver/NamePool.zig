@@ -16,34 +16,31 @@ pub const Index = enum(u32) {
     len,
     has_next,
     next,
-    tag,
-    // what macros ask of trees and the compiler: `$fresh(..)`, `$asterr(..)`, `refl $file`, `.$src`
+    // what macros ask of trees and the compiler: `fresh ..`, `crash ..`, `.src`
     fresh,
-    asterr,
     crash,
-    // machine code in place, calls of the kernel, and what they are for: `$asm(..)`,
-    // `$syscall(..)`, `$os`, `$arch`
+    // machine code in place, calls of the kernel, and what they are for: `asm ..`, `syscall ..`,
+    // `__os`, `__arch`
     @"asm",
     syscall,
     os,
     arch,
-    file,
     src,
     children,
     name,
     params,
-    ret,
+    rettype,
     body,
     fields,
     cases,
-    implof,
+    traits,
     methods,
     type,
-    default,
-    where,
-    mut,
+    defval,
+    guard,
+    ismut,
     decls,
-    value,
+    assigned,
     wall,
     none = std.math.maxInt(u32),
     _,
@@ -80,9 +77,17 @@ pub fn predefined_text(comptime name: Index) []const u8 {
     return switch (name) {
         .empty => "",
         .underscore => "_",
-        .self => "self",
-        else => "$" ++ @tagName(name),
+        .it, .len, .wall => "$" ++ @tagName(name),
+        .os, .arch => "__" ++ @tagName(name),
+        else => @tagName(name),
     };
+}
+
+pub fn is_protocol(text: []const u8) bool {
+    inline for (.{ Index.init, .deinit, .main, .has_next, .next }) |name| {
+        if (std.mem.eql(u8, text, @tagName(name))) return true;
+    }
+    return false;
 }
 
 pub fn deinit(self: *NamePool) void {

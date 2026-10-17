@@ -4,7 +4,7 @@ variant VC = +(A(u8 a, u8 a), B); #! duplicate_declaration
 variant VD = +(A(u8), B, A(u16)); #! duplicate_declaration
 fun unnamed = (u32, u32 $0) {} #! duplicate_declaration
 fun three = (u32 a, u32 b, u32 a) {} #! duplicate_declaration
-fun lam = () { f = (u32 x, u32 x): x; } #! duplicate_declaration
+fun lam = () { fun f = (u32 x, u32 x): x; } #! duplicate_declaration
 fun local = () { fun inner = (u8 p, u8 p) {} } #! duplicate_declaration
 stcfun sf = (u32 n, u32 n) -> u32: ret n; #! duplicate_declaration
 fun generic_uncalled = (&[]u8 a, u8 a) {} #! duplicate_declaration
@@ -19,4 +19,4 @@ fun use = () {
     generic_called(x.&, 1);
     generic_called(y.&, 1);
 }
-$main = () {}
+main = () {}

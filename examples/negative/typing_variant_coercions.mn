@@ -1,5 +1,5 @@
 # implicit conversions into variants, unions and traits
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
 variant Maybe = +(Just(i32), Nothing);
 variant Many = +(One(u8), Two(u8, u8));
 variant Dir = +(N, S);
@@ -41,4 +41,4 @@ fun f = (u8 b, u16 w, i32 n, Cat c, Rock r) {
     u8 t4 = take_named(r.&); #! type_mismatch
 }
 
-$main = () {}
+main = () {}

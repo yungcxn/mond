@@ -49,4 +49,4 @@ fun fl = (f16 h, f32 s, f64 d, i32 n, u8 u, bool b) {
     u8 z11 = b; #! type_mismatch
 }
 
-$main = () {}
+main = () {}

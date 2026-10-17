@@ -488,6 +488,7 @@ pub fn evaluate(self: *Interpreter, node: NodeId) Value {
         .bit_cast => self.types.bit_cast(node),
         .type_test => self.types.type_test(node),
         .size_of => self.types.size_of(node),
+        .length_or_tag => self.calls.length_or_tag(node),
         .macro => self.trees.evaluate(node),
         .lambda,
         .type_expression,

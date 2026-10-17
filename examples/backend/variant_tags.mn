@@ -15,18 +15,18 @@ fun same = (i64 compile_time, i64 run_time) {
     }
 }
 
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
-variant Opt16 = +(Some(i16), None = -1) tagof self;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
+variant Opt16 = +(Some(i16), None = -1) tagtype self;
 fun kind8 = (Opt8 o) -> i64: ret match o { Opt8.Some(x) => x as i64, Opt8.None => -1 };
 fun kind16 = (Opt16 o) -> i64: ret match o { Opt16.Some(x) => x as i64, Opt16.None => -1000 };
 fun some8 = (u8 x) -> Opt8: ret Opt8.Some(x);
 
 variant Wide = +(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14, C15, C16, C17, C18, C19, C20, C21, C22, C23, C24, C25, C26, C27, C28, C29, C30, C31, Last = 1000);
-fun wide_tag = (Wide w) -> i64: ret w.$tag as i64;
+fun wide_tag = (Wide w) -> i64: ret tagof w as i64;
 fun is_last = (Wide w) -> i64: ret match w { Wide.Last => 1, _ => 0 };
 
-variant Signed = +(Low = -5, Mid, High = 120) tagof i8;
-fun signed_tag = (Signed s) -> i64: ret s.$tag as i64;
+variant Signed = +(Low = -5, Mid, High = 120) tagtype i8;
+fun signed_tag = (Signed s) -> i64: ret tagof s as i64;
 fun signed_match = (Signed s) -> i64: ret match s { Signed.Low => 1, Signed.Mid => 2, Signed.High => 3 };
 
 variant Tree = +(Leaf(i64 value), Pair(i64 left, i64 right), Empty);
@@ -51,7 +51,7 @@ fun as_abc = (u32 i) -> ABC: ret match i {
     0 => A.X, 1 => A.Y(5), 2 => B.Z(7), 3 => B.W, 4 => C.V(9), _ => C.U,
 };
 
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     # niche tags: the payload's unused values, a payload equal to a tag is that case
     same(st(kind8(Opt8.Some(7))), kind8(some8(h(7) as u8)));          #> 7

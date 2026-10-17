@@ -43,4 +43,4 @@ fun f = (&*i32 ro_to_rw, *&i32 rw_to_ro, **i32 rw_rw, &&i32 ro_ro, &i32 ri, *i32
     *i32 from_imm = n.&; #! type_mismatch
 }
 
-$main = () {}
+main = () {}

@@ -23,14 +23,9 @@ fun named_loop_no_it = () -> u32 {
 }
 fun it_outside = () -> u32: ret $it; #! undefined_name
 fun lambda_not_hoisted = () -> u32 {
-    g = (): later; #! undefined_name
+    fun g = (): later; #! undefined_name
     u32 later = 1;
     ret later;
-}
-fun lambda_var_before = () -> u32 {
-    u32 r = h(); #! undefined_name
-    h = (): 1;
-    ret r;
 }
 fun or_one_sided = (R r) -> u32: ret match r {
     R(a = 1, b = x) | R(a = 2, b = 0) => x, #! undefined_name
@@ -49,4 +44,4 @@ fun block_local_fn = () -> u32 {
     { fun inner = () -> u32: ret 1; }
     ret inner(); #! undefined_name
 }
-$main = () {}
+main = () {}

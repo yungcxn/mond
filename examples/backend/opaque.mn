@@ -14,12 +14,12 @@ fun sum = (Text text) -> u64 {
     ret total;
 }
 
-$main = () {
+main = () {
     Cat cat = Cat(9);
     Dog dog = Dog(3);
     [2]Pet pets = [Pet(cat.&, true), Pet(dog.&, false)];
     for pet in pets: line_u64(id_of(pet) as u64);   #> 9
                                                     #> 21
     [4]u8 bytes = [1, 2, 3, 4];
-    line_u64(sum(Text(bytes.&, bytes.$len)));       #> 10
+    line_u64(sum(Text(bytes.&, lenof bytes)));       #> 10
 }

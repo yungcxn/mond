@@ -39,4 +39,4 @@ fun f = (&C ro, *C rw, C byval, &Outer ro_o, *Outer rw_o) {
     u32 i = C.add(rw, 1, 2); #! wrong_arity
 }
 
-$main = () {}
+main = () {}

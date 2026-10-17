@@ -56,7 +56,7 @@ stc u32 SH = shadowed(); #= SH 112
 stc u64 RL = recursive_local(15); #= RL 610
 stc u32 LG = local_over_global(); #= LG 88
 
-$main = () {
+main = () {
     u32 r = later(2); #: r u32
     fun later = (u32 n) -> u32: ret n + 1; #: later (u32) -> u32
 }

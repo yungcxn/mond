@@ -1,4 +1,4 @@
-variant Opt = (type T): ++(Some(T), None) tagof u8;
+variant Opt = (type T): ++(Some(T), None) tagtype u8;
 type Pair = (type A, type B): *(mut A first, mut B second);
 type Stack = (type T, u32 N): *(mut [N]T items, mut u32 len = 0) !{
     fun push = (T v) -> bool {
@@ -63,4 +63,4 @@ fun instances = () {
     Grow(1) g; #! static_eval_failed
 }
 
-$main = () {}
+main = () {}

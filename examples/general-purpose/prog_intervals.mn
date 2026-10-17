@@ -142,7 +142,7 @@ stc u32 OVER = s_overlap(); #= OVER 231
 stc i64 GAPS = s_gaps(); #= GAPS 100011883756251
 stc i32 EMPTY = s_empty(); #= EMPTY 0
 
-$main = () -> i32 {
+main = () -> i32 {
     Set s = sample();
     m = s.merged();
     first = m.items[0]; #: first *(i32 lo, i32 hi)

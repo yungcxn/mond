@@ -32,7 +32,7 @@ type Ring = *(mut [8]i32 buf, mut u32 head = 0, mut u32 len = 0) !{
     fun front = () -> i32: ret self.buf[self.head];
 }
 
-fun fresh = () -> Ring: ret Ring(buf = [0, 0, 0, 0, 0, 0, 0, 0]);
+fun make_fresh = () -> Ring: ret Ring(buf = [0, 0, 0, 0, 0, 0, 0, 0]);
 
 # digits of the contents front to back, so order mistakes show
 fun digits = (&Ring r) -> i32 {
@@ -42,7 +42,7 @@ fun digits = (&Ring r) -> i32 {
 }
 
 fun fifo = () -> i32 {
-    mut Ring r = fresh();
+    mut Ring r = make_fresh();
     for i in 1..=5: r.push_back(i as i32);
     mut i32 out = 0;
     for 0..<3: out = out * 10 + r.pop_front();
@@ -51,7 +51,7 @@ fun fifo = () -> i32 {
 }
 
 fun lifo = () -> i32 {
-    mut Ring r = fresh();
+    mut Ring r = make_fresh();
     for i in 1..=4: r.push_front(i as i32);
     mut i32 out = 0;
     while !r.empty(): out = out * 10 + r.pop_back();
@@ -60,7 +60,7 @@ fun lifo = () -> i32 {
 
 # a full ring rejects, wraps the head below zero and keeps order
 fun overflow = () -> u32 {
-    mut Ring r = fresh();
+    mut Ring r = make_fresh();
     mut u32 accepted = 0;
     for i in 0..<12 {
         bool ok = if i % 2 == 0: r.push_back(i as i32) else: r.push_front(i as i32);
@@ -70,7 +70,7 @@ fun overflow = () -> u32 {
 }
 
 fun wrap_order = () -> i32 {
-    mut Ring r = fresh();
+    mut Ring r = make_fresh();
     for i in 1..=6: r.push_back(i as i32);
     for 0..<5: r.pop_front();
     for i in 7..=9: r.push_back(i as i32);
@@ -80,9 +80,9 @@ fun wrap_order = () -> i32 {
 
 # sliding window maximum with a monotonic deque of indices
 fun window_max = (&[]i32 xs, u32 k) -> i32 {
-    mut Ring q = fresh();
+    mut Ring q = make_fresh();
     mut i32 acc = 0;
-    for i in 0..<xs.$len {
+    for i in 0..<lenof xs {
         u32 j = i as u32;
         while !q.empty() and xs.*[q.back()] <= xs.*[j]: q.pop_back();
         q.push_back(j as i32);
@@ -94,7 +94,7 @@ fun window_max = (&[]i32 xs, u32 k) -> i32 {
 
 # josephus elimination on the ring: rotate k - 1 then drop
 fun last_standing = (u32 n, u32 k) -> i32 {
-    mut Ring r = fresh();
+    mut Ring r = make_fresh();
     for i in 1..=n: r.push_back(i as i32);
     while r.len > 1 {
         for 0..<(k - 1): r.push_back(r.pop_front());
@@ -127,8 +127,8 @@ stc i32 J7 = s_jos(7); #= J7 4
 stc i32 J1 = s_jos(1); #= J1 1
 stc i32 J8 = s_jos(8); #= J8 7
 
-$main = () -> i32 {
-    q = fresh(); #: q *([8]i32 buf, u32 head, u32 len)
+main = () -> i32 {
+    q = make_fresh(); #: q *([8]i32 buf, u32 head, u32 len)
     f = fifo(); #: f i32
     ret f + lifo() + overflow() as i32 + wrap_order() + last_standing(5, 2);
 }

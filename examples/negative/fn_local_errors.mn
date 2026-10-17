@@ -16,4 +16,4 @@ fun g = () {
     u32 y = scoped(); #! undefined_name
 }
 
-$main = () {}
+main = () {}

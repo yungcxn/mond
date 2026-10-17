@@ -15,19 +15,47 @@ pub fn owning_interpreter(self: *Calls) *Interpreter {
     return @alignCast(@fieldParentPtr("calls", self));
 }
 
+pub fn length_or_tag(self: *Calls, node: NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const operand = resolver.tree.arg(node, 0);
+    const is_length = resolver.tree.kind(node) == .lenof;
+
+    // a static length is known without evaluating the operand
+    if (is_length and !interpreter.has_body_frame()) {
+        const inferred = resolver.expressions.infer(interpreter.function_context, operand, .none);
+        const operand_type = static_pool.pointee(static_pool.substitute_type_variables(inferred));
+        if (static_pool.static_length(operand_type)) |length| return .int(.u64_type, length);
+    }
+
+    const value = interpreter.dereference(interpreter.evaluate(operand));
+    if (value.is(.poison_type)) return value;
+    if (is_length) {
+        if (interpreter.element_count(value)) |count| return .int(.u64_type, count);
+        return interpreter.fail(node, .not_static, 0, 0);
+    }
+    // a union of variants numbers its cases after the cases of the variants before them
+    const case = interpreter.patterns.case_of(value);
+    if (case == .none) return interpreter.fail(node, .not_static, 0, 0);
+
+    const variant_type = static_pool.through_pointer(interpreter.checked_type(operand));
+    const case_type = static_pool.get(case).variant_case_type;
+    const tag_type = static_pool.tag_type_of(variant_type);
+    const case_number = static_pool.get(case_type.tag).int_value.bits;
+    const offset = if (static_pool.tag(variant_type) == .variant_union_type)
+        static_pool.union_offset(variant_type, case_type.variant)
+    else
+        0;
+    return .int(tag_type, case_number + offset);
+}
+
 pub fn member(self: *Calls, node: NodeId) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
     const static_pool = &resolver.static_pool;
     const parent = resolver.tree.arg(node, 0);
     const name = resolver.name_pool.name_of_node(resolver.tree.arg(node, 1));
-
-    // a static length is known without evaluating the parent
-    if (name == .len and !interpreter.has_body_frame()) {
-        const inferred = resolver.expressions.infer(interpreter.function_context, parent, .none);
-        const parent_type = static_pool.pointee(static_pool.substitute_type_variables(inferred));
-        if (static_pool.static_length(parent_type)) |length| return .int(.u64_type, length);
-    }
 
     const parent_value = interpreter.dereference(interpreter.evaluate(parent));
     if (parent_value.is(.poison_type)) return parent_value;
@@ -36,24 +64,6 @@ pub fn member(self: *Calls, node: NodeId) Value {
             return interpreter.trees.member(node, parent_value);
         }
         if (parent_value.is(.ast_type)) return interpreter.trees.case(node);
-    }
-    if (name == .len) {
-        if (interpreter.element_count(parent_value)) |count| return .int(.u64_type, count);
-    }
-    // a union of variants numbers its cases after the cases of the variants before them
-    if (name == .tag) {
-        const case = interpreter.patterns.case_of(parent_value);
-        if (case == .none) return interpreter.fail(node, .not_static, 0, 0);
-
-        const variant_type = static_pool.through_pointer(interpreter.checked_type(parent));
-        const case_type = static_pool.get(case).variant_case_type;
-        const tag_type = static_pool.tag_type_of(variant_type);
-        const case_number = static_pool.get(case_type.tag).int_value.bits;
-        const offset = if (static_pool.tag(variant_type) == .variant_union_type)
-            static_pool.union_offset(variant_type, case_type.variant)
-        else
-            0;
-        return .int(tag_type, case_number + offset);
     }
 
     const parent_type = interpreter.value_type(parent_value);
@@ -93,26 +103,19 @@ pub fn call(self: *Calls, node: NodeId) Value {
     const static_pool = &resolver.static_pool;
     const callee = resolver.tree.arg(node, 0);
     const arguments = resolver.tree.manychildren(resolver.tree.arg(node, 1));
-    // machine code and the kernel run only at run time
-    const runs_later = resolver.tree.kind(callee) == .identifier and
-        (resolver.name_pool.name_of_node(callee) == .@"asm" or
-            resolver.name_pool.name_of_node(callee) == .syscall);
-    if (runs_later) return interpreter.fail(node, .not_static, 0, 0);
-    // `$fresh` and `$asterr` are builtins of macro bodies
-    if (resolver.tree.kind(callee) == .identifier and
-        resolver.tree.text(callee, resolver.src_bytes)[0] == '$')
-    {
+    if (resolver.tree.kind(node) == .builtin_call) {
         const name = resolver.name_pool.name_of_node(callee);
-        if (resolver.tree.macros and (name == .fresh or name == .asterr)) {
+        // machine code and the kernel run only at run time
+        if (name == .@"asm" or name == .syscall) return interpreter.fail(node, .not_static, 0, 0);
+        // `fresh` and `crash` at a tree are builtins of macro bodies
+        if (name == .fresh or arguments.len == 2) {
             return interpreter.trees.builtin(node, name, arguments);
         }
-        if (name == .crash) {
-            if (arguments.len != 1) return .poison;
-            const message = interpreter.evaluate(resolver.tree.arg_value(arguments[0]));
-            if (message.is(.poison_type)) return message;
-            const text = interpreter.trees.text_of(message) orelse return .poison;
-            return interpreter.fail(node, .crash, resolver.name_pool.intern_copy(text), 0);
-        }
+        if (arguments.len != 1) return .poison;
+        const message = interpreter.evaluate(resolver.tree.arg_value(arguments[0]));
+        if (message.is(.poison_type)) return message;
+        const text = interpreter.trees.text_of(message) orelse return .poison;
+        return interpreter.fail(node, .crash, resolver.name_pool.intern_copy(text), 0);
     }
 
     const declaration = interpreter.node_info(.declaration, node);
@@ -691,6 +694,7 @@ pub fn closure(self: *Calls, declaration: DeclPool.Index) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
     const function_index = resolver.decl_pool.get(declaration, .static_value);
+    if (function_index == .none) return .poison;
     const function: Value = .of(&resolver.static_pool, function_index);
     const captures = resolver.bodies.captures_of(&resolver.decl_pool, declaration);
     if (captures.len == 0) return function;

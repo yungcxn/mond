@@ -32,4 +32,4 @@ fun runtime = (u32 n) {
     [4]u32 c = for i in 0..<5 { if i == 2: cont; i; }
 }
 
-$main = () {}
+main = () {}

@@ -71,14 +71,14 @@ fun round_half_up = (f64 x) -> i64: ret floor(x + 0.5);
 fun mean = (&[]f32 xs) -> f32 {
     mut f32 s = 0.0;
     for x in xs.*: s += x;
-    ret s / xs.$len as f32;
+    ret s / lenof xs as f32;
 }
 
 fun variance = (&[]f32 xs) -> f32 {
     f32 m = mean(xs);
     mut f32 s = 0.0;
     for x in xs.*: s += (x - m) * (x - m);
-    ret s / (xs.$len as f32);
+    ret s / (lenof xs as f32);
 }
 
 fun lerp = (f32 a, f32 b, f32 t) -> f32: ret a + (b - a) * t;
@@ -127,4 +127,4 @@ stc f32 LE = lerp(10.0, 20.0, 0.25); #= LE 12.5
 stc i64 HM = to_fixed(harmonic(100), 6); #= HM 5187378
 stc i64 CM = to_fixed(compensated(), 9); #= CM 1000000000
 
-$main = () {}
+main = () {}

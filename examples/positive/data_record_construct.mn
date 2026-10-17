@@ -26,7 +26,7 @@ stc i32 SUM = POS.x + NAMED.y * 10 + MIXED.z * 100; #= SUM 321
 stc u32 DEEP = N1.d.c; #= DEEP 3
 stc u8 IDX = W.tag[1]; #= IDX 8
 
-$main = () {
+main = () {
     p = P3(1, 2, 3); #: p *(i32 x, i32 y, i32 z)
     q = p with (y = 20); #: q *(i32 x, i32 y, i32 z)
     d = D(5); #: d *(u32 a, u32 b, u32 c)

@@ -1,6 +1,6 @@
-variant Opt = +(Some(u8), None = 0xFF) tagof self;
+variant Opt = +(Some(u8), None = 0xFF) tagtype self;
 variant Res = +(Ok(u32), Err(u8 code, u8 line), Pending);
-variant Reg = ++(AsInt(i32), AsBits([4]u8), AsFloat(f32)) tagof u8;
+variant Reg = ++(AsInt(i32), AsBits([4]u8), AsFloat(f32)) tagtype u8;
 variant Dir = +(N, E, S, W);
 
 stcfun unwrap_or = (Opt o, u8 d) -> u8: ret o ?? d;
@@ -15,7 +15,7 @@ stcfun turn = (Dir d) -> Dir: ret match d { Dir.N => Dir.E, Dir.E => Dir.S, Dir.
 stcfun turns = (u32 k) -> u8 {
     mut Dir d = Dir.N;
     for i in 0..<k: d = turn(d);
-    ret d.$tag;
+    ret tagof d;
 }
 stcfun wrapped = () -> u8 {
     Opt a = 7;
@@ -39,7 +39,7 @@ stc u8 T5 = turns(5); #= T5 1
 stc u8 T8 = turns(8); #= T8 0
 stc u8 WR = wrapped(); #= WR 110
 
-$main = () {
+main = () {
     o = Opt.Some(1); #: o +(Some, None).Some
     Opt p = o;
     n = Opt.None; #: n +(Some, None).None

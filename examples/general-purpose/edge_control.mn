@@ -213,4 +213,4 @@ stc u32 DR = defer_on_return(true) * 1000 + defer_on_return(false); #= DR 1002
 stc u32 SP = size_class(u64) * 100 + size_class(u16) * 10 + size_class(u8); #= SP 123
 stc u32 SM = bucket(0) + bucket(2) + bucket(7) + bucket(99); #= SM 100
 
-$main = () {}
+main = () {}

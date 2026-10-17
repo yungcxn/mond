@@ -15,7 +15,7 @@ stc u32 GD1 = guard_then_dispatch(1); #= GD1 1
 stc u32 GD2 = guard_then_dispatch(20); #= GD2 2
 stc u32 GD3 = guard_then_dispatch(200); #= GD3 7
 
-$main = () {
+main = () {
     u32 v = clamp_div(1, 1);
     u32 g = guard_then_dispatch(v); #: g u32
     u32 b = both(v, g); #: b u32

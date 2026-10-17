@@ -9,7 +9,7 @@ fun apply = (IntFn f, i32 v) -> i32: ret f(v);
 fun returned = (i32 n) -> IntFn: ret (i32 x): x * n;   #! escaping_closure
 fun short_form = (i32 n): (i32 x): x + n;             #! escaping_closure
 fun named = (i32 n) -> IntFn {
-    scale = (i32 x): x * n;
+    fun scale = (i32 x): x * n;
     ret scale;                                         #! escaping_closure
 }
 fun passed_on = (IntFn f) -> IntFn: ret f;             #! escaping_closure
@@ -20,16 +20,16 @@ fun stored = (i32 n, *Holder out) {
 }
 fun in_aggregate = (i32 n) -> Holder: ret Holder((i32 x): x + n);   #! escaping_closure
 fun as_static = (i32 n) -> i32 {
-    add_n = (i32 x): x + n;
+    fun add_n = (i32 x): x + n;
     ret twice(add_n)(1);                               #! not_static
 }
 # all fine: called, passed down, kept in the frame, static functions anywhere
 fun allowed = (i32 n) -> IntFn {
-    add_n = (i32 x): x + n;
+    fun add_n = (i32 x): x + n;
     mut Holder local = Holder(add_n);
     local.f = (i32 x): x * n;
     i32 r = apply(add_n, 1) + local.f(2);
     KEPT = (i32 x): x;
     ret twice((i32 x): x + 1);
 }
-$main = () {}
+main = () {}

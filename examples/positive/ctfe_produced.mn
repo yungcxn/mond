@@ -61,7 +61,7 @@ type Fixed = (u8 N): *([N]u8 bytes);
 type F255 = Fixed(255); #= F255 *([255]u8 bytes)
 stc u64 FS = sizeof Fixed(255); #= FS 255
 
-$main = () {
+main = () {
     u32 r = triple(2) + quad(1);
     u8 c = clamp8(250);
     u32 a = adds(1, 2) + subs(3, 1) + add5(2);

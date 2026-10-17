@@ -17,7 +17,7 @@ stcfun max_of = (type T where T oftype Cmp(T)): (T a, T b) -> T: ret if b.lt(a):
 
 fun describe = (Named n) -> &u8: ret n.greet(); #: describe (!{name; greet}) -> &u8
 
-$main = () {
+main = () {
     Money a = Money(cents = 100);
     Money b = Money(cents = 250);
     rich = max_of(Money)(a, b); #: rich *(i64 cents)

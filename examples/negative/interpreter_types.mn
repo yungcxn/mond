@@ -11,4 +11,4 @@ stcfun Cast = (u32 b) -> u64 { mut u32 c = b; type T = Word(c); ret "x" as T; } 
 
 stc u64 C = Cast(3);
 
-$main = () {}
+main = () {}

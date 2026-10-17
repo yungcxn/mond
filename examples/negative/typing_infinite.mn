@@ -7,4 +7,4 @@ fun a6 = (u32 n): ret a5(n); #! infinite_type
 fun fine = (u32 n) -> [1]u32: ret [n];
 fun ok = (u32 n): ret if n == 0: 0 else: ok(n - 1) + 1; #: ok (u32) -> u32
 
-$main = () {}
+main = () {}

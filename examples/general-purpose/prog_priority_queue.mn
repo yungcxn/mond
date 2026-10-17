@@ -120,7 +120,7 @@ stc i64 SC = scores(); #= SC 221410032
 stc u64 MER = merge(); #= MER 388360
 stc i64 HS = heap_sort(); #= HS 1353115
 
-$main = () -> i64 {
+main = () -> i64 {
     mut Heap(Job, 2) h = Heap(Job, 2)(items = [Job(id = 0, prio = 0), Job(id = 0, prio = 0)]);
     h.push(Job(id = 1, prio = 4));
     h.push(Job(id = 2, prio = 3));

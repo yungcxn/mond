@@ -3,7 +3,7 @@ const mond = @import("mond");
 const Lexer = mond.Lexer;
 
 // whether another mond file of the workspace includes the file at `path`. such a file is a library,
-// meant to be included, so the editor does not ask it for a `$main` (compiling it still does).
+// meant to be included, so the editor does not ask it for a `main` (compiling it still does).
 // the workspace is the nearest directory above `path` holding a `.git` or a `build.zig`
 pub fn is_included(io: std.Io, allocator: std.mem.Allocator, path: []const u8) bool {
     if (path.len == 0) return false;
@@ -86,7 +86,7 @@ test "a file another file includes (or includes raw) is a library, one only name
     try workspace.dir.createDirPath(io, ".git");
     try workspace.dir.createDirPath(io, "lib");
     const library_source = "# include \"b.mn\"\npub fun f = () {}\n";
-    const program_source = "<include \"lib/a.mn\">;\n<includeraw \"lib/c.mn\">;\n$main = () {}\n";
+    const program_source = "<include \"lib/a.mn\">;\n<includeraw \"lib/c.mn\">;\nmain = () {}\n";
     try workspace.dir.writeFile(io, .{ .sub_path = "lib/a.mn", .data = library_source });
     try workspace.dir.writeFile(io, .{ .sub_path = "lib/b.mn", .data = "pub fun g = () {}\n" });
     try workspace.dir.writeFile(io, .{ .sub_path = "lib/c.mn", .data = "fun h = () {}\n" });

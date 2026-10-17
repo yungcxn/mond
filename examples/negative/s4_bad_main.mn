@@ -1,1 +1,1 @@
-$main = (&u8 x) -> &u8: ret x; #! invalid_main
+main = (&u8 x) -> &u8: ret x; #! invalid_main

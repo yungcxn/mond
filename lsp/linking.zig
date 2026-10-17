@@ -294,8 +294,8 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
                 break :blk none;
             };
         }
-        const is_intrinsic = name.len > 0 and name[0] == '$';
-        // a builtin (`$len`) is declared nowhere, its uses share one declaration
+        const is_intrinsic = name.len > 0 and name[0] == '$' or std.mem.startsWith(u8, name, "__");
+        // a builtin (`__os`) is declared nowhere, its uses share one declaration
         if (meaning.* == none and is_intrinsic) meaning.* = blk: {
             const use = spans[token];
             for (analysis.declarations.items(), 0..) |declaration, i| {

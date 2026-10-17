@@ -821,6 +821,13 @@ fn expression(self: *HighLowerer, node: NodeId) Ref {
         .call => self.call(node, value_type),
         .record_update => self.record_update(node),
         .member_access => self.member_access(node),
+        .length_or_tag => {
+            const operand = self.resolver.tree.arg(node, 0);
+            const operand_type = self.type_of(operand);
+            if (self.resolver.tree.kind(node) == .lenof) return self.array_length(operand_type);
+            const owner = self.static_pool.through_pointer(operand_type);
+            return self.variant_tag_of(operand, operand_type, owner);
+        },
         .index => self.load(value_type, self.place(node)),
         .dereference => self.load(value_type, self.expression(first)),
         .address_of => self.place(first),
@@ -2163,16 +2170,16 @@ fn call(self: *HighLowerer, node: NodeId, result_type: Index) Ref {
     const tree = self.resolver.tree;
     const callee = tree.arg(node, 0);
     const arguments = tree.manychildren(tree.arg(node, 1));
-    // `$asm("..")` with the static text the checker took
-    const calls_assembly = tree.kind(callee) == .identifier and
-        self.resolver.name_pool.name_of_node(callee) == .@"asm";
-    if (calls_assembly) {
+    const builtin = if (tree.kind(node) == .builtin_call)
+        self.resolver.name_pool.name_of_node(callee)
+    else
+        .none;
+    // `asm ".."` with the static text the checker took
+    if (builtin == .@"asm") {
         const text = self.static_value_of(tree.arg_value(arguments[0])).?;
         return self.builder.emit(.inline_asm, .unit_type, @intFromEnum(Ref.of(text)), 0);
     }
-    const calls_kernel = tree.kind(callee) == .identifier and
-        self.resolver.name_pool.name_of_node(callee) == .syscall;
-    if (calls_kernel) {
+    if (builtin == .syscall) {
         const mark = self.scratch.len;
         defer self.scratch.len = mark;
         for (arguments) |argument| {
@@ -2510,9 +2517,7 @@ fn member_access(self: *HighLowerer, node: NodeId) Ref {
             const trait = self.static_pool.get(method.trait).trait_type.declaration;
             return self.function_value(@enumFromInt(@intFromEnum(trait) + 1 + method.index));
         },
-        .builtin_len => self.array_length(parent_type),
-        .builtin_tag => self.variant_tag_of(parent, parent_type, base_type),
-        .none, .builtin_init, .builtin_deinit => .none,
+        .none, .builtin_len, .builtin_init, .builtin_deinit => .none,
     };
 }
 

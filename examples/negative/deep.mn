@@ -12,7 +12,7 @@ type R = *(mut i32 n) !{
 }
 
 fun lambdas = () {
-    f = (i32 a): (i32 b): (i32 c): a + b + c + true; #! type_mismatch escaping_closure escaping_closure
-    g = (V v): match v { V.A(x) => x, V.B => "s" } #! type_mismatch
+    fun f = (i32 a): (i32 b): (i32 c): a + b + c + true; #! type_mismatch escaping_closure escaping_closure
+    fun g = (V v): match v { V.A(x) => x, V.B => "s" } #! type_mismatch
     i32 h = f(1)(2)("x"); #! type_mismatch
 }

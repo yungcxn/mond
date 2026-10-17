@@ -1,1 +1,1 @@
-type $main = *(u8 a); #! invalid_main
+type main = *(u8 a); #! invalid_main

@@ -49,6 +49,6 @@ stc u32 LE = lengths(); #= LE 31010
 stc u32 MI = mixed(); #= MI 12
 stc u32 CA = cases(); #= CA 21
 
-$main = () {
+main = () {
     r = w(1 as i32); #: r u32
 }

@@ -1,4 +1,4 @@
-variant T = +(Var(u32 k), Lam(u32 b), App(u32 f, u32 a)) tagof u8;
+variant T = +(Var(u32 k), Lam(u32 b), App(u32 f, u32 a)) tagtype u8;
 
 stc u32 NONE = 0xFFFFFFFF;
 
@@ -236,7 +236,7 @@ type Lc = *(
     }
 
     fun out_is = (&[]u8 want) -> bool {
-        if self.nout as u64 != want.$len: ret false;
+        if self.nout as u64 != lenof want: ret false;
         for i in 0..<self.nout {
             if self.out[i] != want.*[i]: ret false;
         }
@@ -244,15 +244,15 @@ type Lc = *(
     }
 }
 
-fun fresh = (&[]u8 src) -> Lc {
+fun make_fresh = (&[]u8 src) -> Lc {
     [2600]T nodes;
     [16]u8 names;
     [96]u8 out;
-    ret Lc(src = src, length = src.$len, pos = 0, bad = 0, nodes = nodes, n = 0, names = names, depth = 0, out = out, nout = 0, done = false, steps = 0);
+    ret Lc(src = src, length = lenof src, pos = 0, bad = 0, nodes = nodes, n = 0, names = names, depth = 0, out = out, nout = 0, done = false, steps = 0);
 }
 
 fun nat = (&[]u8 src, u32 limit) -> i32 {
-    mut Lc l = fresh(src);
+    mut Lc l = make_fresh(src);
     u32 t = l.parse();
     if l.bad != 0: ret -2;
     u32 r = l.normalize(t, limit);
@@ -261,7 +261,7 @@ fun nat = (&[]u8 src, u32 limit) -> i32 {
 }
 
 fun nf_is = (&[]u8 src, u32 limit, &[]u8 want) -> bool {
-    mut Lc l = fresh(src);
+    mut Lc l = make_fresh(src);
     u32 t = l.parse();
     if l.bad != 0: ret false;
     u32 r = l.normalize(t, limit);
@@ -271,7 +271,7 @@ fun nf_is = (&[]u8 src, u32 limit, &[]u8 want) -> bool {
 }
 
 fun parse_is = (&[]u8 src, &[]u8 want) -> bool {
-    mut Lc l = fresh(src);
+    mut Lc l = make_fresh(src);
     u32 t = l.parse();
     if l.bad != 0: ret false;
     l.print(t, 0);
@@ -279,37 +279,37 @@ fun parse_is = (&[]u8 src, &[]u8 want) -> bool {
 }
 
 fun parse_err = (&[]u8 src) -> u32 {
-    mut Lc l = fresh(src);
+    mut Lc l = make_fresh(src);
     do l.parse();
     ret l.bad;
 }
 
 fun steps_of = (&[]u8 src, u32 limit) -> u32 {
-    mut Lc l = fresh(src);
+    mut Lc l = make_fresh(src);
     u32 t = l.parse();
     do l.normalize(t, limit);
     ret l.steps;
 }
 
 fun converges = (&[]u8 src, u32 limit) -> bool {
-    mut Lc l = fresh(src);
+    mut Lc l = make_fresh(src);
     u32 t = l.parse();
     do l.normalize(t, limit);
     ret l.done;
 }
 
 fun shift_is = (&[]u8 src, i32 d, u32 c, &[]u8 want) -> bool {
-    mut Lc l = fresh(src);
+    mut Lc l = make_fresh(src);
     u32 t = l.parse();
     l.print(l.shift(d, c, t), 0);
     ret l.out_is(want);
 }
 
 fun subst_is = (&[]u8 src, u32 j, &[]u8 arg, &[]u8 want) -> bool {
-    mut Lc l = fresh(src);
+    mut Lc l = make_fresh(src);
     u32 t = l.parse();
     l.src = arg;
-    l.length = arg.$len;
+    l.length = lenof arg;
     l.pos = 0;
     u32 s = l.parse();
     l.print(l.subst(j, s, t), 0);
@@ -375,4 +375,4 @@ stc bool C56 = subst_is("\\_.#1".&, 0, "\\_.#0 #1".&, "\\.\\.0 2".&); #= C56 tru
 stc bool C57 = subst_is("#0 #1 #2".&, 1, "\\_.#0".&, "0 (\\.0) 2".&); #= C57 true
 stc bool C58 = subst_is("\\_.#0".&, 0, "#7".&, "\\.0".&); #= C58 true
 
-$main = () {}
+main = () {}

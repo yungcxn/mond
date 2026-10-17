@@ -19,4 +19,4 @@ stc u32 B = b(); #= B 11
 stc u32 C = c(); #= C 11
 stc u32 D = d(); #= D 7
 stc u32 E = e(); #= E 10
-$main = () {}
+main = () {}

@@ -319,7 +319,7 @@ fn declare_global(self: *LLVMLowerer, declaration: DeclPool.Index, global_index:
     self.globals[global_index] = lowered;
 }
 
-// the entry: the global initializers, then `$main` with the arguments it asks for. with the c
+// the entry: the global initializers, then `main` with the arguments it asks for. with the c
 // library its `main`, which its startup calls. without it `_start`: linux jumps there with
 // argc and argv on the stack and takes the exit code by a system call, macos' dyld calls it
 // like `main`
@@ -354,7 +354,10 @@ fn define_main(self: *LLVMLowerer) void {
         var parameters = [_]Type{ int, self.types.pointer };
         const main_type = llvm.LLVMFunctionType(int, &parameters, parameters.len, 0);
         const name = if (self.options.libc) "main" else "_start";
+        const taken = llvm.LLVMGetNamedFunction(self.module, name);
+        if (taken) |function| llvm.LLVMSetValueName2(function, "", 0);
         const main = llvm.LLVMAddFunction(self.module, name, main_type);
+        if (taken) |function| llvm.LLVMSetValueName2(function, name, name.len);
         self.add_function_attributes(main);
         llvm.LLVMPositionBuilderAtEnd(
             self.builder,
@@ -467,7 +470,7 @@ const system_call_constraints = blk: {
     break :blk all;
 };
 
-// what `$asm` may change: every register llvm allocates (the frame pointer and on aarch64 the
+// what `asm` may change: every register llvm allocates (the frame pointer and on aarch64 the
 // platform register aside), the flags and memory
 const assembly_clobbers = blk: {
     @setEvalBranchQuota(100_000);

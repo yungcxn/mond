@@ -6,4 +6,4 @@ fun f = () {
     u64 d = 18446744073709551616; #! type_mismatch
     e = 0o8; #! type_mismatch
 }
-$main = () {}
+main = () {}

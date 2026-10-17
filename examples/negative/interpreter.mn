@@ -45,4 +45,4 @@ stc u32 ST = stride();
 fun lim = (u32 x stcwhere x < 10) -> u32: ret x;
 stc u32 LI = lim(20); #! stcwhere_violated
 
-$main = () {}
+main = () {}

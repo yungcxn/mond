@@ -9,7 +9,7 @@ type Buf = *(mut [64]u8 data, mut u32 len = 0) !{
         self.len += 1;
     }
     fun same = (&[]u8 want) -> bool {
-        if self.len as u64 != want.$len: ret false;
+        if self.len as u64 != lenof want: ret false;
         for i in 0..<self.len: if self.data[i] != want.*[i]: ret false;
         ret true;
     }
@@ -65,7 +65,7 @@ fun unbase32_n = (&[]u8 src, u64 n) -> Buf {
     ret out;
 }
 
-fun unbase32 = (&[]u8 src) -> Buf: ret unbase32_n(src, src.$len);
+fun unbase32 = (&[]u8 src) -> Buf: ret unbase32_n(src, lenof src);
 
 fun hex = (&[]u8 src) -> Buf {
     mut Buf out = empty();
@@ -81,7 +81,7 @@ fun nibble = (u8 c) -> u8: ret if c >= 'a': c - 'a' + 10 else: if c >= 'A': c - 
 fun unhex = (&[]u8 src) -> Buf {
     mut Buf out = empty();
     mut u64 i = 0;
-    while i + 1 < src.$len, i += 2: out.put(nibble(src.*[i]) << 4 | nibble(src.*[i + 1]));
+    while i + 1 < lenof src, i += 2: out.put(nibble(src.*[i]) << 4 | nibble(src.*[i + 1]));
     ret out;
 }
 
@@ -104,9 +104,9 @@ fun percent = (&[]u8 src) -> Buf {
 fun unpercent = (&[]u8 src) -> Buf {
     mut Buf out = empty();
     mut u64 i = 0;
-    while i < src.$len {
+    while i < lenof src {
         u8 c = src.*[i];
-        if c == '%' and i + 2 < src.$len {
+        if c == '%' and i + 2 < lenof src {
             out.put(nibble(src.*[i + 1]) << 4 | nibble(src.*[i + 2]));
             i += 3;
         } else {
@@ -164,7 +164,7 @@ stc u32 HEXR = hex_round(); #= HEXR 4
 stc u32 PCTR = pct_round(); #= PCTR 4
 stc u32 B32LEN = base32("12345678901234567890".&).len; #= B32LEN 32
 
-$main = () -> u32 {
+main = () -> u32 {
     e = base32("hello".&); #: e *([64]u8 data, u32 len)
     d = unbase32_n(e.data.&, e.len as u64);
     ret d.len + hex("ab".&).len + percent("a b".&).len + (if d.same("hello".&): 1 else: 0);

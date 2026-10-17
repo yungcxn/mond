@@ -11,12 +11,12 @@ stcfun unrolled = (u32 times, ast(()) step) -> ast(()) {
 type Pt = *(mut i64 x, i64 y);
 fun apply = ((i64) -> i64 f, i64 v) -> i64: ret f(v);
 
-$main = () {
+main = () {
     mut i64 x = 1;
     <unrolled(3, quote { @x = @x * 3; })>;
     line_i64(x);                              #> 27
     mut Pt p = Pt(2, 5);
-    k = (i64 v): v + p.y;
+    fun k = (i64 v): v + p.y;
     p.x = apply(k, p.x);
     line_i64(p.x);                            #> 7
 }

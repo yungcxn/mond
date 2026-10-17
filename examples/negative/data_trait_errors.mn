@@ -34,4 +34,4 @@ fun f = () {
     u32 j = use_sub(t.&); #! type_mismatch
 }
 
-$main = () {}
+main = () {}

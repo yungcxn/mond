@@ -1,5 +1,5 @@
 variant Tagged = +(A = notag, B); #! undefined_name
-variant Typed = +(A, B) tagof NoTag; #! undefined_name
+variant Typed = +(A, B) tagtype NoTag; #! undefined_name
 type Sized = *(u8 a) assertsize nosize; #! undefined_name
 type Impl = *(u8 a) implof NoTrait !{} #! undefined_name
 trait Sub = implof NoSuper !{ fun f = (); } #! undefined_name
@@ -38,4 +38,4 @@ fun static_match = () -> u32: ret stcmatch nosc { _ => 1, }; #! undefined_name
 fun static_while = () { stcwhile nosw: 1; } #! undefined_name
 fun static_loop = () { stcloop nosl++: brk; } #! undefined_name
 fun static_for2 = () { stcfor i in nostcseq: i; } #! undefined_name
-$main = () {}
+main = () {}

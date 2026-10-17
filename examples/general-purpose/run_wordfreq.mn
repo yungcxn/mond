@@ -76,7 +76,7 @@ fun report = (*Table t) {
     }
 }
 
-$main = (u32 argc, &&u8 argv) -> i32 {
+main = (u32 argc, &&u8 argv) -> i32 {
     mut Table table;
     mut u32 rejected = 0;
     for i in 1..<argc {

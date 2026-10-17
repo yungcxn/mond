@@ -2,7 +2,7 @@
 
 type Src = *(&[]u8 s, u64 length);
 # a source and its length, which `s` alone doesn't carry
-fun source = (&[]u8 s) -> Src: ret Src(s, s.$len);
+fun source = (&[]u8 s) -> Src: ret Src(s, lenof s);
 type Res = *(bool ok, i64 v, u32 at);
 type Parser = (&Src, u32) -> Res;
 type Join = (i64, i64) -> i64;
@@ -159,7 +159,7 @@ stc i64 EXP = exprs(); #= EXP 140515091409
 stc i64 FAIL = failures(); #= FAIL -1001001
 stc i64 CHO = choice(); #= CHO 98097019
 
-$main = () -> i64 {
+main = () -> i64 {
     Src s = source("12*(3+4)".&);
     p = int_list(); #: p (&*(&[]u8 s, u64 length), u32) -> *(bool ok, i64 v, u32 at)
     r = expr(s.&, 0); #: r *(bool ok, i64 v, u32 at)

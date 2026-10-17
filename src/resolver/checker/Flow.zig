@@ -226,7 +226,6 @@ pub fn check_loop(
             .none,
             .field,
             .case,
-            .builtin_tag,
             .builtin_init,
             .builtin_deinit,
             => resolver.report_mismatch(loop.seq, sequence_type, .none),

@@ -61,7 +61,7 @@ fun twice = (i64 x) -> i64: ret x * 2;
 fun thrice = (i64 x) -> i64: ret x * 3;
 stc [2]Step STEPS = [twice, thrice];
 
-$main = () {
+main = () {
     line_i64(abi_float_int(FloatInt(2.5, 7)));                       #> 32
     fi = abi_make_float_int(6);
     line_i64((fi.f * 10.0) as i64 * 100 + fi.i as i64);              #> 2994

@@ -47,7 +47,7 @@ fun lt_u8 = (u8 a, u8 b) -> bool: ret a < b;
 fun ge_i64 = (i64 a, i64 b) -> bool: ret a >= b;
 fun b = (bool x) -> i64: ret if x: 1 else: 0;
 
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     # wrapping at every width
     same(st(add_u8(250, 10)), add_u8(h(250) as u8, h(10) as u8));                  #> 4

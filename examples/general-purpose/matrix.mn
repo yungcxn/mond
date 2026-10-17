@@ -78,7 +78,7 @@ fun pascal_row = (u32 n) -> u64 {
 
 fun dot = (&[]i64 a, &[]i64 b) -> i64 {
     mut i64 s = 0;
-    for i in 0..<a.$len: s += a.*[i] * b.*[i];
+    for i in 0..<lenof a: s += a.*[i] * b.*[i];
     ret s;
 }
 
@@ -159,4 +159,4 @@ stc u32 SP = spiral_sum(); #= SP 1131510
 stc i64 DO = dot([1, 2, 3].&, [4, 5, 6].&); #= DO 32
 stc i64 MT = Mat(2)(c = [[1, 2], [3, 4]]).trace(); #= MT 5
 
-$main = () {}
+main = () {}

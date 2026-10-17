@@ -91,7 +91,7 @@ fun loop_value = () -> u64 {
     ret n;
 }
 
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     # ranges up to the largest value of their type end, also through `cont`
     line_u64(count_u8_top());                 #> 6

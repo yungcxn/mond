@@ -3,7 +3,7 @@ type In = *(mut [3]u32 xs);
 type Out = *(mut In inner, u32 k) !{
     fun get = (u32 i) -> u32: ret self.inner.xs[i] * self.k;
 }
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
 
 stcfun maker = (u32 n): (u32 m): [n, m];
 
@@ -31,7 +31,7 @@ stcfun unwraps = (Opt8 o) -> u32 {
 
 stc u32 U = unwraps(Opt8.Some(3)) * 1000 + unwraps(Opt8.None); #= U 15001
 
-$main = () {
+main = () {
     mut i32 n = 1;
     n++;
     n--;

@@ -61,7 +61,7 @@ stcfun returned = () -> u32 {
 
 # defer deinit runs the destructor of the value at that point
 type Tracked = *(*u32 log, u32 id) !{
-    $deinit = () { self.log.* = self.log.* * 10 + self.id; }
+    deinit = () { self.log.* = self.log.* * 10 + self.id; }
 }
 stcfun destructors = () -> u32 {
     mut u32 log = 0;
@@ -80,4 +80,4 @@ stc u32 JU = jumps(); #= JU 1234
 stc u32 RE = returned(); #= RE 5521
 stc u32 DE = destructors(); #= DE 321
 
-$main = () {}
+main = () {}

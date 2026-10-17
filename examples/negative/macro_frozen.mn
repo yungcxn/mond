@@ -1,16 +1,16 @@
 # a declaration is written while a splice is evaluated and until it is resolved
 fun target = () -> u32: ret 1;
 stcfun rename = (*ast(fun) f) -> u32 {
-    f.$name = ast.Identifier("renamed"); #! frozen_declaration
+    f.name = ast.Identifier("renamed"); #! frozen_declaration
     ret 0;
 }
 stc u32 outside = rename(refl target);
 
-stcfun touch = (*ast x) { x.$value = quote: 2; } #! frozen_declaration
+stcfun touch = (*ast x) { x.assigned = quote: 2; } #! frozen_declaration
 fun resolved_first = () -> u32 {
     u32 local = 1;
     <touch(refl local)>;
     ret local;
 }
 
-$main = () {}
+main = () {}

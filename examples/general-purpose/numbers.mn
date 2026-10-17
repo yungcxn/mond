@@ -178,4 +178,4 @@ stc i32 SG = sign(-9) * 100 + sign(0) * 10 + sign(4); #= SG -99
 stc i32 CLP = clamp(15, 0, 10) + clamp(-5, 0, 10) + clamp(5, 0, 10); #= CLP 15
 stc i32 M3 = max3(3, 9, 4) * 100 + max3(9, 3, 4) * 10 + max3(1, 2, 3); #= M3 993
 
-$main = () {}
+main = () {}

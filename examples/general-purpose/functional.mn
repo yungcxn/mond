@@ -11,7 +11,7 @@ stcfun flip = (Fold f): (i64 a, i64 b): f(b, a);
 stcfun negate = (Pred p): (i64 x): !p(x);
 
 fun map_into = (&[]i64 src, *[]i64 dst, IntFn f) {
-    for i in 0..<src.$len: dst.*[i] = f(src.*[i]);
+    for i in 0..<lenof src: dst.*[i] = f(src.*[i]);
 }
 
 fun filter_count = (&[]i64 src, Pred p) -> u32 {
@@ -75,28 +75,28 @@ fun memo_fib = (u32 n) -> u64 {
 
 fun accumulate = (u32 n) -> i64 {
     mut i64 total = 0;
-    add = (i64 x): total += x;
+    fun add = (i64 x): total += x;
     for i in 1..=n: add(i as i64);
     ret total;
 }
 
 fun capture_by_value = () -> i64 {
     i64 base = 10;
-    f = (i64 x): x + base;
+    fun f = (i64 x): x + base;
     ret f(1) + f(2);
 }
 
 fun shadowing = () -> i64 {
     i64 x = 1;
-    f = (i64 x): x * 2;
+    fun f = (i64 x): x * 2;
     ret f(5) + x;
 }
 
 fun nested_closures = (i64 a) -> i64 {
     i64 b = a * 2;
-    outer = (i64 c) -> i64 {
+    fun outer = (i64 c) -> i64 {
         i64 d = c + b;
-        inner = (i64 e): e + d + a;
+        fun inner = (i64 e): e + d + a;
         ret inner(1);
     }
     ret outer(3);
@@ -104,7 +104,7 @@ fun nested_closures = (i64 a) -> i64 {
 
 # n applications of the successor, as the church numeral n applies it
 fun church = (u32 n, i64 x) -> i64 {
-    succ = (i64 v): v + 1;
+    fun succ = (i64 v): v + 1;
     mut i64 acc = x;
     for 0..<n: acc = succ(acc);
     ret acc;
@@ -118,8 +118,8 @@ stcfun run_map = () -> i64 {
 
 stcfun run_pred = () -> u32 {
     [8]i64 xs = [3, 8, -1, 12, 7, 0, 5, 10];
-    even = (i64 x): x % 2 == 0;
-    odd = (i64 x): x % 2 != 0;
+    fun even = (i64 x): x % 2 == 0;
+    fun odd = (i64 x): x % 2 != 0;
     u32 a = filter_count(xs.&, even);
     u32 b = filter_count(xs.&, odd);
     u32 c = filter_count(xs.&, (i64 x): x > 4);
@@ -128,7 +128,7 @@ stcfun run_pred = () -> u32 {
 
 stcfun run_quant = () -> u32 {
     [4]i64 xs = [2, 4, 6, 9];
-    ev = (i64 x): x % 2 == 0;
+    fun ev = (i64 x): x % 2 == 0;
     ret any(xs.&, ev) as u32 * 100 + all(xs.&, ev) as u32 * 10 + all(xs.&, (i64 x): x > 0) as u32;
 }
 
@@ -167,7 +167,7 @@ stcfun closures = () -> i64 {
 
 stcfun counting = () -> i64 {
     mut i64 n = 0;
-    bump = (): n += 1;
+    fun bump = (): n += 1;
     bump();
     bump();
     ret n;
@@ -189,7 +189,7 @@ stc i64 CL = closures(); #= CL 1561
 stc i64 CN = counting(); #= CN 2
 stc bool PA = parity(7); #= PA true
 
-$main = () {
+main = () {
     IntFn f = compose(adder(1), multiplier(2));
     i64 a = f(5) + twice(multiplier(2))(3) + curry_add(1, 2)(3) + flip((i64 x, i64 y): x - y)(1, 10) + counter_from(5)(6) + church(7, 100);
     b = filter_count([1, 2, 3].&, negate((i64 x): x > 1));

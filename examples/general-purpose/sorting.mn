@@ -5,7 +5,7 @@ fun swap = (*[]u32 a, u64 i, u64 j) {
 }
 
 fun bubble = (*[]u32 a) {
-    mut u64 n = a.$len;
+    mut u64 n = lenof a;
     mut bool swapped = true;
     while swapped {
         swapped = false;
@@ -20,7 +20,7 @@ fun bubble = (*[]u32 a) {
 }
 
 fun insertion = (*[]u32 a) {
-    for i in 1..<a.$len {
+    for i in 1..<lenof a {
         mut u64 j = i;
         while j > 0 and a.*[j - 1] > a.*[j] {
             swap(a, j - 1, j);
@@ -30,9 +30,9 @@ fun insertion = (*[]u32 a) {
 }
 
 fun selection = (*[]u32 a) {
-    for i in 0..<a.$len {
+    for i in 0..<lenof a {
         mut u64 m = i;
-        for j in (i + 1)..<a.$len: if a.*[j] < a.*[m]: m = j;
+        for j in (i + 1)..<lenof a: if a.*[j] < a.*[m]: m = j;
         swap(a, i, m);
     }
 }
@@ -124,7 +124,7 @@ fun sift_down = (*[]u32 a, u64 start, u64 end) {
 }
 
 fun heap_sort = (*[]u32 a) {
-    u64 n = a.$len;
+    u64 n = lenof a;
     mut u64 start = n / 2;
     while start > 0 {
         start -= 1;
@@ -139,9 +139,9 @@ fun heap_sort = (*[]u32 a) {
 }
 
 fun shell = (*[]u32 a) {
-    mut u64 gap = a.$len / 2;
+    mut u64 gap = lenof a / 2;
     while gap > 0 {
-        for i in gap..<a.$len {
+        for i in gap..<lenof a {
             u32 t = a.*[i];
             mut u64 j = i;
             while j >= gap and a.*[j - gap] > t {
@@ -168,7 +168,7 @@ fun counting = (*[]u32 a, u32 max) {
 
 fun bsearch = (&[]u32 a, u32 key) -> i64 {
     mut i64 lo = 0;
-    mut i64 hi = a.$len as i64 - 1;
+    mut i64 hi = lenof a as i64 - 1;
     while lo <= hi {
         i64 mid = lo + (hi - lo) / 2;
         u32 v = a.*[mid as u64];
@@ -179,7 +179,7 @@ fun bsearch = (&[]u32 a, u32 key) -> i64 {
 }
 
 fun is_sorted = (&[]u32 a) -> bool {
-    for i in 1..<a.$len: if a.*[i - 1] > a.*[i]: ret false;
+    for i in 1..<lenof a: if a.*[i - 1] > a.*[i]: ret false;
     ret true;
 }
 
@@ -255,4 +255,4 @@ stc u64 DU = run_dupes(); #= DU 4444444
 stc u64 ON = run_single(); #= ON 7
 stc i64 BS = run_search(); #= BS 499
 
-$main = () {}
+main = () {}

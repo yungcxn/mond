@@ -42,4 +42,4 @@ fun types = (P p, B b) {
     w = match b { B.Z <- k => k, B.W => 0 }; #: w u8
     bb = match p { P.Zero => true, _ => false }; #: bb bool
 }
-$main = () {}
+main = () {}

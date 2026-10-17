@@ -1,6 +1,6 @@
 # Metaprogramming
 
-Code is data. A tree (`ast`) is a value that exists only at compile time. Its source text is `.$src`, and its parts are [views](#views). You make one with `quote`, put one into the program with a splice `<..>`, and read or rewrite declarations with `refl`. A macro is just a function that returns a tree and is called in a splice, usually a `stcfun`.
+Code is data. A tree (`ast`) is a value that exists only at compile time. Its source text is `.src`, and its parts are [views](#views). You make one with `quote`, put one into the program with a splice `<..>`, and read or rewrite declarations with `refl`. A macro is just a function that returns a tree and is called in a splice, usually a `stcfun`.
 
 ```mond
 stcfun unless = (ast(bool) c, ast body) -> ast(()): ret quote { if !@c { @body; } };
@@ -46,7 +46,7 @@ stc ast(i32) bad = quote: true;      #! type_mismatch
 | `@..xs` | the items of a `[]ast`, spread into a list: arguments, array elements, statements, match arms (an arm is `quote: pattern => body`) |
 | `name_@(x)` | one identifier pasted together from text or a name |
 
-Holes also work in member, type and pattern position: `a.@(f.$name)`, `(@(t.$name) a)`, `@(v.$name).@(c.$name) => ..`.
+Holes also work in member, type and pattern position: `a.@(f.name)`, `(@(t.name) a)`, `@(v.name).@(c.name) => ..`.
 
 Values lift to code: bools, ints (negative ones too), floats (also `inf` and `nan`), `[]u8` text, and types (`*T`, `[N]T`, `Box(u64)`, ...). Records don't lift (`not_static`).
 
@@ -96,7 +96,7 @@ stc u64 SS = sizeof Sized;                                   #= SS 16
 - **Free names** mean what they mean where the code lands.
 - **Sharing:** all quotes written in one function share their names.
 - **Caller's names:** a macro writes the caller's variable through a hole: `quote { @target = v; }` with `target` given as `quote: x`.
-- **`$fresh("v")`** makes a name no one else can write.
+- **`fresh "v"`** makes a name no one else can write.
 
 ```mond
 stcfun swap_add = (ast a, ast b) -> ast(()): ret quote { tmp = @a; @a = @b + tmp; };
@@ -128,7 +128,7 @@ A tree is a value you can match, read and rebuild.
 ```mond
 stcfun op = (ast e) -> u64: ret match e {
     ast.BinaryAdd(lhs, rhs) => 1,             # kinds as patterns
-    ast.BinaryMultiply(rhs = r) => r.$src.$len,
+    ast.BinaryMultiply(rhs = r) => lenof r.src,
     ast.IntegerValue | ast.FloatingPointValue => 7,
     _ => 0,
 };
@@ -152,9 +152,9 @@ stc u32 K = kind(quote: name);                #= K 2
 
 ```mond
 stcfun shape = (ast e) -> []u8: ret match e {
-    quote: @x + 0 => x.$src,
+    quote: @x + 0 => x.src,
     quote: @_ * @_ => "product",
-    quote: f(@first, @..rest) => first.$src,
+    quote: f(@first, @..rest) => first.src,
     _ => "none",
 };
 stc []u8 S1 = shape(quote: (a * b) + 0);      #= S1 "a * b"
@@ -167,72 +167,74 @@ Each name binds once in a pattern, so `@a + @a` is not an equality test.
 
 ## Views
 
-`tree.$view` reads part of a node. Its value is an `ast`. Through a `*ast` a view can also be assigned (`f.$body = ..`), and list elements are then `*ast`; write `c.*` where an `ast` is expected.
+`tree.view` reads part of a node. Its value is an `ast`. Through a `*ast` a view can also be assigned (`f.body = ..`), and list elements are then `*ast`; write `c.*` where an `ast` is expected.
 
 | view | of | |
 |---|---|---|
-| `$src` | any | source text `[]u8` (read only) |
-| `$children` | any | all children |
-| `$name` `$type` `$default` `$where` `$mut` | declarations, parameters, fields | `$mut` is a read-only `bool` |
-| `$value` | declaration | what it declares |
-| `$params` `$ret` `$body` | function | |
-| `$fields` · `$cases` · `$methods` · `$implof` | record · variant · type · type | lists, `+=` appends (and creates a missing `!{}` / `implof`) |
-| `$decls` | block, `include`, `refl $file` | top-level statements |
+| `src` | any | source text `[]u8` (read only) |
+| `children` | any | all children |
+| `name` `type` `defval` `guard` `ismut` | declarations, parameters, fields | `ismut` is a read-only `bool` |
+| `assigned` | declaration | what it declares |
+| `params` `rettype` `body` | function | |
+| `fields` · `cases` · `methods` · `traits` | record · variant · type · type | lists, `+=` appends (and creates a missing `!{}` / `implof`) |
+| `decls` | block, `include`, bare `refl` | top-level statements |
 
-List views are `[]ast` (`[]*ast` on a `*ast`), and `.$len` counts them. A view the node doesn't have is `unknown_member`.
+List views are `[]ast` (`[]*ast` on a `*ast`), and `lenof` counts them. A view the node doesn't have is `unknown_member`.
 
-- Views of declarations are on the declaration: `(refl Pt).$fields`, `(refl f).$params`.
-- A case has `$name`. Its payload fields are the children of its `def_type`.
-- `$src` is the text as written. A declaration's `$src` starts at its name, and on trees a macro built, changed or included it is not meaningful.
+- Views of declarations are on the declaration: `(refl Pt).fields`, `(refl f).params`.
+- A case has `name`. Its payload fields are the children of its `def_type`.
+- A node without a view of a name reaches its child of that name: the `body` of a loop, the `type` of an `as`.
+- `src` is the text as written. A declaration's `src` starts at its name, and on trees a macro built, changed or included it is not meaningful.
 
 ```mond
 variant Sh = +(Circle(u32 r), Rect(u32 w, u32 h), Dot);
-stc []u8 CN = (refl Sh).$cases[1].$name.$src;                           #= CN "Rect"
-stc u64 PF = (refl Sh).$cases[1].def_type.$children.$len;              #= PF 2
-stc []u8 F0 = (refl Sh).$cases[1].def_type.$children[0].$name.$src;    #= F0 "w"
+stc []u8 CN = (refl Sh).cases[1].name.src;                           #= CN "Rect"
+stc u64 PF = lenof (refl Sh).cases[1].def_type.children;              #= PF 2
+stc []u8 F0 = (refl Sh).cases[1].def_type.children[0].name.src;    #= F0 "w"
+stc []u8 AS = (quote: 300 as u8).type.src;                           #= AS "u8"
 ```
 
 ## refl: reading and writing the program
 
-`refl name` gives the declaration's tree as a `*ast(fun | type | variant | trait)`, unresolved. `refl $file` is the whole file. Writes are allowed while a splice is evaluated, and only to declarations that are not resolved yet.
+`refl name` gives the declaration's tree as a `*ast(fun | type | variant | trait)`, unresolved. A bare `refl` is the whole file: `refl.decls`. Writes are allowed while a splice is evaluated, and only to declarations that are not resolved yet.
 
 ```mond
 fun scale = (u32 v, u32 by = 2) -> u32: ret v * by;
-stc []u8 NAME = (refl scale).$name.$src;    #= NAME "scale"
-stc u64 NP = (refl scale).$params.$len;     #= NP 2
+stc []u8 NAME = (refl scale).name.src;    #= NAME "scale"
+stc u64 NP = lenof (refl scale).params;     #= NP 2
 
 fun legacy = (i16 x) -> i16: ret x + 1;
 stcfun upgrade = (*ast(fun) f) {
-    f.$name = ast.Identifier("upgraded");
-    f.$params[0].$type = quote: u32;
-    f.$ret = quote: u32;
-    f.$body = quote: ret @(f.$body.subnode) * 10;   # `subnode`: the value of `ret`
+    f.name = ast.Identifier("upgraded");
+    f.params[0].type = quote: u32;
+    f.rettype = quote: u32;
+    f.body = quote: ret @(f.body.subnode) * 10;   # `subnode`: the value of `ret`
 }
 <upgrade(refl legacy)>;
 stc u32 UP = upgraded(4);                   #= UP 50
 ```
 
-- `(refl $file).$decls` lists the top-level declarations. Appending to it or replacing an entry rewrites the program.
-- Write `(refl x).$view`, with the parentheses: `refl x.$view` reads `x.$view` as the name.
+- `refl.decls` lists the top-level declarations. Appending to it or replacing an entry rewrites the program.
+- Write `(refl x).name`, with the parentheses: `refl x.name` reflects `x.name`.
 - Writing outside a splice, or writing an already resolved declaration (including the macro itself), is `frozen_declaration`.
-- Renaming (`$name =`) doesn't update the uses of the old name.
+- Renaming (`name =`) doesn't update the uses of the old name.
 - Top splices run first, in order. What they write is seen everywhere, even by code written before them.
 
-## $asterr, include
+## crash at a tree, include
 
-`$asterr(at, "text")` stops expansion with `asterr`, reported where the tree `at` was written. `at` is an `ast`, so dereference a `refl` tree (`d.*`); the error then points at that declaration. The text is fixed: there is no string concatenation. `include "path"` reads the top-level declarations of a file (relative to the compiled file, the path any static `[]u8`) as a block tree. `<include "lib/math.mn">;` declares them. To edit them first, take a writable tree: `mut ast lib = include "f.mn"; *ast b = lib.&;` then change `b.$decls` and splice `<lib>`. A library is only included and needs no `$main`. The declarations without `pub` come along under names of their own: the library's code uses them, the including program can't name them. `includeraw "path"` gives the same tree with every name as written: the program can name all of it, and a name it declares itself is a `duplicate_declaration`. Other free names in included code resolve in the including program. Including a file twice declares its `pub` declarations twice. A missing or broken file is `include_failed`.
+`crash (at, "text")` stops expansion with `crash`, reported where the tree `at` was written. `at` is an `ast`, so dereference a `refl` tree (`d.*`); the error then points at that declaration. The text is fixed: there is no string concatenation. `include "path"` reads the top-level declarations of a file (relative to the compiled file, the path any static `[]u8`) as a block tree. `<include "lib/math.mn">;` declares them. To edit them first, take a writable tree: `mut ast lib = include "f.mn"; *ast b = lib.&;` then change `b.decls` and splice `<lib>`. A library is only included and needs no `main`. The declarations without `pub` come along under names of their own: the library's code uses them, the including program can't name them. `includeraw "path"` gives the same tree with every name as written: the program can name all of it, and a name it declares itself is a `duplicate_declaration`. Other free names in included code resolve in the including program. Including a file twice declares its `pub` declarations twice. A missing or broken file is `include_failed`.
 
 ```mond
 stcfun positive = (ast(i32) e) -> ast(i32): ret match e {
-    quote: -@_ => $asterr(e, "must not be negated"),
+    quote: -@_ => crash (e, "must not be negated"),
     _ => e,
 };
 stc i32 OK = <positive(quote: 5)>;      #= OK 5
 ```
 
 ```mond
-stcfun positive = (ast(i32) e) -> ast(i32): ret match e { quote: -@_ => $asterr(e, "negated"), _ => e };
-stc i32 NO = <positive(quote: -5)>;     #! asterr
+stcfun positive = (ast(i32) e) -> ast(i32): ret match e { quote: -@_ => crash (e, "negated"), _ => e };
+stc i32 NO = <positive(quote: -5)>;     #! crash
 stc ast lib = include "missing.mn";     #! include_failed
 ```
 
@@ -247,10 +249,10 @@ The compiler runs in passes: top-level splices first, then everything is checked
 | a stray `@` outside a quote | `stray_unquote` stops the compile before anything else is reported |
 | the same pass | what a top splice declares (a function, a macro from an include) doesn't exist yet for the other top splices of that pass; defer with `<quote: <..> >` or use it in a body |
 | unchecked macros | a `stcfun` nobody calls is never checked |
-| no generic walk | `$children[i] =` is `not_static`; a rewriter rebuilds each kind it handles with `with` or `ast.Kind(..)` |
+| no generic walk | `children[i] =` is `not_static`; a rewriter rebuilds each kind it handles with `with` or `ast.Kind(..)` |
 | quotes hold mond | a DSL must reuse mond syntax (`when(c, b);`, not `when c: b`) |
 | no text functions | no concatenation or comparison of `[]u8`; write a `stcfun` for it |
-| text is code-free | `$src`, `$mut` and `$children[i] =` can't be written (`not_static`) |
+| text is code-free | `src`, `ismut` and `children[i] =` can't be written (`not_static`) |
 | lifted literals type where they land | `<quote: @('a')>` is a `u32` |
 | a block inserted with `@b` is nested | its names end with it; use `@..b` to spread its statements |
 

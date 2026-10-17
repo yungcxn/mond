@@ -142,6 +142,35 @@ pub fn declare_local(
     return declaration;
 }
 
+pub fn roles_of(kind: DeclPool.Entry.Kind, is_global: bool) []const NamePool.Index {
+    if (kind == .trait_member) return &.{ .init, .deinit, .has_next, .next };
+    return if (is_global) &.{.main} else &.{};
+}
+
+pub fn check_keyword(self: *Declarations, statement: Stmt, roles: []const NamePool.Index) void {
+    const resolver = self.owning_resolver();
+    if (statement.assignees.len != 1 or statement.values.len != 1) return;
+    const assignee = statement.assignees[0];
+    const typed_fun = statement.type != 0 and resolver.tree.kind(statement.type) == .type_fun;
+    const untyped_fun = statement.type == 0 and statement.kind == .function;
+    const is_fun = typed_fun or untyped_fun;
+    const name = if (is_fun and roles.len > 0) resolver.name_pool.name_of_node(assignee) else .none;
+    const plays_role = std.mem.indexOfScalar(NamePool.Index, roles, name) != null;
+    if (typed_fun and plays_role and !resolver.doctor.has_report_at(statement.type)) {
+        _ = resolver.report(.redundant_fun, statement.type, 0, 0);
+    }
+    if (statement.type != 0 or plays_role) return;
+    const declared_kind = self.declared_type_kind(statement.values[0]);
+    const keyword: []const u8 = if (untyped_fun) "fun" else switch (declared_kind) {
+        .record => "type",
+        .variant => "variant",
+        .trait => "trait",
+        else => return,
+    };
+    if (resolver.doctor.has_report_at(assignee)) return;
+    _ = resolver.report(.missing_keyword, assignee, resolver.name_pool.intern(keyword), 0);
+}
+
 pub fn report_redeclaration(self: *Declarations, name: NamePool.Index, at: NodeId) void {
     const resolver = self.owning_resolver();
     const earlier = resolver.scopes.in_innermost_scope(name);
@@ -181,17 +210,10 @@ pub fn ensure_signature(self: *Declarations, declaration: DeclPool.Index) void {
     state.* = .resolving_signature;
 
     const kind = decl_pool.get(declaration, .kind);
-    const statement = Stmt.from_node(resolver, decl_pool.get(declaration, .node));
-    // these names are functions by their role already, a `fun` type on them is redundant
-    if (statement.type != 0 and resolver.tree.kind(statement.type) == .type_fun) {
-        const implied = switch (decl_pool.get(declaration, .name)) {
-            .init, .deinit, .main, .has_next, .next => true,
-            else => false,
-        };
-        if (implied) _ = resolver.report(.redundant_fun, statement.type, 0, 0);
-    }
 
     const flags = decl_pool.get(declaration, .flags);
+    const statement = Stmt.from_node(resolver, decl_pool.get(declaration, .node));
+    self.check_keyword(statement, roles_of(kind, flags.is_global));
     var context = FunctionContext{
         .declaration = declaration,
         .self_type = self.owner_of(declaration),
@@ -519,7 +541,7 @@ pub fn check_function_result(self: *Declarations, context: *FunctionContext, bod
     if (return_type == .none) return;
 
     // a `{}` body that never returns a value returns unit
-    // a body with a result returns it on every path (`$main` falls off with 0)
+    // a body with a result returns it on every path (`main` falls off with 0)
     if (static_pool.tag(return_type) == .type_variable) {
         _ = static_pool.unify(context.return_type, .unit_type);
         return;
@@ -593,6 +615,7 @@ pub fn check_statement(
         return self.check_statement(context, node);
     }
 
+    self.check_keyword(statement, &.{});
     // a local function, type or trait
     if (statement.kind != .variable) {
         for (statement.assignees) |assignee| {
@@ -1011,7 +1034,7 @@ pub fn realized(self: *Declarations, declaration: DeclPool.Index) DeclPool.Index
 pub fn collect_globals(self: *Declarations) void {
     const resolver = self.owning_resolver();
 
-    // `$os` and `$arch`: what the program is built for, static text a `stcmatch` picks code by
+    // `__os` and `__arch`: what the program is built for, static text a `stcmatch` picks code by
     const built_for = [_]struct { NamePool.Index, []const u8 }{
         .{ .os, target.os },
         .{ .arch, target.arch },

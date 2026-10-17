@@ -49,7 +49,7 @@ fun f16_to_i32 = (f16 a) -> i32: ret a as i32;
 fun half_bits = (f64 x) -> u16: ret (x as f16) asbits u16;
 fun f32_mul = (f32 a, f32 c) -> u32: ret (a * c) asbits u32;
 
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     # integers: sign extension from signed, zero extension from unsigned, truncation
     same(st(i8_to_i64(-1)), i8_to_i64(h(-1) as i8));                   #> -1

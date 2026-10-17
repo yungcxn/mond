@@ -131,7 +131,7 @@ stc u32 FILL = fill_up(); #= FILL 1011616
 stc i32 CHURN = churn(); #= CHURN 12608
 stc u32 DEL = deletes(); #= DEL 1100
 
-$main = () -> i32 {
+main = () -> i32 {
     mut Map m = empty_map();
     m.put(3, 4);
     g = m.get(3); #: g +(Hit, Miss)

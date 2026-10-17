@@ -40,7 +40,7 @@ stc u32 OTHER = stcif POW != [1, 2, 4]: 1 else: 0;   #= OTHER 0
 fun compared = () -> u32: ret stcif POW != [1, 2, 4]: 1 else: 0;
 stc u32 IN_FUN = compared();                         #= IN_FUN 0
 
-$main = () {
+main = () {
     u32 x = pick() + locals() + code();
     u64 p = platform();
 }

@@ -1,6 +1,6 @@
 type Buf = (type T, u32 N): *(mut [N]T items, mut u32 len = 0, u32 cap = N, u64 width = sizeof T);
-type Pair = (type A, type B): *(A first, B second = B.$init());
-variant Maybe = (type T): +(Just(T), Nothing) tagof u8;
+type Pair = (type A, type B): *(A first, B second = B.init());
+variant Maybe = (type T): +(Just(T), Nothing) tagtype u8;
 trait Eq = (type T): !{ fun eq = (T other) -> bool; }
 type Cell = (type T): *(T v) implof Eq(Cell(T)) !{ fun eq = (Cell(T) o) -> bool: ret self.v == o.v; }
 
@@ -31,6 +31,6 @@ stc bool O2 = Cell(u8)(v = 1) oftype Cell; #= O2 true
 stc bool O3 = Cell(u8)(v = 1) oftype Maybe; #= O3 false
 stc bool O4 = Cell(u8)(v = 1) oftype Cell(u16); #= O4 false
 
-$main = () {
+main = () {
     b = Buf(u8, 2)(items = [1, 2]); #: b *([2]u8 items, u32 len, u32 cap, u64 width)
 }

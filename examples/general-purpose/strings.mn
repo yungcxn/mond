@@ -9,12 +9,12 @@ fun to_lower = (u8 c) -> u8: ret if is_upper(c): c + 32 else: c;
 fun atoi = (&[]u8 s) -> i64 {
     mut u64 i = 0;
     mut bool neg = false;
-    if s.$len > 0 and s.*[0] == '-' {
+    if lenof s > 0 and s.*[0] == '-' {
         neg = true;
         i = 1;
     }
     mut i64 v = 0;
-    while i < s.$len and is_digit(s.*[i]) {
+    while i < lenof s and is_digit(s.*[i]) {
         v = v * 10 + (s.*[i] - '0') as i64;
         i += 1;
     }
@@ -48,12 +48,12 @@ fun itoa = (*[]u8 out, i64 n) -> u64 {
 }
 
 fun copy = (*[]u8 dst, &[]u8 src) {
-    for i in 0..<src.$len: dst.*[i] = src.*[i];
+    for i in 0..<lenof src: dst.*[i] = src.*[i];
 }
 
 fun reverse = (*[]u8 s) {
     mut u64 i = 0;
-    mut u64 j = s.$len;
+    mut u64 j = lenof s;
     while i + 1 < j {
         j -= 1;
         u8 t = s.*[i];
@@ -65,7 +65,7 @@ fun reverse = (*[]u8 s) {
 
 fun palindrome = (&[]u8 s) -> bool {
     mut u64 i = 0;
-    mut u64 j = s.$len;
+    mut u64 j = lenof s;
     while i < j {
         while i < j and !is_alpha(s.*[i]): i += 1;
         while i < j and !is_alpha(s.*[j - 1]): j -= 1;
@@ -98,7 +98,7 @@ fun words = (&[]u8 s) -> u32 {
 }
 
 fun caesar = (*[]u8 s, u8 shift) {
-    for i in 0..<s.$len {
+    for i in 0..<lenof s {
         u8 c = s.*[i];
         if is_lower(c): s.*[i] = 'a' + (c - 'a' + shift) % 26;
         if is_upper(c): s.*[i] = 'A' + (c - 'A' + shift) % 26;
@@ -115,10 +115,10 @@ fun fnv1a = (&[]u8 s) -> u32 {
 }
 
 fun find = (&[]u8 hay, &[]u8 needle) -> i64 {
-    if needle.$len > hay.$len: ret -1;
-    for i in 0..=(hay.$len - needle.$len) {
+    if lenof needle > lenof hay: ret -1;
+    for i in 0..=(lenof hay - lenof needle) {
         mut bool ok = true;
-        for j in 0..<needle.$len: if hay.*[i + j] != needle.*[j]: ok = false;
+        for j in 0..<lenof needle: if hay.*[i + j] != needle.*[j]: ok = false;
         if ok: ret i as i64;
     }
     ret -1;
@@ -127,9 +127,9 @@ fun find = (&[]u8 hay, &[]u8 needle) -> i64 {
 fun rle_len = (&[]u8 s) -> u32 {
     mut u32 groups = 0;
     mut u64 i = 0;
-    while i < s.$len {
+    while i < lenof s {
         mut u64 j = i;
-        while j < s.$len and s.*[j] == s.*[i]: j += 1;
+        while j < lenof s and s.*[j] == s.*[i]: j += 1;
         groups += 1;
         i = j;
     }
@@ -246,4 +246,4 @@ stc u8 RE = reversed_even(); #= RE 197
 stc u32 SF = shifted(); #= SF 1797917332
 stc bool RTR = roundtrip(); #= RTR true
 
-$main = () {}
+main = () {}

@@ -1,11 +1,11 @@
-variant Opt = (type T): ++(Some(T), None) tagof u8;
+variant Opt = (type T): ++(Some(T), None) tagtype u8;
 type Pair = (type A, type B): *(mut A first, mut B second);
 type Stack = (type T, u32 N): *(mut [N]T items, mut u32 len = 0) !{
     fun peek = () -> T: ret self.items[0];
     fun push = (T v) { self.items[self.len] = v; self.len += 1; }
 }
 type Cell = *(mut u8 v);
-type Res = *(mut u32 id) !{ $deinit = () {} }
+type Res = *(mut u32 id) !{ deinit = () {} }
 
 fun make = () -> Cell: ret Cell(v = 1);
 
@@ -82,13 +82,13 @@ fun calls = () {
     through_runtime_length(two.&);
 }
 
-$main = () {}
+main = () {}
 
 fun lifetimes = (&Stack(u8, 4) s) {
     mut u32 z;
-    g = (): z + 1; #! use_before_initialization
+    fun g = (): z + 1; #! use_before_initialization
     z = 2;
-    h = (): z + 1;
+    fun h = (): z + 1;
     mut Res r = Res(id = 1);
     deinit r;
     w = r.id; #! use_before_initialization

@@ -16,4 +16,4 @@ fun ranges = ([6]u8 arr, *[6]u8 wp) {
     u8 ok = arr[5];
 }
 
-$main = () {}
+main = () {}

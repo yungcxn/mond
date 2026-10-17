@@ -4,7 +4,7 @@ type Holder = *(mut () -> u32 f);
 # mutable locals are captured by reference, the closure sees later writes
 fun sees_later_write = () -> u32 {
     mut u32 n = 1;
-    f = (): n;
+    fun f = (): n;
     n = 5;
     ret f();
 }
@@ -16,15 +16,15 @@ fun per_step_copy = () -> u32 {
 }
 fun writes_through = () -> u32 {
     mut u32 n = 0;
-    inc = (): n += 2;
+    fun inc = (): n += 2;
     do inc();
     do inc();
     ret n;
 }
 fun two_levels = (u32 a) -> u32 {
     mut u32 acc = a;
-    outer = () -> u32 {
-        inner = (): acc += 1;
+    fun outer = () -> u32 {
+        fun inner = (): acc += 1;
         do inner();
         ret acc;
     }
@@ -33,7 +33,7 @@ fun two_levels = (u32 a) -> u32 {
 }
 fun reads_aggregate = () -> u32 {
     [3]u32 xs = [4, 5, 6];
-    sum = () -> u32 {
+    fun sum = () -> u32 {
         mut u32 s = 0;
         for x in xs: s += x;
         ret s;
@@ -41,7 +41,7 @@ fun reads_aggregate = () -> u32 {
     ret sum();
 }
 fun globals_not_captured = () -> u32 {
-    tick = (): TICKS += 1;
+    fun tick = (): TICKS += 1;
     do tick();
     do tick();
     ret TICKS;
@@ -68,7 +68,7 @@ stc u32 IF = into_field(); #= IF 14
 stc u32 PC = param_captured(6)(7); #= PC 42
 stc u32 LP = local_fn_sees_param(4); #= LP 12
 
-$main = () -> i32 {
+main = () -> i32 {
     u32 x = sees_later_write() + per_step_copy() + writes_through() + two_levels(1) + reads_aggregate() + globals_not_captured() + param_captured(2)(3) + local_fn_sees_param(2) + into_field();
     ret x as i32;
 }

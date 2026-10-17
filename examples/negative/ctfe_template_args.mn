@@ -41,4 +41,4 @@ stc []u64 B2 = stcfor T in [u8, Box]: sizeof T; #! type_mismatch
 type B3 = Box(Box); #! type_mismatch
 type B4 = Box(Box(u8));
 
-$main = () {}
+main = () {}

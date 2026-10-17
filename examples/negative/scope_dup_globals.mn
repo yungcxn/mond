@@ -21,4 +21,4 @@ u32 third = 3; #! duplicate_declaration
 fun ok = (u8 a) {}
 fun ok = (u16 a) {}
 fun ok = (u32 a) {}
-$main = () {}
+main = () {}

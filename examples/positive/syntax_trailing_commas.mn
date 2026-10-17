@@ -19,6 +19,6 @@ stc P PT = P(x = 1, y = 2,); #= PT [1, 2]
 stc P WITH = PT with (y = 9,); #= WITH [1, 9]
 stc u32 M = match V.Two(n = 3,) { V.Two(n,) => n, _ => 0, }; #= M 3
 
-$main = () {
+main = () {
     u32 s = add(1, 2,);
 }

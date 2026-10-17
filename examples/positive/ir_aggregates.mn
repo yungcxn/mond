@@ -45,6 +45,6 @@ stcfun s_reversed = () -> u32: ret reversed();
 stc u32 SC = s_score([1, 5, 2, 9, 4, 4, 7, 13]); #= SC 241107
 stc u32 RV = s_reversed(); #= RV 654321
 
-$main = () {
+main = () {
     u32 r = score([1, 2, 3, 4, 5, 6, 7, 8]) + reversed();
 }

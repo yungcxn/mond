@@ -83,8 +83,8 @@ fun arm_bindings = (u32 v) -> u32 {
 
 fun closure_params = () -> u32 {
     u32 x = 5;
-    f = (u32 x): x * 3;
-    g = (u32 y): x + y;
+    fun f = (u32 x): x * 3;
+    fun g = (u32 y): x + y;
     ret f(2) * 100 + g(2);
 }
 
@@ -128,4 +128,4 @@ stc u32 CO = capture_outer(); #= CO 33
 stc u32 RL = recursion_local(10); #= RL 55
 stc u32 CB = chained_blocks(); #= CB 9
 
-$main = () {}
+main = () {}

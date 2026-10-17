@@ -41,9 +41,9 @@ fun f = (&P rp, *P wp, &Q rq, *Q wq, &[3]i32 ra, *[3]i32 wa, &i32 ri, *i32 wi) {
     mp.farr[1] = 4; #! assign_to_immutable
     ip.arr[1] = 4; #! assign_to_immutable
     ia[0] = 9; #! assign_to_immutable
-    f2 = (): ia[0] += 1; #! assign_to_immutable
+    fun f2 = (): ia[0] += 1; #! assign_to_immutable
     mut i32 counter = 0;
-    f3 = (): counter += 1;
+    fun f3 = (): counter += 1;
     *i32 c1 = widen(ri);
     takes_mut(ri); #! type_mismatch
     takes_mut(ri.*.&); #! type_mismatch

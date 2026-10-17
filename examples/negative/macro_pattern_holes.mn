@@ -19,4 +19,4 @@ stcfun separate = (ast e) -> u32: ret match e {
 }
 stc u32 sep = separate(quote: x + y + z);
 
-$main = () {}
+main = () {}

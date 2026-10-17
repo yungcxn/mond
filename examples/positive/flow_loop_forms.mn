@@ -62,6 +62,6 @@ stc []u32 CD = countdown(); #= CD [4, 3, 2, 1]
 stc u32 NC = nested_cont(); #= NC 312
 stc []u32 LV = loop_value_cont(); #= LV [1, 3, 5]
 
-$main = () -> u32 {
+main = () -> u32 {
     ret while_cont() + while_brk() + loop_pre() + loop_pre_cont() + while_false() + do_while() + nested_cont();
 }

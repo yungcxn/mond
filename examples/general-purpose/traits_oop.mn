@@ -154,4 +154,4 @@ stc u32 RA = ratios(); #= RA 601305250
 stc u32 CO = counters(); #= CO 166
 stc i64 VI = visit(); #= VI 2604
 
-$main = () {}
+main = () {}

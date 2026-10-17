@@ -21,7 +21,7 @@ stc i32 X = P.x;                             #= X 3
 
 - `x with (f = v)` is a copy with the named fields replaced.
 - Unnamed fields are `$0`, `$1`, ...
-- `T(..)` needs every field that has no default, even an array (a missing one is `wrong_arity`). `T.$init()` builds a value with every field defaulted or zeroed, so `T.$init() with (f = v)` sets just some fields. An unknown name is `unknown_named_argument`.
+- `T(..)` needs every field that has no default, even an array (a missing one is `wrong_arity`). `T.init()` builds a value with every field defaulted or zeroed, so `T.init() with (f = v)` sets just some fields. An unknown name is `unknown_named_argument`.
 - Writing `p.x = ..` needs a `mut` field and a writable `p` (or a `*` pointer to it).
 - The layout is C order with natural alignment. `assertsize N` (bytes) or `assertsize T` checks it, `alignof` gives the alignment in bytes.
 - A record can't contain itself by value (`recursive_by_value_type`). Use a pointer.
@@ -44,13 +44,13 @@ Members go in `!{ }`. Inside them `self` is a `*Self`, and fields are reached on
 
 ```mond
 type Acc = *(mut i64 total) !{
-    $init = (i64 start) -> Acc: ret Acc(start);
+    init = (i64 start) -> Acc: ret Acc(start);
     fun add = (i64 v) -> i64 { self.total += v; ret self.total; }
     fun peek = () -> i64: ret self.total;
     fun reset = () { self.* = Acc(0); }
 }
 stcfun use = () -> i64 {
-    mut Acc a = Acc.$init(10);
+    mut Acc a = Acc.init(10);
     a.add(5);
     ret a.peek() + Acc.peek(a.&);
 }
@@ -61,22 +61,21 @@ stc i64 U = use();   #= U 30
 - `Type.m` is a function value `(*Type, ..) -> R`.
 - Methods may take `type T` parameters (`b.size_of(u16)`), and a template's methods see its parameters.
 - Builtin members:
-  - `T.$init()` is the user's `$init`, or else defaults and zeros.
-  - `x.$deinit()` / `deinit x` is the user's `$deinit`, or else a no-op.
-  - `.$len` is an array length, and `.$tag` is a variant tag.
-  - `$next`/`$has_next` make a value iterable (see [control.md](control.md#loops)).
-- Predefined names are written without `fun` (`fun $init` is `redundant_fun`).
+  - `T.init()` is the user's `init`, or else defaults and zeros.
+  - `x.deinit()` / `deinit x` is the user's `deinit`, or else a no-op.
+  - `next`/`has_next` make a value iterable (see [control.md](control.md#loops)).
+- `init`, `deinit`, `has_next` and `next` are written without `fun` (`fun init = ..` is `redundant_fun`). Outside a type these names are ordinary: a function `next` needs `fun`.
 
 ## Variants `+( )`
 
-`variant Name = +(cases) [tagof IntType | tagof self] [implof ..] [!{ .. }]`
+`variant Name = +(cases) [tagtype IntType | tagtype self] [implof ..] [!{ .. }]`
 
-A case is `Name`, `Name(payload fields)` or `Name = tag`. Tags count up from 0, or from the last explicit tag. Without `tagof`, the tag type is the smallest unsigned type that fits.
+A case is `Name`, `Name(payload fields)` or `Name = tag`. Tags count up from 0, or from the last explicit tag. Without `tagtype`, the tag type is the smallest unsigned type that fits.
 
 ```mond
 variant Shape = +(Circle(u32 r), Rect(u32 w, u32 h), Dot);
 variant Seq = +(A, B = 10, C);
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self;   # None lives in the unused byte values
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;   # None lives in the unused byte values
 
 fun area = (Shape s) -> u32: ret match s {
     Shape.Circle(r) => 3 * r * r,
@@ -84,7 +83,7 @@ fun area = (Shape s) -> u32: ret match s {
     Shape.Dot => 0,
 };
 stc u32 AR = area(Shape.Rect(2, 5));   #= AR 10
-stc u8 TC = Seq.C.$tag;                #= TC 11
+stc u8 TC = tagof Seq.C;                #= TC 11
 stc u64 SZ = sizeof Opt8;              #= SZ 1
 stc Opt8 O = 42;                        # a single-payload variant takes its payload
 ```
@@ -94,7 +93,8 @@ stc Opt8 O = 42;                        # a single-payload variant takes its pay
   - `v as V.Case` retags within the variant.
   - `x as V.Case` wraps a payload.
   - A payload-free case `as u32` gives its tag.
-- `tagof self` needs exactly one single-integer payload case (else `self_tag_without_niche`), and a tag must fit its tag type (else `tag_overflow`). A payload equal to another case's tag is that case: `Opt8.Some(255)` is `Opt8.None`.
+- `tagof v` is the tag of a variant value (`tagof Seq.C`); of anything else, a type too, it is `invalid_operand`.
+- `tagtype self` needs exactly one single-integer payload case (else `self_tag_without_niche`), and a tag must fit its tag type (else `tag_overflow`). A payload equal to another case's tag is that case: `Opt8.Some(255)` is `Opt8.None`.
 - Pattern matching and `??` unwrapping are in [control.md](control.md#match).
 
 ### Unions `A || B`

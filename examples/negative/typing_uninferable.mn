@@ -6,4 +6,4 @@ fun a9 = (u32 n): ret if n > 0: a9(n - 1) else: a9(n + 1); #! uninferable_type
 fun fixed = () { x = []; [0]u8 y = x; }
 fun later = () -> [0]i16 { x = []; ret x; }
 
-$main = () {}
+main = () {}

@@ -1,5 +1,5 @@
 # returned values coerce to the declared result type like any other expectation
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
 
 fun r1 = (u8 x) -> u16: ret x;
 fun r2 = (u16 x) -> u8: ret x; #! type_mismatch
@@ -27,4 +27,4 @@ fun i1 = (bool c, u8 x, u16 y) { if c: ret x; ret y; } #! type_mismatch
 fun i2 = (bool c, u8 x) { if c: ret x; ret 7; } #: i2 (bool, u8) -> u8
 fun i3 = (bool c) { if c: ret; ret; } #: i3 (bool) -> ()
 
-$main = () {}
+main = () {}

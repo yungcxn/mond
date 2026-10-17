@@ -13,4 +13,4 @@ stcfun sum = () -> i32 {
 }
 stc i32 S = sum(); #= S -3
 
-$main = () {}
+main = () {}

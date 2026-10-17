@@ -5,9 +5,9 @@ variant Op = +(
     Load(u32), Store(u32),
     Jmp(u32), Jz(u32), Call(u32), Ret,
     Halt,
-) tagof u8;
+) tagtype u8;
 
-variant Fault = +(None, StackUnderflow, StackOverflow, DivByZero, BadJump(u32), OutOfSteps) tagof u8;
+variant Fault = +(None, StackUnderflow, StackOverflow, DivByZero, BadJump(u32), OutOfSteps) tagtype u8;
 
 type Vm = *(
     &[]Op code,
@@ -116,7 +116,7 @@ fun exec = (&[]Op code) -> i64 {
     [16]i64 stack;
     [8]i64 mem;
     [8]u32 calls;
-    mut Vm vm = Vm(code = code, length = code.$len, stack = stack, mem = mem, calls = calls, sp = 0, cp = 0, pc = 0, steps = 0);
+    mut Vm vm = Vm(code = code, length = lenof code, stack = stack, mem = mem, calls = calls, sp = 0, cp = 0, pc = 0, steps = 0);
     Fault f = vm.run();
     ret match f {
         Fault.None => if vm.sp == 0: 0 else: vm.stack[vm.sp - 1],
@@ -132,7 +132,7 @@ fun steps_of = (&[]Op code) -> u32 {
     [16]i64 stack;
     [8]i64 mem;
     [8]u32 calls;
-    mut Vm vm = Vm(code = code, length = code.$len, stack = stack, mem = mem, calls = calls, sp = 0, cp = 0, pc = 0, steps = 0);
+    mut Vm vm = Vm(code = code, length = lenof code, stack = stack, mem = mem, calls = calls, sp = 0, cp = 0, pc = 0, steps = 0);
     do vm.run();
     ret vm.steps;
 }
@@ -209,4 +209,4 @@ stc i64 OVR = exec([Op.Push(1), Op.Push(2), Op.Over, Op.Add, Op.Add, Op.Halt].&)
 stc i64 RE = exec([Op.Ret,].&); #= RE 0
 stc u32 ST = steps_of([Op.Push(1), Op.Pop, Op.Halt].&); #= ST 3
 
-$main = () {}
+main = () {}

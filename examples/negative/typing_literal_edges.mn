@@ -33,4 +33,4 @@ stc u64 asbits_smaller = 1 asbits u8;                       #! invalid_cast
 stc u8 unparenthesized = 1 as u8 as u16;                    #! invalid_cast
 stc u16 parenthesized = (1 as u8) as u16;
 
-$main = () {}
+main = () {}

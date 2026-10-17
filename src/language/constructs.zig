@@ -34,6 +34,7 @@ pub const Construct = enum {
     type_test,
     type_of,
     size_of,
+    length_or_tag,
     branch,
     loop,
     range,
@@ -79,7 +80,7 @@ const construct_table = .{
     } },
     .{ .short_circuit_logic, .{ .binary_logic_and, .binary_logic_or } },
     .{ .logical_xor, .{.binary_logic_xor} },
-    .{ .call, .{.fun_call} },
+    .{ .call, .{ .fun_call, .builtin_call } },
     .{ .record_update, .{.with} },
     .{ .member_access, .{.member} },
     .{ .index, .{.array_index} },
@@ -91,6 +92,7 @@ const construct_table = .{
     .{ .type_test, .{.oftype} },
     .{ .type_of, .{.typeof} },
     .{ .size_of, .{ .sizeof, .alignof } },
+    .{ .length_or_tag, .{ .lenof, .tagof } },
     .{ .branch, .{ .if_then, .if_else, .stcif_then, .stcif_else } },
     .{ .loop, .{
         .@"while",                  .while_with_repeat_stmt, .stcwhile,
@@ -127,7 +129,7 @@ const construct_table = .{
     } },
     .{ .type_definition, .{
         .def_type,           .def_type_packed,        .def_type_assertsize, .def_type_implof,
-        .def_variant,        .def_variant_unionsized, .def_variant_tagof,   .def_variant_assertsize,
+        .def_variant,        .def_variant_unionsized, .def_variant_tagtype, .def_variant_assertsize,
         .def_variant_implof, .def_trait,              .def_trait_implof,
     } },
     .{ .part, .{

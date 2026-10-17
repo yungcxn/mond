@@ -72,7 +72,7 @@ type Json = *(
     }
 
     fun literal = (&[]u8 w) {
-        for k in 0..<w.$len {
+        for k in 0..<lenof w {
             if self.peek() != w.*[k] {
                 self.fail();
                 ret;
@@ -227,7 +227,7 @@ type Json = *(
 }
 
 fun parse = (&[]u8 s) -> Json {
-    ret Json(s = s, length = s.$len, p = 0, depth = 0, maxd = 0, nval = 0, narr = 0, nobj = 0, nstr = 0, nnum = 0, nlit = 0, nkey = 0, err = 0, failed = false);
+    ret Json(s = s, length = lenof s, p = 0, depth = 0, maxd = 0, nval = 0, narr = 0, nobj = 0, nstr = 0, nnum = 0, nlit = 0, nkey = 0, err = 0, failed = false);
 }
 
 fun check = (&[]u8 s) -> i32 {
@@ -299,4 +299,4 @@ stc i32 J53 = check("{\"a\":{\"b\":}}".&); #= J53 10
 stc i32 J54 = check("[1.5e3,-2E-2,0.0]".&); #= J54 -1
 stc [8]u32 J55 = stats("[1.5e3,-2E-2,0.0]".&); #= J55 [4, 1, 0, 0, 3, 0, 0, 1]
 
-$main = () {}
+main = () {}

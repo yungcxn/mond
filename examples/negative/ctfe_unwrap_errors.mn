@@ -14,4 +14,4 @@ stc u8 BA = bare(Bare.A);
 stc i32 FB = Res.Ok(1) ?? "none"; #! type_mismatch
 stc u8 FU = Res.Ok(1) ?? 0; #! type_mismatch
 
-$main = () {}
+main = () {}

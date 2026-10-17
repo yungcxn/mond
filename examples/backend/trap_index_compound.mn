@@ -4,7 +4,7 @@
 <include "lib/raw.mn">;
 mut i64 ONE = 0;
 fun bump = (*[4]u32 p, u64 i) { p.*[i] += 1; }
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     say_u64(1);   #> 1
     mut [4]u32 xs = [1, 2, 3, 4]; bump(xs.&, (4 * ONE) as u64); say_u64(xs[0] as u64);

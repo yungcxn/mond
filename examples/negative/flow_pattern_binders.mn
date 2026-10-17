@@ -27,4 +27,4 @@ fun use_binders = (P p) -> i32: ret match p {
     P.Two(k, _) | P.One(k) => k,
     P.Zero => z, #! undefined_name
 }
-$main = () {}
+main = () {}

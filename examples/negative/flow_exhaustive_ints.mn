@@ -19,4 +19,4 @@ fun f32_needs_wild = (f32 x) -> u8: ret match x { 0.0 => 0 } #! non_exhaustive_m
 fun f32_wild = (f32 x) -> u8: ret match x { 0.0 => 0, _ => 1 }
 fun str_wild = ([2]u8 s) -> u8: ret match s { "ab" => 0, _ => 1 }
 fun binder_all = (u8 x) -> u8: ret match x { 3 => 0, y => y }
-$main = () {}
+main = () {}

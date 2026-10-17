@@ -30,4 +30,4 @@ stcfun pick = (bool c, i8 k) -> i32 {
 stc i32 P1 = pick(true, 5); #= P1 5
 stc i32 P2 = pick(false, 5); #= P2 100
 
-$main = () {}
+main = () {}

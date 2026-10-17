@@ -5,7 +5,7 @@ fun printf = (&u8 fmt, u32 a, u32 b);
 fun read = (i32 fd, *[]u8 buf, u64 n) -> i64;
 fun write = (i32 fd, &[]u8 buf, u64 n) -> i64;
 
-variant Tok = +(Word(u32 start, u32 len), Num(i64 value), Sym(u8 ch), Space, End) tagof u8;
+variant Tok = +(Word(u32 start, u32 len), Num(i64 value), Sym(u8 ch), Space, End) tagtype u8;
 
 type Stats = *(mut u32 words = 0, mut u32 nums = 0, mut u32 syms = 0, mut i64 sum = 0, mut u32 longest = 0) !{
     fun add = (Tok t) {
@@ -84,7 +84,7 @@ fun scan_line = (*Line ln, *Stats st) -> u32 {
     ret tokens;
 }
 
-$main = (u32 argc, &&u8 argv) -> i32 {
+main = (u32 argc, &&u8 argv) -> i32 {
     mut Line line;
     mut Stats stats;
     mut u32 lines = 0;

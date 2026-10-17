@@ -1,4 +1,4 @@
-variant Opt = +(Some(u8), None = 0xFF) tagof self;
+variant Opt = +(Some(u8), None = 0xFF) tagtype self;
 variant Res = +(Ok(u32), Err(u8 code, u8 line), Pending);
 variant Dir = +(N, E, S, W);
 variant Other = +(N, M);
@@ -31,4 +31,4 @@ fun f = (Res r, Dir d, Opt o) {
     Res cc = Res.Err(line = 1, code = 2);
 }
 
-$main = () {}
+main = () {}

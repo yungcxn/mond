@@ -116,7 +116,7 @@ type Lzw = *(mut [320]u16 prefix, mut [320]u8 ch, mut u32 next) !{
         self.next = 256;
         mut u32 w = src.*[0] as u32;
         mut u32 n = 0;
-        for i in 1..<src.$len {
+        for i in 1..<lenof src {
             u8 c = src.*[i];
             u32 f = self.find(w as u16, c);
             if f != 0 {
@@ -173,7 +173,7 @@ type Lzw = *(mut [320]u16 prefix, mut [320]u8 ch, mut u32 next) !{
 }
 
 fun huffman_lengths = (&[]u32 freq, *[]u32 lens) {
-    u64 n = freq.$len;
+    u64 n = lenof freq;
     mut [32]u32 weight;
     mut [32]u32 parent;
     mut [32]bool live;
@@ -219,13 +219,13 @@ fun huffman_lengths = (&[]u32 freq, *[]u32 lens) {
 fun lz77 = (&[]u8 src, u32 window, *[]Token out) -> u32 {
     mut u32 i = 0;
     mut u32 n = 0;
-    while i < src.$len as u32 {
+    while i < lenof src as u32 {
         mut u32 best_len = 0;
         mut u32 best_off = 0;
         mut u32 back = 1;
         while back <= window and back <= i {
             mut u32 l = 0;
-            while i + l + 1 < src.$len as u32 and src.*[i + l - back] == src.*[i + l]: l += 1;
+            while i + l + 1 < lenof src as u32 and src.*[i + l - back] == src.*[i + l]: l += 1;
             if l > best_len {
                 best_len = l;
                 best_off = back;
@@ -276,7 +276,7 @@ type Bits = *(mut [16]u8 buf, mut u32 nbits, mut u32 rpos) !{
 }
 
 fun rot_less = (&[]u8 s, u32 a, u32 b) -> bool {
-    u32 n = s.$len as u32;
+    u32 n = lenof s as u32;
     for k in 0..<n {
         u8 x = s.*[(a + k) % n];
         u8 y = s.*[(b + k) % n];
@@ -286,7 +286,7 @@ fun rot_less = (&[]u8 s, u32 a, u32 b) -> bool {
 }
 
 fun bwt = (&[]u8 s, *[]u8 out) -> u32 {
-    u32 n = s.$len as u32;
+    u32 n = lenof s as u32;
     mut [16]u32 rot;
     for i in 0..<n: rot[i] = i as u32;
     for i in 1..<n {
@@ -382,8 +382,8 @@ fun delta_case = (&[]i64 xs) -> i64 {
     u32 len = delta_pack(xs, buf.&);
     u32 got = delta_unpack(buf.&, len, back.&);
     mut i64 same = 1;
-    if got != xs.$len as u32: same = 0;
-    for i in 0..<xs.$len: if back[i] != xs.*[i]: same = 0;
+    if got != lenof xs as u32: same = 0;
+    for i in 0..<lenof xs: if back[i] != xs.*[i]: same = 0;
     ret (len as i64) * 100 + (got as i64) * 10 + same;
 }
 
@@ -396,7 +396,7 @@ stc i64 DC5 = delta_case([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 fun run_packbits = (&[]u8 s) -> u64 {
     mut [400]u8 comp;
     mut [400]u8 back;
-    u32 n = s.$len as u32;
+    u32 n = lenof s as u32;
     u32 c = packbits(s, n, comp.&);
     u32 m = unpackbits(comp.&, c, back.&);
     mut u64 same = 1;
@@ -424,7 +424,7 @@ fun run_lzw = (&[]u8 s) -> u64 {
     mut Lzw d;
     u32 m = d.decode(codes.&, n, back.&);
     mut u64 same = 1;
-    if m != s.$len as u32: same = 0;
+    if m != lenof s as u32: same = 0;
     for i in 0..<m: if back[i] != s.*[i]: same = 0;
     mut u64 sum = 0;
     for i in 0..<n: sum += codes[i] as u64;
@@ -451,7 +451,7 @@ fun huff_cost = (&[]u32 freq) -> u32 {
     mut [32]u32 lens;
     huffman_lengths(freq, lens.&);
     mut u32 cost = 0;
-    for i in 0..<freq.$len: cost += freq.*[i] * lens[i];
+    for i in 0..<lenof freq: cost += freq.*[i] * lens[i];
     ret cost;
 }
 
@@ -459,7 +459,7 @@ fun huff_kraft = (&[]u32 freq) -> u32 {
     mut [32]u32 lens;
     huffman_lengths(freq, lens.&);
     mut u32 k = 0;
-    for i in 0..<freq.$len: if lens[i] > 0: k += 65536 >> lens[i];
+    for i in 0..<lenof freq: if lens[i] > 0: k += 65536 >> lens[i];
     ret k;
 }
 
@@ -467,7 +467,7 @@ fun huff_lens = (&[]u32 freq) -> u64 {
     mut [32]u32 lens;
     huffman_lengths(freq, lens.&);
     mut u64 h = 0;
-    for i in 0..<freq.$len: h = h * 10 + lens[i] as u64;
+    for i in 0..<lenof freq: h = h * 10 + lens[i] as u64;
     ret h;
 }
 
@@ -504,7 +504,7 @@ fun run_lz77 = (&[]u8 s, u32 window) -> u64 {
     u32 n = lz77(s, window, toks.&);
     u32 m = unlz77(toks.&, n, back.&);
     mut u64 same = 1;
-    if m != s.$len as u32: same = 0;
+    if m != lenof s as u32: same = 0;
     for i in 0..<m: if back[i] != s.*[i]: same = 0;
     ret (n as u64) * 10 + same;
 }
@@ -566,7 +566,7 @@ fun bwt_hash = (&[]u8 s) -> u64 {
     mut [16]u8 last;
     do bwt(s, last.&);
     mut u64 h = 0;
-    for i in 0..<s.$len: h = h * 131 + last[i] as u64;
+    for i in 0..<lenof s: h = h * 131 + last[i] as u64;
     ret h;
 }
 
@@ -578,7 +578,7 @@ fun bwt_primary = (&[]u8 s) -> u32 {
 fun bwt_roundtrip = (&[]u8 s) -> u32 {
     mut [16]u8 last;
     mut [16]u8 back;
-    u32 n = s.$len as u32;
+    u32 n = lenof s as u32;
     u32 p = bwt(s, last.&);
     unbwt(last.&, n, p, back.&);
     mut u32 same = 1;
@@ -601,4 +601,4 @@ stc u32 BWC = bwt_primary("abracadabra".&); #= BWC 2
 stc u32 BWD = bwt_roundtrip("zyxwvutsrqponmlk".&); #= BWD 1
 stc u64 BWE = bwt_hash("ab".&); #= BWE 12935
 
-$main = () {}
+main = () {}

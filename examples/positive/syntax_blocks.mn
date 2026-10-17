@@ -33,7 +33,7 @@ fun with_semicolons = () {
     while false {};
 }
 
-$main = () {
+main = () {
     no_semicolons();
     with_semicolons();
     u32 v = { 7; };

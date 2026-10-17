@@ -16,7 +16,7 @@ stc u32 LD = lambda_default(4); #= LD 12
 stc u32 LD2 = lambda_default(4, (u32 y): y + 1); #= LD2 5
 stc u32 AD = arr_default(); #= AD 6
 
-$main = () {
+main = () {
     u32 x = chain(seven()); #: x u32
     u32 y = middle(c = 1, a = 2); #: y u32
 }

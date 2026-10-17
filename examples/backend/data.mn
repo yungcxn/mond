@@ -9,7 +9,7 @@ mut u64 counter = 5;
 stc [4]u32 SQUARES = for i in 0..<4: i * i;
 
 fun fill = (u32 n) -> Big {
-    mut Big b = Big.$init();
+    mut Big b = Big.init();
     for i in 0..<n: b.cells[i] = (i * i) as u64;
     b.used = n;
     ret b;
@@ -21,7 +21,7 @@ fun total = (&[]u32 xs) -> u64 {
     ret s;
 }
 
-$main = () {
+main = () {
     mut Pt p = Pt(3);
     p.shift(4);
     line_i64(p.sum() as i64);                 #> 7
@@ -39,7 +39,7 @@ $main = () {
     [3]u64 copied = for i in 0..<3: b.cells[i + 1];
     line_u64(copied[0] + copied[1] + copied[2]);  #> 14
     &[]u32 view = xs.&;
-    line_u64(view.$len);                      #> 5
+    line_u64(lenof view);                      #> 5
     line_i64(view[4] as i64);                 #> 5
     # a record chosen by a branch, each pass anew
     mut i64 picked = 0;

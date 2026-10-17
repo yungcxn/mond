@@ -1,4 +1,4 @@
-variant Ty = +(TInt, TBool, TFun(u32 a, u32 b)) tagof u8;
+variant Ty = +(TInt, TBool, TFun(u32 a, u32 b)) tagtype u8;
 
 variant Ex = +(
     Num(i64 v),
@@ -11,11 +11,11 @@ variant Ex = +(
     Lam(u32 ty, u32 body),
     App(u32 f, u32 a),
     Let(u32 e, u32 body),
-) tagof u8;
+) tagtype u8;
 
-variant Res = +(Ok(u32 ty), Err(u32 code)) tagof u8;
+variant Res = +(Ok(u32 ty), Err(u32 code)) tagtype u8;
 
-variant Val = +(Int(i64 v), Bool(bool b), Clo(u32 body, u32 env)) tagof u8;
+variant Val = +(Int(i64 v), Bool(bool b), Clo(u32 body, u32 env)) tagtype u8;
 
 stc u32 NONE = 0xFFFFFFFF;
 
@@ -355,18 +355,18 @@ type Checker = *(
     }
 }
 
-fun fresh = (&[]u8 src) -> Checker {
+fun make_fresh = (&[]u8 src) -> Checker {
     [32]Ty tys;
     [64]Ex exs;
     [12]u32 items;
     [64]Val cv;
     [64]u32 cp;
     [24]u8 out;
-    ret Checker(src = src, length = src.$len, pos = 0, bad = 0, tys = tys, nty = 0, exs = exs, nex = 0, env = Stack(u32, 12)(items = items, n = 0), cv = cv, cp = cp, nc = 0, out = out, nout = 0);
+    ret Checker(src = src, length = lenof src, pos = 0, bad = 0, tys = tys, nty = 0, exs = exs, nex = 0, env = Stack(u32, 12)(items = items, n = 0), cv = cv, cp = cp, nc = 0, out = out, nout = 0);
 }
 
 fun type_is = (&[]u8 src, &[]u8 want) -> bool {
-    mut Checker c = fresh(src);
+    mut Checker c = make_fresh(src);
     u32 e = c.parse();
     if c.bad != 0: ret false;
     Res r = c.check(e);
@@ -377,7 +377,7 @@ fun type_is = (&[]u8 src, &[]u8 want) -> bool {
             c.put('0' + code as u8);
         },
     }
-    if c.nout as u64 != want.$len: ret false;
+    if c.nout as u64 != lenof want: ret false;
     for i in 0..<c.nout {
         if c.out[i] != want.*[i]: ret false;
     }
@@ -385,15 +385,15 @@ fun type_is = (&[]u8 src, &[]u8 want) -> bool {
 }
 
 fun parse_bad = (&[]u8 src) -> u32 {
-    mut Checker c = fresh(src);
+    mut Checker c = make_fresh(src);
     do c.parse();
     c.ws();
-    if c.bad == 0 and (c.pos as u64) < src.$len: ret 9;
+    if c.bad == 0 and (c.pos as u64) < lenof src: ret 9;
     ret c.bad;
 }
 
 fun run = (&[]u8 src) -> i64 {
-    mut Checker c = fresh(src);
+    mut Checker c = make_fresh(src);
     u32 e = c.parse();
     if c.bad != 0: ret -2000 - c.bad as i64;
     Res r = c.check(e);
@@ -466,4 +466,4 @@ stc i64 K52 = run("@ 1 2".&); #= K52 -1005
 stc i64 K53 = run("999999 ".&); #= K53 999999
 stc i64 K54 = run("+ 123456 654321".&); #= K54 777777
 
-$main = () {}
+main = () {}

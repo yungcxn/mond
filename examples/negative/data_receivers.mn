@@ -39,4 +39,4 @@ fun f = (&C ro, *C rw, C val, &Box rb, *Box wb) {
     m.fixed = 3; #! assign_to_immutable
 }
 
-$main = () {}
+main = () {}

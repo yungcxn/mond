@@ -14,4 +14,4 @@ stc u32 FW = fwd(); #= FW 6
 stc u32 GU = guard(); #= GU 4
 stc u32 BA = back(); #= BA 3
 
-$main = () {}
+main = () {}

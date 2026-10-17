@@ -54,9 +54,9 @@ fun permute = (*[]u32 a, u32 k, *u32 count, *u32 first_last) {
 
 fun subset_sum = (&[]u32 xs, u32 target) -> u32 {
     mut u32 ways = 0;
-    for mask in 0..<(1 << xs.$len) as u32 {
+    for mask in 0..<(1 << lenof xs) as u32 {
         mut u32 s = 0;
-        for i in 0..<xs.$len: if ((mask >> i as u32) & 1) == 1: s += xs.*[i];
+        for i in 0..<lenof xs: if ((mask >> i as u32) & 1) == 1: s += xs.*[i];
         if s == target: ways += 1;
     }
     ret ways;
@@ -214,4 +214,4 @@ stc u32 AC = ackermann(2, 3); #= AC 9
 stc u32 GR = gray(5) * 100 + gray(8); #= GR 712
 stc u64 TP = tri_paths(10); #= TP 184756
 
-$main = () {}
+main = () {}

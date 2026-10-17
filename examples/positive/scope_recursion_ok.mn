@@ -25,4 +25,4 @@ fun build = () -> u32 {
     ret len(b.&) * 100 + sum(b.&);
 }
 stc u32 B = build(); #= B 207
-$main = (u64 n, &&u8 p) -> i64 { u32 b = build(); } #: $main (u64, &&u8) -> i64
+main = (u64 n, &&u8 p) -> i64 { u32 b = build(); } #: main (u64, &&u8) -> i64

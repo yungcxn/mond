@@ -3,4 +3,4 @@ type C = *(mut u32 n, u32 d = 1) !{
     fun get = () -> u32: ret n; #! undefined_name
     fun ok = () -> u32: ret self.n + self.d;
 }
-$main = () {}
+main = () {}

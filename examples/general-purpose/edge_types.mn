@@ -21,7 +21,7 @@ type Rect = *(Vec2 min, Vec2 max) !{
 }
 
 type Account = *(mut i64 balance, mut u32 ops = 0) !{
-    $init = (i64 start): ret Account(balance = start);
+    init = (i64 start): ret Account(balance = start);
     fun deposit = (i64 n) -> bool {
         if n <= 0: ret false;
         self.balance += n;
@@ -90,7 +90,7 @@ stcfun rects = () -> i32 {
 }
 
 stcfun accounts = () -> i64 {
-    mut Account a = Account.$init(100);
+    mut Account a = Account.init(100);
     do a.deposit(50);
     do a.withdraw(500);
     do a.withdraw(30);
@@ -149,4 +149,4 @@ stc u32 WC = with_chain(); #= WC 125619
 stc u32 VS = value_semantics(); #= VS 9911575
 stc u64 LY = layouts(); #= LY 8121604
 
-$main = () {}
+main = () {}

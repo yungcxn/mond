@@ -13,7 +13,7 @@ fun per_pass = () -> i64 {
     mut i64 s = 0;
     for i in 0..<h(4) {
         i64 k = i * 10;
-        f = (i64 x): x + k;
+        fun f = (i64 x): x + k;
         s += apply(f, i);
     }
     ret s;
@@ -22,7 +22,7 @@ fun per_pass = () -> i64 {
 fun counter = () -> i64 {
     mut i64 hits = 0;
     mut i64 last = 0;
-    record = (i64 x) -> i64 { hits += 1; last = x; ret x; };
+    fun record = (i64 x) -> i64 { hits += 1; last = x; ret x; };
     do apply_twice(record, h(5));
     ret hits * 100 + last;
 }
@@ -31,13 +31,13 @@ type Pt = *(i64 x, i64 y);
 fun captured_aggregates = () -> i64 {
     Pt p = Pt(h(3), h(4));
     [3]i64 xs = [h(1), h(2), h(3)];
-    f = (i64 i): p.x * p.y + xs[i as u64];
+    fun f = (i64 i): p.x * p.y + xs[i as u64];
     ret apply(f, 2);
 }
 # closures inside closures, the inner one using the outer one's parameter and frame
 fun nested = (i64 base) -> i64 {
-    outer = (i64 a) -> i64 {
-        inner = (i64 b): a * 100 + b + base;
+    fun outer = (i64 a) -> i64 {
+        fun inner = (i64 b): a * 100 + b + base;
         ret apply(inner, a + 1);
     };
     ret apply(outer, h(4));
@@ -57,7 +57,7 @@ fun spread = (Big b, i64 n) -> Big {
     ret spread(c, n - 1);
 }
 
-$main = (u32 argc, &&u8 argv) {
+main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     line_i64(per_pass());                     #> 66
     line_i64(counter());                      #> 205

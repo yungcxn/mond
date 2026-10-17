@@ -7,7 +7,7 @@ fun sgn = (i64 v) -> i32: ret if v > 0: 1 else: if v < 0: -1 else: 0;
 fun before = (P a, P b) -> bool: ret a.x < b.x or a.x == b.x and a.y < b.y;
 
 fun sort_points = (*[]P pts) {
-    for i in 1..<pts.$len {
+    for i in 1..<lenof pts {
         P key = pts.*[i];
         mut u64 j = i;
         while j > 0 and before(key, pts.*[j - 1]) {
@@ -68,7 +68,7 @@ fun intersects = (P a, P b, P c, P d) -> bool {
 
 # 0 outside, 1 inside, 2 on the boundary, by crossing count of a ray to the right
 fun locate = (&[]P poly, P q) -> u32 {
-    u64 n = poly.$len;
+    u64 n = lenof poly;
     mut bool inside = false;
     for i in 0..<n {
         P a = poly.*[i];
@@ -94,7 +94,7 @@ fun gcd = (i64 a0, i64 b0) -> i64 {
 
 # lattice points strictly inside a lattice polygon: area = i + b / 2 - 1
 fun interior_points = (&[]P poly) -> i64 {
-    u64 n = poly.$len;
+    u64 n = lenof poly;
     mut i64 a2 = 0;
     mut i64 boundary = 0;
     for i in 0..<n {
@@ -144,7 +144,7 @@ stc u32 SEG = segments(); #= SEG 45
 stc u32 LOC = locations(); #= LOC 1022102
 stc i64 PICK = picks(); #= PICK 90119
 
-$main = () -> i64 {
+main = () -> i64 {
     [3]P t = [P(x = 0, y = 0), P(x = 3, y = 0), P(x = 0, y = 3)];
     c = cross(t[0], t[1], t[2]); #: c i64
     ret c + locate(t.&, P(x = 1, y = 1)) as i64 + interior_points(t.&);

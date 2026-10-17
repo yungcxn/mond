@@ -111,7 +111,7 @@ stc i64 TRI = trig(); #= TRI 10005010000292
 stc i64 POW = powers(); #= POW 7593001000
 stc i64 MIX = mixes(); #= MIX 1250002000
 
-$main = () -> i32 {
+main = () -> i32 {
     h = ratio(1, 2); #: h i32
     r = cordic(h); #: r *(i32 cos, i32 sin)
     m = milli(mul(r.cos, r.sin)); #: m i64

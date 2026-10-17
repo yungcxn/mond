@@ -1,5 +1,5 @@
 variant V = +(A, B, C);
-type R = *(mut i32 x) !{ $deinit = () {} }
+type R = *(mut i32 x) !{ deinit = () {} }
 
 fun ifs = (bool c, bool d) {
     mut u32 a;
@@ -103,4 +103,4 @@ fun nested = () {
     fun later = () -> u32: ret a;
 }
 
-$main = () {}
+main = () {}

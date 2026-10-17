@@ -25,8 +25,8 @@ type Pool = *(mut [8]u32 next, mut [8]bool used, mut u32 free = 0, mut u32 live 
 fun new_pool = () -> Pool: ret Pool(next = [1, 2, 3, 4, 5, 6, 7, 8], used = [false, false, false, false, false, false, false, false]);
 
 type Handle = *(u32 slot, *Pool pool) !{
-    $init = (*Pool p) -> Handle: ret Handle(slot = p.acquire(), pool = p);
-    $deinit = () { self.pool.release(self.slot); }
+    init = (*Pool p) -> Handle: ret Handle(slot = p.acquire(), pool = p);
+    deinit = () { self.pool.release(self.slot); }
     fun ok = () -> bool: ret self.slot < 8;
 }
 
@@ -36,15 +36,15 @@ fun stats = (&Pool p) -> u32: ret p.live * 1000 + p.peak * 100 + p.failed * 10 +
 fun scopes = () -> u32 {
     mut Pool p = new_pool();
     {
-        mut Handle a = Handle.$init(p.&);
+        mut Handle a = Handle.init(p.&);
         defer deinit a;
         {
-            mut Handle b = Handle.$init(p.&);
+            mut Handle b = Handle.init(p.&);
             defer deinit b;
-            mut Handle c = Handle.$init(p.&);
+            mut Handle c = Handle.init(p.&);
             defer deinit c;
         }
-        mut Handle d = Handle.$init(p.&);
+        mut Handle d = Handle.init(p.&);
         defer deinit d;
     }
     ret stats(p.&);
@@ -66,10 +66,10 @@ fun searching = (u32 target) -> u32 {
     mut Pool p = new_pool();
     mut u32 found = 99;
     for i in 0..<4 {
-        mut Handle outer = Handle.$init(p.&);
+        mut Handle outer = Handle.init(p.&);
         defer deinit outer;
         for j in 0..<4 {
-            mut Handle inner = Handle.$init(p.&);
+            mut Handle inner = Handle.init(p.&);
             defer deinit inner;
             if j == 1: cont;
             if i * 4 + j == target {
@@ -83,12 +83,12 @@ fun searching = (u32 target) -> u32 {
 }
 
 fun leave_early = (*Pool p, u32 k) -> u32 {
-    mut Handle a = Handle.$init(p);
+    mut Handle a = Handle.init(p);
     defer deinit a;
-    mut Handle b = Handle.$init(p);
+    mut Handle b = Handle.init(p);
     defer deinit b;
     if k == 0: ret p.live;
-    mut Handle c = Handle.$init(p);
+    mut Handle c = Handle.init(p);
     defer deinit c;
     if k == 1: ret p.live * 10;
     ret p.live * 100;
@@ -131,13 +131,13 @@ fun by_kind = (u32 k) -> u32 {
     mut u32 mark = 0;
     match k {
         0 => {
-            mut Handle h = Handle.$init(p.&);
+            mut Handle h = Handle.init(p.&);
             defer deinit h;
             mark = p.live;
         },
         1 => {
-            mut Handle h = Handle.$init(p.&);
-            mut Handle g = Handle.$init(p.&);
+            mut Handle h = Handle.init(p.&);
+            mut Handle g = Handle.init(p.&);
             defer deinit h;
             mark = p.live * 10;
         },
@@ -162,9 +162,9 @@ stc u32 RE = s_returns(); #= RE 3320300
 stc u32 TR = s_trans(); #= TR 88183440
 stc u32 KI = s_kinds(); #= KI 100200017
 
-$main = () -> u32 {
+main = () -> u32 {
     mut Pool p = new_pool();
-    h = Handle.$init(p.&);
+    h = Handle.init(p.&);
     s = h.slot; #: s u32
     u32 ok = if h.ok(): 1 else: 0;
     ret scopes() + exhaust() + searching(5) + returns() + transactions() + by_kind(1) + ok;

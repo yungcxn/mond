@@ -11,7 +11,7 @@
 #   3.  functions (every definition form, defaults, named args, where / where-else / stcwhere,
 #       overloading, lambdas, currying, inlfun, stcfun with two parameter tuples, function types)
 #   4.  types (plain, packed, mutable fields, defaults, where-else fields, assertsize, generics,
-#       $init / $deinit, methods, `with` copies)
+#       init / deinit, methods, `with` copies)
 #   5.  traits (plain, generic, trait-implementing traits, implof lists)
 #   6.  variants (enum-like, tagged unions, self-tagged, untagged unification with ||)
 #   7.  pattern matching (literals, or-patterns with `|`, ranges, payload destructuring,
@@ -107,7 +107,6 @@ i32 _underscored     = 1;
 i32 __double         = 2;
 i32 camelCaseName    = 3;
 i32 snake_case_name2 = 4;
-i32 $dollar          = 5;
 
 
 
@@ -340,7 +339,7 @@ fun absolute = (i32 x) -> i32: ret if x < 0: -x else: x;
 fun absolute = (f32 x) -> f32: ret if x < 0.0: -x else: x;
 
 # overloading by array length through pointers (0-copy)
-fun arr_sum = (&[]u32 arr)  -> u32: ret arr_sum(arr as &[arr.$len-1]u32) + arr.*[arr.$len-1];
+fun arr_sum = (&[]u32 arr)  -> u32: ret arr_sum(arr as &[lenof arr-1]u32) + arr.*[lenof arr-1];
 fun arr_sum = (&[1]u32 arr) -> u32: ret arr.*[0];
 fun arr_sum = (&[0]u32 arr) -> u32: ret 0;
 
@@ -456,8 +455,8 @@ type ByteBuf = Chunk(u8);
 
 # types with methods (anonymous trait body)
 type Counter = *(mut u32 count = 0, u32 step = 1) !{
-    $init = (u32 step): ret Counter(step = step);
-    $deinit = () {}
+    init = (u32 step): ret Counter(step = step);
+    deinit = () {}
 
     fun tick = () { self.count += self.step; }
     fun reset = () { self.count = 0; }
@@ -495,7 +494,7 @@ fun type_tour = () {
     older_peter = peter with (age = 99) with (address = "Retirement Home");
 
     # methods
-    mut Counter c = Counter.$init(2);
+    mut Counter c = Counter.init(2);
     c.tick();
     c.tick();
     u32 v = c.value();
@@ -550,8 +549,8 @@ trait Comparable = (type T): !{
 }
 
 trait Iterable = (type T): !{
-    $next = () -> T;
-    $has_next = () -> bool;
+    next = () -> T;
+    has_next = () -> bool;
 }
 
 # a trait that builds on other traits
@@ -585,11 +584,11 @@ type Id = *(u32 raw) assertsize 4 implof Comparable(Id) !{
 
 # real example: a byte stream implementing the builtin `Iterable`
 type ByteStream = *(&u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
-    $init = (&u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
-    $deinit = () {}
+    init = (&u8 in_buf, u32 len): ret ByteStream(buf = in_buf, cursor = 0, len = len);
+    deinit = () {}
 
-    $next = () -> u8: ret self.buf[self.cursor++];
-    $has_next = () -> bool: ret self.cursor < self.len;
+    next = () -> u8: ret self.buf[self.cursor++];
+    has_next = () -> bool: ret self.cursor < self.len;
     fun peek = () -> u8: ret self.buf[self.cursor];
     fun skip = (u32 n = 1) { self.cursor += n; }
 
@@ -598,10 +597,10 @@ type ByteStream = *(&u8 buf, mut u32 cursor, u32 len) implof Iterable(u8) !{
 
 # generic stream
 type Stream = (type Child): *(*Child buf, mut u32 cursor, u32 len) implof Iterable(Child) !{
-    $init = (*Child in_buf, u32 len): ret Stream(Child)(buf = in_buf, cursor = 0, len = len);
+    init = (*Child in_buf, u32 len): ret Stream(Child)(buf = in_buf, cursor = 0, len = len);
 
-    $next = () -> Child: ret self.buf[self.cursor++];
-    $has_next = () -> bool: ret self.cursor < self.len;
+    next = () -> Child: ret self.buf[self.cursor++];
+    has_next = () -> bool: ret self.cursor < self.len;
 
     pub fun pop = () -> Opt(Child): ret if self.cursor >= self.len: Opt(Child).None else: self.buf[self.cursor++];
 }
@@ -647,7 +646,7 @@ fun trait_tour = () {
 variant Direction = +(North, South, East, West);
 
 # A2) enum-like with explicit tag values and tag type
-variant Level = +(Low = 1, Mid = 5, High = 10,) tagof u8;
+variant Level = +(Low = 1, Mid = 5, High = 10,) tagtype u8;
 
 # B) tagged homogenic union variant
 variant Register = ++(
@@ -655,7 +654,7 @@ variant Register = ++(
     AsInt(i32)                      = 0x01,
     AsFloat(f32)                    = 0x02,
     AsBytes(u8 a, u8 b, u8 c, u8 d) = 0x03,
-) tagof u8;
+) tagtype u8;
 
 # C) tagged heterogenic abstract variant
 variant Event = +(
@@ -663,7 +662,7 @@ variant Event = +(
     Key(u8)             = 0x02,
     Scroll(mut f32 delta = 0.0) = 0x03,
     Close               = 0x00,
-) tagof u8;
+) tagtype u8;
 
 # D) homogenic union variant (tagged by default: 1 tag byte + 4 payload bytes, aligned)
 variant AnyFixed32 = ++(
@@ -680,28 +679,28 @@ variant AnyPrintable = +(
 );
 
 # F) self-tagged variants: the payload itself encodes the tag
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self assertsize u8;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self assertsize u8;
 
 variant CommonCode = +(
     Ok  = 0x0,
     OOM = 0x1,
     EOF = 0x2,
     Undefined(u8),
-) tagof self;
+) tagtype self;
 
 # payloads with every parameter feature
 variant FamilyMember = +(
     Parent(&u8 name, mut i32 age where age >= 18 else age = 18) = 0x01,
     Child(&u8 name, mut i32 age, mut bool is_student = false)   = 0x02,
     Pet(mut [10]u8 name, &u8 species)                           = 0x03,
-) tagof u8;
+) tagtype u8;
 
 # generic builtins-alikes
-variant Opt    = (type T): ++(Some(T), None) tagof u8;
-variant Result = (type T, type E): +(Ok(T), Err(E)) tagof u8;
+variant Opt    = (type T): ++(Some(T), None) tagtype u8;
+variant Result = (type T, type E): +(Ok(T), Err(E)) tagtype u8;
 
 # variants with methods
-variant Shape = +(Circle(f32 r), Rect(f32 w, f32 h), Tri(f32 a, f32 b, f32 c)) tagof u8 !{
+variant Shape = +(Circle(f32 r), Rect(f32 w, f32 h), Tri(f32 a, f32 b, f32 c)) tagtype u8 !{
     fun area = () -> f32: ret match self {
         Shape.Circle(r) => 3.14159 * r * r,
         Shape.Rect(w, h) => w * h,
@@ -709,15 +708,15 @@ variant Shape = +(Circle(f32 r), Rect(f32 w, f32 h), Tri(f32 a, f32 b, f32 c)) t
     }
 }
 
-variant Toggle = +(On, Off) tagof u8 assertsize 1 implof Describable !{
+variant Toggle = +(On, Off) tagtype u8 assertsize 1 implof Describable !{
     fun name = () -> &u8: ret match self { Toggle.On => "on", Toggle.Off => "off" }
     fun flipped = () -> Toggle: ret if self == Toggle.On: Toggle.Off else: Toggle.On;
 }
 
 # unifying variants into a bigger one
-variant IoError    = +(NotFound, PermissionDenied, Interrupted) tagof u8;
-variant ParseError = +(UnexpectedChar(u8), UnexpectedEof) tagof u8;
-variant NetError   = +(Timeout(u32 ms), Refused) tagof u8;
+variant IoError    = +(NotFound, PermissionDenied, Interrupted) tagtype u8;
+variant ParseError = +(UnexpectedChar(u8), UnexpectedEof) tagtype u8;
+variant NetError   = +(Timeout(u32 ms), Refused) tagtype u8;
 variant AppError   = IoError || ParseError || NetError;
 
 fun heron = (f32 a, f32 b, f32 c) -> f32 {
@@ -1007,12 +1006,12 @@ fun for_tour = () {
     }
 
     # computed bounds
-    for i in 0..<arr3.$len: arr3[i] *= 2;
+    for i in 0..<lenof arr3: arr3[i] *= 2;
     # generators bind tighter than binary operators, so a computed lower bound needs parens
-    for i in (arr3.$len - 1)..=arr3.$len * 2: print("%d", i);
+    for i in (lenof arr3 - 1)..=lenof arr3 * 2: print("%d", i);
 
     # for as value produces an array
-    mut [arr3.$len]u32 arr4;
+    mut [lenof arr3]u32 arr4;
     arr4 = for arr3: $it * 2;
     []i32 squares = for i in 1..=8: i * i;
 
@@ -1089,15 +1088,15 @@ fun void_exit = (bool b) {
 # ============================================================================================== #
 
 type File = *(i32 fd, mut bool open = true) !{
-    $init = (&u8 path): ret File(fd = sys_open(path));
-    $deinit = () { if self.open: self.close(); }
+    init = (&u8 path): ret File(fd = sys_open(path));
+    deinit = () { if self.open: self.close(); }
     fun close = () { sys_close(self.fd); self.open = false; }
     fun write = (&u8 data) -> u64: ret sys_write(self.fd, data);
 }
 
 fun resource_tour = () {
     # plain defer
-    mut File log = File.$init("/tmp/log.txt");
+    mut File log = File.init("/tmp/log.txt");
     defer log.close();
 
     # defer a whole block
@@ -1111,12 +1110,12 @@ fun resource_tour = () {
     defer depth = 0;
 
     # explicit deinit
-    tmp = File.$init("/tmp/scratch");
+    tmp = File.init("/tmp/scratch");
     tmp.write("scratch data");
     deinit tmp;
 
     # deinit deferred right at the construction site
-    data = File.$init("/tmp/data.bin") defer deinit;
+    data = File.init("/tmp/data.bin") defer deinit;
     data.write("payload");
 
     # do: evaluate for side effects only
@@ -1138,7 +1137,7 @@ fun calc_something = () -> i32: ret 42;
 type DivMod = *(i32 quot, i32 rem);
 fun divmod = (i32 a, i32 b) -> DivMod: ret DivMod(a / b, a % b);
 fun find_byte = (&[]u8 hay, u8 needle) -> Opt8 {
-    for i in 0..<hay.$len: if hay.*[i] == needle: ret Opt8.Some(i as u8);
+    for i in 0..<lenof hay: if hay.*[i] == needle: ret Opt8.Some(i as u8);
     ret Opt8.None;
 }
 
@@ -1188,7 +1187,7 @@ fun array_tour = () {
     # fixed length
     mut [4]u8 arr = [1, 2, 3, 4];
     arr[0] = 42;
-    arr[arr.$len - 1] += 1;
+    arr[lenof arr - 1] += 1;
 
     # induced length
     []u8 induced_len = [5, 6, 7, 8, 9];
@@ -1210,10 +1209,10 @@ fun array_tour = () {
     &[4]u8 arr_ptr = arr.&;
     u8 via_ptr = arr_ptr.*[2];
     u8 via_auto = arr_ptr[2];
-    u64 len_auto = arr_ptr.$len;
+    u64 len_auto = lenof arr_ptr;
 
     # strings
-    []u8 str = "Hello, world!";                                               # str.$len == 13
+    []u8 str = "Hello, world!";                                               # lenof str == 13
     &u8 cstr = "Hello, world!";                                                  # with \0
     u8 h = str[0];
 
@@ -1257,12 +1256,12 @@ variant Op = +(
     Jz(u32)    = 0x31,
     Print      = 0x40,
     Halt       = 0xFF,
-) tagof u8;
+) tagtype u8;
 
-variant VmError = +(StackOverflow, StackUnderflow, DivByZero, BadJump(u32 target)) tagof u8;
+variant VmError = +(StackOverflow, StackUnderflow, DivByZero, BadJump(u32 target)) tagtype u8;
 
 # a status is either fine or carries an error
-variant Status = (type E): +(Ok, Err(E)) tagof u8;
+variant Status = (type E): +(Ok, Err(E)) tagtype u8;
 type VmStatus = Status(VmError);
 type Arith64  = (i64, i64) -> i64;
 
@@ -1277,7 +1276,7 @@ type Vm = *(
     u64 length,
     mut bool running = true,
 ) !{
-    $init = (&[]Op program): ret Vm(stack = empty_stack, program = program, length = program.$len);
+    init = (&[]Op program): ret Vm(stack = empty_stack, program = program, length = lenof program);
 
     fun push = (i64 v) -> VmStatus {
         if self.sp >= VM_STACK_SIZE: ret VmStatus.Err(VmError.StackOverflow);
@@ -1360,7 +1359,7 @@ fun vm_demo = () {
         Op.Halt,
     ];
 
-    mut Vm vm = Vm.$init(program.&) defer deinit;
+    mut Vm vm = Vm.init(program.&) defer deinit;
     match vm.run() {
         VmStatus.Ok => print("vm finished"),
         VmStatus.Err(VmError.DivByZero) => print("division by zero"),
@@ -1374,7 +1373,7 @@ fun vm_demo = () {
 # 12.2 a tokenizer over ByteStream
 # ---------------------------------------------------------------------------------------------- #
 
-variant TokKind = +(Number, Ident, Plus, Minus, Star, Slash, LParen, RParen, End) tagof u8;
+variant TokKind = +(Number, Ident, Plus, Minus, Star, Slash, LParen, RParen, End) tagtype u8;
 
 type Tok = *(TokKind kind, u32 start, u32 end) assertsize 12;
 
@@ -1383,13 +1382,13 @@ fun is_alpha = (u8 c) -> bool: ret c >= 'a' and c <= 'z' or c >= 'A' and c <= 'Z
 fun is_space = (u8 c) -> bool: ret match c { ' ' | '\t' | '\n' | '\r' => true, _ => false }
 
 fun tokenize = (&u8 src, u32 len) -> [1024]Tok {
-    mut ByteStream bs = ByteStream.$init(src, len) defer deinit;
+    mut ByteStream bs = ByteStream.init(src, len) defer deinit;
     mut [1024]Tok out;
     mut u32 count = 0;
 
-    while bs.$has_next() {
+    while bs.has_next() {
         u32 start = bs.cursor;
-        u8 c = bs.$next();
+        u8 c = bs.next();
 
         if is_space(c): cont;
 
@@ -1401,11 +1400,11 @@ fun tokenize = (&u8 src, u32 len) -> [1024]Tok {
             '(' => TokKind.LParen,
             ')' => TokKind.RParen,
             '0'..='9' => {
-                while bs.$has_next() and is_digit(bs.peek()): bs.skip();
+                while bs.has_next() and is_digit(bs.peek()): bs.skip();
                 TokKind.Number;
             },
             _ => {
-                while bs.$has_next() and is_alpha(bs.peek()): bs.skip();
+                while bs.has_next() and is_alpha(bs.peek()): bs.skip();
                 TokKind.Ident;
             },
         }
@@ -1450,8 +1449,8 @@ type RingBuffer = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0):
     }
 
     # Iterable(T)
-    $next = () -> T: ret self.pop() ??;
-    $has_next = () -> bool: ret !self.is_empty();
+    next = () -> T: ret self.pop() ??;
+    has_next = () -> bool: ret !self.is_empty();
 }
 
 type EventQueue = RingBuffer(Event, 64);
@@ -1524,8 +1523,8 @@ fun tree_demo = () {
 # 12.5 a state machine driven by variants and loops
 # ---------------------------------------------------------------------------------------------- #
 
-variant TrafficLight = +(Red(u32 wait), Yellow, Green(u32 wait)) tagof u8 !{
-    fun next = () -> TrafficLight: ret match self {
+variant TrafficLight = +(Red(u32 wait), Yellow, Green(u32 wait)) tagtype u8 !{
+    next = () -> TrafficLight: ret match self {
         TrafficLight.Red(_) => TrafficLight.Green(wait = 30),
         TrafficLight.Green(_) => TrafficLight.Yellow,
         TrafficLight.Yellow => TrafficLight.Red(wait = 45),
@@ -1554,7 +1553,7 @@ fun traffic_demo = () {
 ### MAIN ###
 # ============================================================================================== #
 
-$main = (u32 argc, &&u8 argv) -> i32 {
+main = (u32 argc, &&u8 argv) -> i32 {
     if argc < 2 {
         print("usage: %s <demo>", argv[0]);
         ret 1;

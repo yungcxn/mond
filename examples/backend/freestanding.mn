@@ -11,7 +11,7 @@ fun area = (Shape shape) -> i64: ret match shape {
 };
 
 # the exit code is the test: 0 when everything holds
-$main = (u32 argc, &&u8 argv) -> u8 {
+main = (u32 argc, &&u8 argv) -> u8 {
     mut [256]u8 bytes;
     for i in 0..<256: bytes[i] = i as u8;
     [256]u8 copied = bytes;

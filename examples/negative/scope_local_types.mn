@@ -12,4 +12,4 @@ fun g = () -> u32 {
     }
     ret T(v = 1).get() + U(w = 2).need();
 }
-$main = () {}
+main = () {}

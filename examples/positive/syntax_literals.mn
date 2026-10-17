@@ -47,7 +47,7 @@ stc u8 S7 = STR[7]; #= S7 122
 stc []u8 HASHED = "'#'"; #: HASHED [3]u8
 stc u8 H1 = HASHED[1]; #= H1 35
 stc []u8 EMPTY = ""; #: EMPTY [0]u8
-stc u64 EMPTY_LEN = EMPTY.$len; #= EMPTY_LEN 0
+stc u64 EMPTY_LEN = lenof EMPTY; #= EMPTY_LEN 0
 
 # identifiers may start with `_` or `$` and contain keywords
 stc u32 _under = 1; #= _under 1
@@ -56,7 +56,7 @@ stc u32 u8x = 3; #= u8x 3
 stc u32 fun_ = 4; #= fun_ 4
 stc u32 a1b2 = 5; #= a1b2 5
 
-$main = () {
+main = () {
     x = 0x10; #: x u32
     y = 1_000.5; #: y f32
     z = '\x30'; #: z u32

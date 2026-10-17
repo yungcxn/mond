@@ -71,7 +71,7 @@ stcfun call = () -> u32 {
     ret t.m0() + t.m63() * 100 + t.m64() * 10000;
 }
 stc u32 R = call(); #= R 646300
-$main = () {
+main = () {
     T t = T(x = 0);
     r = t.m64(); #: r u32
 }

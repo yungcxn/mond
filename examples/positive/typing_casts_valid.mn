@@ -1,7 +1,7 @@
 # every valid kind of `as`, evaluated statically
 variant Color = +(Red, Green = 5, Blue);
-variant Reg = ++(AsInt(i32), AsFloat(f32), AsByte(u8)) tagof u8;
-variant Small = +(Lo = 0, Hi = 255) tagof u8;
+variant Reg = ++(AsInt(i32), AsFloat(f32), AsByte(u8)) tagtype u8;
+variant Small = +(Lo = 0, Hi = 255) tagtype u8;
 
 stc u32 B1 = true as u32; #= B1 1
 stc u8 B0 = false as u8; #= B0 0
@@ -47,4 +47,4 @@ stcfun mid = () -> u32 {
 
 stc u32 MID = mid(); #= MID 6030040
 
-$main = () {}
+main = () {}

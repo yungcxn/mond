@@ -4,7 +4,7 @@
 
 stc u64 LENGTH = 96;
 
-$main = (u32 argc, &&u8 argv) -> u8 {
+main = (u32 argc, &&u8 argv) -> u8 {
     mut [LENGTH]u8 text;
     for i in 0..<LENGTH: text[i] = 'a' + (i % 26) as u8;
     bool equal = match text {

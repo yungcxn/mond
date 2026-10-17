@@ -1,6 +1,6 @@
 # a small stream pipeline built from first class functions, where dispatch and pointer walks
 
-fun map = (*[]i64 xs, (i64) -> i64 f) { for i in 0..<xs.$len: xs[i] = f(xs[i]); }
+fun map = (*[]i64 xs, (i64) -> i64 f) { for i in 0..<lenof xs: xs[i] = f(xs[i]); }
 
 fun fold = (&[]i64 xs, i64 init, (i64, i64) -> i64 f) -> i64 {
     mut i64 acc = init;
@@ -25,7 +25,7 @@ stcfun then = ((i64) -> i64 f, (i64) -> i64 g): (i64 x): g(f(x));
 
 fun max_ptr = (&[]i64 xs) -> u64 {
     mut u64 best = 0;
-    for i in 1..<xs.$len: if xs.*[i] > xs.*[best]: best = i;
+    for i in 1..<lenof xs: if xs.*[i] > xs.*[best]: best = i;
     ret best;
 }
 
@@ -56,7 +56,7 @@ stc i64 RUN = run(); #= RUN 34903007
 stc u32 BZ = buzz(); #= BZ 74
 stc i64 TB = tables(); #= TB 14041149
 
-$main = () {
+main = () {
     mut [3]i64 xs = [1, 2, 3];
     map(xs.&, scaler(2));
     t = fold(xs.&, 0, (i64 a, i64 b): a + b); #: t i64

@@ -18,12 +18,12 @@ stc u32 V2 = f_dollar(9, 4) + f_default(1) + f_default(1, b = 2); #= V2 19
 stc u32 V3 = f_expr(1) + f_curried(2)(3); #= V3 7
 stc u32 V4 = s_template(u32)(6) + s_value(4); #= V4 14
 
-$main = () {
+main = () {
     # lambdas: called directly, stored, passed
     called = ((u8 c): c + 1)(4); #: called u8
-    lam = (i32 a, i32 b) -> i32 { ret a - b; }; #: lam (i32, i32) -> i32
-    unit_lam = () {}; #: unit_lam () -> ()
-    nested = (i32 a, i32 b, i32 c): a + b + c; #: nested (i32, i32, i32) -> i32
+    fun lam = (i32 a, i32 b) -> i32 { ret a - b; }; #: lam (i32, i32) -> i32
+    fun unit_lam = () {}; #: unit_lam () -> ()
+    fun nested = (i32 a, i32 b, i32 c): a + b + c; #: nested (i32, i32, i32) -> i32
     r = nested(1, 2, 3); #: r i32
     # a group without `:` / `{` / `->` after it is a value
     g = (3 + 4); #: g u32

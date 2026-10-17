@@ -346,9 +346,9 @@ fun wide = (bool c) {
 }
 
 # a new body starts with a fresh set
-fun fresh = () {
+fun make_fresh = () {
     mut u8 w;
     u8 r = w; #! use_before_initialization
 }
 
-$main = () {}
+main = () {}

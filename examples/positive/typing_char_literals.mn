@@ -29,4 +29,4 @@ stc u8 H1 = H[1]; #= H1 255
 
 fun upper = (u8 c) -> u8: ret if c >= 'a' and c <= 'z': c - 32 else: c; #: upper (u8) -> u8
 
-$main = () {}
+main = () {}

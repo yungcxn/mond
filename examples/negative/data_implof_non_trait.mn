@@ -6,4 +6,4 @@ type OnVar = *(u8 v) implof Var !{ } #! type_mismatch
 type OnPrim = *(u8 v) implof u32 !{ } #! type_mismatch
 trait Super = implof Rec !{ fun y = (); } #! type_mismatch
 
-$main = () {}
+main = () {}

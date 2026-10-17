@@ -10,7 +10,7 @@ fun arr_len = () { [count]u8 buf; } #! undefined_name
 fun loop_head = () { for x in nothing {} } #! undefined_name
 fun while_head = () { while nocond {} } #! undefined_name
 fun match_head = () { match nomatch { _ => 1, } } #! undefined_name
-fun lambda_body = () { f = (i32 x): x + ghost; } #! undefined_name
+fun lambda_body = () { fun f = (i32 x): x + ghost; } #! undefined_name
 fun member_base = () -> i32: ret nobase.field; #! undefined_name
 fun call_arg = () { ov(gone); } #! undefined_name
 fun ov = (i32 x) {}
@@ -26,4 +26,4 @@ fun typeof_arg = () { t = typeof hidden; } #! undefined_name
 fun sizeof_arg = () -> u64: ret sizeof Hidden; #! undefined_name
 fun deinit_arg = () { deinit vanished; } #! undefined_name
 fun ret_value = () -> i32: ret nothing_here; #! undefined_name
-$main = () {}
+main = () {}

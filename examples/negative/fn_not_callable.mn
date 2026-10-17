@@ -29,4 +29,4 @@ fun f = (i32 n, Rec r, bool b, [2]u8 arr, &i32 p, (i32) -> i32 g) {
     add(undefined_arg, 1); #! undefined_name
 }
 
-$main = () {}
+main = () {}

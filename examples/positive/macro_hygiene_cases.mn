@@ -16,7 +16,7 @@ stc u32 su = sums(); #= su 21
 stcfun lambda_maker = () -> ast: ret quote: (u32 x) -> u32: ret x + 1;
 fun use_lambda = () -> u32 {
     u32 x = 100;
-    f = <lambda_maker()>;
+    fun f = <lambda_maker()>;
     ret f(x);
 }
 stc u32 ul = use_lambda(); #= ul 101
@@ -55,8 +55,8 @@ stcfun counter = () -> ast: ret quote {
     ret c;
 };
 fun count_twice = () -> u32 {
-    a = (): <counter()>;
-    b = (): <counter()>;
+    fun a = (): <counter()>;
+    fun b = (): <counter()>;
     ret a() + b();
 }
 stc u32 ct = count_twice(); #= ct 6
@@ -88,4 +88,20 @@ stc u32 named_default = named_fn(y = 1); #= named_default 11
 fun runtime_named = () -> u32: ret named_fn(z = 5, y = 5);
 stc u32 rn = runtime_named(); #= rn 10
 
-$main = () {}
+# the methods the compiler calls by name keep it in a quote
+stcfun counting_type = () -> ast(()): ret quote {
+    type Count = *(mut u32 n) !{
+        init = () -> Count: ret Count(3);
+        has_next = () -> bool: ret self.n > 0;
+        next = () -> u32 { self.n -= 1; ret self.n; }
+    };
+};
+<counting_type()>;
+fun counted = () -> u32 {
+    mut u32 s = 10;
+    for x in Count.init(): s += x;
+    ret s;
+}
+stc u32 cs = counted(); #= cs 13
+
+main = () {}

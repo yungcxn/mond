@@ -1,1 +1,1 @@
-fun outer = () { $main = () {}; } #! missing_main
+fun outer = () { fun main = () {}; } #! missing_main

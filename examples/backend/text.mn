@@ -12,7 +12,7 @@ fun count = ([]u8 text, u8 c) -> u64 {
     ret n;
 }
 
-$main = () {
+main = () {
     puts("hello, world");          #> hello, world
     line_u64(command("mul") as u64);  #> 2
     line_u64(command("sub") as u64);  #> 0

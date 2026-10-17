@@ -1,5 +1,5 @@
-variant Dir = +(Up, Down, Idle) tagof u8;
-variant Event = +(Call(u8 floor), Tick, DoorOpen, DoorClose, Emergency) tagof u8;
+variant Dir = +(Up, Down, Idle) tagtype u8;
+variant Event = +(Call(u8 floor), Tick, DoorOpen, DoorClose, Emergency) tagtype u8;
 
 type Elevator = *(mut u8 floor, mut Dir dir, mut bool open, mut [8]bool requests, mut u32 moved, mut bool halted) !{
     fun pending_above = () -> bool {
@@ -19,8 +19,8 @@ type Elevator = *(mut u8 floor, mut Dir dir, mut bool open, mut [8]bool requests
             self.dir = Dir.Idle;
             ret;
         }
-        if self.dir.$tag == Dir.Up.$tag and self.pending_above(): ret;
-        if self.dir.$tag == Dir.Down.$tag and self.pending_below(): ret;
+        if tagof self.dir == tagof Dir.Up and self.pending_above(): ret;
+        if tagof self.dir == tagof Dir.Down and self.pending_below(): ret;
         self.dir = if self.pending_above(): Dir.Up else: if self.pending_below(): Dir.Down else: Dir.Idle;
     }
 
@@ -40,7 +40,7 @@ type Elevator = *(mut u8 floor, mut Dir dir, mut bool open, mut [8]bool requests
                     ret;
                 }
                 self.choose();
-                match self.dir.$tag {
+                match tagof self.dir {
                     0 => {
                         self.floor += 1;
                         self.moved += 1;
@@ -56,8 +56,8 @@ type Elevator = *(mut u8 floor, mut Dir dir, mut bool open, mut [8]bool requests
     }
 }
 
-variant Tx = +(Deposit(u32 cents), Withdraw(u32 cents), Fee(u32 cents), Transfer(u8 to, u32 cents)) tagof u8;
-variant Outcome = +(Done, Insufficient(u32 short), Frozen, Rejected) tagof u8;
+variant Tx = +(Deposit(u32 cents), Withdraw(u32 cents), Fee(u32 cents), Transfer(u8 to, u32 cents)) tagtype u8;
+variant Outcome = +(Done, Insufficient(u32 short), Frozen, Rejected) tagtype u8;
 
 type Ledger = *(mut [4]u32 balance, mut [4]bool frozen, mut u32 applied, mut u32 rejected) !{
     fun apply = (u8 acct, Tx tx) -> Outcome {
@@ -147,7 +147,7 @@ stcfun elevator_run = () -> u32 {
         Event.Tick, Event.Tick, Event.Tick, Event.Tick, Event.Tick, Event.Tick,
     ];
     for ev in script: e.handle(ev);
-    ret e.floor as u32 * 1000 + e.moved * 100 + e.dir.$tag as u32 * 10 + e.open as u32;
+    ret e.floor as u32 * 1000 + e.moved * 100 + tagof e.dir as u32 * 10 + e.open as u32;
 }
 
 stcfun elevator_halt = () -> u32 {
@@ -174,7 +174,7 @@ stcfun ledger_run = () -> u32 {
     e = l.apply(2, Tx.Deposit(5));
     f = l.apply(0, Tx.Transfer(2, 10));
     short = match b { Outcome.Insufficient(s) => s, _ => 0 };
-    ret l.total() * 100000 + l.applied * 10000 + l.rejected * 1000 + short + (d.$tag as u32) * 10000000;
+    ret l.total() * 100000 + l.applied * 10000 + l.rejected * 1000 + short + (tagof d as u32) * 10000000;
 }
 
 stcfun inventory_run = () -> u32 {
@@ -191,4 +191,4 @@ stc u32 EH = elevator_halt(); #= EH 221
 stc u32 LG = ledger_run(); #= LG 80054150
 stc u32 IV = inventory_run(); #= IV 372
 
-$main = () {}
+main = () {}

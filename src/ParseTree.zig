@@ -31,6 +31,8 @@ pub const Node = struct {
         .{ "TypeOf", "typeof", struct { subnode: NodeId } },
         .{ "SizeOf", "sizeof", struct { subnode: NodeId } },
         .{ "AlignOf", "alignof", struct { subnode: NodeId } },
+        .{ "LengthOf", "lenof", struct { subnode: NodeId } },
+        .{ "TagOf", "tagof", struct { subnode: NodeId } },
         .{ "TypeArray", "type_array", struct { length: NodeId, type: NodeId } },
         .{ "TypeArrayUnlengthed", "type_array_unlengthed", struct { type: NodeId } },
         .{ "NegateNumerical", "neg_num", struct { subnode: NodeId } },
@@ -96,7 +98,7 @@ pub const Node = struct {
         .{ "TypeDefinitionWithTrait", "def_type_implof", struct { def_type: NodeId, def_trait: NodeId } },
         .{ "VariantDefinition", "def_variant", struct { param_tuple: NodeId } },
         .{ "VariantDefinitionUnionsized", "def_variant_unionsized", struct { param_tuple: NodeId } },
-        .{ "VariantDefinitionWithTag", "def_variant_tagof", struct { def_variant: NodeId, tagof: NodeId } },
+        .{ "VariantDefinitionWithTag", "def_variant_tagtype", struct { def_variant: NodeId, tagtype: NodeId } },
         .{ "VariantDefinitionWithAssertedSize", "def_variant_assertsize", struct { def_variant: NodeId, assertsize: NodeId } },
         .{ "VariantDefinitionWithTrait", "def_variant_implof", struct { def_variant: NodeId, def_trait: NodeId } },
         .{ "TraitDefinition", "def_trait", struct { body: NodeId } },
@@ -117,6 +119,7 @@ pub const Node = struct {
         .{ "UnifyVariants", "unify_variants", struct { left_type: NodeId, right_type: NodeId } },
         .{ "With", "with", struct { value: NodeId, fun_call_param_tuple: NodeId } },
         .{ "FunctionCall", "fun_call", struct { callable: NodeId, fun_param_tuple: NodeId } },
+        .{ "BuiltinCall", "builtin_call", struct { callable: NodeId, fun_param_tuple: NodeId } },
         .{ "PartialExpression_FunctionCallParameterTuple", "partial__fun_call_param_tuple", []const NodeId },
         .{ "PartialExpression_FunctionCallAssignedParameter", "partial__fun_call_assigned_param", struct { identifier: NodeId, value: NodeId } },
         .{ "ArrayIndexing", "array_index", struct { indexable: NodeId, index: NodeId } },
@@ -410,14 +413,14 @@ pub const Def = struct {
     core: NodeId,
     body: NodeId = 0,
     size: NodeId = 0,
-    tagof: NodeId = 0,
+    tagtype: NodeId = 0,
 
     pub fn from_node(tree: *const ParseTree, n: NodeId) Def {
         var d = Def{ .core = n };
         while (true) : (d.core = tree.arg(d.core, 0)) switch (tree.kind(d.core)) {
             .def_type_implof, .def_variant_implof => d.body = tree.arg(d.core, 1),
             .def_type_assertsize, .def_variant_assertsize => d.size = tree.arg(d.core, 1),
-            .def_variant_tagof => d.tagof = tree.arg(d.core, 1),
+            .def_variant_tagtype => d.tagtype = tree.arg(d.core, 1),
             else => return d,
         };
     }

@@ -1,5 +1,5 @@
 # runtime loop values: a for over a range or array is counted at loop entry, while / loop / open ranges are not
-$main = (i32 argc, &&u8 argv) -> i32 {
+main = (i32 argc, &&u8 argv) -> i32 {
     mut i32 k = 0;
     u32 n = argc as u32;
     []i32 a = loop { k += 1; if k > argc: brk else: k; }; #! uninferable_type

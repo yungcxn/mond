@@ -75,7 +75,7 @@ stcfun helpers = (u32 x) -> u32: ret scale(x) + scale(x, b = 1) + classify(3) * 
 
 stcfun closure = (u32 x) -> u32 {
     u32 k = 3;
-    add_k = (u32 y) -> u32: ret y + k;
+    fun add_k = (u32 y) -> u32: ret y + k;
     ret add_k(add_k(x));
 }
 
@@ -155,6 +155,6 @@ stc u32 SAT = 10000000000.5 as u32; #= SAT 4294967295
 
 fun at_runtime = () -> u64: ret fact(5) + gcd(12, 18); #: at_runtime () -> u64
 
-$main = () {
+main = () {
     u64 r = at_runtime();
 }

@@ -3,6 +3,7 @@ const mond = @import("mond");
 const Lexer = mond.Lexer;
 const Resolver = mond.Resolver;
 const StaticPool = mond.StaticPool;
+const NamePool = mond.NamePool;
 const Node = mond.ParseTree.Node;
 const lookahead = mond.Parser.lookahead;
 const constructs = mond.constructs;
@@ -65,7 +66,12 @@ pub fn classify_lexically(analysis: *Analysis, lexer: *Lexer) void {
         class.* = class_of_token_kind[@intFromEnum(kind)];
         if (kind == .identifier) {
             const name = analysis.source[span[0]..span[1]];
-            class.* = if (Completion.described(name)) |entry|
+            const after_dot = i > 0 and tokens.tk[i - 1] == .@"xpct_.";
+            const described = if (after_dot or std.mem.startsWith(u8, name, "__"))
+                Completion.described(name)
+            else
+                null;
+            class.* = if (described) |entry|
                 (if (entry.class == .function) .function else .property)
             else if (std.mem.eql(u8, name, "_")) .keyword else .variable;
         }
@@ -172,11 +178,12 @@ pub fn classify_resolved(resolver: *Resolver, token_class: []?Type, token_modifi
 
         const declaration = resolver.node_declarations[node];
         if (declaration == .none) {
-            // a builtin (`$src`) stays what it is, a later pass may know more of other names
+            // a builtin (`.src`) stays what it is, a later pass may know more of other names
             if (undeclared_class) |class| {
                 const span = tree.span(identifier);
                 const name = resolver.src_bytes[span[0]..span[1]];
                 if (Completion.described(name) == null) token_class[token] = class;
+                if (NamePool.is_protocol(name)) token_class[token] = .keyword;
             }
             continue;
         }
@@ -185,6 +192,12 @@ pub fn classify_resolved(resolver: *Resolver, token_class: []?Type, token_modifi
         const kind = resolver.decl_pool.get(declaration, .kind);
         token_class[token] = symbol_classes.class_of_kind(kind);
         token_modifiers[token] = symbol_classes.declaration_modifiers(resolver, declaration_index);
+        const is_global = resolver.decl_pool.get(declaration, .flags).is_global;
+        const roles = Resolver.Declarations.roles_of(kind, is_global);
+        const name = resolver.decl_pool.get(declaration, .name);
+        if (std.mem.indexOfScalar(NamePool.Index, roles, name) != null) {
+            token_class[token] = .keyword;
+        }
     }
 }
 

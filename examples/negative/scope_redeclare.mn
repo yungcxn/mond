@@ -22,4 +22,4 @@ fun binders = (R r, V v) -> u32 {
     ret x + y + z;
 }
 
-$main = () {}
+main = () {}

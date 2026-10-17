@@ -5,4 +5,4 @@ stcfun total = () -> u32 {
     ret s;
 }
 stc u32 T = total(); #= T 10
-$main = () {}
+main = () {}

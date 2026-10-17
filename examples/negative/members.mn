@@ -16,16 +16,11 @@ fun f = () {
     P.m(); #! wrong_arity
 }
 
-variant Code = +(Ok = 0, Bad(u8)) tagof self;
+variant Code = +(Ok = 0, Bad(u8)) tagtype self;
 
 variant Shape = +(Dot, Line);
 
-fun self_tag = (Code c) -> u8: ret c.$tag; #! unknown_member
-fun type_tag = () -> u8: ret Shape.$tag; #! unknown_member
-fun record_tag = (P p) -> u8: ret p.$tag; #! unknown_member
-
-# predefined names are declared without fun
-type Walk = *(mut u32 at) !{
-    fun $has_next = () -> bool: ret self.at < 3; #! redundant_fun
-    $next = () -> u32: ret self.at++;
-}
+fun self_tag = (Code c) -> u8: ret tagof c; #! invalid_operand
+fun type_tag = () -> u8: ret tagof Shape; #! invalid_operand
+fun record_tag = (P p) -> u8: ret tagof p; #! invalid_operand
+fun record_length = (P p) -> u64: ret lenof p; #! invalid_operand

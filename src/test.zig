@@ -170,7 +170,7 @@ fn check_directory(
             continue;
         }
 
-        // a doc checks each of its ```mond blocks as a file, with an empty `$main` when it has none
+        // a doc checks each of its ```mond blocks as a file, with an empty `main` when it has none
         var lines = std.mem.splitScalar(u8, source, '\n');
         var line_number: usize = 0;
         var block: ?std.ArrayList(u8) = null;
@@ -189,8 +189,8 @@ fn check_directory(
                 try block.?.append(allocator, '\n');
                 continue;
             }
-            if (std.mem.indexOf(u8, block.?.items, "$main") == null) {
-                try block.?.appendSlice(allocator, "$main = () {}\n");
+            if (std.mem.indexOf(u8, block.?.items, "main = (") == null) {
+                try block.?.appendSlice(allocator, "main = () {}\n");
             }
             const label = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ name, block_line });
             const passed =

@@ -46,7 +46,7 @@ type Forth = *(
     }
 
     fun is = (u32 s, u32 e, &[]u8 w) -> bool {
-        if (e - s) as u64 != w.$len: ret false;
+        if (e - s) as u64 != lenof w: ret false;
         for k in 0..<(e - s) {
             if self.src.*[s + k] != w.*[k]: ret false;
         }
@@ -288,8 +288,8 @@ fun exec = (&[]u8 src) -> [8]i64 {
     [4]u32 z2;
     [4]u32 z3;
     [4]u32 z4;
-    mut Forth f = Forth(src = src, length = src.$len, st = blank, sp = 0, dname = z1, dnend = z2, dbody = z3, dend = z4, nd = 0, err = 0, depth = 0);
-    f.run(0, src.$len as u32);
+    mut Forth f = Forth(src = src, length = lenof src, st = blank, sp = 0, dname = z1, dnend = z2, dbody = z3, dend = z4, nd = 0, err = 0, depth = 0);
+    f.run(0, lenof src as u32);
     mut [8]i64 out;
     out[0] = f.err as i64;
     out[1] = f.sp as i64;
@@ -303,8 +303,8 @@ fun top = (&[]u8 src) -> i64 {
     [4]u32 z2;
     [4]u32 z3;
     [4]u32 z4;
-    mut Forth f = Forth(src = src, length = src.$len, st = blank, sp = 0, dname = z1, dnend = z2, dbody = z3, dend = z4, nd = 0, err = 0, depth = 0);
-    f.run(0, src.$len as u32);
+    mut Forth f = Forth(src = src, length = lenof src, st = blank, sp = 0, dname = z1, dnend = z2, dbody = z3, dend = z4, nd = 0, err = 0, depth = 0);
+    f.run(0, lenof src as u32);
     if f.err != 0 {
         i64 code = f.err as i64;
         ret -1000 - code;
@@ -370,4 +370,4 @@ stc [8]i64 F54 = exec("1 +".&); #= F54 [1, 1, 1, 0, 0, 0, 0, 0]
 stc [8]i64 F55 = exec("1 dup dup dup dup dup dup dup dup".&); #= F55 [4, 8, 1, 1, 1, 1, 1, 1]
 stc [8]i64 F56 = exec(": sq dup * ; 2 sq 3 sq".&); #= F56 [0, 2, 4, 9, 3, 0, 0, 0]
 
-$main = () {}
+main = () {}

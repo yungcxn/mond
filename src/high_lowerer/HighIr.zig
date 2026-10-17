@@ -83,9 +83,9 @@ pub const Op = enum(u8) {
     variant_payload,
     call,
     closure,
-    // `$asm`: `a` is the constant of its text
+    // `asm`: `a` is the constant of its text
     inline_asm,
-    // `$syscall`: `b` lists the number and the arguments
+    // `syscall`: `b` lists the number and the arguments
     syscall,
     br,
     cond_br,

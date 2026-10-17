@@ -1,5 +1,5 @@
 type Node = *(mut i32 val, mut Opt(*Node) next);
-variant Opt = (type T): ++(Some(T), None) tagof u8;
+variant Opt = (type T): ++(Some(T), None) tagtype u8;
 
 fun swap = (*i32 a, *i32 b) {
     i32 t = a.*;
@@ -20,8 +20,8 @@ fun divmod = (u32 a, u32 b, *u32 q, *u32 r) {
 
 fun reverse_in_place = (*[]i32 a) {
     mut *i32 lo = a.*[0].&;
-    mut *i32 hi = a.*[0].& + (a.$len - 1);
-    for 0..<a.$len / 2 {
+    mut *i32 hi = a.*[0].& + (lenof a - 1);
+    for 0..<lenof a / 2 {
         swap(lo, hi);
         lo += 1;
         hi -= 1;
@@ -30,7 +30,7 @@ fun reverse_in_place = (*[]i32 a) {
 
 fun reverse_until = (*[]i32 a) {
     mut *i32 lo = a.*[0].&;
-    mut *i32 hi = a.*[0].& + (a.$len - 1);
+    mut *i32 hi = a.*[0].& + (lenof a - 1);
     while lo < hi {
         swap(lo, hi);
         lo += 1;
@@ -54,17 +54,17 @@ fun sum_ptr = (*i32 p, u32 n) -> i32 {
 
 fun max_ptr = (*[]i32 a) -> *i32 {
     mut *i32 best = a.*[0].&;
-    for i in 1..<a.$len: if a.*[i] > best.*: best = a.*[i].&;
+    for i in 1..<lenof a: if a.*[i] > best.*: best = a.*[i].&;
     ret best;
 }
 
 fun find_ptr = (*[]i32 a, i32 key) -> Opt(*i32) {
-    for i in 0..<a.$len: if a.*[i] == key: ret Opt(*i32).Some(a.*[i].&);
+    for i in 0..<lenof a: if a.*[i] == key: ret Opt(*i32).Some(a.*[i].&);
     ret Opt(*i32).None;
 }
 
 fun bump_all = (*[]u32 a) {
-    for i in 0..<a.$len: {
+    for i in 0..<lenof a: {
         p = a.*[i].&;
         p.* += 1;
     }
@@ -213,7 +213,7 @@ stc i32 SF = struct_fields(); #= SF 42
 stc i32 AP = array_of_pointers(); #= AP 21230
 stc u32 CM = comparisons(); #= CM 11
 
-$main = () {
+main = () {
     mut Node last = Node(val = 3, next = Opt(*Node).None);
     mut Node mid = Node(val = 2, next = Opt(*Node).Some(last.&));
     mut Node head = Node(val = 1, next = Opt(*Node).Some(mid.&));

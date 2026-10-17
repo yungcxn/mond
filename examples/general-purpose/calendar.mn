@@ -1,4 +1,4 @@
-variant Wd = +(Sun, Mon, Tue, Wed, Thu, Fri, Sat) tagof u8;
+variant Wd = +(Sun, Mon, Tue, Wed, Thu, Fri, Sat) tagtype u8;
 
 fun is_leap = (i32 y) -> bool: ret (y % 4 == 0 and y % 100 != 0) or y % 400 == 0;
 
@@ -256,4 +256,4 @@ stc i64 NW2 = nth_weekday(2024, 9, 1, 1).pack(); #= NW2 20240902
 stc i64 NW3 = nth_weekday(2024, 2, 4, 5).pack(); #= NW3 20240229
 stc i64 NW4 = nth_weekday(2000, 1, 6, 1).pack(); #= NW4 20000101
 
-$main = () {}
+main = () {}

@@ -1,4 +1,4 @@
-variant Tok = +(Num(i64 v), Op(u8 c), LParen, RParen) tagof u8;
+variant Tok = +(Num(i64 v), Op(u8 c), LParen, RParen) tagtype u8;
 
 fun prec = (u8 c) -> u32: ret match c {
     '+' | '-' => 1,
@@ -146,7 +146,7 @@ type Sy = *(&[]u8 src, u64 length, mut [24]Tok out, mut u32 nout, mut [24]u8 ops
 fun calc = (&[]u8 src) -> i64 {
     [24]Tok blank;
     [24]u8 ob;
-    mut Sy sy = Sy(src = src, length = src.$len, out = blank, nout = 0, ops = ob, nops = 0, err = 0, at = 0);
+    mut Sy sy = Sy(src = src, length = lenof src, out = blank, nout = 0, ops = ob, nops = 0, err = 0, at = 0);
     sy.convert();
     if sy.err != 0 {
         i64 code = sy.err as i64;
@@ -163,9 +163,9 @@ fun calc = (&[]u8 src) -> i64 {
 fun rpn_is = (&[]u8 src, &[]u8 want) -> bool {
     [24]Tok blank;
     [24]u8 ob;
-    mut Sy sy = Sy(src = src, length = src.$len, out = blank, nout = 0, ops = ob, nops = 0, err = 0, at = 0);
+    mut Sy sy = Sy(src = src, length = lenof src, out = blank, nout = 0, ops = ob, nops = 0, err = 0, at = 0);
     sy.convert();
-    if sy.err != 0 or sy.nout as u64 != want.$len: ret false;
+    if sy.err != 0 or sy.nout as u64 != lenof want: ret false;
     for i in 0..<sy.nout {
         u8 w = want.*[i];
         ok = match sy.out[i] {
@@ -224,4 +224,4 @@ stc bool Y43 = rpn_is("3+4*2".&, "342+*".&); #= Y43 false
 stc bool Y44 = rpn_is("(1+".&, "1".&); #= Y44 false
 stc bool Y45 = rpn_is("1+2".&, "12+3".&); #= Y45 false
 
-$main = () {}
+main = () {}

@@ -280,4 +280,4 @@ stc u64 DD = div_digits(); #= DD 2000155
 stc u32 DR = div_rem(); #= DR 976371285
 stc u32 DZ = div_to_zero(); #= DZ 9
 
-$main = () {}
+main = () {}

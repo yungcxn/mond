@@ -45,4 +45,4 @@ fun g = (u64 w, u8 n, R r, [2]u8 a, *u8 p) {
     s10 = w asbits T; #! invalid_cast
 }
 
-$main = () {}
+main = () {}

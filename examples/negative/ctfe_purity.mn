@@ -31,4 +31,4 @@ stcfun through = (*u32 p) { p.* = 4; }
 stcfun caller = () -> u32 { mut u32 x = 0; through(x.&); ret x; } #! not_static
 stc u32 TH = caller();
 
-$main = () {}
+main = () {}

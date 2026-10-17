@@ -25,4 +25,4 @@ fun f = (u8 b) {
     u8 g = a1[0][0]; #! type_mismatch
 }
 
-$main = () {}
+main = () {}

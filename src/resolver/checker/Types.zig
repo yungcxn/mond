@@ -150,7 +150,7 @@ pub fn define_static_type(
         .def_type_implof,
         .def_variant,
         .def_variant_unionsized,
-        .def_variant_tagof,
+        .def_variant_tagtype,
         .def_variant_assertsize,
         .def_variant_implof,
         .def_trait,
@@ -408,7 +408,7 @@ fn define_variant(
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
     const core = definition.core;
-    const tagof = definition.tagof;
+    const tagof = definition.tagtype;
     const case_nodes = resolver.tree.manychildren(resolver.tree.arg(core, 0));
     const cases = resolver.temporary_slice(StaticPool.Index, case_nodes.len);
     var payloads = PayloadSummary{};

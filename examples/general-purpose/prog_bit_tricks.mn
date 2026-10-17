@@ -133,7 +133,7 @@ stc u64 CTZ = ctzs(); #= CTZ 331200232
 stc u64 CLZ = clzs(); #= CLZ 311615000132
 stc u32 GOS = gospers(); #= GOS 56013
 
-$main = () -> i32 {
+main = () -> i32 {
     c = ctz(40); #: c u32
     k = knight(1 << 63); #: k u64
     ret (c + clz(40) + pop64(k) + morton(1, 1)) as i32 + sign_extend(3, 2);

@@ -13,12 +13,12 @@ fun match_all = (bool c) -> u8 { match c { true => ret 1, false => ret 2 } }
 fun while_true = () -> u8 { while true { ret 1; } } #! missing_ret
 fun recursion_mismatch = (u32 n) -> u32: ret if n == 0: true else: recursion_mismatch(n - 1); #! type_mismatch
 fun ret_in_lambda = () -> u8 {
-    f = (): ret "s";
+    fun f = (): ret "s";
     ret 1;
 }
 fun lambda_unit = () -> u8 {
-    g = (i32 x) -> i32 { }; #! missing_ret
+    fun g = (i32 x) -> i32 { }; #! missing_ret
     ret 1;
 }
 
-$main = () {}
+main = () {}

@@ -14,16 +14,16 @@ type ArrOfRec = *([2]Tail t, u8 z);
 type WithVar = *(u8 a, Opt v);
 variant Opt = +(Some(u32), None);
 variant Payload64 = +(A(u64), B);
-variant Payload16 = +(A(u16), B) tagof u8;
-variant TagU16 = +(A(u8), B) tagof u16;
-variant TagU64 = +(A(u8), B) tagof u64;
+variant Payload16 = +(A(u16), B) tagtype u8;
+variant TagU16 = +(A(u8), B) tagtype u16;
+variant TagU64 = +(A(u8), B) tagtype u64;
 variant MultiField = +(P(u8 a, u32 b), Q);
 variant PayRec = +(R(Tail t), N);
 variant Union = ++(I(i32), F(f32), B([4]u8));
 variant UnionMixed = ++(I(i64), S(u8));
-variant SelfPtr = +(Some(u16), None = 0xFFFF) tagof self;
-variant SelfI8 = +(Val(i8), Nil = 0x7F) tagof self;
-variant NoPay = +(A, B, C) tagof u32;
+variant SelfPtr = +(Some(u16), None = 0xFFFF) tagtype self;
+variant SelfI8 = +(Val(i8), Nil = 0x7F) tagtype self;
+variant NoPay = +(A, B, C) tagtype u32;
 
 stc u64 S1 = sizeof Tail; #= S1 8
 stc u64 S2 = sizeof BoolWide; #= S2 16
@@ -52,4 +52,4 @@ stc u64 V12 = sizeof NoPay; #= V12 4
 stc u64 A1 = sizeof [3]Opt; #= A1 24
 stc u64 A2 = sizeof [2]PkIn; #= A2 10
 
-$main = () {}
+main = () {}

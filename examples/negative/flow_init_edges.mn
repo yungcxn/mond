@@ -26,4 +26,4 @@ fun loop_then_brk = () -> u32 {
     ret x;
 }
 
-$main = () {}
+main = () {}

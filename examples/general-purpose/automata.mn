@@ -350,4 +350,4 @@ stc u32 JP1 = johnson_period(4); #= JP1 8
 stc u32 JP2 = johnson_period(1); #= JP2 2
 stc u32 JP3 = johnson_period(10); #= JP3 20
 
-$main = () {}
+main = () {}

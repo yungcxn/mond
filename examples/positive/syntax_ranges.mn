@@ -19,7 +19,7 @@ stcfun open_end = () -> u32 {
 
 stc u32 OE = open_end(); #= OE 18
 
-$main = () {
+main = () {
     r = 0..<4; #: r []u32
     for i in 1..=3 {}
 }

@@ -8,4 +8,4 @@ stc [2]Step TABLE = [twice, thrice];
 fun by_runtime_index = (u32 i) -> i64: ret clib_apply(TABLE[i as u64], 7);   #! not_static
 fun by_parameter = (Step f) -> i64: ret clib_apply(f, 7);                   #! escaping_closure not_static
 fun static_ones = () -> i64: ret clib_apply(twice, 7) + clib_apply(TABLE[1], 1) + clib_apply((i64 x): x, 1);
-$main = () {}
+main = () {}

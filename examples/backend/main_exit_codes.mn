@@ -1,4 +1,4 @@
-# `$main` with C's pair and a signed result: the count includes the program, a negative result
+# `main` with C's pair and a signed result: the count includes the program, a negative result
 # is the exit code modulo 256
 <include "lib/out.mn">;
 #? args a bb ccc
@@ -6,7 +6,7 @@
 
 fun strlen = (&u8 text) -> u64;
 
-$main = (i64 argc, &&u8 argv) -> i32 {
+main = (i64 argc, &&u8 argv) -> i32 {
     line_i64(argc);                          #> 4
     mut u64 total = 0;
     for i in 1..<argc as u64: total += strlen(argv[i]);

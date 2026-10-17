@@ -133,7 +133,7 @@ type Lexer = *(&[]u8 src, u64 length, mut u32 pos, mut [24]u8 kinds, mut [24]u8 
 fun lex = (&[]u8 src) -> Lexer {
     [24]u8 kinds;
     [24]u8 lens;
-    mut Lexer l = Lexer(src = src, length = src.$len, pos = 0, kinds = kinds, lens = lens, n = 0, steps = 0);
+    mut Lexer l = Lexer(src = src, length = lenof src, pos = 0, kinds = kinds, lens = lens, n = 0, steps = 0);
     l.run();
     ret l;
 }
@@ -217,4 +217,4 @@ stc u32 Z52 = step_count("0..1".&); #= Z52 3
 stc [12]u8 Z53 = kinds_of("end_".&); #= Z53 [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 stc u32 Z54 = token_count("a b c d e f g h i j k l m n o p q r s t u v w x y z 1 2 3".&); #= Z54 24
 
-$main = () {}
+main = () {}

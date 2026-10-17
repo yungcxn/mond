@@ -26,4 +26,4 @@ stcfun locals = () -> u32 {
 }
 stc u32 LO = locals(); #= LO 8
 
-$main = () {}
+main = () {}

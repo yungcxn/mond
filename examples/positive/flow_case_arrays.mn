@@ -22,4 +22,4 @@ fun types = (u8 a, u16 b) {
     wide2 = [b, a]; #: wide2 [2]u16
     []P given = [P.Zero, P.One(1)]; #: given [2]+(Two, One, Zero)
 }
-$main = () {}
+main = () {}

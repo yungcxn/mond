@@ -4,7 +4,7 @@ stc []u32 ONE = stcfor 5..=5: $it; #= ONE [5]
 stc []u32 BACK = stcfor 5..<3: $it; #= BACK []
 stc []u32 UPTO = stcfor ..=3: $it; #= UPTO [0, 1, 2, 3]
 stc []u32 BELOW = stcfor ..<3: $it * 10; #= BELOW [0, 10, 20]
-stc u64 NL = NONE.$len + ONE.$len * 10 + UPTO.$len * 100; #= NL 410
+stc u64 NL = lenof NONE + lenof ONE * 10 + lenof UPTO * 100; #= NL 410
 
 # nested static loops build nested arrays
 stc [][]u32 GRID = stcfor r in 0..<3: for c in 0..<2: r * 10 + c; #= GRID [[0, 1], [10, 11], [20, 21]]
@@ -43,7 +43,7 @@ stcfun collatz = (u32 n) -> []u32 {
     }
 }
 stc []u32 C6 = collatz(6); #= C6 [3, 10, 5, 16, 8, 4, 2, 1]
-stc u64 C27 = collatz(27).$len; #= C27 111
+stc u64 C27 = lenof collatz(27); #= C27 111
 
 stcfun digits = (u64 n) -> []u8 {
     mut u64 x = n;
@@ -52,4 +52,4 @@ stcfun digits = (u64 n) -> []u8 {
 stc []u8 DG = digits(90210); #= DG [0, 1, 2, 0, 9]
 stc []u8 DZ = digits(0); #= DZ []
 
-$main = () {}
+main = () {}

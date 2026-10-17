@@ -156,7 +156,7 @@ stc i32 SPA = sparse_ops(); #= SPA 90606
 stc u32 CROSS = cross_check(); #= CROSS 66
 stc u32 LOWS = lowbit(12) * 100 + lowbit(1) * 10 + lowbit(0); #= LOWS 410
 
-$main = () -> i32 {
+main = () -> i32 {
     f = build_fenwick(DATA.&); #: f *([11]i32 t)
     s = build_seg(DATA.&);
     ret f.sum(5) + s.min(2, 7) + sparse_max(DATA.&, 1, 4);

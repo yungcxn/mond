@@ -1,6 +1,6 @@
 stcfun count = (u32 n) -> u64 {
     xs = for i in 0..<n: i;
-    ret xs.$len;
+    ret lenof xs;
 }
 stcfun skip_odd = () -> []u32: ret for i in 0..<10: if i % 2 == 1: cont else: i;
 stcfun stop_at = () -> []u32: ret for i in 0..<10: if i == 4: brk else: i * 3;
@@ -50,4 +50,4 @@ stc JT = jagged(); #: JT [3][]u32
 stc JV = jagged(); #= JV [[], [0], [0, 1]]
 fun runtime_jagged = () { jr = for i in 0..<3: for j in 0..<i: j; } #: jr [3][]u32
 
-$main = () {}
+main = () {}

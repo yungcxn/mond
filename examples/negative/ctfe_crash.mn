@@ -1,23 +1,23 @@
-# `$crash(text)` is a compile error with its text wherever it is checked or run: standalone, in a
+# `crash text` is a compile error with its text wherever it is checked or run: standalone, in a
 # taken static branch, in any runtime branch, when a stcfun runs into it
-$crash("standalone");                                   #! crash
-stcif $os != "plan9": $crash("not on plan9");           #! crash
-stcif $os == "plan9": $crash("never on this machine");
-stc u32 THROWN = stcif false: 1 else: $crash("taken");  #! crash
-stc type PICKED = stcmatch sizeof u16 { 1 => u8, _ => $crash("no such size") };   #! crash
-stc []u32 EACH = stcfor i in 0..<4: if i == 2: $crash("at two") else: i;          #! crash
+crash "standalone";                                   #! crash
+stcif __os != "plan9": crash "not on plan9";           #! crash
+stcif __os == "plan9": crash "never on this machine";
+stc u32 THROWN = stcif false: 1 else: crash "taken";  #! crash
+stc type PICKED = stcmatch sizeof u16 { 1 => u8, _ => crash "no such size" };   #! crash
+stc []u32 EACH = stcfor i in 0..<4: if i == 2: crash "at two" else: i;          #! crash
 
 # the text is any static text: a slice, a fixed array (also a field), a pointer
 stc []u8 SLICE = "from a slice";
 stc &u8 POINTER = "from a pointer";
 type Holder = *([10]u8 text);
 stc Holder HOLDER = Holder(text = "from field");
-$crash(SLICE);              #! crash
-$crash(POINTER);            #! crash
-$crash(HOLDER.text);        #! crash
+crash SLICE;              #! crash
+crash POINTER;            #! crash
+crash HOLDER.text;        #! crash
 
 # a stcfun throws where it runs into it, once for every call that does
-stcfun checked = (u32 n) -> u32: ret if n > 3: $crash("too big") else: n;   #! crash
+stcfun checked = (u32 n) -> u32: ret if n > 3: crash "too big" else: n;   #! crash
 stc u32 SMALL = checked(2);
 stc u32 BIG = checked(9);
 stc u32 BIGGER = checked(10);
@@ -25,26 +25,26 @@ fun at_run_time = () -> u32: ret checked(4);
 
 # runtime code is checked once: a runtime branch throws whether it runs or not, a pruned one never
 fun runtime = (u32 n) -> u32 {
-    if n > 3: $crash("runtime branch");                 #! crash
+    if n > 3: crash "runtime branch";                 #! crash
     ret n;
 }
-fun never_called = () -> u32: ret $crash("checked all the same");                  #! crash
-fun pruned = () -> u32: ret stcif sizeof u32 == 4: 4 else: $crash("pruned");
-fun per_type = (type T) -> u32: ret stcif sizeof T > 4: $crash("too wide") else: 1;  #! crash
+fun never_called = () -> u32: ret crash "checked all the same";                  #! crash
+fun pruned = () -> u32: ret stcif sizeof u32 == 4: 4 else: crash "pruned";
+fun per_type = (type T) -> u32: ret stcif sizeof T > 4: crash "too wide" else: 1;  #! crash
 stc u32 NARROW = per_type(u32);
 stc u32 WIDE = per_type(u64);
 
 # landed code throws like written code
-stc u32 MADE = <quote: $crash("landed")>;               #! crash
+stc u32 MADE = <quote: crash "landed">;               #! crash
 
 # a text, static, and exactly one
 u32 plain = 5;
 fun wrong = () {
-    $crash(42);                                         #! type_mismatch
-    $crash();                                           #! wrong_arity
-    $crash("a", "b");                                   #! wrong_arity
+    crash 42;                                         #! type_mismatch
+    crash ();                                           #! wrong_arity
+    crash ("a", "b", "c");                                   #! wrong_arity
     []u8 dynamic = "x";
-    $crash(dynamic);                                    #! not_static
+    crash dynamic;                                    #! not_static
 }
 
-$main = () {}
+main = () {}

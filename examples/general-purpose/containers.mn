@@ -1,4 +1,4 @@
-variant Opt = (type T): ++(Some(T), None) tagof u8;
+variant Opt = (type T): ++(Some(T), None) tagtype u8;
 
 type Stack = (type T, u32 CAP): *(mut [CAP]T items, mut u32 len) !{
     fun push = (T v) -> bool {
@@ -248,4 +248,4 @@ stc u64 LK = linked(); #= LK 654322234566
 stc i32 AL = alternating(); #= AL 10
 stc i64 VC = vectors(); #= VC 5525
 
-$main = () {}
+main = () {}

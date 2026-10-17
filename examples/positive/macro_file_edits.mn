@@ -1,33 +1,33 @@
 # the top splices run in order before anything is resolved: what they write is seen by everything
 fun early = () -> u32: ret 1;
 stc u32 used_early = early(); #= used_early 7
-stcfun rewrite = (*ast(fun) f) { f.$body = quote: ret 2; }
+stcfun rewrite = (*ast(fun) f) { f.body = quote: ret 2; }
 <rewrite(refl early)>;
 
-# `refl $file`: declarations appended, read and replaced
+# `refl`: declarations appended, read and replaced
 stcfun add_two = (*ast file) {
-    file.$decls += [quote: fun one = () -> u32: ret 1, quote: fun two = () -> u32: ret one() + 1];
+    file.decls += [quote: fun one = () -> u32: ret 1, quote: fun two = () -> u32: ret one() + 1];
 }
-<add_two(refl $file)>;
+<add_two(refl)>;
 stc u32 t = two(); #= t 2
 
 stcfun replace_early = (*ast file) {
-    for i in 0..<file.$decls.$len {
-        *ast d = file.$decls[i];
-        if d oftype ast(fun) and d.$name.$src.$len == 5 and d.$name.$src[0] == 'e' {
-            file.$decls[i] = quote: fun early = () -> u32: ret 7;
+    for i in 0..<lenof file.decls {
+        *ast d = file.decls[i];
+        if d oftype ast(fun) and lenof d.name.src == 5 and d.name.src[0] == 'e' {
+            file.decls[i] = quote: fun early = () -> u32: ret 7;
         }
     }
 }
-<replace_early(refl $file)>;
+<replace_early(refl)>;
 stc u32 replaced = early(); #= replaced 7
 
 stcfun count_funs = (&ast file) -> u64 {
     mut u64 n = 0;
-    for d in file.$decls: if d oftype ast(fun): n += 1;
+    for d in file.decls: if d oftype ast(fun): n += 1;
     ret n;
 }
-stc u64 funs = count_funs(refl $file); #= funs 19
+stc u64 funs = count_funs(refl); #= funs 19
 
 # a splice in an expansion is expanded in the next pass, until there is none
 stcfun gen = (u32 n) -> ast: ret if n == 0: quote: 0 else: quote: 1 + <gen(@(n - 1))>;
@@ -53,7 +53,7 @@ fun made_block = () -> u32 {
     ret n;
 }
 stc u32 mb = made_block(); #= mb 10
-stc u64 copied_list = <(quote: [1, 2]) with ()>.$len; #= copied_list 2
+stc u64 copied_list = lenof <(quote: [1, 2]) with ()>; #= copied_list 2
 
 # what a root makes, by `oftype`
 stcfun kinds = (ast e) -> u32 {
@@ -76,8 +76,8 @@ fun plain_function = () -> u32 {
 stc u32 pf = plain_function(); #= pf 42
 stcfun local_refl = () -> u64 {
     u32 local = 12345;
-    ret (refl local).$value.$src.$len;
+    ret lenof (refl local).assigned.src;
 }
 stc u64 lr = local_refl(); #= lr 5
 
-$main = () {}
+main = () {}

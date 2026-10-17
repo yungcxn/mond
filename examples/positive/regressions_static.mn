@@ -36,4 +36,4 @@ fun largest = (type T): (&[]T xs) -> T {
 stc [3]i16 XS = [4, -9, 7];
 stc i16 MAX = largest(i16)(XS.&); #= MAX 7
 
-$main = () {}
+main = () {}

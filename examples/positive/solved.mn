@@ -36,13 +36,13 @@ type Dog = *(u8 age) implof Speak !{ fun speak = () -> &u8: ret "woof"; }
 fun is_dog = (Speak s) -> bool: ret s oftype Dog;
 fun small = (type T stcwhere sizeof T <= 8) -> u64: ret sizeof T;
 
-$main = (u32 argc, &&u8 argv) -> i32 {
+main = (u32 argc, &&u8 argv) -> i32 {
     mut i32 counter = 0;
-    inc = (): counter += 1; #: inc () -> ()
+    fun inc = (): counter += 1; #: inc () -> ()
     inc();
     a = area(3); #: a u32
     [4]u8 bytes = [1, 2, 3, 4];
-    b = blen(Buf(data = bytes.&, length = bytes.$len)); #: b u64
+    b = blen(Buf(data = bytes.&, length = lenof bytes)); #: b u64
     sq = squares(5); #: sq []u32
     first = sq[0]; #: first u32
     n = argc; #: n u32

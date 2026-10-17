@@ -1,5 +1,5 @@
 variant Shape = +(Circle(u32 r), Rect(u32 w, u32 h), Dot);
-variant Opt8 = +(Some(u8), None = 0xFF) tagof self;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
 
 # or patterns with and without a trailing `|`, ranges, wildcards, blocks as arms, a trailing comma or none
 stcfun classify = (u32 n) -> u32: ret match n {
@@ -28,7 +28,7 @@ stcfun opt = (Opt8 o) -> u32: ret match o {
 stc u32 A = area(Shape.Circle(2)) + area(Shape.Rect(3, 4)) + area(Shape.Dot); #= A 24
 stc u32 O = opt(Opt8.Some(7)) + opt(Opt8.None); #= O 1007
 
-$main = () {
+main = () {
     i32 x = 3;
     match x { 3 => {}, _ => {} }
     match x {

@@ -16,4 +16,4 @@ stcfun over = (u32 n) -> u32 { mut u32 k = n; ret limited(k); } #! stcwhere_viol
 
 stc u32 OV = over(20);
 
-$main = () {}
+main = () {}

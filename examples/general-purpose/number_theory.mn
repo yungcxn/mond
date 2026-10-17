@@ -108,12 +108,12 @@ fun totient = (u32 n) -> u32 {
 }
 
 fun build_spf = (*[]u32 spf) {
-    for i in 0..<spf.$len: spf.*[i] = i as u32;
+    for i in 0..<lenof spf: spf.*[i] = i as u32;
     mut u32 i = 2;
-    while i * i < spf.$len as u32 {
+    while i * i < lenof spf as u32 {
         if spf.*[i] == i {
             mut u32 j = i * i;
-            while j < spf.$len as u32 {
+            while j < lenof spf as u32 {
                 if spf.*[j] == j: spf.*[j] = i;
                 j += i;
             }
@@ -368,4 +368,4 @@ stc u32 BM2 = binom_mod(5, 6, 13); #= BM2 0
 stc u32 BM3 = binom_mod(0, 0, 13); #= BM3 1
 stc u32 BM4 = binom_mod(30, 15, 101); #= BM4 3
 
-$main = () {}
+main = () {}

@@ -17,4 +17,4 @@ stcfun mean = ([4]f64 xs) -> f64 {
 
 stc f64 MEAN = mean([1.0, 2.0, 3.5, 5.5]); #= MEAN 3
 
-$main = () {}
+main = () {}

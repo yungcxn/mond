@@ -5,8 +5,8 @@ type N = *(A a, u8 c); stc u64 sn = sizeof N; #= sn 12
 type Big = *(u8 a, u64 b, u8 c); stc u64 sbig = sizeof Big; #= sbig 24
 variant E = +(X, Y, Z); stc u64 se = sizeof E; #= se 1
 variant P = +(A(u32), B); stc u64 sp = sizeof P; #= sp 8
-variant S = +(Some(u8), None = 0xFF) tagof self; stc u64 ss = sizeof S; #= ss 1
-variant T16 = +(A(u16), B) tagof u16; stc u64 st = sizeof T16; #= st 4
+variant S = +(Some(u8), None = 0xFF) tagtype self; stc u64 ss = sizeof S; #= ss 1
+variant T16 = +(A(u16), B) tagtype u16; stc u64 st = sizeof T16; #= st 4
 variant U = E || P; stc u64 su = sizeof U; #= su 8
 variant W = +(A(u64), B(u8)); stc u64 sw = sizeof W; #= sw 16
 
@@ -17,4 +17,4 @@ stc u64 sf = sizeof f64; #= sf 8
 stc u64 sfn = sizeof (i32) -> i32; #= sfn 16
 stc u64 su8 = sizeof u8; #= su8 1
 
-$main = () {}
+main = () {}
