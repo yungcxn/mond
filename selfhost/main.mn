@@ -1,1 +1,10 @@
-# incoming
+<include "linux/print.mn">;
+
+
+main = (u32 argc, &&u8 argv) -> u8 {
+    if argc > 1 {
+        puts(["arg0: ", argv[1], "\n"]);
+    }
+
+    ret 1;
+}

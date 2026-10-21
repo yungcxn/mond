@@ -1,0 +1,28 @@
+stc u64 WRITE = stcmatch __os {
+    "linux" => stcmatch __arch { "x86_64" => 1, _ => 64 },
+    "macos" => 4,
+    _ => 0,
+}
+
+inlfun len0t = (&u8 buf) -> u64 {
+    mut u64 c = 0;
+    while buf[c] != 0: c += 1;
+    ret c;
+}
+
+pub inlfun write   = (i32 desc, &u8 buf, u64 len): ret syscall (WRITE, desc, buf, len);
+pub inlfun putchar = (&u8 c): ret write(1, c, 1);
+
+pub inlfun puts = (&u8 buf): ret write(1, buf, len0t(buf));
+pub inlfun puts = ([]u8 buf): ret write(1, buf, lenof buf);
+pub inlfun puts = ([]&u8 buf) {
+    mut i64 total = 0;
+    for buf: total += write(1, $it, len0t($it));
+    ret total;
+}
+pub inlfun puts = ([][]u8 buf) {
+    mut i64 total = 0;
+    for buf: total += write(1, $it, lenof $it);
+    ret total;
+}
+

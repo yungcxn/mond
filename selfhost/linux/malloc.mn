@@ -1,0 +1,42 @@
+stc u64 MMAP = stcmatch __os {
+    "linux" => stcmatch __arch { "x86_64" => 9, _ => 222 },
+    "macos" => 197,
+    _ => 0,
+}
+stc u64 MUNMAP = stcmatch __os {
+    "linux" => stcmatch __arch { "x86_64" => 11, _ => 215 },
+    "macos" => 73,
+    _ => 0,
+}
+stc u64 PROT_READ = stcmatch __os { "linux" => 1, "macos" => 1, _ => 0 };
+stc u64 PROT_WRITE = stcmatch __os { "linux" => 2, "macos" => 2, _ => 0 };
+stc u64 MAP_PRIVATE = stcmatch __os { "linux" => 2, "macos" => 2, _ => 0 };
+stc u64 MAP_ANONYMOUS = stcmatch __os { "linux" => 0x20, "macos" => 0x1000, _ => 0 };
+stc u64 MAP_FAILED = 0xFFFFFFFFFFFFFFFF;
+stc u64 MAX_ALLOC = 0x7FFFFFFFFFFFFFFF;
+stc u64 PAGE = 4096;
+
+
+variant OptBytePtr = +(None = 0xFFFFFFFFFFFFFFFF, Some(&u8)) tagtype self;
+type MallocHeader = *(mut u64 mapsize);
+
+fun malloc = (u64 b where b == 0) -> OptBytePtr: ret OptBytePtr.None;
+fun malloc = (u64 b where b > MAX_ALLOC - sizeof MallocHeader) -> OptBytePtr: ret OptBytePtr.None;
+fun malloc = (u64 b) -> OptBytePtr{
+    u64 total = b + sizeof MallocHeader;
+    *u8 base = syscall (MMAP, 0, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
+        asbits *u8;
+
+    if (base asbits u64) == MAP_FAILED: ret OptBytePtr.None;
+    *MallocHeader header = base asbits *MallocHeader;
+    header.mapsize = total;
+    ret OptBytePtr.Some(base + sizeof MallocHeader);
+}
+
+fun free = (OptBytePtr ptr where ptr == OptBytePtr.None) -> bool: ret false;
+fun free = (OptBytePtr ptr) -> bool {
+    *u8 base = ptr asbits *u8 - sizeof MallocHeader;
+    *MallocHeader header = base asbits *MallocHeader;
+    if header.mapsize != 0: do syscall (MUNMAP, base, header.mapsize) else ret true;
+    ret false;
+}
