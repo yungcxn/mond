@@ -11,7 +11,7 @@ variant U = A || B;
 # a known case has a static tag, a variant reads it at runtime
 fun shape_tag = (Shape s) -> u8: ret tagof s;
 fun level_tag = (*Level l) -> u8: ret tagof l;
-fun union_tag = (U u) -> u8: ret tagof u;
+fun unified_tag = (U u) -> u8: ret tagof u;
 
 stcfun tags = () -> u32 {
     Shape s = Shape.Rect(w = 1, h = 2);
@@ -25,6 +25,6 @@ stc u32 TG = tags(); #= TG 391
 main = () {
     Shape s = Shape.Circle(r = 2);
     mut Level l = Level.Mid;
-    u8 a = shape_tag(s) + level_tag(l.&) + union_tag(A.Y);
+    u8 a = shape_tag(s) + level_tag(l.&) + unified_tag(A.Y);
     u8 b = tagof Shape.Dot;
 }

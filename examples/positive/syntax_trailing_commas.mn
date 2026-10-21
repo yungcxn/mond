@@ -17,7 +17,8 @@ stc u32 CALL = add(1, 2,); #= CALL 3
 stc u32 NAMED = add(a = 1, b = 5,); #= NAMED 6
 stc P PT = P(x = 1, y = 2,); #= PT [1, 2]
 stc P WITH = PT with (y = 9,); #= WITH [1, 9]
-stc u32 M = match V.Two(n = 3,) { V.Two(n,) => n, _ => 0, }; #= M 3
+stc V TWO = V.Two(n = 3,);
+stc u32 M = match TWO { V.Two(n,) => n, _ => 0, }; #= M 3
 
 main = () {
     u32 s = add(1, 2,);

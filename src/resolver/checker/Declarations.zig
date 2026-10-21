@@ -928,7 +928,7 @@ pub fn declared_type_kind(self: *Declarations, node: NodeId) DeclPool.Entry.Kind
     const resolver = self.owning_resolver();
     return switch (resolver.tree.kind(ParseTree.Def.from_node(resolver.tree, node).core)) {
         .def_type, .def_type_packed => .record,
-        .def_variant, .def_variant_unionsized => .variant,
+        .def_variant, .def_variant_packed => .variant,
         .def_trait, .def_trait_implof => .trait,
         else => .variable,
     };

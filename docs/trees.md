@@ -128,7 +128,7 @@ The last column is the name `mond -b` prints in its tree dump.
 | `TypeDefinitionWithAssertedSize` | `.. assertsize N` | def_type, assertsize | def_type_assertsize |
 | `TypeDefinitionWithTrait` | `*(..) implof T !{..}` | def_type, def_trait | def_type_implof |
 | `VariantDefinition` | `+(cases)` | param_tuple | def_variant |
-| `VariantDefinitionUnionsized` | `++(cases)` | param_tuple | def_variant_unionsized |
+| `VariantDefinitionPacked` | `++(cases)` | param_tuple | def_variant_packed |
 | `VariantDefinitionWithTag` | `.. tagtype T` | def_variant, tagtype | def_variant_tagtype |
 | `VariantDefinitionWithAssertedSize` | `.. assertsize N` | def_variant, assertsize | def_variant_assertsize |
 | `VariantDefinitionWithTrait` | `+(..) implof T !{..}` | def_variant, def_trait | def_variant_implof |
@@ -148,6 +148,7 @@ The last column is the name `mond -b` prints in its tree dump.
 | `TraitDefinitionImplementationTuple` | `implof A, B` | list | partial__trait_def_implof_tuple |
 | `TraitDefinitionBody` | `!{ .. }` members | list | partial__trait_def_body |
 | `UnifyVariants` | `A || B` | left_type, right_type | unify_variants |
+| `UnifyVariantsPacked` | `A ||| B` | left_type, right_type | unify_variants_packed |
 | `With` | `e with (f = v)` | value, fun_call_param_tuple | with |
 | `FunctionCall` | `f(args)` | callable, fun_param_tuple | fun_call |
 | `BuiltinCall` | `crash x`, `asm x`, `syscall (..)`, `fresh x` | callable, fun_param_tuple | builtin_call |

@@ -144,23 +144,31 @@ fn pattern(
     scrutinee_type: StaticPool.Index,
 ) bool {
     const resolver = self.owning_resolver();
-    switch (resolver.tree.kind(node)) {
-        .identifier => return self.binder_pattern(node, scrutinee_type),
-        .partial__match_case_pattern_or => {
-            return self.alternatives_pattern(context, node, scrutinee_type);
-        },
+    const takes_every_value = pattern: switch (resolver.tree.kind(node)) {
+        .identifier => self.binder_pattern(node, scrutinee_type),
+        .partial__match_case_pattern_or => self.alternatives_pattern(context, node, scrutinee_type),
         .partial__match_case_pattern_typecast => {
-            return self.typecast_pattern(context, node, scrutinee_type);
+            break :pattern self.typecast_pattern(context, node, scrutinee_type);
         },
-        .labelarrow => return self.labelled_pattern(context, node, scrutinee_type),
-        .fun_call => return self.constructor_pattern(context, node, scrutinee_type),
+        .labelarrow => self.labelled_pattern(context, node, scrutinee_type),
+        .fun_call => self.constructor_pattern(context, node, scrutinee_type),
         .quote => {
             resolver.macros.quote_pattern(resolver.tree.arg(node, 0));
-            return false;
+            break :pattern false;
         },
         // literals, ranges and constant paths (`Toggle.On`): any expression
-        else => return self.value_pattern(context, node, scrutinee_type),
-    }
+        else => self.value_pattern(context, node, scrutinee_type),
+    };
+    // nothing tells a case of a variant without a tag, unless the value is known to be of it: a
+    // packed variant's is, per realization
+    const static_pool = &resolver.static_pool;
+    const pattern_type = resolver.node_types[node];
+    const tells_untagged_case = pattern_type != scrutinee_type and pattern_type != .none and
+        static_pool.tag(pattern_type) == .variant_case_type and
+        static_pool.is_untagged(pattern_type) and
+        !static_pool.is_unstorable(static_pool.get(pattern_type).variant_case_type.variant);
+    if (tells_untagged_case) resolver.doctor.report(.untagged_variant, node, pattern_type, 0);
+    return takes_every_value;
 }
 
 fn binder_pattern(self: *Patterns, node: NodeId, scrutinee_type: StaticPool.Index) bool {
@@ -252,7 +260,7 @@ fn typecast_pattern(
     // a variant or trait value may hold a value of a narrower type
     const narrows = switch (static_pool.tag(scrutinee_type)) {
         .variant_type,
-        .variant_union_type,
+        .unified_variant_type,
         .trait_type,
         => static_pool.coercion(cast_type, scrutinee_type) != .incompatible,
         else => false,
@@ -425,7 +433,8 @@ fn covers(
     }
     return switch (resolver.static_pool.tag(column_type)) {
         .variant_type,
-        .variant_union_type,
+        .variant_case_type,
+        .unified_variant_type,
         .record_type,
         => self.covers_constructors(context, columns, spread_rows.items, queries.items),
         .int_type => self.covers_integers(context, columns, spread_rows.items, queries.items),
@@ -436,7 +445,6 @@ fn covers(
         .pointer_type,
         .mutable_pointer_type,
         .function_type,
-        .variant_case_type,
         .trait_type,
         .static_function,
         .template_type,
@@ -493,31 +501,28 @@ fn covers_constructors(
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
     const width = columns.len;
-    // the cases of a variant or of every variant of a union, a record is its own constructor
+    // the cases of a variant or of every member of a unified variant that brings its cases, a
+    // record, a case and any other member are their own constructor
     const column_type = columns[0];
-    const is_union = static_pool.tag(column_type) == .variant_union_type;
-    const member_count = if (is_union) static_pool.get(column_type).variant_union_type.len else 1;
+    const is_unified = static_pool.tag(column_type) == .unified_variant_type;
+    const members: []const StaticPool.Index = if (is_unified)
+        static_pool.get(column_type).unified_variant_type.members
+    else
+        &.{column_type};
 
     var constructor_count: usize = 0;
-    for (0..member_count) |i| {
-        if (is_union) {
-            const member = static_pool.get(column_type).variant_union_type[i];
-            constructor_count += static_pool.get(member).variant_type.cases.len;
-        } else if (static_pool.tag(column_type) == .variant_type) {
-            constructor_count += static_pool.get(column_type).variant_type.cases.len;
-        } else {
-            constructor_count += 1;
-        }
+    for (members) |member| {
+        const splits = static_pool.tag(member) == .variant_type and
+            (!is_unified or static_pool.brings_cases(member));
+        constructor_count += if (splits) static_pool.get(member).variant_type.cases.len else 1;
     }
 
     const constructors = resolver.temporary_slice(StaticPool.Index, constructor_count);
     var filled: usize = 0;
-    for (0..member_count) |i| {
-        const member = if (is_union)
-            static_pool.get(column_type).variant_union_type[i]
-        else
-            column_type;
-        if (static_pool.tag(member) == .record_type) {
+    for (members) |member| {
+        const splits = static_pool.tag(member) == .variant_type and
+            (!is_unified or static_pool.brings_cases(member));
+        if (!splits) {
             constructors[filled] = member;
             filled += 1;
             continue;
@@ -536,7 +541,7 @@ fn covers_constructors(
             static_pool.get(constructor).variant_case_type.payload
         else
             constructor;
-        const fields = if (record_type == .none)
+        const fields = if (record_type == .none or static_pool.tag(record_type) != .record_type)
             &[_]NodeId{}
         else
             resolver.types.field_nodes_of(record_type);
@@ -717,6 +722,8 @@ fn specialize(
                 },
                 .record_type => break :blk self.same(pattern_type, constructor),
                 else => {
+                    // a member of a unified variant that is one case is told by its type
+                    if (is_typecast) break :blk pattern_type == constructor;
                     const boolean_kind: ParseTree.Node.Kind =
                         if (constructor == .bool_true) .boolean_true else .boolean_false;
                     break :blk resolver.tree.kind(row_pattern) == boolean_kind;

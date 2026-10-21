@@ -1,7 +1,8 @@
 <include "lib/out.mn">;
 
 # tags: niches of `tagof self`, tags past one byte and signed ones, payloads of different sizes
-# copied in arrays, unions of variants; each case also folded at compile time (`st`)
+# copied in arrays, unified variants of variants and of plain types, untagged and packed variants;
+# each case also folded at compile time (`st`)
 mut i64 ONE = 0;
 fun h = (i64 v) -> i64: ret v * ONE;
 stcfun st = (i64 v) -> i64: ret v;
@@ -17,6 +18,10 @@ fun same = (i64 compile_time, i64 run_time) {
 
 variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
 variant Opt16 = +(Some(i16), None = -1) tagtype self;
+variant OptPtr = +(None, Some(&u8)) tagtype self;
+variant OptBool = +(Some(bool), None = 2) tagtype self;
+fun first_byte = (OptPtr p) -> i64: ret match p { OptPtr.Some(s) => s[0] as i64, OptPtr.None => -1 };
+fun flag = (OptBool b) -> i64: ret match b { OptBool.Some(v) => v as i64, OptBool.None => -1 };
 fun kind8 = (Opt8 o) -> i64: ret match o { Opt8.Some(x) => x as i64, Opt8.None => -1 };
 fun kind16 = (Opt16 o) -> i64: ret match o { Opt16.Some(x) => x as i64, Opt16.None => -1000 };
 fun some8 = (u8 x) -> Opt8: ret Opt8.Some(x);
@@ -51,6 +56,31 @@ fun as_abc = (u32 i) -> ABC: ret match i {
     0 => A.X, 1 => A.Y(5), 2 => B.Z(7), 3 => B.W, 4 => C.V(9), _ => C.U,
 };
 
+stc ABC FIXED = B.Z(5);
+variant Plain = u32 || f32 || Tree;
+fun plain = (Plain p) -> i64: ret match p {
+    u32 n => n as i64,
+    f32 f => (f * 10.0) as i64,
+    Tree.Leaf(v) => v * 100,
+    Tree.Pair(l, r) => l * 1000 + r,
+    Tree.Empty => -1,
+};
+fun as_plain = (u32 i) -> Plain: ret match i { 0 => h(7) as u32, 1 => 2.5, _ => Tree.Leaf(h(3)) };
+stc Plain HALF = 0.5;
+
+variant Msg = ++(Ping(u8 seq), Data(u64 a, u64 b), Quit);
+fun msg_weight = (Msg m) -> i64: ret match m {
+    Msg.Ping(s) => s as i64,
+    Msg.Data(a, b) => (a * 10 + b) as i64,
+    Msg.Quit => -1,
+};
+type Slot = *(&Msg any);
+fun slot_kind = (Slot s) -> i64: ret tagof s.any as i64;
+fun scaled = (u32 ||| f32 x) -> i64: ret match x { u32 i => i as i64 * 10, f32 f => (f * 10.0) as i64 };
+
+variant Word = +(Int(u32), Float(f32), Bytes([4]u8)) tagtype _;
+fun word_bits = (Word w) -> i64: ret (w as Word.Int).$0 as i64;
+
 main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     # niche tags: the payload's unused values, a payload equal to a tag is that case
@@ -59,6 +89,12 @@ main = (u32 argc, &&u8 argv) {
     same(st(kind8(Opt8.Some(255))), kind8(some8(h(255) as u8)));      #> -1
     same(st(kind16(Opt16.Some(-2))), kind16(Opt16.Some(h(-2) as i16)));  #> -2
     same(st(kind16(Opt16.None)), kind16(if h(1) == 1: Opt16.None else: Opt16.Some(3)));  #> -1000
+    # niches of other scalars: the null address, a byte a bool never is
+    line_u64(sizeof OptPtr * 10 + sizeof OptBool);                         #> 81
+    line_i64(first_byte(if h(1) == 1: OptPtr.Some("abc".&) else: OptPtr.None));  #> 97
+    line_i64(first_byte(if h(1) == 1: OptPtr.None else: OptPtr.Some("abc".&)));  #> -1
+    same(st(flag(OptBool.Some(true))), flag(OptBool.Some(h(1) == 1)));  #> 1
+    same(st(flag(OptBool.None)), flag(if h(1) == 1: OptBool.None else: OptBool.Some(false)));  #> -1
     # tags past one byte (the tag type holds the largest tag), signed tags
     line_u64(sizeof Wide);                                                  #> 2
     same(st(wide_tag(Wide.Last)), wide_tag(if h(1) == 1: Wide.Last else: Wide.C3));  #> 1000
@@ -73,8 +109,28 @@ main = (u32 argc, &&u8 argv) {
     mut i64 total = 0;
     for t in trees: total = total * 100 + weight(t);
     line_i64(total);                                                    #> 120409
-    # unions of variants
+    # unified variants
     mut i64 seen = 0;
     for i in 0..<6: seen += which(as_abc((h(i as i64)) as u32));
     line_i64(seen);                                                     #> 111132
+    same(st(which(FIXED)), which(FIXED));                               #> 105
+    # unified variants of plain types: one tag each, the value in the room
+    line_u64(sizeof Plain);                                                 #> 24
+    mut i64 plains = 0;
+    for i in 0..<3: plains = plains * 1000 + plain(as_plain(h(i as i64) as u32));
+    line_i64(plains);                                                   #> 7025300
+    same(st(plain(HALF)), plain(HALF));                                 #> 5
+    # untagged: the cases overlaid, read through a cast
+    line_u64(sizeof Word);                                                  #> 4
+    same(st(word_bits(Word.Float(1.0))), word_bits(Word.Float(h(1) as f32)));  #> 1065353216
+    mut Word word = Word.Bytes([h(1) as u8, 0, 0, 0]);
+    line_i64(word_bits(word));                                          #> 1
+    # packed: each case its own size, realized per case, the tag read through an address
+    line_u64(sizeof Msg.Ping * 100 + sizeof Msg.Data);                    #> 224
+    same(st(msg_weight(Msg.Data(3, 4))), msg_weight(Msg.Data(h(3) as u64, h(4) as u64)));  #> 34
+    same(st(msg_weight(Msg.Ping(9))), msg_weight(Msg.Ping(h(9) as u8)));  #> 9
+    line_i64(msg_weight(Msg.Quit));                                     #> -1
+    mut Msg.Data data = Msg.Data(h(1) as u64, 2);
+    line_i64(slot_kind(Slot(data.&)));                                  #> 1
+    same(st(scaled(2) + scaled(0.5)), scaled(h(2) as u32) + scaled(0.5));  #> 25
 }

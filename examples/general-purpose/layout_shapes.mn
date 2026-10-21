@@ -18,7 +18,7 @@ type Grid = *([2]Inner rows, u8 n) assertsize 10;
 variant Mix = +(Tiny(u8, u8), Word(u16), Empty) tagtype u8;
 variant Long = +(Big(u64), Small(u8, u8, u8), Empty) tagtype u8;
 variant Nib = +(Lo(u8), Hi(u8), Other) tagtype u16;
-variant Sel = ++(Some(u32), None) tagtype u8;
+variant Sel = +(Some(u32), None) tagtype u8;
 
 stc u64 S1 = sizeof Pk; #= S1 6
 stc u64 S2 = sizeof Sorted; #= S2 4

@@ -13,7 +13,7 @@ stcfun max_of = (type T where T oftype Cmp(T)): (T a, T b) -> T: ret a; #! stcwh
 fun f = () {
     &u8 x = print_it(Good(v = 1)); #! type_mismatch
     Good g = max_of(Good)(Good(v = 1), Good(v = 2));
-    Show s2 = Good(v = 1); #! trait_outside_parameter
+    Show s2 = Good(v = 1); #! unstorable_outside_parameter
     i32 y = Good(v = 1).nope(); #! unknown_member
     NoImpl n = max_of(NoImpl)(NoImpl(v = 1), NoImpl(v = 2));
     Plain p = max_of(Plain)(Plain(v = 1), Plain(v = 2));

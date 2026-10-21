@@ -57,10 +57,13 @@ pub const VariantType = struct {
     declaration: DeclPool.Index,
     tag_mode: VariantTagMode,
     tag_type: Index,
-    is_unionsized: bool,
+    is_packed: bool,
     cases: []const Index,
     traits: []const Index,
 };
+
+// `A || B`, packed `A ||| B`
+pub const UnifiedVariantType = struct { members: []const Index, is_packed: bool };
 
 pub const VariantCaseType = struct {
     variant: Index,
@@ -140,7 +143,9 @@ pub const CoercionKind = enum(u8) {
     ptr_mut_to_ptr,
     case_to_variant,
     payload_to_self_tagged,
-    variant_to_union,
+    member_to_unified,
+    // a value or address of a case or member as its packed variant: realized per type, it stays
+    member_to_packed,
     impl_to_trait,
     unit_to_runit,
     incompatible,
@@ -218,7 +223,7 @@ pub const Composition = enum(u8) {
     // the parameters and the return type
     function,
     // `A || B`: the member variants
-    union_of_variants,
+    unified_variants,
     // `ast(T)`: what the tree produces
     tree,
 };
@@ -293,7 +298,7 @@ const tag_table = .{
         .is_variant = true,
         .has_layout = true,
     } },
-    .{ "variant_union_type", []const Index, .union_of_variants, TagProperties{
+    .{ "unified_variant_type", UnifiedVariantType, .unified_variants, TagProperties{
         .is_type = true,
         .is_variant = true,
         .has_layout = true,
@@ -382,7 +387,9 @@ pub const through_pointer = type_queries.through_pointer;
 pub const template_of = type_queries.template_of;
 pub const trait_of = type_queries.trait_of;
 pub const is_realized_per_type = type_queries.is_realized_per_type;
-pub const contains_trait = type_queries.contains_trait;
+pub const packed_of = type_queries.packed_of;
+pub const is_parameter_only = type_queries.is_parameter_only;
+pub const contains_parameter_only = type_queries.contains_parameter_only;
 pub const contains_template = type_queries.contains_template;
 pub const has_open_type_variable = type_queries.has_open_type_variable;
 pub const is_poisoned = type_queries.is_poisoned;
@@ -406,10 +413,13 @@ pub const ast_type_of = type_queries.ast_type_of;
 pub const is_tree = type_queries.is_tree;
 pub const contains_trees = type_queries.contains_trees;
 pub const holds_function_value = type_queries.holds_function_value;
+pub const is_untagged = type_queries.is_untagged;
+pub const holds_untagged_variant = type_queries.holds_untagged_variant;
 pub const is_unstorable = type_queries.is_unstorable;
 pub const tag_range = type_layouts.tag_range;
-pub const union_offset = type_layouts.union_offset;
-pub const union_tag_type = type_layouts.union_tag_type;
+pub const unified_offset = type_layouts.unified_offset;
+pub const brings_cases = type_layouts.brings_cases;
+pub const unified_tag_type = type_layouts.unified_tag_type;
 pub const layout = type_layouts.layout;
 pub const smallest_tag_type = type_layouts.smallest_tag_type;
 pub const unify = type_relations.unify;
@@ -840,7 +850,7 @@ pub fn type_of(self: *const StaticPool, value: Index) Index {
         .function_value => .fun_type,
         .static_function => .stcfun_type,
         .trait_type => .trait_type,
-        .variant_type, .variant_union_type => .variant_type,
+        .variant_type, .unified_variant_type => .variant_type,
         .int_type, .float_type, .simple_type, .meta_type, .array_type => .type_type,
         .pointer_type, .mutable_pointer_type, .function_type, .record_type => .type_type,
         .variant_case_type, .template_type, .type_variable, .ast_type => .type_type,

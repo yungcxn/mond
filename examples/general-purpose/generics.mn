@@ -1,4 +1,4 @@
-variant Opt = (type T): ++(Some(T), None) tagtype u8;
+variant Opt = (type T): +(Some(T), None) tagtype u8;
 variant Result = (type T, type E): +(Ok(T), Err(E)) tagtype u8;
 
 type Pair = (type A, type B): *(A first, B second) !{

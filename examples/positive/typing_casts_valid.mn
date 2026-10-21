@@ -1,6 +1,6 @@
 # every valid kind of `as`, evaluated statically
 variant Color = +(Red, Green = 5, Blue);
-variant Reg = ++(AsInt(i32), AsFloat(f32), AsByte(u8)) tagtype u8;
+variant Reg = +(AsInt(i32), AsFloat(f32), AsByte(u8)) tagtype u8;
 variant Small = +(Lo = 0, Hi = 255) tagtype u8;
 
 stc u32 B1 = true as u32; #= B1 1
@@ -26,7 +26,7 @@ stc i8 F8 = -1000.0 as i8; #= F8 -128
 stc f16 F9 = 65504.0 as f16; #= F9 65504
 stc f32 F10 = (1.5 as f16) as f32; #= F10 1.5
 
-fun retag = (Reg r) -> Reg.AsFloat: ret r as Reg.AsFloat; #: retag (++(AsInt, AsFloat, AsByte)) -> ++(AsInt, AsFloat, AsByte).AsFloat
+fun retag = (Reg r) -> Reg.AsFloat: ret r as Reg.AsFloat; #: retag (+(AsInt, AsFloat, AsByte)) -> +(AsInt, AsFloat, AsByte).AsFloat
 fun wrap = (f32 x) -> Reg.AsFloat: ret x as Reg.AsFloat;
 fun wrap_lit = () -> Reg.AsFloat: ret 4.5 as Reg.AsFloat;
 fun narrow = ([6]u8 a) -> [2]u8: ret a as [2..<4]u8; #: narrow ([6]u8) -> [2]u8

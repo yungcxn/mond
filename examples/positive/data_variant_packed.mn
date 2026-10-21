@@ -1,0 +1,41 @@
+# `++( )`: a packed variant, each case only its tag and its own payload; the variant is a parameter
+# type realized per case, `match` picks the arm while compiling; `|||` is the untagged form of types
+variant Msg = ++(Ping(u8 seq), Data(u64 a, u64 b), Quit);
+variant Bare = ++(Small(u8), Large(u64)) tagtype _;
+stc u64 ping_size = sizeof Msg.Ping; #= ping_size 2
+stc u64 data_size = sizeof Msg.Data; #= data_size 24
+stc u64 quit_size = sizeof Msg.Quit; #= quit_size 1
+stc u64 small_size = sizeof Bare.Small; #= small_size 1
+stc u64 large_size = sizeof Bare.Large; #= large_size 8
+
+fun weight = (Msg m) -> u64: ret match m {
+    Msg.Ping(s) => s as u64,
+    Msg.Data(a, b) => a + b,
+    Msg.Quit => 0,
+};
+stc u64 of_ping = weight(Msg.Ping(9)); #= of_ping 9
+stc u64 of_data = weight(Msg.Data(3, 4)); #= of_data 7
+stc u64 of_quit = weight(Msg.Quit); #= of_quit 0
+
+# behind a pointer it is some case: its tag can be read, a cast gives the case
+fun kind = (&Msg m) -> u8: ret tagof m;
+fun relay = (&Msg m) -> u8: ret kind(m);
+stc Msg.Data held = Msg.Data(1, 2);
+stc u8 data_kind = relay(held.&); #= data_kind 1
+fun first = (&Msg m) -> u64: ret (m as &Msg.Data).*.a;
+
+# a packed variant without tags: the cases are told apart only while compiling
+fun bytes = (Bare b) -> u64: ret match b { Bare.Small(x) => 1, Bare.Large(x) => 8 };
+stc u64 bare_bytes = bytes(Bare.Large(5)); #= bare_bytes 8
+
+fun scaled = (u32 ||| f32 x) -> f32: ret match x { u32 i => i as f32 * 10.0, f32 f => f * 10.0 };
+stc f32 sum = scaled(2) + scaled(0.5); #= sum 25
+
+# a trait parameter matched by its implementers, each realization takes its own arm
+trait Named = !{ fun id = () -> u32; }
+type Cat = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
+type Dog = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
+fun animal = (Named n) -> u32: ret match n { Cat c => 1, Dog d => 2, _ => 0 };
+stc u32 animals = animal(Cat(1)) + animal(Dog(1)) * 10; #= animals 21
+
+main = () {}

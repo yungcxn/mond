@@ -1,5 +1,5 @@
 # tags: signed, past one byte (the automatic tag type holds the largest tag), niches (a payload
-# equal to a tag is that case), unions; payload-free cases in static data
+# equal to a tag is that case), unified variants; payload-free cases in static data
 variant Signed = +(Low = -5, Mid, High = 120) tagtype i8;
 stc i8 LOW_TAG = tagof Signed.Low;     #= LOW_TAG -5
 stc i8 MID_TAG = tagof Signed.Mid;     #= MID_TAG -4
@@ -39,7 +39,7 @@ variant X = +(X0, X1(u32));
 variant Y = +(Y0(u64), Y1);
 variant XY = X || Y;
 stcfun which = (XY v) -> u64: ret match v { X.X0 => 1, X.X1(k) => k as u64 + 10, Y.Y0(k) => k + 100, Y.Y1 => 1000 };
-stc u64 UNION = which(X.X0) + which(X.X1(5)) + which(Y.Y0(7)) + which(Y.Y1);   #= UNION 1123
+stc u64 UNIFIED = which(X.X0) + which(X.X1(5)) + which(Y.Y0(7)) + which(Y.Y1);   #= UNIFIED 1123
 
 # records and arrays are values: copies, swaps, a record from a function of itself
 type Pt = *(mut i64 x, mut i64 y);

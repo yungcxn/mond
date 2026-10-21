@@ -16,7 +16,7 @@ fun use_trait = (Base b) -> u32: ret b.id();
 fun use_ptr = (*Base b) -> u32: ret b.id();
 fun use_extra = (&Base g) -> u32: ret g.extra(); #! unknown_member
 fun use_sub = (&Sub s) -> u32: ret s.extra();
-fun returns_trait = () -> Base: ret Rec(1); #! trait_outside_parameter
+fun returns_trait = () -> Base: ret Rec(1); #! unstorable_outside_parameter
 fun takes_nested = ([]&Base all) {}
 type HoldsTrait = *(&Base inner);
 
@@ -27,7 +27,7 @@ fun f = () {
     u32 c = use_ptr(t.&); #! type_mismatch
     mut Twice mt = Twice(1);
     u32 d = use_ptr(mt.&);
-    Base e = Rec(1); #! trait_outside_parameter
+    Base e = Rec(1); #! unstorable_outside_parameter
     &Base g = t.&;
     u32 h = g.id(); #! unstorable_dereference
     u32 i = Base.id(); #! wrong_arity

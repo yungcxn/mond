@@ -25,9 +25,11 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
     const reserved = type_index != .poison_type and pool.tag(type_index) == .simple_type and
         pool.items.column(.data)[@intFromEnum(type_index)] == @intFromEnum(SimpleType.poison);
     if (reserved) return std.mem.zeroes(Layout);
-    // a case is laid out as its variant, before its own entry is marked in progress
+    // a case is laid out as its variant, before its own entry is marked in progress; a case of a
+    // packed variant has a size of its own
     if (pool.tag(type_index) == .variant_case_type) {
-        return pool.layout(pool.get(type_index).variant_case_type.variant);
+        const variant = pool.get(type_index).variant_case_type.variant;
+        if (!pool.get(variant).variant_type.is_packed) return pool.layout(variant);
     }
     const i = @intFromEnum(type_index);
     const state = &pool.layouts.column(.state)[i];
@@ -53,8 +55,12 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
         .array_type => |array| array_layout(pool, array),
         .record_type => |record| record_layout(pool, record),
         .variant_type => |variant| variant_layout(pool, type_index, variant),
-        .variant_case_type => unreachable,
-        .variant_union_type => |members| union_layout(pool, type_index, members),
+        .variant_case_type => |case| packed_case_layout(pool, case),
+        // a packed one has no size, only each of its members
+        .unified_variant_type => |unified| if (unified.is_packed)
+            Partial{}
+        else
+            unified_layout(pool, type_index, unified.members),
         // static-only entries and values have no memory
         .meta_type, .trait_type, .static_function, .template_type => Partial{},
         .type_variable, .ast_type => Partial{},
@@ -134,12 +140,32 @@ fn record_layout(pool: *StaticPool, record: StaticPool.RecordType) Partial {
     return partial;
 }
 
-// the tag, then the largest payload aligned behind it.
-// a self-tagged variant without payload bytes is its tag
+// the tag, then the largest payload aligned behind it. a packed variant has no size, only each
+// of its cases
 fn variant_layout(pool: *StaticPool, type_index: Index, variant: StaticPool.VariantType) Partial {
+    if (variant.is_packed) return .{};
     var payload_size: u64 = 0;
     var payload_align_log2: u8 = 0;
     const payload_state = widest_payload(pool, type_index, &payload_size, &payload_align_log2);
+    return tagged_layout(pool, variant, payload_size, payload_align_log2, payload_state);
+}
+
+// a case of a packed variant: the tag, then only its own payload
+fn packed_case_layout(pool: *StaticPool, case: StaticPool.VariantCaseType) Partial {
+    const variant = pool.get(case.variant).variant_type;
+    if (case.payload == .none) return tagged_layout(pool, variant, 0, 0, .done);
+    const payload = pool.layout(case.payload);
+    return tagged_layout(pool, variant, payload.size, payload.align_log2, payload.state);
+}
+
+// the tag, then a payload aligned behind it. a self-tagged variant without payload bytes is its tag
+fn tagged_layout(
+    pool: *StaticPool,
+    variant: StaticPool.VariantType,
+    payload_size: u64,
+    payload_align_log2: u8,
+    payload_state: Layout.State,
+) Partial {
     const tag = if (variant.tag_mode == .int)
         pool.layout(variant.tag_type)
     else
@@ -156,17 +182,25 @@ fn variant_layout(pool: *StaticPool, type_index: Index, variant: StaticPool.Vari
     return partial;
 }
 
-// the members share one tag (see `union_tag_type`) and the room of the widest payload of any member
-fn union_layout(pool: *StaticPool, type_index: Index, members: []const Index) Partial {
+// the members share one tag (see `unified_tag_type`) and the room of the widest payload of any
+// member
+fn unified_layout(pool: *StaticPool, type_index: Index, members: []const Index) Partial {
     var partial = Partial{};
     var payload_size: u64 = 0;
     var payload_align_log2: u8 = 0;
     for (members) |member| {
-        const state = widest_payload(pool, member, &payload_size, &payload_align_log2);
+        const state = if (pool.brings_cases(member))
+            widest_payload(pool, member, &payload_size, &payload_align_log2)
+        else blk: {
+            const member_layout = pool.layout(member);
+            payload_size = @max(payload_size, member_layout.size);
+            payload_align_log2 = @max(payload_align_log2, member_layout.align_log2);
+            break :blk member_layout.state;
+        };
         partial.infinite = partial.infinite or state == .infinite;
         partial.incomplete = partial.incomplete or state == .unknown;
     }
-    const tag = pool.layout(pool.union_tag_type(type_index));
+    const tag = pool.layout(pool.unified_tag_type(type_index));
     partial.align_log2 = @max(payload_align_log2, tag.align_log2);
     const payload_alignment = @as(u64, 1) << @intCast(payload_align_log2);
     partial.size = std.mem.alignForward(u64, tag.size, payload_alignment) + payload_size;
@@ -200,19 +234,24 @@ pub fn tag_range(pool: *const StaticPool, variant: Index) u64 {
     return end;
 }
 
-// the members of a union are numbered one after another: where `member`'s tags start
-pub fn union_offset(pool: *const StaticPool, union_type: Index, member: Index) u64 {
+// a member of a unified variant brings its cases when they have tags, any other type is one case
+pub fn brings_cases(pool: *const StaticPool, member: Index) bool {
+    return pool.tag(member) == .variant_type and pool.get(member).variant_type.tag_mode != .none;
+}
+
+// the members of a unified variant are numbered one after another: where `member`'s tags start
+pub fn unified_offset(pool: *const StaticPool, unified_type: Index, member: Index) u64 {
     var offset: u64 = 0;
-    for (pool.get(union_type).variant_union_type) |other| {
+    for (pool.get(unified_type).unified_variant_type.members) |other| {
         if (other == member) return offset;
-        offset += pool.tag_range(other);
+        offset += if (pool.brings_cases(other)) pool.tag_range(other) else 1;
     }
     return offset;
 }
 
-pub fn union_tag_type(pool: *const StaticPool, union_type: Index) Index {
-    const members = pool.get(union_type).variant_union_type;
-    return smallest_tag_type(if (members.len == 0) 1 else pool.union_offset(union_type, .none));
+pub fn unified_tag_type(pool: *const StaticPool, unified_type: Index) Index {
+    const members = pool.get(unified_type).unified_variant_type.members;
+    return smallest_tag_type(if (members.len == 0) 1 else pool.unified_offset(unified_type, .none));
 }
 
 pub fn smallest_tag_type(case_count: u64) Index {

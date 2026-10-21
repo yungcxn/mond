@@ -249,6 +249,9 @@ fn infer_comparison(self: *Expressions, context: *FunctionContext, node: NodeId)
     if (operand_type == .poison_type) return operand_type;
     // arrays compare element by element, as far as a static length reaches
     const compared = resolver.static_pool.substitute_type_variables(operand_type);
+    if (resolver.static_pool.holds_untagged_variant(compared)) {
+        return resolver.report(.untagged_variant, node, compared, 0);
+    }
     if (!self.length_is_static(context, compared, node)) {
         return resolver.report(.not_static, node, 0, 0);
     }
@@ -503,6 +506,10 @@ fn infer_cast(self: *Expressions, context: *FunctionContext, node: NodeId) Stati
 
     if (static_pool.cast_kind(source_type, target_type) == .invalid) {
         return resolver.report(.invalid_cast, node, source_type, target_type);
+    }
+    // a case is cast to an int as its tag
+    if (static_pool.is_untagged(source_type) and static_pool.properties(target_type).is_integer) {
+        return resolver.report(.untagged_variant, node, source_type, 0);
     }
     return target_type;
 }
@@ -914,6 +921,9 @@ fn infer_length_or_tag(
         return resolver.report(.not_static, node, 0, 0);
     }
     const is_value = static_pool.tag(operand_type) != .meta_type;
+    if (!is_length and is_value and static_pool.is_untagged(owner)) {
+        return resolver.report(.untagged_variant, node, owner, 0);
+    }
     const tag_type = static_pool.tag_type_of(owner);
     if (!is_length and is_value and tag_type != .none) return tag_type;
     const operator = resolver.name_pool.intern(if (is_length) "lenof" else "tagof");

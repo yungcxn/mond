@@ -4,7 +4,7 @@ fun printf = (&u8 fmt, i64 v);
 variant Tok = +(Num(i64 v), Plus, Minus, Star, LParen, RParen, End) tagtype u8;
 variant Op = +(Push(i64 v), Add, Sub, Mul) tagtype u8;
 
-variant Opt = (type T): ++(Some(T), None) tagtype u8;
+variant Opt = (type T): +(Some(T), None) tagtype u8;
 
 type Stack = (type T, u32 CAP stcwhere CAP > 0 and (CAP & (CAP - 1)) == 0): *(mut [CAP]T items, mut u32 len = 0) !{
     stc u32 MASK = CAP - 1;

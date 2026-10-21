@@ -124,27 +124,48 @@ fn equals(lowerer: *LLVMLowerer, value_type: Index, left: Value, right: Value) V
 }
 
 // the same tag, and for a case with a payload the same payload
-fn variants_equal(lowerer: *LLVMLowerer, variant_or_union: Index, left: Value, right: Value) Value {
+fn variants_equal(
+    lowerer: *LLVMLowerer,
+    variant_or_unified: Index,
+    left: Value,
+    right: Value,
+) Value {
     const builder = lowerer.builder;
     const pool = lowerer.pool;
-    const left_tag = tag_of(lowerer, variant_or_union, left);
-    const right_tag = tag_of(lowerer, variant_or_union, right);
+    // values of one case of a packed variant: their payloads
+    if (pool.tag(variant_or_unified) == .variant_case_type) {
+        const payload = pool.get(variant_or_unified).variant_case_type.payload;
+        if (payload == .none) return true_value(lowerer);
+        const left_payload = room(lowerer, variant_or_unified, left);
+        return equals(lowerer, payload, left_payload, room(lowerer, variant_or_unified, right));
+    }
+    const left_tag = tag_of(lowerer, variant_or_unified, left);
+    const right_tag = tag_of(lowerer, variant_or_unified, right);
     const tag_type = llvm.LLVMTypeOf(left_tag);
     const same_tag = llvm.LLVMBuildICmp(builder, llvm.LLVMIntEQ, left_tag, right_tag, "");
 
     var same_payload = true_value(lowerer);
-    const is_union = pool.tag(variant_or_union) == .variant_union_type;
-    const members: []const Index = if (is_union)
-        pool.get(variant_or_union).variant_union_type
+    const is_unified = pool.tag(variant_or_unified) == .unified_variant_type;
+    const members: []const Index = if (is_unified)
+        pool.get(variant_or_unified).unified_variant_type.members
     else
-        &.{variant_or_union};
+        &.{variant_or_unified};
     for (members) |member| {
-        const offset = if (is_union) pool.union_offset(variant_or_union, member) else 0;
+        const offset = if (is_unified) pool.unified_offset(variant_or_unified, member) else 0;
+        if (is_unified and !pool.brings_cases(member)) {
+            const left_member = member_in_room(lowerer, variant_or_unified, left, member);
+            const right_member = member_in_room(lowerer, variant_or_unified, right, member);
+            const same = equals(lowerer, member, left_member, right_member);
+            const tag = llvm.LLVMConstInt(tag_type, offset, 0);
+            const is_member = llvm.LLVMBuildICmp(builder, llvm.LLVMIntEQ, left_tag, tag, "");
+            same_payload = llvm.LLVMBuildSelect(builder, is_member, same, same_payload, "");
+            continue;
+        }
         for (pool.get(member).variant_type.cases) |case| {
             const payload = pool.get(case).variant_case_type.payload;
             if (payload == .none) continue;
-            const left_payload = room(lowerer, variant_or_union, left);
-            const right_payload = room(lowerer, variant_or_union, right);
+            const left_payload = room(lowerer, variant_or_unified, left);
+            const right_payload = room(lowerer, variant_or_unified, right);
             const same = equals(lowerer, payload, left_payload, right_payload);
             const tag = llvm.LLVMConstInt(tag_type, tag_bits(lowerer, case) + offset, 0);
             const is_case = llvm.LLVMBuildICmp(builder, llvm.LLVMIntEQ, left_tag, tag, "");
@@ -201,6 +222,7 @@ pub fn convert(lowerer: *LLVMLowerer, kind: StaticPool.CoercionKind, to: Index, 
         .ptr_mut_to_ptr,
         .case_to_variant,
         .payload_to_self_tagged,
+        .member_to_packed,
         .impl_to_trait,
         .unit_to_runit,
         .incompatible,
@@ -216,7 +238,7 @@ pub fn convert(lowerer: *LLVMLowerer, kind: StaticPool.CoercionKind, to: Index, 
         .float_widen => llvm.LLVMBuildFPExt(builder, value, lowerer.types.of(to), ""),
         // the address of the first element, of an array value its own copy
         .array_ptr_to_elem_ptr, .to_dyn => value,
-        .variant_to_union => into_union(lowerer, lowerer.types.variant_of(from), to, value),
+        .member_to_unified => into_unified(lowerer, lowerer.types.variant_of(from), to, value),
     };
 }
 
@@ -443,16 +465,29 @@ fn store_value(lowerer: *LLVMLowerer, value_type: Index, address: Value, value: 
 
 // variants
 
+// a tag as a constant, the empty `{}` for a variant without one (`tagtype _`)
+pub fn tag_constant(tag_type: Type, bits: u64) Value {
+    const is_int = llvm.LLVMGetTypeKind(tag_type) == llvm.LLVMIntegerTypeKind;
+    return if (is_int) llvm.LLVMConstInt(tag_type, bits, 0) else llvm.LLVMConstNull(tag_type);
+}
+
 pub fn tag_bits(lowerer: *LLVMLowerer, case: Index) u64 {
     const tag = lowerer.pool.get(case).variant_case_type.tag;
     if (lowerer.pool.tag(tag) != .int_value) return 0;
     return lowerer.pool.get(tag).int_value.bits;
 }
 
-// where the payload of a variant or union value starts
+// where the payload of a variant or unified variant value starts
 fn room(lowerer: *LLVMLowerer, variant_type: Index, pointer: Value) Value {
     const lowered_type = lowerer.types.of(lowerer.types.variant_of(variant_type));
     return llvm.LLVMBuildStructGEP2(lowerer.builder, lowered_type, pointer, 1, "");
+}
+
+// a member of a unified variant that is one case, as a value of its own: it fills the room
+fn member_in_room(lowerer: *LLVMLowerer, unified_type: Index, value: Value, member: Index) Value {
+    const member_room = room(lowerer, unified_type, value);
+    if (lowerer.types.is_in_memory(member)) return member_room;
+    return llvm.LLVMBuildLoad2(lowerer.builder, lowerer.types.of(member), member_room, "");
 }
 
 pub fn variant_make(
@@ -467,9 +502,13 @@ pub fn variant_make(
 
 fn make_variant(lowerer: *LLVMLowerer, variant: Index, case_index: u32, payload: Value) Value {
     const builder = lowerer.builder;
-    const case = lowerer.pool.get(variant).variant_type.cases[case_index];
+    // a case of a packed variant is made as itself
+    const case = if (lowerer.pool.tag(variant) == .variant_case_type)
+        variant
+    else
+        lowerer.pool.get(variant).variant_type.cases[case_index];
     const tag_type = lowerer.types.of(lowerer.types.tag_type(variant));
-    const tag = llvm.LLVMConstInt(tag_type, tag_bits(lowerer, case), 0);
+    const tag = tag_constant(tag_type, tag_bits(lowerer, case));
     // a `tagof self` variant is its payload's int, or the tag of a case without payload
     if (lowerer.types.is_self_tagged(variant)) {
         if (payload == null) return tag;
@@ -489,15 +528,28 @@ fn make_variant(lowerer: *LLVMLowerer, variant: Index, case_index: u32, payload:
     return slot;
 }
 
-// the tag of a variant or union value, for `tagof self` the tag of the case its int stands for
+// the tag of a variant or unified variant value, or at the address of a packed variant, for
+// `tagof self` the tag of the case its int stands for
 pub fn variant_tag(lowerer: *LLVMLowerer, value_type: Index, value: Value) Value {
-    return tag_of(lowerer, lowerer.types.variant_of(value_type), value);
+    const variant_type = if (lowerer.pool.is_pointer(value_type))
+        lowerer.pool.pointee(value_type)
+    else
+        value_type;
+    return tag_of(lowerer, lowerer.types.variant_of(variant_type), value);
 }
 
 fn tag_of(lowerer: *LLVMLowerer, variant: Index, value: Value) Value {
     const builder = lowerer.builder;
     const pool = lowerer.pool;
     const tag_type = lowerer.types.of(lowerer.types.tag_type(variant));
+    // a value of a case of a packed variant is known to be of it, at an address of some case of
+    // one every case starts with the tag
+    if (pool.tag(variant) == .variant_case_type) {
+        return tag_constant(tag_type, tag_bits(lowerer, variant));
+    }
+    if (pool.tag(variant) == .variant_type and pool.get(variant).variant_type.is_packed) {
+        return llvm.LLVMBuildLoad2(builder, tag_type, value, "");
+    }
     if (!lowerer.types.is_self_tagged(variant)) {
         const field = llvm.LLVMBuildStructGEP2(builder, lowerer.types.of(variant), value, 0, "");
         return llvm.LLVMBuildLoad2(builder, tag_type, field, "");
@@ -525,56 +577,66 @@ pub fn variant_payload(
     return payload;
 }
 
-// a variant into a union of it: the tag moved into the member's range, the payload copied
-fn into_union(lowerer: *LLVMLowerer, variant: Index, union_type: Index, value: Value) Value {
+// a member into a unified variant of it: a variant's tag moved into the member's range and its
+// payload copied, a member that is one case is its tag and the whole value
+fn into_unified(lowerer: *LLVMLowerer, variant: Index, unified_type: Index, value: Value) Value {
     const builder = lowerer.builder;
-    const union_lowered = lowerer.types.of(union_type);
-    const union_tag_type = llvm.LLVMStructGetTypeAtIndex(union_lowered, 0);
+    const unified_lowered = lowerer.types.of(unified_type);
+    const unified_tag_type = llvm.LLVMStructGetTypeAtIndex(unified_lowered, 0);
     const offset = llvm.LLVMConstInt(
-        union_tag_type,
-        lowerer.pool.union_offset(union_type, variant),
+        unified_tag_type,
+        lowerer.pool.unified_offset(unified_type, variant),
         0,
     );
-    const member_tag = llvm.LLVMBuildIntCast2(
-        builder,
-        tag_of(lowerer, variant, value),
-        union_tag_type,
-        0,
-        "",
-    );
-    const slot = lowerer.entry_alloca(union_lowered);
-    const tag = llvm.LLVMBuildAdd(builder, member_tag, offset, "");
+    const is_one_case = !lowerer.pool.brings_cases(variant);
+    const tag = if (is_one_case) offset else blk: {
+        const member_tag = llvm.LLVMBuildIntCast2(
+            builder,
+            tag_of(lowerer, variant, value),
+            unified_tag_type,
+            0,
+            "",
+        );
+        break :blk llvm.LLVMBuildAdd(builder, member_tag, offset, "");
+    };
+    const slot = lowerer.entry_alloca(unified_lowered);
     _ = llvm.LLVMBuildStore(
         builder,
         tag,
-        llvm.LLVMBuildStructGEP2(builder, union_lowered, slot, 0, ""),
+        llvm.LLVMBuildStructGEP2(builder, unified_lowered, slot, 0, ""),
     );
-    const union_room = room(lowerer, union_type, slot);
-    if (lowerer.types.is_self_tagged(variant)) {
-        _ = llvm.LLVMBuildStore(builder, value, union_room);
+    const unified_room = room(lowerer, unified_type, slot);
+    if (is_one_case) {
+        store_value(lowerer, variant, unified_room, value);
+    } else if (lowerer.types.is_self_tagged(variant)) {
+        _ = llvm.LLVMBuildStore(builder, value, unified_room);
     } else {
         const length = llvm.LLVMConstInt(
             lowerer.types.length,
             lowerer.types.payload_room(variant).size,
             0,
         );
-        _ = llvm.LLVMBuildMemCpy(builder, union_room, 1, room(lowerer, variant, value), 1, length);
+        const payload = room(lowerer, variant, value);
+        _ = llvm.LLVMBuildMemCpy(builder, unified_room, 1, payload, 1, length);
     }
     return slot;
 }
 
-// `as V.Case` sets the case's tag, and a union narrowed to a member moves the tag back into the
-// member's own range
+// `as V.Case` sets the case's tag, and a unified variant narrowed to a member moves the tag back
+// into the member's own range
 fn retag(lowerer: *LLVMLowerer, from: Index, to: Index, value: Value) Value {
     const builder = lowerer.builder;
     const pool = lowerer.pool;
     const types = &lowerer.types;
     const from_variant = types.variant_of(from);
     const to_variant = types.variant_of(to);
+    if (from_variant != to_variant and !pool.brings_cases(to_variant)) {
+        return member_in_room(lowerer, from_variant, value, to_variant);
+    }
     const tag_type = types.of(types.tag_type(to_variant));
     if (from_variant == to_variant) {
         if (pool.tag(to) != .variant_case_type) return value;
-        const tag = llvm.LLVMConstInt(tag_type, tag_bits(lowerer, to), 0);
+        const tag = tag_constant(tag_type, tag_bits(lowerer, to));
         if (types.is_self_tagged(to_variant)) {
             return if (pool.get(to).variant_case_type.payload == .none) tag else value;
         }
@@ -588,24 +650,24 @@ fn retag(lowerer: *LLVMLowerer, from: Index, to: Index, value: Value) Value {
         return slot;
     }
 
-    // from a union to its member `to_variant`
-    const union_tag = tag_of(lowerer, from_variant, value);
+    // from a unified variant to its member `to_variant`
+    const unified_tag = tag_of(lowerer, from_variant, value);
     const offset = llvm.LLVMConstInt(
-        llvm.LLVMTypeOf(union_tag),
-        pool.union_offset(from_variant, to_variant),
+        llvm.LLVMTypeOf(unified_tag),
+        pool.unified_offset(from_variant, to_variant),
         0,
     );
     const member_tag = llvm.LLVMBuildIntCast2(
         builder,
-        llvm.LLVMBuildSub(builder, union_tag, offset, ""),
+        llvm.LLVMBuildSub(builder, unified_tag, offset, ""),
         tag_type,
         0,
         "",
     );
-    const union_room = room(lowerer, from_variant, value);
+    const unified_room = room(lowerer, from_variant, value);
     if (types.is_self_tagged(to_variant)) {
         // the room holds the int of a payload case, the tag is the int of the others
-        const payload_int = llvm.LLVMBuildLoad2(builder, tag_type, union_room, "");
+        const payload_int = llvm.LLVMBuildLoad2(builder, tag_type, unified_room, "");
         const payload_tag = llvm.LLVMConstInt(
             tag_type,
             tag_bits(lowerer, pool.first_payload_case(to_variant)),
@@ -622,6 +684,6 @@ fn retag(lowerer: *LLVMLowerer, from: Index, to: Index, value: Value) Value {
         llvm.LLVMBuildStructGEP2(builder, member_type, slot, 0, ""),
     );
     const length = llvm.LLVMConstInt(types.length, types.payload_room(to_variant).size, 0);
-    _ = llvm.LLVMBuildMemCpy(builder, room(lowerer, to_variant, slot), 1, union_room, 1, length);
+    _ = llvm.LLVMBuildMemCpy(builder, room(lowerer, to_variant, slot), 1, unified_room, 1, length);
     return slot;
 }

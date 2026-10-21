@@ -79,7 +79,7 @@ fn write_entry(
             try writer.writeAll(")");
         },
         .variant_type => |variant| {
-            try writer.writeAll(if (variant.is_unionsized) "++(" else "+(");
+            try writer.writeAll(if (variant.is_packed) "++(" else "+(");
             for (variant.cases, 0..) |case, i| {
                 const separator = if (i > 0) ", " else "";
                 const case_name = names.text_of(pool.get(case).variant_case_type.name);
@@ -91,8 +91,9 @@ fn write_entry(
             try write_entry(pool, names, case.variant, writer, depth);
             try writer.print(".{s}", .{names.text_of(case.name)});
         },
-        .variant_union_type => |members| {
-            try write_list(pool, names, members, " || ", writer, depth);
+        .unified_variant_type => |unified| {
+            const separator = if (unified.is_packed) " ||| " else " || ";
+            try write_list(pool, names, unified.members, separator, writer, depth);
         },
         .trait_type => |trait| {
             try writer.writeAll("!{");

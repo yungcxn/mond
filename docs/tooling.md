@@ -103,7 +103,8 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `recursive_by_value_type` | a type contains itself without a pointer |
 | `assertsize_failed` | the size differs from `assertsize` |
 | `tag_overflow` | a tag doesn't fit the tag type |
-| `self_tag_without_niche` | `tagtype self` with no single-integer payload case |
+| `self_tag_without_niche` | `tagtype self` without exactly one payload case of one scalar field (integer, `bool`, float, pointer) |
+| `untagged_variant` | a case matched, `tagof`, `==` or a case `as` an int on a variant without a tag (`tagtype _`) |
 | `trait_member_missing` / `trait_signature_mismatch` | an implementation lacks a member / differs from the trait |
 | `no_deinit` | `deinit` on a value without one |
 | `not_static` | a compile-time value depends on runtime |
@@ -117,8 +118,8 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `redundant_fun` | `fun` on `main` or on a method the compiler calls by name (`init`, `deinit`, `has_next`, `next`) |
 | `missing_keyword` | a function, type, variant or trait declared without its keyword (`f = () {}`) |
 | `unrealized_template` | a template where a concrete type is needed |
-| `trait_outside_parameter` | a trait type is used other than as a parameter type or behind a pointer |
-| `unstorable_dereference` | a pointer to a trait, a template or a runtime-length array is used as what it points to: dereferenced, called through, or indexed directly instead of through `.*` |
+| `unstorable_outside_parameter` | a trait or packed variant is used other than as a parameter type or behind a pointer, or a type without a size is a member of a unified variant |
+| `unstorable_dereference` | a pointer to a trait, a template, a packed variant or a runtime-length array is used as what it points to: dereferenced, called through, or indexed directly instead of through `.*` |
 | `impure_stcfun` | a `stcfun` writes state outside itself |
 | `escaping_closure` | a closure, or a value that may hold one, outlives its frame (returned, stored outside it, given to C) |
 | `brk_outside_loop` / `cont_outside_loop` | a jump outside a loop |

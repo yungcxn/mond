@@ -68,7 +68,7 @@ stc i64 U = use();   #= U 30
 
 ## Variants `+( )`
 
-`variant Name = +(cases) [tagtype IntType | tagtype self] [implof ..] [!{ .. }]`
+`variant Name = +(cases) [tagtype IntType | tagtype self | tagtype _] [implof ..] [!{ .. }]`
 
 A case is `Name`, `Name(payload fields)` or `Name = tag`. Tags count up from 0, or from the last explicit tag. Without `tagtype`, the tag type is the smallest unsigned type that fits.
 
@@ -94,12 +94,39 @@ stc Opt8 O = 42;                        # a single-payload variant takes its pay
   - `x as V.Case` wraps a payload.
   - A payload-free case `as u32` gives its tag.
 - `tagof v` is the tag of a variant value (`tagof Seq.C`); of anything else, a type too, it is `invalid_operand`.
-- `tagtype self` needs exactly one single-integer payload case (else `self_tag_without_niche`), and a tag must fit its tag type (else `tag_overflow`). A payload equal to another case's tag is that case: `Opt8.Some(255)` is `Opt8.None`.
+- `tagtype self` needs exactly one payload case, of one scalar field: an integer, `bool`, float or pointer (else `self_tag_without_niche`). Its tag type is that integer, or the unsigned integer of the field's size, and a tag is a bit pattern of the field: `+(None, Some(&u8)) tagtype self` is 8 bytes, `None` the null address. A tag must fit its tag type (else `tag_overflow`). A payload equal to another case's tag is that case: `Opt8.Some(255)` is `Opt8.None`.
+- `tagtype _` has no tag: the cases share the room of the widest payload, like a C union. A value is read through a cast to a case (`v as V.Case`), which reinterprets its bytes. Matching a case, `tagof`, `==` and a case `as` an int need a tag (`untagged_variant`), and a written tag doesn't fit (`tag_overflow`).
 - Pattern matching and `??` unwrapping are in [control.md](control.md#match).
 
-### Unions `A || B`
+```mond
+variant Word = +(Int(u32), Float(f32)) tagtype _;
+stc Word ONE = Word.Float(1.0);
+stc u32 BITS = (ONE as Word.Int).$0;   #= BITS 1065353216
+stc u64 SW = sizeof Word;              #= SW 4
+fun tag = (Word w) -> u8: ret tagof w;   #! untagged_variant
+```
 
-A union is a variant made of other variants. Their tags are renumbered one after another, and members and their cases coerce into it.
+### Packed variants `++( )`
+
+A doubled sigil packs: `**( )` drops the padding between fields, `++( )` the padding up to the widest case. A case of a packed variant is its tag and its own payload, so each case has a size of its own (`sizeof Msg.Ping`) and the variant has none. Like a trait it is only a parameter type: the function is realized for each case it is called with, and `match` picks the arm while compiling. Anywhere else it is `unstorable_outside_parameter`. Behind a pointer it is the address of some case: `tagof p` reads its tag, anything else needs a cast to a case (`p as &Msg.Ping`). Tags work as for `+( )`; `tagtype _` leaves them out.
+
+```mond
+variant Msg = ++(Ping(u8 seq), Data(u64 a, u64 b), Quit);
+fun weight = (Msg m) -> u64: ret match m {
+    Msg.Ping(s) => s as u64,
+    Msg.Data(a, b) => a + b,
+    Msg.Quit => 0,
+};
+fun kind = (&Msg m) -> u8: ret tagof m;
+stc u64 WT = weight(Msg.Data(3, 4));   #= WT 7
+stc u64 SP = sizeof Msg.Ping;          #= SP 2
+stc u64 SD = sizeof Msg.Data;          #= SD 24
+Msg stored = Msg.Quit;                 #! unstorable_outside_parameter
+```
+
+### Unified variants `A || B`, `A ||| B`
+
+`||` unifies types into a variant whose cases are the types. A member variant with tags brings its cases, renumbered one after another; any other type, an untagged variant too, is one case. The smallest tag tells them apart and the room of the widest holds the value, so it is stored like any variant. Members and their cases coerce into it, and `T x` patterns tell them apart. A member needs a size (`unstorable_outside_parameter`).
 
 ```mond
 variant A = +(X, Y);
@@ -107,6 +134,17 @@ variant B = +(Z(u32), W);
 variant AB = A || B;
 fun which = (AB v) -> u32: ret match v { A a => 1, B.Z(k) => k, B b => 50 };
 stc u32 WH = which(A.X) + which(B.Z(7)) + which(B.W);   #= WH 58
+variant Number = u32 || f32;
+fun twice = (Number n) -> f32: ret match n { u32 i => i as f32 * 2.0, f32 f => f * 2.0 };
+stc f32 TW = twice(3) + twice(0.5);    #= TW 7
+stc u64 SN = sizeof Number;            #= SN 8
+```
+
+`|||` is packed and untagged, the unnamed form of `++(..) tagtype _`: a parameter type realized for each member it is called with.
+
+```mond
+fun scaled = (u32 ||| f32 x) -> f32: ret match x { u32 i => i as f32 * 10.0, f32 f => f * 10.0 };
+stc f32 SC = scaled(2) + scaled(0.5);   #= SC 25
 ```
 
 ## Traits
@@ -133,14 +171,14 @@ stc bool IS = CAT oftype Named;                 #= IS true
 ```mond
 trait Named = !{ fun id = () -> u32; }
 type Cat = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
-fun pick = () -> Named: ret Cat(1);            #! trait_outside_parameter
+fun pick = () -> Named: ret Cat(1);            #! unstorable_outside_parameter
 type Slot = *(&Named any);                     # opaque: an address of some implementer
 fun peek = (Slot s) -> u32: ret (s.any as &Cat).id();
 fun guess = (Slot s) -> u32: ret s.any.id();   #! unstorable_dereference
 ```
 
 - A missing member is `trait_member_missing`, and a different signature is `trait_signature_mismatch`.
-- A trait is only a parameter type (`Named n`, `&Named n`, `*Named n`). Like a template, the function is realized for each argument type, so calls are static and no trait value exists at run time. Defaults are realized per implementer through `self`. A trait type anywhere else (a local, field, result, array element, or inside a parameter type) is `trait_outside_parameter`; for a closed set of types use a variant. Behind a pointer it is allowed everywhere (`&Named`, `[]*Named`): an address of some implementer, used after a cast to its type (`p as &Cat`). Calling or dereferencing through it is `unstorable_dereference`, as for a pointer to a template or to a runtime-length array.
+- A trait is only a parameter type (`Named n`, `&Named n`, `*Named n`). Like a template, the function is realized for each argument type, so calls are static and no trait value exists at run time. Defaults are realized per implementer through `self`. A trait type anywhere else (a local, field, result, array element, or inside a parameter type) is `unstorable_outside_parameter`; for a closed set of types use a variant. Behind a pointer it is allowed everywhere (`&Named`, `[]*Named`): an address of some implementer, used after a cast to its type (`p as &Cat`). Calling or dereferencing through it is `unstorable_dereference`, as for a pointer to a template or to a runtime-length array.
 - Inside the function the parameter reaches only the trait's members.
 - `T oftype Named` also works on types, which makes it a constraint for generics: `stcfun max_of = (type T where T oftype Cmp(T)): (T a, T b) -> T: ..`.
 - Only declared types implement traits; built-in types like `u32` can't.

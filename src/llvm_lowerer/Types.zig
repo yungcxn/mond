@@ -28,7 +28,7 @@ closure: Type,
 unit: Type,
 length: Type,
 
-// the room of the payloads of a variant or union
+// the room of the payloads of a variant or unified variant
 pub const PayloadRoom = struct { size: u64, align_log2: u8 };
 
 pub fn init(
@@ -76,7 +76,7 @@ pub fn of(self: *Types, type_index: Index) Type {
 pub fn is_in_memory(self: *const Types, type_index: Index) bool {
     if (type_index == .none) return false;
     return switch (self.pool.get(type_index)) {
-        .record_type, .variant_union_type => true,
+        .record_type, .unified_variant_type => true,
         .array_type => |array| array.length != StaticPool.dyn_len,
         .variant_type => |variant| variant.tag_mode != .self,
         .variant_case_type => |case| self.is_in_memory(case.variant),
@@ -105,40 +105,67 @@ pub fn is_runtime_array(self: *const Types, type_index: Index) bool {
 }
 
 pub fn is_self_tagged(self: *const Types, type_index: Index) bool {
-    return self.pool.tag(type_index) == .variant_type and
-        self.pool.get(type_index).variant_type.tag_mode == .self;
+    const variant = self.declaring_variant(type_index);
+    return self.pool.tag(variant) == .variant_type and
+        self.pool.get(variant).variant_type.tag_mode == .self;
 }
 
-// the variant a case or variant type stands for, unions stay themselves
+// the variant a case or variant type stands for, unified variants stay themselves and a case of a
+// packed variant too: it has a size of its own
 pub fn variant_of(self: *const Types, type_index: Index) Index {
+    const declaring = self.declaring_variant(type_index);
+    if (declaring == type_index or self.pool.get(declaring).variant_type.is_packed) {
+        return type_index;
+    }
+    return declaring;
+}
+
+fn declaring_variant(self: *const Types, type_index: Index) Index {
     if (self.pool.tag(type_index) != .variant_case_type) return type_index;
     return self.pool.get(type_index).variant_case_type.variant;
 }
 
-pub fn tag_type(self: *const Types, variant_or_union: Index) Index {
+pub fn tag_type(self: *const Types, variant_or_unified: Index) Index {
     const pool = self.pool;
-    const variant = self.variant_of(variant_or_union);
-    if (pool.tag(variant) == .variant_union_type) return pool.union_tag_type(variant);
-    const declared = pool.get(variant).variant_type.tag_type;
+    const variant = self.variant_of(variant_or_unified);
+    if (pool.tag(variant) == .unified_variant_type) return pool.unified_tag_type(variant);
+    const declared = pool.get(self.declaring_variant(variant)).variant_type.tag_type;
     if (declared == .none or declared == .poison_type) return .u8_type;
     return declared;
 }
 
-pub fn payload_room(self: *Types, variant_or_union: Index) PayloadRoom {
+pub fn payload_room(self: *Types, variant_or_unified: Index) PayloadRoom {
     const pool = self.pool;
     var room: PayloadRoom = .{ .size = 0, .align_log2 = 0 };
-    const variant = self.variant_of(variant_or_union);
-    const members: []const Index = if (pool.tag(variant) == .variant_union_type)
-        pool.get(variant).variant_union_type
+    const variant = self.variant_of(variant_or_unified);
+    // a case of a packed variant has a room for its own payload only
+    if (pool.tag(variant) == .variant_case_type) {
+        const payload = pool.get(variant).variant_case_type.payload;
+        if (payload == .none) return room;
+        const payload_layout = pool.layout(payload);
+        return .{ .size = payload_layout.size, .align_log2 = payload_layout.align_log2 };
+    }
+    const is_unified = pool.tag(variant) == .unified_variant_type;
+    const members: []const Index = if (is_unified)
+        pool.get(variant).unified_variant_type.members
     else
         &.{variant};
-    for (members) |member| for (pool.get(member).variant_type.cases) |case| {
-        const payload = pool.get(case).variant_case_type.payload;
-        if (payload == .none) continue;
-        const payload_layout = pool.layout(payload);
-        room.size = @max(room.size, payload_layout.size);
-        room.align_log2 = @max(room.align_log2, payload_layout.align_log2);
-    };
+    for (members) |member| {
+        // a member that is one case fills the room itself
+        if (is_unified and !pool.brings_cases(member)) {
+            const member_layout = pool.layout(member);
+            room.size = @max(room.size, member_layout.size);
+            room.align_log2 = @max(room.align_log2, member_layout.align_log2);
+            continue;
+        }
+        for (pool.get(member).variant_type.cases) |case| {
+            const payload = pool.get(case).variant_case_type.payload;
+            if (payload == .none) continue;
+            const payload_layout = pool.layout(payload);
+            room.size = @max(room.size, payload_layout.size);
+            room.align_log2 = @max(room.align_log2, payload_layout.align_log2);
+        }
+    }
     return room;
 }
 
@@ -177,8 +204,13 @@ fn lower(self: *Types, type_index: Index) Type {
             self.of(variant.tag_type)
         else
             self.tagged(type_index),
-        .variant_case_type => |case| self.of(case.variant),
-        .variant_union_type => self.tagged(type_index),
+        .variant_case_type => |case| if (self.variant_of(type_index) != type_index)
+            self.of(case.variant)
+        else if (self.is_self_tagged(type_index))
+            self.of(self.tag_type(type_index))
+        else
+            self.tagged(type_index),
+        .unified_variant_type => self.tagged(type_index),
         .meta_type, .trait_type, .static_function, .template_type, .type_variable => self.unit,
         .ast_type => self.unit,
         .int_value, .float_value, .simple_value, .string_value, .aggregate_value => self.unit,
@@ -187,16 +219,16 @@ fn lower(self: *Types, type_index: Index) Type {
 }
 
 // `{tag, [n x iA]}` with A the payloads' alignment
-fn tagged(self: *Types, variant_or_union: Index) Type {
-    const room = self.payload_room(variant_or_union);
+fn tagged(self: *Types, variant_or_unified: Index) Type {
+    const room = self.payload_room(variant_or_unified);
     const unit_bytes = @as(u64, 1) << @intCast(room.align_log2);
     const unit = llvm.LLVMIntTypeInContext(self.context, @intCast(unit_bytes * 8));
     const room_type = llvm.LLVMArrayType2(
         unit,
         std.math.divCeil(u64, room.size, unit_bytes) catch 0,
     );
-    const named = self.named_struct(variant_or_union);
-    var fields = [_]Type{ self.of(self.tag_type(variant_or_union)), room_type };
+    const named = self.named_struct(variant_or_unified);
+    var fields = [_]Type{ self.of(self.tag_type(variant_or_unified)), room_type };
     llvm.LLVMStructSetBody(named, &fields, fields.len, 0);
     return named;
 }

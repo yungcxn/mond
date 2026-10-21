@@ -1,4 +1,4 @@
-# implicit conversions into variants, unions and traits
+# implicit conversions into variants, unified variants and traits
 variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
 variant Maybe = +(Just(i32), Nothing);
 variant Many = +(One(u8), Two(u8, u8));
@@ -36,7 +36,7 @@ fun f = (u8 b, u16 w, i32 n, Cat c, Rock r) {
     take_any(d1);
     take_any(Turn.L);
     take_any(o3); #! type_mismatch
-    Named t1 = c; #! trait_outside_parameter
+    Named t1 = c; #! unstorable_outside_parameter
     u8 t3 = take_named(c.&);
     u8 t4 = take_named(r.&); #! type_mismatch
 }

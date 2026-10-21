@@ -1,0 +1,18 @@
+# `tagtype _`: a variant without a tag, its cases share the room of the widest one; a value is read
+# through a cast to a case, at compile time too
+variant Word = +(Int(u32), Float(f32), Bytes([4]u8)) tagtype _;
+variant Wide = +(Small(u8), Big(u64), Nothing) tagtype _;
+stc u64 word_size = sizeof Word; #= word_size 4
+stc u64 wide_size = sizeof Wide; #= wide_size 8
+stc u64 wide_align = alignof Wide; #= wide_align 8
+
+stc Word one = Word.Float(1.0);
+stc u32 one_bits = (one as Word.Int).$0; #= one_bits 1065353216
+fun bits = (Word w) -> u32: ret (w as Word.Int).$0;
+fun bits_through = (*Word p) -> u32: ret (p.* as Word.Int).$0;
+fun store = (*Word p, f32 f) { p.* = Word.Float(f); }
+# a binder takes any value, it needs no tag
+fun whole = (Word w) -> Word: ret match w { any => any };
+stc u32 from_call = bits(Word.Float(2.0)); #= from_call 1073741824
+
+main = () {}

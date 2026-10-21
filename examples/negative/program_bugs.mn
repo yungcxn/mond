@@ -1,6 +1,6 @@
 variant Tok = +(Num(i64 v), Plus, End) tagtype u8;
 
-variant Opt = (type T): ++(Some(T), None) tagtype u8;
+variant Opt = (type T): +(Some(T), None) tagtype u8;
 
 type Stack = (type T, u32 CAP): *(mut [CAP]T items, mut u32 len = 0) !{
     fun push = (T v) { self.items[self.len] = v; self.len += 1; }

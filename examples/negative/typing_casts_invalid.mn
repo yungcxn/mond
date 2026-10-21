@@ -3,7 +3,7 @@ type R = *(u8 a);
 type S = *(u8 a);
 variant V = +(A, B(u8));
 variant W = +(X, Y);
-variant P = ++(I(i32), F(f32));
+variant P = +(I(i32), F(f32));
 trait T = !{ fun m = (); }
 
 fun f = (u8 n, f32 x, bool b, R r, V v, *u8 p, &u8 q, [4]u8 a, &[4]u8 ap, (u8) -> u8 fp) {

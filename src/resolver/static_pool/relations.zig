@@ -69,9 +69,9 @@ pub fn unify(pool: *StaticPool, left_type: Index, right_type: Index) UnifyResult
             }
             return pool.unify(left_function.return_type, right_function.return_type);
         },
-        .union_of_variants => {
-            const left_members = pool.get(left).variant_union_type;
-            const right_members = pool.get(right).variant_union_type;
+        .unified_variants => {
+            const left_members = pool.get(left).unified_variant_type.members;
+            const right_members = pool.get(right).unified_variant_type.members;
             if (left_members.len != right_members.len) return .mismatch;
             for (left_members, right_members) |left_member, right_member| {
                 const result = pool.unify(left_member, right_member);
@@ -173,14 +173,18 @@ pub fn coercion(pool: *StaticPool, from_type: Index, to_type: Index) CoercionKin
         from_key.array_type.element == to_key.array_type.element;
     if (array_to_runtime_length) return .to_dyn;
 
-    // variants, unions, traits and single-payload variants (`Opt8 x = 42`)
+    // variants, unified variants, traits and single-payload variants (`Opt8 x = 42`)
     if (from_key == .variant_case_type) {
         const variant = from_key.variant_case_type.variant;
         const fits = variant == to or pool.coercion(variant, to) != .incompatible;
         return if (fits) .case_to_variant else .incompatible;
     }
-    if (to_key == .variant_union_type) {
-        for (to_key.variant_union_type) |member| if (member == from) return .variant_to_union;
+    if (to_key == .unified_variant_type) {
+        const into: CoercionKind = if (to_key.unified_variant_type.is_packed)
+            .member_to_packed
+        else
+            .member_to_unified;
+        for (to_key.unified_variant_type.members) |member| if (member == from) return into;
         return .incompatible;
     }
     if (to_key == .trait_type and pool.implements(from, to)) return .impl_to_trait;
@@ -193,6 +197,9 @@ pub fn coercion(pool: *StaticPool, from_type: Index, to_type: Index) CoercionKin
         if (keeps_writability and to_trait and implemented) {
             return .impl_to_trait;
         }
+        const to_packed = pool.is_parameter_only(to_pointer.pointee) and
+            pool.coercion(from_pointer.pointee, to_pointer.pointee) != .incompatible;
+        if (keeps_writability and to_packed) return .member_to_packed;
     }
     const payload = pool.single_payload(to);
     const wraps_payload = payload != .none and from_key != .variant_type and
@@ -255,7 +262,7 @@ pub fn cast_kind(pool: *StaticPool, from: Index, to: Index) CastKind {
         .pointer_type => |to_pointer| pointer_cast(pool, from, to_pointer),
         .array_type => |to_array| array_cast(pool, from, to_array),
         .simple_type, .meta_type, .function_type, .record_type => .invalid,
-        .variant_type, .variant_union_type => .invalid,
+        .variant_type, .unified_variant_type => .invalid,
         .trait_type, .static_function, .template_type, .type_variable, .ast_type => .invalid,
         .int_value, .float_value, .simple_value, .string_value, .aggregate_value => .invalid,
         .variant_value, .function_value, .tree_value => .invalid,
@@ -266,6 +273,8 @@ fn case_cast(pool: *StaticPool, from: Index, case: StaticPool.VariantCaseType) C
     const from_key = pool.get(from);
     const same_variant = from == case.variant or
         from_key == .variant_case_type and from_key.variant_case_type.variant == case.variant;
+    // the cases of a packed variant differ in size
+    if (same_variant and pool.is_unstorable(case.variant)) return .invalid;
     if (same_variant) return .variant_retag;
     if (case.payload == .none) return .invalid;
     const payload_fields = pool.get(case.payload).record_type.field_types;
@@ -357,14 +366,17 @@ pub fn substitute_type_variables(pool: *StaticPool, index: Index) Index {
                 .return_type = return_type,
             } });
         },
-        .union_of_variants => {
-            pool.scratch.append(pool.get(index).variant_union_type);
+        .unified_variants => {
+            pool.scratch.append(pool.get(index).unified_variant_type.members);
             for (mark..pool.scratch.len) |i| {
                 const substituted = pool.substitute_type_variables(pool.scratch.buffer[i]);
                 pool.scratch.buffer[i] = substituted;
             }
             const members_substituted = pool.scratch.buffer[mark..pool.scratch.len];
-            return pool.intern(.{ .variant_union_type = members_substituted });
+            return pool.intern(.{ .unified_variant_type = .{
+                .members = members_substituted,
+                .is_packed = pool.get(index).unified_variant_type.is_packed,
+            } });
         },
         .tree => {
             const ast = pool.get(index).ast_type;
@@ -412,8 +424,8 @@ pub fn occurs_in(pool: *StaticPool, variable: TypeVariables.Index, index: Index)
             }
             return pool.occurs_in(variable, function.return_type);
         },
-        .union_of_variants => {
-            for (pool.get(resolved).variant_union_type) |member| {
+        .unified_variants => {
+            for (pool.get(resolved).unified_variant_type.members) |member| {
                 if (pool.occurs_in(variable, member)) return true;
             }
             return false;

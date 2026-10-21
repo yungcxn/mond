@@ -1,6 +1,6 @@
 variant Opt = +(Some(u8), None = 0xFF) tagtype self;
 variant Res = +(Ok(u32), Err(u8 code, u8 line), Pending);
-variant Reg = ++(AsInt(i32), AsBits([4]u8), AsFloat(f32)) tagtype u8;
+variant Reg = +(AsInt(i32), AsBits([4]u8), AsFloat(f32)) tagtype u8;
 variant Dir = +(N, E, S, W);
 
 stcfun unwrap_or = (Opt o, u8 d) -> u8: ret o ?? d;

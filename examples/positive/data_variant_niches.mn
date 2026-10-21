@@ -1,0 +1,18 @@
+# `tagtype self` keeps the tags in bit patterns the one payload never has: any scalar field, its
+# bits seen as an unsigned int of its size (the null address, the bytes a bool never is)
+variant OptPtr = +(None, Some(&u8)) tagtype self;
+variant OptText = +(Some(&[]u8), None = 0xFFFFFFFFFFFFFFFF) tagtype self;
+variant OptBool = +(Some(bool), None = 2) tagtype self;
+variant OptF32 = +(Some(f32), None = 0x7FC00001) tagtype self;
+stc u64 ptr_size = sizeof OptPtr; #= ptr_size 8
+stc u64 text_size = sizeof OptText; #= text_size 8
+stc u64 bool_size = sizeof OptBool; #= bool_size 1
+stc u64 f32_size = sizeof OptF32; #= f32_size 4
+
+fun flag = (OptBool b) -> i32: ret match b { OptBool.Some(v) => v as i32, OptBool.None => -1 };
+stc i32 flags = flag(OptBool.Some(true)) + flag(OptBool.None) * 10; #= flags -9
+fun doubled = (OptF32 f) -> f32: ret match f { OptF32.Some(v) => v * 2.0, OptF32.None => 0.0 };
+stc f32 twice = doubled(OptF32.Some(1.5)); #= twice 3
+fun first = (OptPtr p) -> u8: ret match p { OptPtr.Some(s) => s[0], OptPtr.None => 0 };
+
+main = () {}

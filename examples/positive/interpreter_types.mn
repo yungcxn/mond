@@ -16,7 +16,7 @@ stcfun Pair = (u32 bits) -> type {
 
 stcfun Opt = (bool wide) -> variant {
     t = if wide: u64 else: u8;
-    ret ++(Some(t), None);
+    ret +(Some(t), None);
 }
 
 variant X = +(A, B);
@@ -99,7 +99,7 @@ stcfun typed = (u32 bits) -> u64 {
 
 type G = Grid(3); #= G [6]u32
 type P = Pair(12); #= P *(u16 lo, u16 hi)
-type O = Opt(true); #= O ++(Some, None)
+type O = Opt(true); #= O +(Some, None)
 type J = Joined(true); #= J +(A, B) || +(C)
 type R8 = Rec(7); #= R8 *(u8 x, u8 y)
 type R9 = Rec(8); #= R9 *(u16 x, u16 y)

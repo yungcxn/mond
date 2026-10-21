@@ -1,0 +1,13 @@
+# a member of a unified variant is stored in it: a trait has no size; a match covers every member;
+# `==` needs the members to be comparable, an untagged variant is not; a record member lends no fields
+trait Named = !{ fun id = () -> u32; }
+type Pt = *(i32 x, i32 y);
+variant Word = +(Int(u32), Float(f32)) tagtype _;
+variant Bad = u32 || Named; #! unstorable_outside_parameter
+variant Num = u32 || f32 || Pt;
+fun missing = (Num n) -> u32: ret match n { u32 i => i, f32 f => 0 }; #! non_exhaustive_match
+variant WithWord = u32 || Word;
+fun equal = (WithWord a, WithWord b) -> bool: ret a == b; #! untagged_variant
+fun field = (Num n) -> i32: ret n.x; #! unknown_member
+
+main = () {}

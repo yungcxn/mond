@@ -25,8 +25,8 @@ fn any_component(pool: *const StaticPool, type_index: Index, comptime decide: Co
             }
             return any_component(pool, function.return_type, decide);
         },
-        // the walk stops at the members of unions and at what a tree produces
-        .leaf, .union_of_variants, .tree => false,
+        // the walk stops at the members of unified variants and at what a tree produces
+        .leaf, .unified_variants, .tree => false,
     };
 }
 
@@ -58,19 +58,43 @@ pub fn trait_of(pool: *const StaticPool, parameter: Index) Index {
     return if (pool.tag(pointee) == .trait_type) pointee else .none;
 }
 
-// a template or a trait as the whole parameter type, `T`, `*T` or `&T`: the function is realized
-// per argument type, so a trait value never exists at run time
-pub fn is_realized_per_type(pool: *const StaticPool, parameter: Index) bool {
-    return pool.template_of(parameter) != .none or pool.trait_of(parameter) != .none;
+// a packed variant `++(..)` or `A ||| B` as the whole parameter type, `T`, `*T` or `&T`
+pub fn packed_of(pool: *const StaticPool, parameter: Index) Index {
+    if (parameter == .none or parameter == .poison_type) return .none;
+    const pointee = pool.pointee(parameter);
+    const is_packed = switch (pool.get(pointee)) {
+        .variant_type => |variant| variant.is_packed,
+        .unified_variant_type => |unified| unified.is_packed,
+        else => false,
+    };
+    return if (is_packed) pointee else .none;
 }
 
-// behind a pointer a trait or template is opaque, and allowed
-pub fn contains_trait(pool: *const StaticPool, type_index: Index) bool {
+// a template, a trait or a packed variant as the whole parameter type, `T`, `*T` or `&T`: the
+// function is realized per argument type, so a trait or packed value never exists at run time
+pub fn is_realized_per_type(pool: *const StaticPool, parameter: Index) bool {
+    return pool.template_of(parameter) != .none or pool.trait_of(parameter) != .none or
+        pool.packed_of(parameter) != .none;
+}
+
+// a type only a parameter has, `trait_of` or `packed_of` it: a value is always of one of the
+// types it stands for
+pub fn is_parameter_only(pool: *const StaticPool, type_index: Index) bool {
+    return switch (pool.get(type_index)) {
+        .trait_type => true,
+        .variant_type => |variant| variant.is_packed,
+        .unified_variant_type => |unified| unified.is_packed,
+        else => false,
+    };
+}
+
+// behind a pointer a trait, packed variant or template is opaque, and allowed
+pub fn contains_parameter_only(pool: *const StaticPool, type_index: Index) bool {
     return any_component(pool, type_index, struct {
         fn decide(p: *const StaticPool, t: Index) ?bool {
             if (t == .none or t == .poison_type) return false;
-            if (p.is_pointer(t) and p.tag(p.pointee(t)) == .trait_type) return false;
-            return if (p.tag(t) == .trait_type) true else null;
+            if (p.is_pointer(t) and p.is_parameter_only(p.pointee(t))) return false;
+            return if (p.is_parameter_only(t)) true else null;
         }
     }.decide);
 }
@@ -95,35 +119,60 @@ pub fn has_open_type_variable(pool: *const StaticPool, type_index: Index) bool {
     }.decide);
 }
 
-// a type without a size: a trait, a template, an array of a runtime length. a pointer to one is
-// only an address, used after a cast
+// a type without a size: a trait, a template, a packed variant, an array of a runtime length. a
+// pointer to one is only an address, used after a cast
 pub fn is_unstorable(pool: *const StaticPool, type_index: Index) bool {
     return switch (pool.get(type_index)) {
         .trait_type, .template_type => true,
+        .variant_type => |variant| variant.is_packed,
+        .unified_variant_type => |unified| unified.is_packed,
         .array_type => |array| array.length == StaticPool.dyn_len,
         else => false,
     };
 }
 
-// a function value in the value itself: the value, an element, a field or a payload. what a
+// whether `decide` holds for the value itself: the value, an element, a field or a payload. what a
 // pointer reaches is not part of it
-pub fn holds_function_value(pool: *const StaticPool, type_index: Index) bool {
+fn any_part(pool: *const StaticPool, type_index: Index, comptime decide: PartTest) bool {
     if (type_index == .none or type_index == .poison_type) return false;
+    if (decide(pool, type_index)) return true;
     return switch (pool.get(type_index)) {
-        .function_type => true,
-        .array_type => |array| pool.holds_function_value(array.element),
+        .array_type => |array| any_part(pool, array.element, decide),
         .record_type => |record| for (record.field_types) |field| {
-            if (pool.holds_function_value(field)) break true;
+            if (any_part(pool, field, decide)) break true;
         } else false,
         .variant_type => |variant| for (variant.cases) |case| {
-            if (pool.holds_function_value(case)) break true;
+            if (any_part(pool, case, decide)) break true;
         } else false,
-        .variant_case_type => |case| pool.holds_function_value(case.payload),
-        .variant_union_type => |members| for (members) |member| {
-            if (pool.holds_function_value(member)) break true;
+        .variant_case_type => |case| any_part(pool, case.payload, decide),
+        .unified_variant_type => |unified| for (unified.members) |member| {
+            if (any_part(pool, member, decide)) break true;
         } else false,
         else => false,
     };
+}
+
+const PartTest = fn (pool: *const StaticPool, type_index: Index) bool;
+
+pub fn holds_function_value(pool: *const StaticPool, type_index: Index) bool {
+    return any_part(pool, type_index, struct {
+        fn decide(p: *const StaticPool, t: Index) bool {
+            return p.tag(t) == .function_type;
+        }
+    }.decide);
+}
+
+// a variant or case of one without a tag (`tagtype _`): nothing tells its cases apart at run time
+pub fn is_untagged(pool: *const StaticPool, type_index: Index) bool {
+    return switch (pool.get(type_index)) {
+        .variant_type => |variant| variant.tag_mode == .none,
+        .variant_case_type => |case| pool.is_untagged(case.variant),
+        else => false,
+    };
+}
+
+pub fn holds_untagged_variant(pool: *const StaticPool, type_index: Index) bool {
+    return any_part(pool, type_index, is_untagged);
 }
 
 // a type only static code can have: trees and what holds them
@@ -282,14 +331,14 @@ fn trait_member(
 
 pub fn tag_type_of(pool: *const StaticPool, type_index: Index) Index {
     return switch (pool.get(type_index)) {
-        .variant_type => |variant| if (variant.tag_mode == .self)
+        .variant_type => |variant| if (variant.tag_mode != .int)
             .none
         else if (variant.tag_type == .none or variant.tag_type == .poison_type)
             .u8_type
         else
             variant.tag_type,
         .variant_case_type => |case| pool.tag_type_of(case.variant),
-        .variant_union_type => pool.union_tag_type(type_index),
+        .unified_variant_type => pool.unified_tag_type(type_index),
         .pointer_type => |pointer| pool.tag_type_of(pointer.pointee),
         else => .none,
     };
@@ -318,7 +367,8 @@ pub fn lookup_member(pool: *StaticPool, type_index: Index, name: NamePool.Index)
             if (of_payload != .none) break :blk of_payload;
             break :blk pool.lookup_member(case.variant, name);
         },
-        .variant_union_type => |members| for (members) |member| {
+        .unified_variant_type => |unified| for (unified.members) |member| {
+            if (!pool.brings_cases(member)) continue;
             const of_member = pool.lookup_member(member, name);
             if (of_member != .none) break of_member;
         } else .none,
@@ -358,12 +408,21 @@ pub fn niche_case(pool: *const StaticPool, case: Index, payload: Index) Index {
     const variant = pool.get(case).variant_case_type.variant;
     if (pool.tag(variant) != .variant_type) return .none;
     if (pool.get(variant).variant_type.tag_mode != .self) return .none;
-    const field = pool.get(payload).aggregate_value.elements[0];
-    if (pool.tag(field) != .int_value) return .none;
+    // the bits of the payload's one field, as its tag type sees them
+    const field_bits: u64 = switch (pool.get(pool.get(payload).aggregate_value.elements[0])) {
+        .int_value => |int| int.bits,
+        .simple_value => |simple| @intFromBool(simple == .bool_true),
+        .float_value => |float| switch (pool.get(float.value_type).float_type.bits) {
+            16 => @as(u16, @bitCast(@as(f16, @floatCast(float.value)))),
+            32 => @as(u32, @bitCast(@as(f32, @floatCast(float.value)))),
+            else => @as(u64, @bitCast(float.value)),
+        },
+        else => return .none,
+    };
     for (pool.get(variant).variant_type.cases) |other| {
         const other_case = pool.get(other).variant_case_type;
         if (other_case.payload != .none or pool.tag(other_case.tag) != .int_value) continue;
-        if (pool.get(other_case.tag).int_value.bits == pool.get(field).int_value.bits) return other;
+        if (pool.get(other_case.tag).int_value.bits == field_bits) return other;
     }
     return .none;
 }

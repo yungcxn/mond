@@ -1,7 +1,7 @@
 <include "lib/out.mn">;
 
 # static data in the executable (nested records and cases, payload-free cases alone, in arrays,
-# records and unions, escapes, a zero byte in a string), mutable globals, text compared and matched
+# records and unified variants, escapes, a zero byte in a string), mutable globals, text compared and matched
 mut i64 ONE = 0;
 fun h = (i64 v) -> i64: ret v * ONE;
 

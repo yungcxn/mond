@@ -19,11 +19,12 @@ variant TagU16 = +(A(u8), B) tagtype u16;
 variant TagU64 = +(A(u8), B) tagtype u64;
 variant MultiField = +(P(u8 a, u32 b), Q);
 variant PayRec = +(R(Tail t), N);
-variant Union = ++(I(i32), F(f32), B([4]u8));
-variant UnionMixed = ++(I(i64), S(u8));
+variant Word = +(I(i32), F(f32), B([4]u8));
+variant WordMixed = +(I(i64), S(u8));
 variant SelfPtr = +(Some(u16), None = 0xFFFF) tagtype self;
 variant SelfI8 = +(Val(i8), Nil = 0x7F) tagtype self;
 variant NoPay = +(A, B, C) tagtype u32;
+variant Packed = ++(I(i64), S(u8), N);
 
 stc u64 S1 = sizeof Tail; #= S1 8
 stc u64 S2 = sizeof BoolWide; #= S2 16
@@ -44,10 +45,14 @@ stc u64 V4 = sizeof TagU16; #= V4 4
 stc u64 V5 = sizeof TagU64; #= V5 16
 stc u64 V6 = sizeof MultiField; #= V6 12
 stc u64 V7 = sizeof PayRec; #= V7 12
-stc u64 V8 = sizeof Union; #= V8 8
-stc u64 V9 = sizeof UnionMixed; #= V9 16
+stc u64 V8 = sizeof Word; #= V8 8
+stc u64 V9 = sizeof WordMixed; #= V9 16
 stc u64 V10 = sizeof SelfPtr; #= V10 2
 stc u64 V11 = sizeof SelfI8; #= V11 1
+# a case of a packed variant is its tag and its own payload
+stc u64 P1 = sizeof Packed.I; #= P1 16
+stc u64 P2 = sizeof Packed.S; #= P2 2
+stc u64 P3 = sizeof Packed.N; #= P3 1
 stc u64 V12 = sizeof NoPay; #= V12 4
 stc u64 A1 = sizeof [3]Opt; #= A1 24
 stc u64 A2 = sizeof [2]PkIn; #= A2 10

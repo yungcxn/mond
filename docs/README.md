@@ -32,7 +32,7 @@ main = () -> u32 {
 |---|---|
 | [basics](basics.md) | program, literals, types, operators, casts, declarations |
 | [functions](functions.md) | parameters, overloads, dispatch, lambdas, closures, generic lengths |
-| [types](types.md) | records, methods, variants, unions, traits, templates |
+| [types](types.md) | records, methods, variants, packed and unified variants, traits, templates |
 | [control](control.md) | if, loops, match and patterns, unwrapping, defer, initialization |
 | [static](static.md) | compile-time evaluation, `crash` |
 | [metaprogramming](metaprogramming.md) | quotes, splices, hygiene, trees, `refl`, `include`, `includeraw`, limits |

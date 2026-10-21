@@ -1,4 +1,4 @@
-variant Opt = (type T): ++(Some(T), None) tagtype u8;
+variant Opt = (type T): +(Some(T), None) tagtype u8;
 
 type Pair = (type A, type B): *(A first, B second);
 
@@ -69,10 +69,10 @@ stc u64 SS = sizeof Stack(Stack(u8, 2), 3); #= SS 28
 
 main = () {
     Opt(Opt(u8)) o = Opt(Opt(u8)).Some(Opt(u8).None);
-    f = flatten(o); #: f ++(Some, None)
+    f = flatten(o); #: f +(Some, None)
     d = depth(o); #: d u32
     mut Stack(Pair(u8, u8), 2) s;
-    q = s.pop(); #: q ++(Some, None)
+    q = s.pop(); #: q +(Some, None)
     n = s.size(); #: n u32
     Pair(Pair(u8, u16), u32) p = Pair(Pair(u8, u16), u32)(first = Pair(u8, u16)(first = 1, second = 2), second = 3);
     x = p.first.second; #: x u16

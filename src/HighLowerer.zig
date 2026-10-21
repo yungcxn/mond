@@ -339,7 +339,7 @@ fn lives_in_memory(self: *HighLowerer, value_type: Index) bool {
     if (self.is_aggregate(value_type)) return true;
     if (value_type == .none) return false;
     return switch (self.static_pool.get(value_type)) {
-        .variant_union_type => true,
+        .unified_variant_type => true,
         .variant_type => |variant| variant.tag_mode != .self,
         .variant_case_type => |case| self.lives_in_memory(case.variant),
         else => false,
@@ -690,12 +690,13 @@ fn coerce(self: *HighLowerer, value: Ref, unsubstituted_from: Index, unsubstitut
         .never_to_any,
         .poison,
         .unit_to_runit,
+        .member_to_packed,
         .incompatible,
         => value,
         .case_to_variant => {
             if (self.static_pool.tag(to) == .variant_type) return value;
-            const into_union = StaticPool.CoercionKind.variant_to_union;
-            return self.builder.emit(.convert, to, @intFromEnum(value), @intFromEnum(into_union));
+            const into_unified = StaticPool.CoercionKind.member_to_unified;
+            return self.builder.emit(.convert, to, @intFromEnum(value), @intFromEnum(into_unified));
         },
         .payload_to_self_tagged => self.wrap_in_payload_case(value, from, to),
         .int_widen,
@@ -703,7 +704,7 @@ fn coerce(self: *HighLowerer, value: Ref, unsubstituted_from: Index, unsubstitut
         .string_to_ptr,
         .array_ptr_to_elem_ptr,
         .to_dyn,
-        .variant_to_union,
+        .member_to_unified,
         .impl_to_trait,
         => self.builder.emit(.convert, to, @intFromEnum(value), @intFromEnum(kind)),
     };
@@ -732,6 +733,11 @@ fn payload_case_index(self: *HighLowerer, variant: Index) u32 {
 fn constant_of(self: *HighLowerer, value: Index, value_type: Index) Ref {
     const pool = self.static_pool;
     if (value_type == .none) return Ref.of(value);
+    // a static value of a unified variant is the value of a member, made one like a run-time one
+    if (pool.tag(value_type) == .unified_variant_type) {
+        const own_type = if (pool.tag(value) == .variant_case_type) value else pool.type_of(value);
+        if (own_type != value_type) return self.coerce(Ref.of(value), own_type, value_type);
+    }
 
     const is_int = pool.tag(value) == .int_value;
     if (is_int and pool.properties(value_type).is_integer) {
@@ -1361,21 +1367,21 @@ fn match_expression(self: *HighLowerer, node: NodeId) Ref {
 }
 
 fn tag_type(self: *HighLowerer, scrutinee_type: Index, variant: Index) Index {
-    if (scrutinee_type != .none and self.static_pool.tag(scrutinee_type) == .variant_union_type) {
-        return self.static_pool.union_tag_type(scrutinee_type);
+    if (scrutinee_type != .none and self.static_pool.tag(scrutinee_type) == .unified_variant_type) {
+        return self.static_pool.unified_tag_type(scrutinee_type);
     }
     const variant_type = self.static_pool.get(variant).variant_type;
     if (variant_type.tag_type == .none or variant_type.tag_type == .poison_type) return .u8_type;
     return variant_type.tag_type;
 }
 
-// a union flattens its members: a member's tags are moved into the member's own range
+// a unified variant flattens its members: a member's tags are moved into the member's own range
 fn tag_constant(self: *HighLowerer, scrutinee_type: Index, case: Index) Ref {
     const case_type = self.static_pool.get(case).variant_case_type;
     const case_tag_type = self.tag_type(scrutinee_type, case_type.variant);
-    if (scrutinee_type != .none and self.static_pool.tag(scrutinee_type) == .variant_union_type) {
+    if (scrutinee_type != .none and self.static_pool.tag(scrutinee_type) == .unified_variant_type) {
         const bits = self.static_pool.get(case_type.tag).int_value.bits;
-        const offset = self.static_pool.union_offset(scrutinee_type, case_type.variant);
+        const offset = self.static_pool.unified_offset(scrutinee_type, case_type.variant);
         return self.builder.constant_int(case_tag_type, bits + offset);
     }
     return self.constant_of(case_type.tag, case_tag_type);
@@ -1386,8 +1392,13 @@ fn can_hold_case(self: *HighLowerer, scrutinee_type: Index, case: Index) bool {
     const variant = self.static_pool.get(case).variant_case_type.variant;
     if (scrutinee_type == .none or scrutinee_type == variant) return true;
     return switch (self.static_pool.get(scrutinee_type)) {
-        .variant_union_type => |members| std.mem.indexOfScalar(Index, members, variant) != null,
-        .variant_case_type => |case_type| case_type.variant == variant,
+        .unified_variant_type => |unified| std.mem.indexOfScalar(
+            Index,
+            unified.members,
+            variant,
+        ) != null,
+        // a value of a case is of no other
+        .variant_case_type => scrutinee_type == case,
         .variant_type => false,
         else => true,
     };
@@ -1399,10 +1410,11 @@ fn tests_case(self: *HighLowerer, value: Ref, scrutinee_type: Index, case: Index
     return self.builder.emit_refs(.eq, .bool_type, value_tag, tag);
 }
 
-// a union member is a variant of its own again once its tag is moved back into its range
+// a member of a unified variant is a variant of its own again once its tag is moved back into its
+// range
 fn narrow_to_variant(self: *HighLowerer, value: Ref, scrutinee_type: Index, variant: Index) Ref {
     if (scrutinee_type == .none) return value;
-    if (self.static_pool.tag(scrutinee_type) != .variant_union_type) return value;
+    if (self.static_pool.tag(scrutinee_type) != .unified_variant_type) return value;
     const retag = StaticPool.CastKind.variant_retag;
     return self.builder.emit(.cast, variant, @intFromEnum(value), @intFromEnum(retag));
 }
@@ -1420,7 +1432,7 @@ fn lower_as_switch(
     // self-tagged variants keep their tag inside the payload, there is no tag to switch on
     const tagged = blk: {
         if (scrutinee_type == .none) break :blk false;
-        if (self.static_pool.tag(scrutinee_type) == .variant_union_type) break :blk true;
+        if (self.static_pool.tag(scrutinee_type) == .unified_variant_type) break :blk true;
         if (self.static_pool.tag(scrutinee_type) != .variant_type) break :blk false;
         break :blk self.static_pool.get(scrutinee_type).variant_type.tag_mode != .self;
     };
@@ -1692,23 +1704,40 @@ fn match_type(
     const target_type = self.type_of(binding);
     // `value` as `target_type` after tests branching to `failed`, when it may be one
     const narrowed = blk: {
-        const is_union = value_type != .none and
-            self.static_pool.tag(value_type) == .variant_union_type;
-        if (is_union and self.static_pool.tag(target_type) == .variant_type) {
-            // the member's tags are a range of the union's tags
-            const union_tag_type = self.static_pool.union_tag_type(value_type);
-            const tag = self.builder.emit_refs(.variant_tag, union_tag_type, value, .none);
-            const low = self.static_pool.union_offset(value_type, target_type);
+        const is_unified = value_type != .none and
+            self.static_pool.tag(value_type) == .unified_variant_type;
+        const is_member = is_unified and std.mem.indexOfScalar(
+            Index,
+            self.static_pool.get(value_type).unified_variant_type.members,
+            target_type,
+        ) != null;
+        // a member that is one case has one tag
+        if (is_member and !self.static_pool.brings_cases(target_type)) {
+            const unified_tag_type = self.static_pool.unified_tag_type(value_type);
+            const tag = self.builder.emit_refs(.variant_tag, unified_tag_type, value, .none);
+            const offset = self.static_pool.unified_offset(value_type, target_type);
+            const member_tag = self.builder.constant_int(unified_tag_type, offset);
+            const is_member_tag = self.builder.emit_refs(.eq, .bool_type, tag, member_tag);
+            const is_that_member = self.builder.new_block();
+            self.builder.branch_if(is_member_tag, is_that_member, failed);
+            self.builder.go_to(is_that_member);
+            break :blk self.narrow_to_variant(value, value_type, target_type);
+        }
+        if (is_member) {
+            // the member's tags are a range of the unified variant's tags
+            const unified_tag_type = self.static_pool.unified_tag_type(value_type);
+            const tag = self.builder.emit_refs(.variant_tag, unified_tag_type, value, .none);
+            const low = self.static_pool.unified_offset(value_type, target_type);
             const above_low = self.builder.new_block();
             const in_range = self.builder.new_block();
 
-            const low_tag = self.builder.constant_int(union_tag_type, low);
+            const low_tag = self.builder.constant_int(unified_tag_type, low);
             const is_above_low = self.builder.emit_refs(.ge, .bool_type, tag, low_tag);
             self.builder.branch_if(is_above_low, above_low, failed);
             self.builder.go_to(above_low);
 
             const end = low + self.static_pool.tag_range(target_type);
-            const end_tag = self.builder.constant_int(union_tag_type, end);
+            const end_tag = self.builder.constant_int(unified_tag_type, end);
             const is_below_end = self.builder.emit_refs(.lt, .bool_type, tag, end_tag);
             self.builder.branch_if(is_below_end, in_range, failed);
             self.builder.go_to(in_range);
@@ -2358,7 +2387,12 @@ fn direct_call(
 fn construct(self: *HighLowerer, target_type: Index, arguments: []const NodeId) Ref {
     const pool = self.static_pool;
     const is_case = pool.tag(target_type) == .variant_case_type;
-    const variant = if (is_case) pool.get(target_type).variant_case_type.variant else target_type;
+    const of_variant = if (is_case)
+        pool.get(target_type).variant_case_type.variant
+    else
+        target_type;
+    // a case of a packed variant is a value of its own size, of the case's type
+    const variant = if (pool.is_unstorable(of_variant)) target_type else of_variant;
     const record = if (is_case) pool.get(target_type).variant_case_type.payload else target_type;
     const case_index: u32 = if (is_case) pool.get(target_type).variant_case_type.case_index else 0;
     if (record == .none) {
@@ -2548,7 +2582,8 @@ fn variant_tag_of(self: *HighLowerer, variant: NodeId, value_type: Index, base_t
         return self.tag_constant(base_type, base_type);
     }
     const variant_tag_type = self.static_pool.tag_type_of(base_type);
-    const value = if (self.is_pointer(value_type))
+    // through a pointer to a packed variant, which has no size, the tag is read at the address
+    const value = if (self.is_pointer(value_type) and !self.static_pool.is_unstorable(base_type))
         self.load(base_type, self.expression(variant))
     else
         self.expression(variant);

@@ -1,4 +1,4 @@
-# a union of 65 variants, its tag counts the cases of every member before
+# a unified variant of 65 variants, its tag counts the cases of every member before
 variant V0 = +(A0);
 variant V1 = +(A1);
 variant V2 = +(A2);

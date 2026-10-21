@@ -31,8 +31,9 @@ pub fn owning_resolver(self: *Types) *Resolver {
 pub fn meta_type_of_node(self: *Types, node: NodeId) StaticPool.Index {
     const resolver = self.owning_resolver();
     const kind = resolver.declarations.declared_type_kind(node);
-    const is_union = resolver.tree.kind(node) == .unify_variants;
-    return kind.meta_type(if (is_union) .variant_type else .type_type);
+    const is_unified = resolver.tree.kind(node) == .unify_variants or
+        resolver.tree.kind(node) == .unify_variants_packed;
+    return kind.meta_type(if (is_unified) .variant_type else .type_type);
 }
 
 // ------------------------------------------------------------------------------------------ //
@@ -143,13 +144,13 @@ pub fn define_static_type(
 ) StaticPool.Index {
     const resolver = self.owning_resolver();
     return switch (resolver.tree.kind(node)) {
-        .unify_variants => self.variant_union_type(context, node),
+        .unify_variants, .unify_variants_packed => self.unified_variant_type(context, node),
         .def_type,
         .def_type_packed,
         .def_type_assertsize,
         .def_type_implof,
         .def_variant,
-        .def_variant_unionsized,
+        .def_variant_packed,
         .def_variant_tagtype,
         .def_variant_assertsize,
         .def_variant_implof,
@@ -172,25 +173,33 @@ pub fn define_static_type(
     };
 }
 
-// `A | B`: the variants of both sides, a union on a side contributes its members
-fn variant_union_type(self: *Types, context: *FunctionContext, node: NodeId) StaticPool.Index {
+// `A || B`: the members of both sides, a unified variant of the same kind on a side contributes its
+// members. a member is stored in it, or in a packed `A ||| B` a function is realized for it, so it
+// needs a size
+fn unified_variant_type(self: *Types, context: *FunctionContext, node: NodeId) StaticPool.Index {
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
+    const is_packed = resolver.tree.kind(node) == .unify_variants_packed;
     var members: std.ArrayList(StaticPool.Index) = .empty;
     defer members.deinit(resolver.allocator);
 
     for ([_]NodeId{ resolver.tree.arg(node, 0), resolver.tree.arg(node, 1) }) |side| {
         const side_type = self.type_from_node(context, side);
-        if (static_pool.tag(side_type) == .variant_union_type) {
-            const side_members = static_pool.get(side_type).variant_union_type;
+        if (side_type == .poison_type) continue;
+        const is_same_kind = static_pool.tag(side_type) == .unified_variant_type and
+            static_pool.get(side_type).unified_variant_type.is_packed == is_packed;
+        if (is_same_kind) {
+            const side_members = static_pool.get(side_type).unified_variant_type.members;
             members.appendSlice(resolver.allocator, side_members) catch @panic("OOM");
-        } else if (static_pool.tag(side_type) == .variant_type) {
-            members.append(resolver.allocator, side_type) catch @panic("OOM");
+        } else if (static_pool.is_unstorable(side_type)) {
+            _ = resolver.report(.unstorable_outside_parameter, side, side_type, 0);
         } else {
-            _ = resolver.report_mismatch(side, side_type, .variant_type);
+            members.append(resolver.allocator, side_type) catch @panic("OOM");
         }
     }
-    return static_pool.intern(.{ .variant_union_type = members.items });
+    return static_pool.intern(.{
+        .unified_variant_type = .{ .members = members.items, .is_packed = is_packed },
+    });
 }
 
 // ------------------------------------------------------------------------------------------ //
@@ -264,7 +273,7 @@ pub fn check_type_definition(
         .def_trait, .def_trait_implof => {
             own = self.define_trait(context, declaration, nominal, core);
         },
-        .def_variant, .def_variant_unionsized => {
+        .def_variant, .def_variant_packed => {
             self.define_variant(context, declaration, nominal, definition, implemented.traits);
         },
         // records: `*(..)`, `**(..)` and payload tuples
@@ -476,9 +485,16 @@ fn define_variant(
         payloads.count += 1;
     }
 
-    // variants are always tagged, without tagof by the smallest tag type holding their tags
+    // without tagof by the smallest tag type holding their tags, `tagtype _` without any tag
     const is_self_tagged = tagof != 0 and resolver.tree.kind(tagof) == .identifier_self;
-    const mode: StaticPool.VariantTagMode = if (is_self_tagged) .self else .int;
+    const is_untagged = tagof != 0 and resolver.tree.kind(tagof) == .identifier and
+        resolver.name_pool.name_of_node(tagof) == .underscore;
+    const mode: StaticPool.VariantTagMode = if (is_self_tagged)
+        .self
+    else if (is_untagged)
+        .none
+    else
+        .int;
     const tag_type: StaticPool.Index = blk: {
         if (tagof == 0) {
             var tag_count: u64 = cases.len;
@@ -489,6 +505,7 @@ fn define_variant(
             }
             break :blk StaticPool.smallest_tag_type(tag_count);
         }
+        if (mode == .none) break :blk .unit_type;
         if (mode != .self) break :blk self.type_from_node(context, tagof);
 
         // the one payload type encodes the other cases in bit patterns it never uses
@@ -497,14 +514,29 @@ fn define_variant(
         }
         const payload = static_pool.get(cases[payloads.last_case.?]).variant_case_type.payload;
         const fields = static_pool.get(payload).record_type.field_types;
-        if (fields.len == 1 and static_pool.properties(fields[0]).is_integer) break :blk fields[0];
-        break :blk resolver.report(.self_tag_without_niche, tagof, 0, 0);
+        if (fields.len != 1) break :blk resolver.report(.self_tag_without_niche, tagof, 0, 0);
+        const field = static_pool.properties(fields[0]);
+        if (field.is_integer) break :blk fields[0];
+        // the bits of any other scalar are an unsigned int of its size: the null address, the
+        // byte values a bool never has
+        if (!field.is_float and !field.is_pointer and fields[0] != .bool_type) {
+            break :blk resolver.report(.self_tag_without_niche, tagof, 0, 0);
+        }
+        break :blk switch (static_pool.layout(fields[0]).size) {
+            1 => .u8_type,
+            2 => .u16_type,
+            4 => .u32_type,
+            else => .u64_type,
+        };
     };
     // with a self tag the payload case is told apart by its niche, it has no tag value to overflow
     if (tag_type != .none and tag_type != .poison_type) {
         for (case_nodes, 0..) |case_node, i| {
             const case = static_pool.get(cases[i]).variant_case_type;
-            if (mode != .int and case.payload != .none) continue;
+            if (mode == .self and case.payload != .none) continue;
+            // without a tag only a written one overflows
+            const is_written = resolver.tree.kind(case_node) == .partial__variant_def_param_tagged;
+            if (mode == .none and !is_written) continue;
             if (static_pool.tag(case.tag) != .int_value) continue;
             if (static_pool.fits(case.tag, tag_type)) continue;
             _ = resolver.report(.tag_overflow, case_node, case.tag, tag_type);
@@ -515,7 +547,7 @@ fn define_variant(
         .declaration = declaration,
         .tag_mode = mode,
         .tag_type = tag_type,
-        .is_unionsized = resolver.tree.kind(core) == .def_variant_unionsized,
+        .is_packed = resolver.tree.kind(core) == .def_variant_packed,
         .cases = cases[0..case_nodes.len],
         .traits = traits,
     } });
@@ -745,8 +777,8 @@ fn same_as(
             return self.same_as(array.element, right_array.element, trait, implementer);
         },
         .function => self.same_function_type(left, right, trait, implementer),
-        // distinct leaves, unions and trees are distinct types
-        .leaf, .union_of_variants, .tree => false,
+        // distinct leaves, unified variants and trees are distinct types
+        .leaf, .unified_variants, .tree => false,
     };
 }
 
@@ -801,11 +833,12 @@ pub fn function_type_of(
             const reported = resolver.report(.unrealized_template, type_node, parameter_type, 0);
             parameters[i + offset] = reported;
         }
-        const is_nested_trait = static_pool.contains_trait(parameter_type) and
-            static_pool.trait_of(parameter_type) == .none;
-        if (is_nested_trait) {
+        const is_nested_parameter_only = static_pool.contains_parameter_only(parameter_type) and
+            static_pool.trait_of(parameter_type) == .none and
+            static_pool.packed_of(parameter_type) == .none;
+        if (is_nested_parameter_only) {
             parameters[i + offset] =
-                resolver.report(.trait_outside_parameter, type_node, parameter_type, 0);
+                resolver.report(.unstorable_outside_parameter, type_node, parameter_type, 0);
         }
     }
 
@@ -870,7 +903,7 @@ pub fn with_runtime_lengths(self: *Types, value_type: StaticPool.Index) StaticPo
             } });
         },
         // lengths are only made runtime ones through arrays, pointers and functions
-        .leaf, .union_of_variants, .tree => value_type,
+        .leaf, .unified_variants, .tree => value_type,
     };
 }
 
@@ -884,9 +917,10 @@ pub fn concrete_type_from_node(
     if (resolver.static_pool.contains_template(node_type)) {
         return resolver.report(.unrealized_template, node, node_type, 0);
     }
-    // a function taking a trait is realized per argument type, so no value has a trait's type
-    if (resolver.static_pool.contains_trait(node_type)) {
-        return resolver.report(.trait_outside_parameter, node, node_type, 0);
+    // a function taking a trait or packed variant is realized per argument type, so no value has
+    // such a type
+    if (resolver.static_pool.contains_parameter_only(node_type)) {
+        return resolver.report(.unstorable_outside_parameter, node, node_type, 0);
     }
     return node_type;
 }

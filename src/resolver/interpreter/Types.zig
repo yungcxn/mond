@@ -82,12 +82,13 @@ pub fn static_value(self: *Types, node: NodeId, kind: Kind) Value {
         .type_ptr,
         .type_ptrmut,
         .unify_variants,
+        .unify_variants_packed,
         => self.build(node),
         else => .pooled(self.define(node)),
     };
 }
 
-// a type expression whose parts are evaluated in the frame: arrays, pointers, unions of variants
+// a type expression whose parts are evaluated in the frame: arrays, pointers, unified variants
 fn build(self: *Types, node: NodeId) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
@@ -95,23 +96,30 @@ fn build(self: *Types, node: NodeId) Value {
     const tree = resolver.tree;
     const kind = tree.kind(node);
 
-    // `A | B`: the variants of both sides, a union on either side contributes its members
-    if (kind == .unify_variants) {
+    // `A || B`, `A ||| B`: the members of both sides, a unified variant of the same kind on either
+    // side contributes its members
+    if (kind == .unify_variants or kind == .unify_variants_packed) {
+        const is_packed = kind == .unify_variants_packed;
         const mark = interpreter.pool_indices.len;
         defer interpreter.pool_indices.len = mark;
         for ([_]NodeId{ tree.arg(node, 0), tree.arg(node, 1) }) |side| {
             const side_type = self.type_of_node(side) orelse return .poison;
-            switch (static_pool.tag(side_type)) {
-                .variant_union_type => {
-                    interpreter.pool_indices.append(static_pool.get(side_type).variant_union_type);
-                },
-                .variant_type => interpreter.pool_indices.push(side_type),
-                else => return interpreter.fail(side, .type_mismatch, side_type, .variant_type),
+            const is_same_kind = static_pool.tag(side_type) == .unified_variant_type and
+                static_pool.get(side_type).unified_variant_type.is_packed == is_packed;
+            if (is_same_kind) {
+                const side_members = static_pool.get(side_type).unified_variant_type.members;
+                interpreter.pool_indices.append(side_members);
+            } else if (static_pool.is_unstorable(side_type)) {
+                return interpreter.fail(side, .unstorable_outside_parameter, side_type, 0);
+            } else {
+                interpreter.pool_indices.push(side_type);
             }
         }
 
         const members = interpreter.pool_indices.buffer[mark..interpreter.pool_indices.len];
-        return .pooled(static_pool.intern(.{ .variant_union_type = members }));
+        return .pooled(static_pool.intern(.{
+            .unified_variant_type = .{ .members = members, .is_packed = is_packed },
+        }));
     }
 
     const element_node = tree.arg(node, if (kind == .type_array) 1 else 0);

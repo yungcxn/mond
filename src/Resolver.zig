@@ -46,7 +46,8 @@ pub const Session = struct {
     fresh_name_count: u32 = 0,
     files: std.ArrayList(File) = .empty,
 
-    pub const File = struct { path: []const u8, at: u32, len: u32 };
+    // `is_declared`: a top splice of its `include` landed it, the program declares a file once
+    pub const File = struct { path: []const u8, at: u32, len: u32, is_declared: bool = false };
 
     pub fn deinit(self: *Session, allocator: std.mem.Allocator) void {
         for (self.files.items) |file| allocator.free(file.path);

@@ -101,7 +101,8 @@ pub const macro_syntax = blk: {
 
 pub const post = blk: {
     var t: [256]?*const fn (parser: *Parser, lhs: u32) anyerror!u32 = @splat(null);
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = &eval.unify_variants;
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = &eval.templ_unify_variants(.unify_variants);
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_|||")] = &eval.templ_unify_variants(.unify_variants_packed);
     t[@intFromEnum(Lexer.Token.Kind.@"pct_(")] = &eval.fun_call;
     t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = &eval.array_index;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_.")] = &eval.member;

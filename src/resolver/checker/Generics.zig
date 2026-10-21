@@ -387,8 +387,10 @@ pub fn is_sibling_realization(
         return self.realizes(sibling, static_pool.template_of(candidate));
     }
 
+    // in a realization per argument type a pattern of another argument type never matches, the
+    // generic body was checked with the parameter's own type
     const template = self.template_source_of(sibling);
-    if (template == .none) return false;
+    if (template == .none) return self.is_inside_template_realization(context);
     if (self.template_source_of(candidate) != template) return false;
     return self.is_inside_template_realization(context);
 }
@@ -402,7 +404,7 @@ pub fn is_inside_template_realization(self: *Generics, context: *FunctionContext
     const template_type = resolver.decl_pool.get(template, .value_type);
     if (template_type == .none or static_pool.tag(template_type) != .function_type) return false;
     for (static_pool.get(template_type).function_type.parameters) |parameter| {
-        if (static_pool.template_of(parameter) != .none) return true;
+        if (static_pool.is_realized_per_type(parameter)) return true;
     }
     return false;
 }

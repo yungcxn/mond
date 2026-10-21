@@ -1,5 +1,5 @@
 type Node = *(mut i32 val, mut Opt(*Node) next);
-variant Opt = (type T): ++(Some(T), None) tagtype u8;
+variant Opt = (type T): +(Some(T), None) tagtype u8;
 
 fun swap = (*i32 a, *i32 b) {
     i32 t = a.*;

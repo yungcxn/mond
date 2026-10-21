@@ -4,10 +4,10 @@ variant N = +(Leaf(bool), Pair(A l, A r), Nil);
 type R = *(A a, bool f);
 type Deep = *(R inner, B b);
 
-fun unions = (A || B u) -> u8: ret match u { A.X => 0, A.Y => 1, B.Z(_) => 2, B.W => 3 }
-fun unions_miss = (A || B u) -> u8: ret match u { A.X => 0, A.Y => 1, B.W => 3 } #! non_exhaustive_match
-fun unions_cast = (A || B u) -> u8: ret match u { A a => 0, B b => 1 }
-fun unions_cast_miss = (A || B u) -> u8: ret match u { A a => 0, B.W => 1 } #! non_exhaustive_match
+fun unified = (A || B u) -> u8: ret match u { A.X => 0, A.Y => 1, B.Z(_) => 2, B.W => 3 }
+fun unified_miss = (A || B u) -> u8: ret match u { A.X => 0, A.Y => 1, B.W => 3 } #! non_exhaustive_match
+fun unified_cast = (A || B u) -> u8: ret match u { A a => 0, B b => 1 }
+fun unified_cast_miss = (A || B u) -> u8: ret match u { A a => 0, B.W => 1 } #! non_exhaustive_match
 fun nested_ok = (N n) -> u8: ret match n {
     N.Leaf(true) => 0,
     N.Leaf(false) => 1,

@@ -3,7 +3,7 @@ type Box = (type T): *(mut T value, mut u32 count) !{
     fun get = () -> T: ret self.value;
 }
 
-variant Opt = (type T): ++(Some(T), None) tagtype u8;
+variant Opt = (type T): +(Some(T), None) tagtype u8;
 
 trait Source = (type T): !{
     fun left = () -> u32;

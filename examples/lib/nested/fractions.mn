@@ -1,0 +1,6 @@
+# a library including another one next to it: its path is relative to this file
+
+<include "../math.mn">;
+
+pub fun reduced_denominator = (u32 numerator, u32 denominator) -> u32:
+    ret denominator / gcd(numerator, denominator);

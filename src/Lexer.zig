@@ -151,6 +151,7 @@ pub const Token = struct {
         @"xpct_?<-", // for selftag arrow
         @"xpct_++(",
         @"xpct_**(",
+        @"xpct_|||",
 
         // everything below this needs a textspan //
 

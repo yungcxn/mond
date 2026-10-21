@@ -589,7 +589,7 @@ fn type_owner(analysis: *Analysis, resolver: *Resolver, type_index: StaticIndex)
         .meta_type,
         .array_type,
         .function_type,
-        .variant_union_type,
+        .unified_variant_type,
         .trait_type,
         .static_function,
         .template_type,

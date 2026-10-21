@@ -1,0 +1,17 @@
+# a file is declared once: included again, directly or through a library including it, it adds
+# nothing, whether plain or raw
+<include "../lib/math.mn">;
+<include "../lib/math.mn">;
+<include "../lib/nested/fractions.mn">;
+<includeraw "../lib/math.mn">;
+
+stc u32 lcm_of = lcm(4, 6); #= lcm_of 12
+stc u32 reduced = reduced_denominator(6, 8); #= reduced 4
+# a tree value reads the file every time
+stc u64 math_decls = lenof (include "../lib/math.mn").decls; #= math_decls 3
+
+# in a body an include declares locals, each body its own
+fun first = () -> u32 { <include "../lib/math.mn">; ret gcd(9, 6); }
+fun second = () -> u32 { <include "../lib/math.mn">; ret gcd(8, 6); }
+
+main = () {}

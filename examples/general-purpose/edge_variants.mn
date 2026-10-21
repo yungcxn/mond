@@ -120,7 +120,7 @@ stcfun vending = () -> u32 {
     ret mid * 1000000 + early * 10000 + change * 100 + slot + v.refund() * 100000000 + (v == Vend.Broken) as u32 * 10;
 }
 
-stcfun unions = () -> u32 {
+stcfun unified = () -> u32 {
     Joined a = Small.B;
     Joined b = Big.D(7);
     Joined c = Big.E;
@@ -144,7 +144,7 @@ stc u32 CY = cycle(); #= CY 15035
 stc u32 TA = tags(); #= TA 802
 stc u32 EQ = equality(); #= EQ 101101
 stc u32 VE = vending(); #= VE 25251514
-stc u32 UN = unions(); #= UN 10027605
+stc u32 UN = unified(); #= UN 10027605
 stc i32 CM = commands(); #= CM 20501
 stc u32 NE = nested(); #= NE 1005170
 stc u64 SZ = sizes(); #= SZ 112122

@@ -16,7 +16,7 @@ fun loaded = (Shelf s) { c = s.first.*; }                  #! unstorable_derefer
 fun opened = (Shelf s) -> u32: ret s.any.value;            #! unstorable_dereference
 fun copied = (Shelf s) { b = s.bytes.*; }                  #! unstorable_dereference
 fun direct = (Shelf s) -> u8: ret s.bytes[1];              #! unstorable_dereference
-fun by_value = (Named n, Shelf s) { Named m = n; }         #! trait_outside_parameter
+fun by_value = (Named n, Shelf s) { Named m = n; }         #! unstorable_outside_parameter
 
 stc u64 SHELF = sizeof Shelf;   #= SHELF 40
 main = () {}

@@ -255,7 +255,7 @@ pub fn print_type_definition(
         .pointer_type,
         .function_type,
         .variant_case_type,
-        .variant_union_type,
+        .unified_variant_type,
         .trait_type,
         .static_function,
         .template_type,
@@ -374,13 +374,12 @@ fn print_type(
             const name = lowerer.resolver.name_pool.text_of(case.name);
             try writer.print(type_color ++ ".{s}", .{name});
         },
-        .variant_union_type => |members| {
-            try writer.writeAll("union(");
-            for (members, 0..) |member, i| {
-                if (i > 0) try writer.writeAll(type_color ++ ", ");
+        .unified_variant_type => |unified| {
+            const separator = if (unified.is_packed) " ||| " else " || ";
+            for (unified.members, 0..) |member, i| {
+                if (i > 0) try writer.print(type_color ++ "{s}", .{separator});
                 try print_type(writer, lowerer, member);
             }
-            try writer.writeAll(type_color ++ ")");
         },
         .int_type,
         .float_type,
@@ -507,7 +506,7 @@ fn print_value(writer: *Writer, lowerer: *HighLowerer, value: StaticPool.Index) 
         .record_type,
         .variant_type,
         .variant_case_type,
-        .variant_union_type,
+        .unified_variant_type,
         .trait_type,
         .static_function,
         .template_type,

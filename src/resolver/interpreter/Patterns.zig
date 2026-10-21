@@ -106,7 +106,7 @@ inline fn matches_any(self: *Patterns, alternatives: NodeId, value: Value) bool 
     return false;
 }
 
-// `T x`: a case matches its variant and any union of variants, other values their type or trait
+// `T x`: a case matches its variant and any unified variant of it, other values their type or trait
 inline fn matches_typecast(self: *Patterns, pattern: NodeId, value: Value) bool {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
@@ -120,12 +120,12 @@ inline fn matches_typecast(self: *Patterns, pattern: NodeId, value: Value) bool 
     const case = self.case_of(value);
     const value_type = interpreter.value_type(value);
 
-    // a case belongs to its variant and to every union holding that variant
+    // a case belongs to its variant and to every unified variant holding that variant
     const matched = if (case != .none) blk: {
         const variant = static_pool.get(case).variant_case_type.variant;
         if (variant == wanted_type) break :blk true;
-        if (static_pool.tag(wanted_type) != .variant_union_type) break :blk false;
-        const members = static_pool.get(wanted_type).variant_union_type;
+        if (static_pool.tag(wanted_type) != .unified_variant_type) break :blk false;
+        const members = static_pool.get(wanted_type).unified_variant_type.members;
         break :blk std.mem.indexOfScalar(Index, members, variant) != null;
     } else value_type == wanted_type or static_pool.implements(value_type, wanted_type);
     if (matched) self.bind_name(tree.arg(pattern, 1), value);

@@ -112,7 +112,7 @@ stc u8 Q = quadrant(Pt(3, 5));              #= Q 1
 | `1..=9` `..<0` `10..` | integer intervals |
 | `V.Case` · `V.Case(p, f = p)` · `Rec(p, f = p)` | a case or a record, fields by position or name; missing fields are `_` |
 | `p1 \| p2` | either one (only at the top of an arm); both must bind the same names |
-| `T x` | a value that is a `T` (a union member, a trait implementer, a case), bound as `T` |
+| `T x` | a value that is a `T` (a member of a unified variant, a trait implementer, a case), bound as `T` |
 | `p <- x` · `p <- a, b` | matches `p` and binds its payload: a single field directly, several fields as a record, or `a, b` in order |
 | `quote: ..` | tree shapes, see [metaprogramming.md](metaprogramming.md#quote-patterns) |
 

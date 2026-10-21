@@ -35,18 +35,21 @@ pub fn length_or_tag(self: *Calls, node: NodeId) Value {
         if (interpreter.element_count(value)) |count| return .int(.u64_type, count);
         return interpreter.fail(node, .not_static, 0, 0);
     }
-    // a union of variants numbers its cases after the cases of the variants before them
+    // a unified variant numbers its cases after the cases of the members before them, a member
+    // bringing no cases is one
+    const variant_type = static_pool.through_pointer(interpreter.checked_type(operand));
+    const tag_type = static_pool.tag_type_of(variant_type);
+    const is_unified = static_pool.tag(variant_type) == .unified_variant_type;
     const case = interpreter.patterns.case_of(value);
+    const of_member = if (case != .none)
+        static_pool.get(case).variant_case_type.variant
+    else
+        interpreter.value_type(value);
+    const offset = if (is_unified) static_pool.unified_offset(variant_type, of_member) else 0;
+    if (is_unified and !static_pool.brings_cases(of_member)) return .int(tag_type, offset);
     if (case == .none) return interpreter.fail(node, .not_static, 0, 0);
 
-    const variant_type = static_pool.through_pointer(interpreter.checked_type(operand));
-    const case_type = static_pool.get(case).variant_case_type;
-    const tag_type = static_pool.tag_type_of(variant_type);
-    const case_number = static_pool.get(case_type.tag).int_value.bits;
-    const offset = if (static_pool.tag(variant_type) == .variant_union_type)
-        static_pool.union_offset(variant_type, case_type.variant)
-    else
-        0;
+    const case_number = static_pool.get(static_pool.get(case).variant_case_type.tag).int_value.bits;
     return .int(tag_type, case_number + offset);
 }
 
@@ -203,7 +206,7 @@ pub fn call(self: *Calls, node: NodeId) Value {
         .static_function => return self.call_static_function(node, callee_index, arguments),
         .int_type, .float_type, .simple_type, .meta_type, .array_type => {},
         .pointer_type, .mutable_pointer_type, .function_type, .variant_type => {},
-        .variant_union_type, .trait_type, .template_type, .type_variable => {},
+        .unified_variant_type, .trait_type, .template_type, .type_variable => {},
         .int_value, .float_value, .simple_value, .string_value => {},
         .aggregate_value, .variant_value, .tree_value => {},
     }

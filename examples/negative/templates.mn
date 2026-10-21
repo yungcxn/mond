@@ -22,7 +22,7 @@ fun foreign = (Opt(u8) o) -> u32: ret match o { Opt(u16).Some(x) => 1, _ => 0 };
 fun set_count = (&Box b) { b.count = 1; } #! write_through_immutable_pointer
 fun mut_count = (*Box b) -> u32: ret b.count;
 
-variant Opt = (type T): ++(Some(T), None);
+variant Opt = (type T): +(Some(T), None);
 stcfun size = (type T) -> u64: ret sizeof T;
 stcfun vsize = (variant T) -> u64: ret sizeof T;
 stc u64 SB = size(Box); #! type_mismatch

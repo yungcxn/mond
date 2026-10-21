@@ -194,7 +194,7 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
         .pointer_type,
         .mutable_pointer_type,
         .variant_type,
-        .variant_union_type,
+        .unified_variant_type,
         .trait_type,
         .static_function,
         .template_type,
@@ -589,6 +589,10 @@ fn call_declared(
                 // what a generic parameter takes from its argument
                 const argument_type = arguments.types[i];
                 generic_buffer[generic_count] = blk: {
+                    // a packed variant per case: each has a size of its own
+                    if (static_pool.packed_of(parameter_type) != .none) {
+                        break :blk static_pool.through_pointer(argument_type);
+                    }
                     if (static_pool.is_realized_per_type(parameter_type)) {
                         break :blk static_pool.unwrapped(argument_type);
                     }

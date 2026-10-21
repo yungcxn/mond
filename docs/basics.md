@@ -120,7 +120,7 @@ Lowest to highest precedence, and `·` separates levels within a row. All binary
 | prefix | `- ! ++ -- typeof sizeof alignof lenof tagof crash asm syscall fresh` |
 | postfix | `f(..) a[i] .m .* .& x++ x-- as asbits oftype ?? <- ?<- with ..` (unwrapping and labels: [control.md](control.md#unwrapping)) |
 
-`crash`, `asm`, `syscall` and `fresh` take one operand, or several in parentheses: `crash "too big"`, `syscall (WRITE, 1, p, n)`. `!` is logical not on `bool` and bitwise not on integers. Unary `-` on an unsigned value wraps. The operands of a shift join like any others, so `u8 << u32` is a `u32`. `||` is not logical or: it is the variant union type. There is no `**`, and no `<<=` or similar.
+`crash`, `asm`, `syscall` and `fresh` take one operand, or several in parentheses: `crash "too big"`, `syscall (WRITE, 1, p, n)`. `!` is logical not on `bool` and bitwise not on integers. Unary `-` on an unsigned value wraps. The operands of a shift join like any others, so `u8 << u32` is a `u32`. `||` and `|||` are not logical or: they make unified variants (see [types.md](types.md#unified-variants-a--b-a--b)). There is no `**`, and no `<<=` or similar.
 
 ```mond
 stc u32 A = 1 << 2 + 1;          #= A 8

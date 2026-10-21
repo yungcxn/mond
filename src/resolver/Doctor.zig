@@ -47,6 +47,7 @@ const definition_table = .{
     .{ "assertsize_failed", .@"error", operand(.count, "size"), operand(.count, "asserted") },
     .{ "tag_overflow", .@"error", operand(.type, "tag"), operand(.type, "tag type") },
     .{ "self_tag_without_niche", .@"error", operand(.count, "payload cases"), no_operand },
+    .{ "untagged_variant", .@"error", operand(.type, "type"), no_operand },
     .{ "trait_member_missing", .@"error", operand(.name, "member"), operand(.type, "of trait") },
     .{
         "trait_signature_mismatch",
@@ -66,7 +67,7 @@ const definition_table = .{
     .{ "redundant_fun", .@"error", no_operand, no_operand },
     .{ "missing_keyword", .@"error", operand(.name, "keyword"), no_operand },
     .{ "unrealized_template", .@"error", no_operand, no_operand },
-    .{ "trait_outside_parameter", .@"error", operand(.type, "type"), no_operand },
+    .{ "unstorable_outside_parameter", .@"error", operand(.type, "type"), no_operand },
     .{ "unstorable_dereference", .@"error", operand(.type, "pointer"), no_operand },
     .{ "impure_stcfun", .@"error", no_operand, no_operand },
     .{ "escaping_closure", .@"error", no_operand, no_operand },

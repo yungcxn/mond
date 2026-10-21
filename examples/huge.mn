@@ -13,7 +13,7 @@
 #   4.  types (plain, packed, mutable fields, defaults, where-else fields, assertsize, generics,
 #       init / deinit, methods, `with` copies)
 #   5.  traits (plain, generic, trait-implementing traits, implof lists)
-#   6.  variants (enum-like, tagged unions, self-tagged, untagged unification with ||)
+#   6.  variants (enum-like, tagged, self-tagged, untagged, packed, unified with || and |||)
 #   7.  pattern matching (literals, or-patterns with `|`, ranges, payload destructuring,
 #       struct patterns, type-cast patterns, label arrows, nested matches, stcmatch)
 #   8.  control flow as expressions (if, while, for, loop + all their static `stc...` twins)
@@ -648,15 +648,15 @@ variant Direction = +(North, South, East, West);
 # A2) enum-like with explicit tag values and tag type
 variant Level = +(Low = 1, Mid = 5, High = 10,) tagtype u8;
 
-# B) tagged homogenic union variant
-variant Register = ++(
+# B) tagged variant, every value as large as the widest case
+variant Register = +(
     AsLower(i16)                    = 0x00,
     AsInt(i32)                      = 0x01,
     AsFloat(f32)                    = 0x02,
     AsBytes(u8 a, u8 b, u8 c, u8 d) = 0x03,
 ) tagtype u8;
 
-# C) tagged heterogenic abstract variant
+# C) tagged variant with tags of its own
 variant Event = +(
     Click(i32 x, i32 y) = 0x01,
     Key(u8)             = 0x02,
@@ -664,14 +664,14 @@ variant Event = +(
     Close               = 0x00,
 ) tagtype u8;
 
-# D) homogenic union variant (tagged by default: 1 tag byte + 4 payload bytes, aligned)
-variant AnyFixed32 = ++(
+# D) variant tagged by default (1 tag byte + 4 payload bytes, aligned)
+variant AnyFixed32 = +(
     AsInt(i32),
     AsFloat(f32),
     AsBits([4]u8),
 ) assertsize u64;
 
-# E) heterogenic abstract variant (tagged by default)
+# E) variant tagged by default, of cases of different sizes
 variant AnyPrintable = +(
     AsInt(i32),
     AsText(&u8),
@@ -688,6 +688,28 @@ variant CommonCode = +(
     Undefined(u8),
 ) tagtype self;
 
+# G) untagged variant: the cases share the room of the widest, read through a cast to a case
+variant Raw32 = +(AsInt(i32), AsFloat(f32)) tagtype _;
+stc i32 RAW_BITS = (Raw32.AsFloat(1.0) as Raw32.AsInt).$0;
+
+# H) packed variant: a case is only as large as its own payload, so the variant is a parameter
+#    type (realized per case) or behind a pointer, where `tagof` reads the tag
+variant Packet = ++(Ping(u8 seq), Data(u64 a, u64 b), Quit);
+fun packet_weight = (Packet p) -> u64: ret match p {
+    Packet.Ping(s) => s as u64,
+    Packet.Data(a, b) => a + b,
+    Packet.Quit => 0,
+};
+fun packet_kind = (&Packet p) -> u8: ret tagof p;
+stc u64 PACKET_SIZE = sizeof Packet.Ping;
+stc u64 PACKET_WEIGHT = packet_weight(Packet.Data(1, 2));
+
+# I) unified variants of any types: `||` tags and stores them, `|||` realizes a function per member
+variant Number = u32 || f32;
+fun doubled = (u32 ||| f32 x) -> f32: ret match x { u32 n => n as f32 * 2.0, f32 f => f * 2.0 };
+stc Number SOME_NUMBER = 2.5;
+stc f32 DOUBLED = doubled(3) + doubled(1.5);
+
 # payloads with every parameter feature
 variant FamilyMember = +(
     Parent(&u8 name, mut i32 age where age >= 18 else age = 18) = 0x01,
@@ -696,7 +718,7 @@ variant FamilyMember = +(
 ) tagtype u8;
 
 # generic builtins-alikes
-variant Opt    = (type T): ++(Some(T), None) tagtype u8;
+variant Opt    = (type T): +(Some(T), None) tagtype u8;
 variant Result = (type T, type E): +(Ok(T), Err(E)) tagtype u8;
 
 # variants with methods
@@ -808,7 +830,7 @@ fun handle_event = (Event e): match e {
     Event.Close => print("Close"),
 }
 
-# static matches check only the matching arm, homogenic variants allow a type-cast pattern
+# static matches check only the matching arm, a type-cast pattern of its own type takes all
 fun handle_anyfixed = (AnyFixed32 a): match a {
     AnyFixed32.AsInt(i) => print("Int: %d", i),
     AnyFixed32.AsFloat(f) => print("Float: %f", f),

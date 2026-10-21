@@ -1,0 +1,36 @@
+# `||` unifies any types that have a size: a variant with tags brings its cases, every other type is
+# one case; the smallest tag tells them apart and the room of the widest holds the value
+type Pt = *(i32 x, i32 y);
+variant Shape = +(Dot, Circle(u32 r));
+variant Word = +(Int(u32), Float(f32)) tagtype _;
+variant Any = u32 || f32 || Pt || Shape || Word;
+variant Scalar = u8 || i64;
+variant Wider = Scalar || bool;    # a unified variant on a side brings its members
+
+stc u64 any_size = sizeof Any; #= any_size 12
+stc u64 scalar_size = sizeof Scalar; #= scalar_size 16
+
+fun describe = (Any a) -> i64: ret match a {
+    u32 n => n as i64,
+    f32 f => (f * 10.0) as i64,
+    Pt p => (p.x * 100 + p.y) as i64,
+    Shape.Dot => -1,
+    Shape.Circle(r) => -1000 - r as i64,
+    Word w => (w as Word.Int).$0 as i64,
+};
+fun tag = (Any a) -> u8: ret tagof a;
+stc i64 of_int = describe(7); #= of_int 7
+stc i64 of_float = describe(1.5); #= of_float 15
+stc i64 of_record = describe(Pt(3, 4)); #= of_record 304
+stc i64 of_case = describe(Shape.Circle(2)); #= of_case -1002
+stc i64 of_untagged = describe(Word.Float(1.0)); #= of_untagged 1065353216
+# u32 0, f32 1, Pt 2, Shape.Dot 3, Shape.Circle 4, Word 5
+stc u8 tag_of_case = tag(Shape.Circle(2)); #= tag_of_case 4
+stc u8 tag_of_word = tag(Word.Int(1)); #= tag_of_word 5
+stc Any global = 2.5;
+stc i64 of_global = describe(global); #= of_global 25
+
+fun is_byte = (Wider w) -> bool: ret match w { u8 b => true, i64 i => false, bool b => false };
+stc bool byte = is_byte(3 as u8); #= byte true
+
+main = () {}

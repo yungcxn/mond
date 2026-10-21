@@ -3,6 +3,7 @@ const llvm = @import("llvm_c");
 const mond = @import("mond");
 const LLVMLowerer = @import("../LLVMLowerer.zig");
 const tag_bits = @import("values.zig").tag_bits;
+const tag_constant = @import("values.zig").tag_constant;
 const StaticPool = mond.StaticPool;
 const Index = StaticPool.Index;
 const Value = LLVMLowerer.Value;
@@ -19,7 +20,7 @@ pub fn operand(lowerer: *LLVMLowerer, value: Index) Value {
     if (pool.tag(value) == .function_value) return lower(lowerer, value, .none);
     if (pool.tag(value) == .string_value) return string_pointer(lowerer, value);
     const value_type = if (pool.tag(value) == .variant_case_type)
-        pool.get(value).variant_case_type.variant
+        lowerer.types.variant_of(value)
     else
         pool.type_of(value);
     if (!lowerer.types.is_in_memory(value_type)) return lower(lowerer, value, value_type);
@@ -47,6 +48,14 @@ pub fn lower(lowerer: *LLVMLowerer, value: Index, expected: Index) Value {
     const pool = lowerer.pool;
     const types = &lowerer.types;
     const into = if (expected == .none) pool.type_of(value) else expected;
+    if (pool.tag(into) == .unified_variant_type) {
+        const value_type = if (pool.tag(value) == .variant_case_type)
+            value
+        else
+            pool.type_of(value);
+        const member = types.variant_of(value_type);
+        if (!pool.brings_cases(member)) return member_constant(lowerer, value, member, into);
+    }
     return switch (pool.get(value)) {
         .int_value => |int| {
             const into_type = types.of(into);
@@ -174,31 +183,31 @@ fn lower_aggregate(lowerer: *LLVMLowerer, value: Index, aggregate_type: Index) V
     return llvm.LLVMConstArray2(lowerer.types.of(element_type), part_values.ptr, element_count);
 }
 
-// a case of a variant, also seen as a case of a union of it
+// a case of a variant, also seen as a case of a unified variant holding it
 fn lower_variant(lowerer: *LLVMLowerer, variant_value: StaticPool.VariantValue, into: Index) Value {
     const pool = lowerer.pool;
     const types = &lowerer.types;
     const case = pool.get(variant_value.case).variant_case_type;
-    const into_union = pool.tag(into) == .variant_union_type;
-    const container = if (into_union) into else case.variant;
+    const into_unified = pool.tag(into) == .unified_variant_type;
+    const container = if (into_unified) into else types.variant_of(variant_value.case);
     const self_tagged = types.is_self_tagged(case.variant);
     const first_field = if (variant_value.payload == .none)
         Index.none
     else
         pool.get(variant_value.payload).aggregate_value.elements[0];
 
-    if (self_tagged and !into_union) {
+    if (self_tagged and !into_unified) {
         if (first_field == .none) return llvm.LLVMConstInt(
             types.of(case.variant),
             tag_bits(lowerer, variant_value.case),
             0,
         );
-        return lower(lowerer, first_field, pool.get(case.variant).variant_type.tag_type);
+        return niche_bits(lowerer, variant_value, pool.get(case.variant).variant_type.tag_type);
     }
 
-    const offset = if (into_union) pool.union_offset(into, case.variant) else 0;
+    const offset = if (into_unified) pool.unified_offset(into, case.variant) else 0;
     const tag_type = types.of(types.tag_type(container));
-    const tag = llvm.LLVMConstInt(tag_type, tag_bits(lowerer, variant_value.case) + offset, 0);
+    const tag = tag_constant(tag_type, tag_bits(lowerer, variant_value.case) + offset);
     const container_type = types.of(container);
     if (variant_value.payload == .none and !self_tagged) {
         var fields = [_]Value{ tag, llvm.LLVMConstNull(llvm.LLVMStructGetTypeAtIndex(
@@ -216,7 +225,7 @@ fn lower_variant(lowerer: *LLVMLowerer, variant_value: StaticPool.VariantValue, 
         tag_size,
         @as(u64, 1) << @intCast(room.align_log2),
     );
-    // a `tagof self` member keeps its int in the union's room
+    // a `tagof self` member keeps its int in the unified variant's room
     const payload_type = if (self_tagged)
         pool.get(case.variant).variant_type.tag_type
     else
@@ -226,12 +235,52 @@ fn lower_variant(lowerer: *LLVMLowerer, variant_value: StaticPool.VariantValue, 
     else if (first_field == .none)
         llvm.LLVMConstInt(types.of(payload_type), tag_bits(lowerer, variant_value.case), 0)
     else
-        lower(lowerer, first_field, payload_type);
+        niche_bits(lowerer, variant_value, payload_type);
     const parts = [_]Part{
         .{ .offset = 0, .size = tag_size, .value = tag },
         .{ .offset = room_offset, .size = pool.layout(payload_type).size, .value = payload },
     };
     return packed_struct(lowerer, &parts, pool.layout(container).size);
+}
+
+// the one field of a self-tagged payload as the bits of its tag type
+fn niche_bits(
+    lowerer: *LLVMLowerer,
+    variant_value: StaticPool.VariantValue,
+    tag_type: Index,
+) Value {
+    const pool = lowerer.pool;
+    const into = lowerer.types.of(tag_type);
+    const field = pool.get(variant_value.payload).aggregate_value.elements[0];
+    const field_type = pool.field_type(pool.get(variant_value.case).variant_case_type.payload, 0);
+    return switch (pool.get(field)) {
+        .int_value => lower(lowerer, field, tag_type),
+        .simple_value => |simple| llvm.LLVMConstInt(into, @intFromBool(simple == .bool_true), 0),
+        .float_value => llvm.LLVMConstBitCast(lower(lowerer, field, field_type), into),
+        else => llvm.LLVMConstPtrToInt(lower(lowerer, field, field_type), into),
+    };
+}
+
+// a member of a unified variant that is one case: its tag, then its value where the room starts
+fn member_constant(lowerer: *LLVMLowerer, value: Index, member: Index, unified: Index) Value {
+    const pool = lowerer.pool;
+    const types = &lowerer.types;
+    const tag_type = types.tag_type(unified);
+    const tag_size = pool.layout(tag_type).size;
+    const room_alignment = @as(u64, 1) << @intCast(types.payload_room(unified).align_log2);
+    const parts = [_]Part{
+        .{
+            .offset = 0,
+            .size = tag_size,
+            .value = llvm.LLVMConstInt(types.of(tag_type), pool.unified_offset(unified, member), 0),
+        },
+        .{
+            .offset = std.mem.alignForward(u64, tag_size, room_alignment),
+            .size = pool.layout(member).size,
+            .value = lower(lowerer, value, member),
+        },
+    };
+    return packed_struct(lowerer, &parts, pool.layout(unified).size);
 }
 
 const Part = struct { offset: u64, size: u64, value: Value };

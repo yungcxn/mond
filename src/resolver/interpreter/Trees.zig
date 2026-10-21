@@ -5,6 +5,7 @@ const Parser = @import("../../Parser.zig");
 const StaticPool = @import("../StaticPool.zig");
 const NamePool = @import("../NamePool.zig");
 const Interpreter = @import("../Interpreter.zig");
+const Resolver = @import("../../Resolver.zig");
 const Value = @import("Value.zig");
 const Index = StaticPool.Index;
 const NodeId = ParseTree.NodeId;
@@ -148,7 +149,7 @@ pub fn keep(self: *Trees, value: Value) Value {
         .record_type,
         .variant_type,
         .variant_case_type,
-        .variant_union_type,
+        .unified_variant_type,
         .trait_type,
         .static_function,
         .template_type,
@@ -214,7 +215,9 @@ pub fn expand(self: *Trees, node: NodeId, code: Index) void {
         const static_pool = &resolver.static_pool;
         if (code == .unit_value) break :blk resolver.tree.push_node(.block);
         if (static_pool.tag(code) == .tree_value) {
-            break :blk self.land(static_pool.get(code).tree_value.node, .none);
+            const root = static_pool.get(code).tree_value.node;
+            if (self.is_declared_again(node, root)) break :blk resolver.tree.push_node(.block);
+            break :blk self.land(root, .none);
         }
 
         const found_type = static_pool.type_of(code);
@@ -665,7 +668,7 @@ fn type_tree(self: *Trees, token: u32, named: Index) ?NodeId {
         .record_type,
         .variant_type,
         .variant_case_type,
-        .variant_union_type,
+        .unified_variant_type,
         .trait_type,
         .static_function,
         .template_type,
@@ -759,7 +762,10 @@ fn read(self: *Trees, node: NodeId, name: []const u8) Read {
     const tree = resolver.tree;
     const allocator = resolver.allocator;
 
-    const directory = std.fs.path.dirname(resolver.session.path) orelse ".";
+    // relative to the file the `include` is written in, a library reads its own neighbours
+    const includer = included_file(resolver, node);
+    const written_in = if (includer) |file| file.path else resolver.session.path;
+    const directory = std.fs.path.dirname(written_in) orelse ".";
     const path = std.fs.path.resolve(allocator, &.{ directory, name }) catch |err| {
         return .{ .failed = .{ .at = node, .reason = err } };
     };
@@ -840,6 +846,39 @@ fn read(self: *Trees, node: NodeId, name: []const u8) Read {
     const included = tree.push_node(.block);
     tree.set_children(included, tree.scratch.buffer[mark..tree.scratch.len]);
     return .{ .included = included };
+}
+
+// the included file a subtree was written in, the one holding its first word; null for the
+// compiled file
+fn included_file(resolver: *Resolver, node: NodeId) ?*Resolver.Session.File {
+    const tree = resolver.tree;
+    const subtree = tree.subtree(node);
+    const word = for (subtree[0]..subtree[1]) |i| {
+        const leaf: NodeId = @intCast(i);
+        if (tree.token(leaf) != null and tree.arg(leaf, 1) != 0) break tree.arg(leaf, 1);
+    } else return null;
+    const at = tree.words.column(.at)[word - 1];
+    for (resolver.session.files.items) |*file| {
+        if (at >= file.at and at - file.at < file.len) return file;
+    }
+    return null;
+}
+
+// a file is declared once like a module: a top splice of an `include` of a file the program
+// declared already lands nothing, so libraries may include what their includer includes too
+fn is_declared_again(self: *Trees, splice_node: NodeId, block: NodeId) bool {
+    const resolver = self.owning_interpreter().owning_resolver();
+    const tree = resolver.tree;
+    const operand_kind = tree.kind(tree.arg(splice_node, 0));
+    const declares_file = operand_kind == .include or operand_kind == .include_raw;
+    if (!resolver.macros.top or !declares_file or tree.manychildren(block).len == 0) return false;
+
+    const file = included_file(resolver, tree.manychildren(block)[0]) orelse return false;
+    for (resolver.session.files.items) |other| {
+        if (other.is_declared and std.mem.eql(u8, other.path, file.path)) return true;
+    }
+    file.is_declared = true;
+    return false;
 }
 
 // views of trees: a declaration, function, type, field or parameter by its parts, a node by fields
@@ -980,7 +1019,7 @@ fn member_list(tree: *const ParseTree, subject_node: NodeId, name: NamePool.Inde
     const defines_type = core_kind == .def_type or
         core_kind == .def_type_packed or
         core_kind == .def_variant or
-        core_kind == .def_variant_unionsized;
+        core_kind == .def_variant_packed;
     return if (defines_type) tree.arg(core, 0) else null;
 }
 

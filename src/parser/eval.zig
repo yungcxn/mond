@@ -511,7 +511,7 @@ pub fn variant(p: *Parser) anyerror!NodeId {
 
     const parent: Node.Kind = switch (try p.pop_tok()) {
         .@"xpct_+(" => .def_variant,
-        .@"xpct_++(" => .def_variant_unionsized,
+        .@"xpct_++(" => .def_variant_packed,
         else => return error.IllegalVariantStart,
     };
 
@@ -597,8 +597,12 @@ pub fn trait(p: *Parser) anyerror!NodeId {
     return p.tree.push_node_with(.def_trait, .{ .body = body });
 }
 
-pub fn unify_variants(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    return p.tree.push_node_with(.unify_variants, .{ .left_type = lhs, .right_type = try any(p, .forbid_assign, 0) });
+pub fn templ_unify_variants(comptime kind: Node.Kind) fn (parser: *Parser, lhs: NodeId) anyerror!NodeId {
+    return struct {
+        pub fn eval(p: *Parser, lhs: NodeId) anyerror!NodeId {
+            return p.tree.push_node_with(kind, .{ .left_type = lhs, .right_type = try any(p, .forbid_assign, 0) });
+        }
+    }.eval;
 }
 
 pub fn fun_call(p: *Parser, lhs: NodeId) anyerror!NodeId {
