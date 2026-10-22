@@ -1,0 +1,25 @@
+out = <include "lib/out.mn">;
+math = <include "../lib/math.mn">;
+o = <include "../lib/namespace/outer.mn">;
+
+# a namespace's functions, types, values and namespaces, called at run time and folded at compile
+# time; its c functions keep their names for the linker
+mut u32 ONE = 0;
+stc u32 FOLDED = math.lcm(4, 6);
+fun bump = (u32 by) -> u32 { o.counter += by; ret o.counter; }
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc;
+    out.line_u64(math.gcd(12 * ONE, 18) as u64);             #> 6
+    out.line_u64(math.lcm(4 * ONE, 6) as u64);               #> 12
+    out.line_u64(FOLDED as u64);                             #> 12
+    out.line_u64((o.nested.deep() * ONE + o.via()) as u64);  #> 9
+    o.Vec v = o.Vec(3 * ONE, 4);
+    out.line_u64(v.sum() as u64);                            #> 7
+    bump(2 * ONE);
+    out.line_u64(bump(3) as u64);                            #> 5
+    o.Sign s = if ONE == 1: o.Sign.Pos else: o.Sign.Neg;
+    out.line_u64(match s { o.Sign.Pos => 1, o.Sign.Neg => 0 });   #> 1
+    out.putchar(79);
+    out.putchar(10);                                         #> O
+}

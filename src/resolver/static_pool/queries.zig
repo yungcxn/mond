@@ -77,6 +77,14 @@ pub fn is_realized_per_type(pool: *const StaticPool, parameter: Index) bool {
         pool.packed_of(parameter) != .none;
 }
 
+// what a parameter realized per type is realized for: the argument's type, of a case its variant,
+// but of a packed variant the case, which has a size of its own
+pub fn realized_for(pool: *StaticPool, argument_type: Index) Index {
+    const variant_or_type = pool.unwrapped(argument_type);
+    if (pool.is_unstorable(variant_or_type)) return pool.through_pointer(argument_type);
+    return variant_or_type;
+}
+
 // a type only a parameter has, `trait_of` or `packed_of` it: a value is always of one of the
 // types it stands for
 pub fn is_parameter_only(pool: *const StaticPool, type_index: Index) bool {
@@ -162,6 +170,13 @@ pub fn holds_function_value(pool: *const StaticPool, type_index: Index) bool {
     }.decide);
 }
 
+// whether a type is a member of a unified variant, of any other type it is not
+pub fn is_member(pool: *const StaticPool, unified: Index, member: Index) bool {
+    if (unified == .none or pool.tag(unified) != .unified_variant_type) return false;
+    const members = pool.get(unified).unified_variant_type.members;
+    return std.mem.indexOfScalar(Index, members, member) != null;
+}
+
 // a variant or case of one without a tag (`tagtype _`): nothing tells its cases apart at run time
 pub fn is_untagged(pool: *const StaticPool, type_index: Index) bool {
     return switch (pool.get(type_index)) {
@@ -169,6 +184,16 @@ pub fn is_untagged(pool: *const StaticPool, type_index: Index) bool {
         .variant_case_type => |case| pool.is_untagged(case.variant),
         else => false,
     };
+}
+
+// a variant or case of one whose case nothing tells while the program runs: untagged and stored,
+// a packed one is realized per case
+pub fn is_untagged_at_run_time(pool: *const StaticPool, type_index: Index) bool {
+    const variant = switch (pool.get(type_index)) {
+        .variant_case_type => |case| case.variant,
+        else => type_index,
+    };
+    return pool.is_untagged(variant) and !pool.is_unstorable(variant);
 }
 
 pub fn holds_untagged_variant(pool: *const StaticPool, type_index: Index) bool {
@@ -329,17 +354,31 @@ fn trait_member(
     return .none;
 }
 
+// what `tagof` gives: the tag type of a variant with tags of its own, of a case or a pointer
+// through to it
 pub fn tag_type_of(pool: *const StaticPool, type_index: Index) Index {
     return switch (pool.get(type_index)) {
-        .variant_type => |variant| if (variant.tag_mode != .int)
-            .none
-        else if (variant.tag_type == .none or variant.tag_type == .poison_type)
-            .u8_type
+        .variant_type => |variant| if (variant.tag_mode == .int)
+            pool.stored_tag_type(type_index)
         else
-            variant.tag_type,
+            .none,
         .variant_case_type => |case| pool.tag_type_of(case.variant),
-        .unified_variant_type => pool.unified_tag_type(type_index),
+        .unified_variant_type => pool.stored_tag_type(type_index),
         .pointer_type => |pointer| pool.tag_type_of(pointer.pointee),
+        else => .none,
+    };
+}
+
+// the type a tag is held in, a self-tagged variant's int and an untagged one's `()` too; a case's
+// is its variant's
+pub fn stored_tag_type(pool: *const StaticPool, type_index: Index) Index {
+    return switch (pool.get(type_index)) {
+        .variant_type => |variant| switch (variant.tag_type) {
+            .none, .poison_type => .u8_type,
+            else => variant.tag_type,
+        },
+        .variant_case_type => |case| pool.stored_tag_type(case.variant),
+        .unified_variant_type => pool.unified_tag_type(type_index),
         else => .none,
     };
 }

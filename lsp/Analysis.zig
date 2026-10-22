@@ -36,6 +36,7 @@ pub const Type = enum(u8) {
     parameter,
     property,
     macro,
+    namespace,
 };
 pub const Modifier = enum(u5) { readonly, static };
 
@@ -184,6 +185,7 @@ pub fn analyze_at(
     var lexer = Lexer{ .src_bytes = source, .tokens = .init(allocator, 1024) };
     if (self.resolve(&lexer)) |resolver| {
         highlighting.classify_resolved(resolver, self.token_class, self.token_modifiers);
+        highlighting.classify_namespaces(&self, &lexer, resolver);
         linking.link(&self, &lexer, resolver);
     }
     highlighting.encode(&self, &lexer);
@@ -545,6 +547,42 @@ test "macros: the meta syntax is a macro, code by its role, splices and stcfuns 
         if (!is_fresh_call) continue;
         try std.testing.expect(result.decls[found[3]].selectionRange.?.start.character == 78);
     }
+}
+
+test "a namespace is a namespace where it is declared and reached, a `pub` one of it too" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var workspace = std.testing.tmpDir(.{});
+    defer workspace.cleanup();
+    const inner_source = "pub fun deep = () -> u32: ret 3;\n";
+    const library_source = "pub inner = <include \"inner.mn\">;\npub fun f = () -> u32: ret 1;\n";
+    try workspace.dir.writeFile(io, .{ .sub_path = "inner.mn", .data = inner_source });
+    try workspace.dir.writeFile(io, .{ .sub_path = "lib.mn", .data = library_source });
+    var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buffer[0..try workspace.dir.realPath(io, &root_buffer)];
+    const path = try std.fs.path.join(allocator, &.{ root, "main.mn" });
+
+    const source = try allocator.dupe(u8,
+        \\m = <include "lib.mn">;
+        \\main = () -> u32: ret m.f() + m.inner.deep();
+    );
+    const result = analyze_at(allocator, source, io, path);
+    try std.testing.expectEqual(0, result.diagnostics.len);
+    var classes: [2][64]?Type = @splat(@splat(null));
+    var line: u32, var character: u32 = .{ 0, 0 };
+    for (0..result.data.len / 5) |i| {
+        const encoded = result.data[i * 5 ..][0..5];
+        line += encoded[0];
+        character = if (encoded[0] == 0) character + encoded[1] else encoded[1];
+        classes[line][character] = @enumFromInt(encoded[3]);
+    }
+    const expected = [_]struct { u32, u32, Type }{
+        .{ 0, 0, .namespace },  .{ 1, 22, .namespace }, .{ 1, 24, .function },
+        .{ 1, 30, .namespace }, .{ 1, 32, .namespace }, .{ 1, 38, .function },
+    };
+    for (expected) |token| try std.testing.expectEqual(token[2], classes[token[0]][token[1]].?);
 }
 
 test "main and the protocol methods are keywords, a free function of the same name is not" {

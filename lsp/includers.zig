@@ -75,7 +75,7 @@ pub fn is_included(io: std.Io, allocator: std.mem.Allocator, path: []const u8) b
     return false;
 }
 
-test "a file another file includes (or includes raw) is a library, one only named in a comment is not" {
+test "an included file (raw, via a library or a namespace) is a library, one in a comment is not" {
     const io = std.testing.io;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -84,12 +84,15 @@ test "a file another file includes (or includes raw) is a library, one only name
     var workspace = std.testing.tmpDir(.{});
     defer workspace.cleanup();
     try workspace.dir.createDirPath(io, ".git");
-    try workspace.dir.createDirPath(io, "lib");
-    const library_source = "# include \"b.mn\"\npub fun f = () {}\n";
-    const program_source = "<include \"lib/a.mn\">;\n<includeraw \"lib/c.mn\">;\nmain = () {}\n";
+    try workspace.dir.createDirPath(io, "lib/sub");
+    const library_source = "# include \"b.mn\"\n<include \"sub/d.mn\">;\npub fun f = () {}\n";
+    const program_source = "<include \"lib/a.mn\">;\n<includeraw \"lib/c.mn\">;\n" ++
+        "space = <include \"lib/e.mn\">;\nmain = () {}\n";
     try workspace.dir.writeFile(io, .{ .sub_path = "lib/a.mn", .data = library_source });
     try workspace.dir.writeFile(io, .{ .sub_path = "lib/b.mn", .data = "pub fun g = () {}\n" });
     try workspace.dir.writeFile(io, .{ .sub_path = "lib/c.mn", .data = "fun h = () {}\n" });
+    try workspace.dir.writeFile(io, .{ .sub_path = "lib/sub/d.mn", .data = "pub fun i = () {}\n" });
+    try workspace.dir.writeFile(io, .{ .sub_path = "lib/e.mn", .data = "pub fun j = () {}\n" });
     try workspace.dir.writeFile(io, .{ .sub_path = "main.mn", .data = program_source });
 
     var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
@@ -98,9 +101,13 @@ test "a file another file includes (or includes raw) is a library, one only name
     const mentioned = try std.fs.path.join(allocator, &.{ root, "lib", "b.mn" });
     const raw = try std.fs.path.join(allocator, &.{ root, "lib", "c.mn" });
     const program = try std.fs.path.join(allocator, &.{ root, "main.mn" });
+    const nested = try std.fs.path.join(allocator, &.{ root, "lib", "sub", "d.mn" });
+    const namespaced = try std.fs.path.join(allocator, &.{ root, "lib", "e.mn" });
 
     try std.testing.expect(is_included(io, allocator, library));
     try std.testing.expect(!is_included(io, allocator, mentioned));
     try std.testing.expect(is_included(io, allocator, raw));
     try std.testing.expect(!is_included(io, allocator, program));
+    try std.testing.expect(is_included(io, allocator, nested));
+    try std.testing.expect(is_included(io, allocator, namespaced));
 }

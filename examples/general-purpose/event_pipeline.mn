@@ -1,0 +1,61 @@
+# an event pipeline: events of different sizes handled per kind (packed), sample values of any
+# number type (unified), raw float bits for a checksum (untagged), a chain of nodes linked by
+# null-address niches, and a statistics library reached through a namespace
+stats = <include "../lib/namespace/stats.mn">;
+
+variant Value = u32 || i64 || f32;
+variant Event = ++(Tick(u32 at), Sample(u32 at, Value value), Stop);
+variant Bits = +(Float(f32), Word(u32)) tagtype _;
+variant Link = +(End, Next(&Node)) tagtype self;
+type Node = *(u32 id, Link next);
+
+fun as_float = (Value v) -> f32: ret match v { u32 n => n as f32, i64 i => i as f32, f32 f => f };
+fun handle = (Event e, *stats.Acc acc) -> u32: ret match e {
+    Event.Tick(at) => at,
+    Event.Sample(at, value) => {
+        acc.add(stats.clamp(as_float(value), 0.0, 100.0));
+        at;
+    },
+    Event.Stop => 0,
+};
+fun word = (f32 f) -> u32: ret (Bits.Float(f) as Bits.Word).$0;
+fun length = (&Node first) -> u32 {
+    mut u32 count = 1;
+    mut Link at = first.next;
+    loop {
+        match at {
+            Link.End => brk,
+            Link.Next(node) => {
+                count += 1;
+                at = node.next;
+            },
+        }
+    }
+    ret count;
+}
+
+stcfun pipeline = () -> f32 {
+    mut stats.Acc acc = stats.Acc.init();
+    mut u32 last = 0;
+    last += handle(Event.Tick(1), acc.&);
+    last += handle(Event.Sample(2, 10), acc.&);
+    last += handle(Event.Sample(3, -4), acc.&);
+    last += handle(Event.Sample(4, 250.0), acc.&);
+    last += handle(Event.Stop, acc.&);
+    ret acc.mean() + last as f32;
+}
+stc f32 RESULT = pipeline(); #= RESULT 46.66666793823242
+stc u64 TICK_SIZE = sizeof Event.Tick; #= TICK_SIZE 8
+stc u64 SAMPLE_SIZE = sizeof Event.Sample; #= SAMPLE_SIZE 32
+stc u32 ONE_BITS = word(1.0); #= ONE_BITS 1065353216
+
+stcfun chain = () -> u32 {
+    Node c = Node(3, Link.End);
+    Node b = Node(2, Link.Next(c.&));
+    Node a = Node(1, Link.Next(b.&));
+    ret length(a.&);
+}
+stc u32 CHAIN = chain(); #= CHAIN 3
+stc u64 LINK_SIZE = sizeof Link; #= LINK_SIZE 8
+
+main = () {}

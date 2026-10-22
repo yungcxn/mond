@@ -1,0 +1,20 @@
+# a function realized per argument type checks its arms against the generic parameter: in each
+# realization the arms of the other types are dead; a value of a case is covered by that case
+trait Named = !{ fun id = () -> u32; }
+type Cat = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
+type Dog = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v * 2; }
+fun animal = (Named n) -> u32: ret match n { Cat c => c.v, Dog d => d.v * 10, _ => 0 };
+stc u32 animals = animal(Cat(1)) + animal(Dog(2)); #= animals 21
+fun pointed = (&Named n) -> u32: ret match n.* { Cat c => 1, Dog d => 2, _ => 0 };
+stc Cat CAT = Cat(5);
+stc u32 through_pointer = pointed(CAT.&); #= through_pointer 1
+
+type Box = (type T): *(T value);
+fun boxed = (Box b) -> u32: ret match b { Box(u8) x => 8, Box(u32) y => 32, _ => 0 };
+stc u32 box_widths = boxed(Box(u8)(1)) + boxed(Box(u32)(1)); #= box_widths 40
+
+variant Shape = +(Dot, Circle(u32 r), Square(u32 s));
+fun circle = (Shape.Circle c) -> u32: ret match c { Shape.Circle(r) => r };
+stc u32 radius = circle(Shape.Circle(7)); #= radius 7
+
+main = () {}

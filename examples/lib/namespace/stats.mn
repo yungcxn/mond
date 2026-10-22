@@ -1,0 +1,9 @@
+# a small statistics library, used as a namespace
+pub type Acc = *(mut f32 sum = 0.0, mut u32 count = 0) !{
+    fun add = (f32 v) {
+        self.sum += v;
+        self.count += 1;
+    }
+    fun mean = () -> f32: ret if self.count == 0: 0.0 else: self.sum / self.count as f32;
+}
+pub fun clamp = (f32 v, f32 low, f32 high) -> f32: ret if v < low: low else: if v > high: high else: v;

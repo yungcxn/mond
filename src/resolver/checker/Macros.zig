@@ -78,6 +78,84 @@ pub fn expand_roots(self: *Macros) bool {
     return any;
 }
 
+// `name = <include "f">` at top level declares no value but a namespace: the root becomes the top
+// splice of its include, which lands the file's names as ``x`name`` (see Trees.read). `pub` shows
+// it as a name of the file declaring it. a name taken by a namespace stays a declaration, which
+// is then reported as a duplicate
+pub fn declare_namespaces(self: *Macros) void {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    const session = &resolver.session;
+    for (session.namespaces.items) |*namespace| namespace.include = 0;
+    for (resolver.roots) |root| {
+        const declaration = if (tree.kind(root) == .mod_pub) tree.arg(root, 0) else root;
+        const include = namespace_include(tree, declaration);
+        if (include == 0) continue;
+
+        const name = tree.text(tree.arg(declaration, 0), resolver.src_bytes);
+        if (session.namespace_named(name) != null) continue;
+        const index: u32 = @intCast(session.namespaces.items.len);
+        session.namespaces.append(resolver.allocator, .{
+            .name = resolver.allocator.dupe(u8, name) catch @panic("OOM"),
+            .of = index,
+            .file = std.math.maxInt(u32),
+            .is_raw = tree.kind(include) == .include_raw,
+            .include = include,
+        }) catch @panic("OOM");
+        tree.overwrite(root, tree.arg(declaration, 1));
+    }
+}
+
+// the include of `name = <include "f">`, 0 for any other node
+pub fn namespace_include(tree: *const ParseTree, node: NodeId) NodeId {
+    if (tree.kind(node) != .assign or tree.kind(tree.arg(node, 0)) != .identifier) return 0;
+    const value = tree.arg(node, 1);
+    if (tree.kind(value) != .splice) return 0;
+    const include = tree.arg(value, 0);
+    return if (tree.kind(include) == .include or tree.kind(include) == .include_raw) include else 0;
+}
+
+// `name.x` of a namespace is the name ``x`name`` its file landed, before anything looks at it, a
+// namespace of it too (`name.inner.x`). a namespace is no value and is not shadowed
+pub fn reach_namespaces(self: *Macros) void {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    const namespaces = resolver.session.namespaces.items;
+    defer resolver.grow_node_tables();
+    for (namespaces) |namespace| {
+        const taken = resolver.scopes.globals.get(resolver.name_pool.intern(namespace.name));
+        if (taken) |declaration| {
+            const name = resolver.decl_pool.get(declaration, .name);
+            const node = resolver.decl_pool.get(declaration, .node);
+            resolver.doctor.report(.duplicate_declaration, node, name, DeclPool.Index.none);
+        }
+    }
+
+    var landed: std.ArrayList(u8) = .empty;
+    defer landed.deinit(resolver.allocator);
+    for (1..tree.ast_nodes.len()) |i| {
+        const node: NodeId = @intCast(i);
+        if (tree.kind(node) != .member) continue;
+        const owner = tree.arg(node, 0);
+        const member = tree.arg(node, 1);
+        if (tree.kind(owner) != .identifier or tree.kind(member) != .identifier) continue;
+        const owner_text = tree.text(owner, resolver.src_bytes);
+        const namespace = resolver.session.namespace_named(owner_text) orelse continue;
+        // declared in this pass, its file lands in the next one
+        if (namespace.include != 0) continue;
+
+        landed.clearRetainingCapacity();
+        landed.appendSlice(resolver.allocator, tree.text(member, resolver.src_bytes)) catch {
+            @panic("OOM");
+        };
+        landed.append(resolver.allocator, '`') catch @panic("OOM");
+        landed.appendSlice(resolver.allocator, namespaces[namespace.of].name) catch @panic("OOM");
+        // a name the file does not show is undefined where it is used
+        const reached = tree.push_word(.identifier, tree.arg(member, 0), landed.items, 0, false);
+        tree.overwrite(node, reached);
+    }
+}
+
 pub fn infer(self: *Macros, context: *FunctionContext, node: NodeId, expected: Index) Index {
     const resolver = self.owning_resolver();
     return switch (resolver.tree.kind(node)) {

@@ -173,33 +173,19 @@ pub fn define_static_type(
     };
 }
 
-// `A || B`: the members of both sides, a unified variant of the same kind on a side contributes its
-// members. a member is stored in it, or in a packed `A ||| B` a function is realized for it, so it
-// needs a size
+// `A || B`, `A ||| B` (see `StaticPool.unified_of`)
 fn unified_variant_type(self: *Types, context: *FunctionContext, node: NodeId) StaticPool.Index {
     const resolver = self.owning_resolver();
-    const static_pool = &resolver.static_pool;
+    const sides = [_]NodeId{ resolver.tree.arg(node, 0), resolver.tree.arg(node, 1) };
+    const types = [_]StaticPool.Index{
+        self.type_from_node(context, sides[0]),
+        self.type_from_node(context, sides[1]),
+    };
     const is_packed = resolver.tree.kind(node) == .unify_variants_packed;
-    var members: std.ArrayList(StaticPool.Index) = .empty;
-    defer members.deinit(resolver.allocator);
-
-    for ([_]NodeId{ resolver.tree.arg(node, 0), resolver.tree.arg(node, 1) }) |side| {
-        const side_type = self.type_from_node(context, side);
-        if (side_type == .poison_type) continue;
-        const is_same_kind = static_pool.tag(side_type) == .unified_variant_type and
-            static_pool.get(side_type).unified_variant_type.is_packed == is_packed;
-        if (is_same_kind) {
-            const side_members = static_pool.get(side_type).unified_variant_type.members;
-            members.appendSlice(resolver.allocator, side_members) catch @panic("OOM");
-        } else if (static_pool.is_unstorable(side_type)) {
-            _ = resolver.report(.unstorable_outside_parameter, side, side_type, 0);
-        } else {
-            members.append(resolver.allocator, side_type) catch @panic("OOM");
-        }
-    }
-    return static_pool.intern(.{
-        .unified_variant_type = .{ .members = members.items, .is_packed = is_packed },
-    });
+    return switch (resolver.static_pool.unified_of(types[0], types[1], is_packed)) {
+        .unified => |unified| unified,
+        .sizeless_side => |i| resolver.report(.unstorable_outside_parameter, sides[i], types[i], 0),
+    };
 }
 
 // ------------------------------------------------------------------------------------------ //

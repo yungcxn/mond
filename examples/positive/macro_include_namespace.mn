@@ -1,0 +1,21 @@
+# `name = <include "f">` declares a namespace, no value: `name.x` reaches what the file shows, its
+# `pub` declarations (all of them for `includeraw`), and nothing of it is a global name
+math = <include "../lib/math.mn">;
+kit = <include "../lib/macro_kit.mn">;
+everything = <includeraw "../lib/math.mn">;
+again = <include "../lib/math.mn">;    # the same file again: the same declarations
+
+fun gcd = () -> u32: ret 1;            # the program's own gcd, no clash with math.gcd
+stc u32 g = math.gcd(12, 18); #= g 6
+stc u32 l = again.lcm(4, 6); #= l 12
+stc u32 h = everything.hidden(); #= h 7
+stc u32 own = gcd(); #= own 1
+
+# types, cases, values and macros of a namespace
+stc i32 deg = kit.Celsius(degrees = 5).degrees; #= deg 5
+fun calm = (kit.Mood m) -> bool: ret match m { kit.Mood.Calm => true, kit.Mood.Angry => false };
+stc bool cm = calm(kit.Mood.Calm); #= cm true
+stc u32 kv = kit.kit_version; #= kv 3
+stc u32 tw = <kit.twice_of(quote: 21)>; #= tw 42
+
+main = () {}

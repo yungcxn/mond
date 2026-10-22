@@ -101,8 +101,6 @@ pub const macro_syntax = blk: {
 
 pub const post = blk: {
     var t: [256]?*const fn (parser: *Parser, lhs: u32) anyerror!u32 = @splat(null);
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = &eval.templ_unify_variants(.unify_variants);
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_|||")] = &eval.templ_unify_variants(.unify_variants_packed);
     t[@intFromEnum(Lexer.Token.Kind.@"pct_(")] = &eval.fun_call;
     t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = &eval.array_index;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_.")] = &eval.member;
@@ -182,6 +180,9 @@ pub const binary_compute = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_and)] = .{ .f = &eval.templ_binary(.binary_logic_and, 3), .prec = 3 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&&")] = .{ .f = &eval.templ_binary(.binary_logic_and, 3), .prec = 3 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_|")] = .{ .f = &eval.templ_binary(.binary_num_or, 4), .prec = 4 };
+    // types unify looser than any prefix: `&u8 || [2]u8` is `(&u8) || ([2]u8)`
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = .{ .f = &eval.templ_unify_variants(.unify_variants, 4), .prec = 4 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_|||")] = .{ .f = &eval.templ_unify_variants(.unify_variants_packed, 4), .prec = 4 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_^")] = .{ .f = &eval.templ_binary(.binary_num_xor, 5), .prec = 5 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = .{ .f = &eval.templ_binary(.binary_num_and, 6), .prec = 6 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_==")] = .{ .f = &eval.templ_binary(.binary_eq, 7), .prec = 7 };

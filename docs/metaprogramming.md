@@ -233,6 +233,22 @@ stc i32 OK = <positive(quote: 5)>;      #= OK 5
 ```
 
 ```mond
+<include "../examples/lib/nested/fractions.mn">;   # includes ../math.mn, relative to itself
+<include "../examples/lib/math.mn">;               # declared already: nothing more
+stc u32 R = reduced_denominator(6, 8);            #= R 4
+stc u32 G = gcd(12, 18);                          #= G 6
+```
+
+`name = <include "f">` at top level declares a namespace instead: no value, a name that reaches what the file shows as `name.x`, its `pub` declarations (all of them for `includeraw`), functions, types, cases, values and macros alike. None of the file's names is a global name, so they clash with nothing; its C functions keep their names for the linker. A namespace of a file another namespace has reaches the same declarations, and its name is taken like any global name. The file's own namespaces are reached through it when they are `pub` (`pub inner = <include "x.mn">;` gives `name.inner.x`), and a plain `<include>` inside the file still declares globally. A namespace is declared at top level only, in a body it is `include_failed`, and its name is taken everywhere: a global, parameter, local or binder of it is a `duplicate_declaration`.
+
+```mond
+math = <include "../examples/lib/math.mn">;   # a library of the examples
+fun gcd = () -> u32: ret 1;                    # no clash with math.gcd
+stc u32 G = math.gcd(12, 18);                  #= G 6
+stc u32 H = math.hidden();                     #! undefined_name
+```
+
+```mond
 stcfun positive = (ast(i32) e) -> ast(i32): ret match e { quote: -@_ => crash (e, "negated"), _ => e };
 stc i32 NO = <positive(quote: -5)>;     #! crash
 stc ast lib = include "missing.mn";     #! include_failed

@@ -277,6 +277,11 @@ fn declare_function(self: *LLVMLowerer, function_index: u32) void {
     self.function_types[function_index] = lowered_type;
 
     const name = self.name_of(function.decl, "$init");
+    // a c function links by its name as written, also when an include landed it as ``f`ns``
+    if (is_external) {
+        const written = std.mem.sliceTo(&self.name_buffer, 0);
+        if (std.mem.indexOfScalar(u8, written, '`')) |end| self.name_buffer[end] = 0;
+    }
     // the lists of a variadic c function are one symbol of one type
     if (is_external) if (llvm.LLVMGetNamedFunction(self.module, name)) |existing| {
         self.functions[function_index] = existing;

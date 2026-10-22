@@ -1,0 +1,19 @@
+# a namespace shows only what its file makes `pub`, it is no value, it is declared at top level
+# only, and a namespace's own namespaces show only when `pub`
+math = <include "../lib/math.mn">;
+stc u32 private = math.hidden(); #! undefined_name
+stc u32 missing = math.nope; #! undefined_name
+stc u32 bare = math; #! undefined_name
+fun local = () -> u32 { space = <include "../lib/math.mn">; ret space.gcd(1, 2); } #! include_failed
+
+o = <include "../lib/namespace/outer.mn">;
+stc u32 private_space = o.hidden_space.deep(); #! undefined_name
+stc u32 private_nested = o.nested.secret(); #! undefined_name
+everything = <includeraw "../lib/namespace/inner.mn">;
+stc u32 raw_secret = everything.secret();
+# another file's type is another type
+kit = <include "../lib/macro_kit.mn">;
+fun other = (o.Vec v) -> u32: ret v.x;
+stc u32 wrong = other(kit.Celsius(1)); #! type_mismatch
+
+main = () {}

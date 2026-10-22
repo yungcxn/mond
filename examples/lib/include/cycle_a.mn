@@ -1,0 +1,3 @@
+# two libraries including each other
+<include "cycle_b.mn">;
+pub fun cycle_a = () -> u32: ret 1;

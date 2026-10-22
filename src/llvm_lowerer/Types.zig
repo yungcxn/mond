@@ -28,9 +28,6 @@ closure: Type,
 unit: Type,
 length: Type,
 
-// the room of the payloads of a variant or unified variant
-pub const PayloadRoom = struct { size: u64, align_log2: u8 };
-
 pub fn init(
     allocator: std.mem.Allocator,
     context: llvm.LLVMContextRef,
@@ -126,47 +123,12 @@ fn declaring_variant(self: *const Types, type_index: Index) Index {
 }
 
 pub fn tag_type(self: *const Types, variant_or_unified: Index) Index {
-    const pool = self.pool;
-    const variant = self.variant_of(variant_or_unified);
-    if (pool.tag(variant) == .unified_variant_type) return pool.unified_tag_type(variant);
-    const declared = pool.get(self.declaring_variant(variant)).variant_type.tag_type;
-    if (declared == .none or declared == .poison_type) return .u8_type;
-    return declared;
+    return self.pool.stored_tag_type(self.variant_of(variant_or_unified));
 }
 
-pub fn payload_room(self: *Types, variant_or_unified: Index) PayloadRoom {
-    const pool = self.pool;
-    var room: PayloadRoom = .{ .size = 0, .align_log2 = 0 };
-    const variant = self.variant_of(variant_or_unified);
-    // a case of a packed variant has a room for its own payload only
-    if (pool.tag(variant) == .variant_case_type) {
-        const payload = pool.get(variant).variant_case_type.payload;
-        if (payload == .none) return room;
-        const payload_layout = pool.layout(payload);
-        return .{ .size = payload_layout.size, .align_log2 = payload_layout.align_log2 };
-    }
-    const is_unified = pool.tag(variant) == .unified_variant_type;
-    const members: []const Index = if (is_unified)
-        pool.get(variant).unified_variant_type.members
-    else
-        &.{variant};
-    for (members) |member| {
-        // a member that is one case fills the room itself
-        if (is_unified and !pool.brings_cases(member)) {
-            const member_layout = pool.layout(member);
-            room.size = @max(room.size, member_layout.size);
-            room.align_log2 = @max(room.align_log2, member_layout.align_log2);
-            continue;
-        }
-        for (pool.get(member).variant_type.cases) |case| {
-            const payload = pool.get(case).variant_case_type.payload;
-            if (payload == .none) continue;
-            const payload_layout = pool.layout(payload);
-            room.size = @max(room.size, payload_layout.size);
-            room.align_log2 = @max(room.align_log2, payload_layout.align_log2);
-        }
-    }
-    return room;
+// the room of the payloads of a variant or unified variant, a packed case's own
+pub fn payload_room(self: *Types, variant_or_unified: Index) StaticPool.Room {
+    return self.pool.payload_room(self.variant_of(variant_or_unified));
 }
 
 fn lower(self: *Types, type_index: Index) Type {

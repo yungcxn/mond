@@ -1366,25 +1366,18 @@ fn match_expression(self: *HighLowerer, node: NodeId) Ref {
     return self.merged_result(result);
 }
 
-fn tag_type(self: *HighLowerer, scrutinee_type: Index, variant: Index) Index {
-    if (scrutinee_type != .none and self.static_pool.tag(scrutinee_type) == .unified_variant_type) {
-        return self.static_pool.unified_tag_type(scrutinee_type);
-    }
-    const variant_type = self.static_pool.get(variant).variant_type;
-    if (variant_type.tag_type == .none or variant_type.tag_type == .poison_type) return .u8_type;
-    return variant_type.tag_type;
-}
-
-// a unified variant flattens its members: a member's tags are moved into the member's own range
-fn tag_constant(self: *HighLowerer, scrutinee_type: Index, case: Index) Ref {
-    const case_type = self.static_pool.get(case).variant_case_type;
-    const case_tag_type = self.tag_type(scrutinee_type, case_type.variant);
-    if (scrutinee_type != .none and self.static_pool.tag(scrutinee_type) == .unified_variant_type) {
-        const bits = self.static_pool.get(case_type.tag).int_value.bits;
-        const offset = self.static_pool.unified_offset(scrutinee_type, case_type.variant);
-        return self.builder.constant_int(case_tag_type, bits + offset);
-    }
-    return self.constant_of(case_type.tag, case_tag_type);
+// a unified variant flattens its members: a member's tags are moved into the member's own range,
+// a member that is one case (only of a unified variant) has one tag
+fn tag_constant(self: *HighLowerer, scrutinee_type: Index, case_or_member: Index) Ref {
+    const pool = self.static_pool;
+    const is_unified = scrutinee_type != .none and
+        pool.tag(scrutinee_type) == .unified_variant_type;
+    const container = if (is_unified)
+        scrutinee_type
+    else
+        pool.get(case_or_member).variant_case_type.variant;
+    const bits = pool.tag_in(container, case_or_member);
+    return self.builder.constant_int(pool.stored_tag_type(container), bits);
 }
 
 // whether a value of `scrutinee_type` may be of `case`
@@ -1392,15 +1385,10 @@ fn can_hold_case(self: *HighLowerer, scrutinee_type: Index, case: Index) bool {
     const variant = self.static_pool.get(case).variant_case_type.variant;
     if (scrutinee_type == .none or scrutinee_type == variant) return true;
     return switch (self.static_pool.get(scrutinee_type)) {
-        .unified_variant_type => |unified| std.mem.indexOfScalar(
-            Index,
-            unified.members,
-            variant,
-        ) != null,
-        // a value of a case is of no other
+        .unified_variant_type => self.static_pool.is_member(scrutinee_type, variant),
+        // a value of a case is of no other, of any other type (a realization's sibling) no case
         .variant_case_type => scrutinee_type == case,
-        .variant_type => false,
-        else => true,
+        else => false,
     };
 }
 
@@ -1704,22 +1692,12 @@ fn match_type(
     const target_type = self.type_of(binding);
     // `value` as `target_type` after tests branching to `failed`, when it may be one
     const narrowed = blk: {
-        const is_unified = value_type != .none and
-            self.static_pool.tag(value_type) == .unified_variant_type;
-        const is_member = is_unified and std.mem.indexOfScalar(
-            Index,
-            self.static_pool.get(value_type).unified_variant_type.members,
-            target_type,
-        ) != null;
+        const is_member = self.static_pool.is_member(value_type, target_type);
         // a member that is one case has one tag
         if (is_member and !self.static_pool.brings_cases(target_type)) {
-            const unified_tag_type = self.static_pool.unified_tag_type(value_type);
-            const tag = self.builder.emit_refs(.variant_tag, unified_tag_type, value, .none);
-            const offset = self.static_pool.unified_offset(value_type, target_type);
-            const member_tag = self.builder.constant_int(unified_tag_type, offset);
-            const is_member_tag = self.builder.emit_refs(.eq, .bool_type, tag, member_tag);
             const is_that_member = self.builder.new_block();
-            self.builder.branch_if(is_member_tag, is_that_member, failed);
+            const test_member = self.tests_case(value, value_type, target_type);
+            self.builder.branch_if(test_member, is_that_member, failed);
             self.builder.go_to(is_that_member);
             break :blk self.narrow_to_variant(value, value_type, target_type);
         }
@@ -1777,7 +1755,9 @@ fn match_destructuring(
     if (is_case and !self.can_hold_case(value_type, pattern_type)) {
         return self.builder.branch(failed);
     }
-    if (is_case) {
+    // a record a unified variant holds is one of its members
+    const is_member = !is_case and self.static_pool.is_member(value_type, pattern_type);
+    if (is_case or is_member) {
         const case_matched = self.builder.new_block();
         const test_case = self.tests_case(value, value_type, pattern_type);
         self.builder.branch_if(test_case, case_matched, failed);
@@ -1793,7 +1773,10 @@ fn match_destructuring(
         const narrowed = self.narrow_to_variant(value, value_type, case_type.variant);
         const case_index: Ref = @enumFromInt(case_type.case_index);
         break :blk self.builder.emit_refs(.variant_payload, record, narrowed, case_index);
-    } else value;
+    } else if (is_member)
+        self.narrow_to_variant(value, value_type, pattern_type)
+    else
+        value;
     if (record != .none and self.static_pool.tag(record) == .record_type) {
         const arguments = self.resolver.tree.manychildren(self.resolver.tree.arg(pattern, 1));
         for (arguments, 0..) |argument, i| {

@@ -201,6 +201,58 @@ pub fn classify_resolved(resolver: *Resolver, token_class: []?Type, token_modifi
     }
 }
 
+// a namespace's name where it is declared (`math = <include ..>`) and where it is reached (`math.x`,
+// `math.inner.x` for a `pub` namespace of its file): the compiler keeps only the session's names
+pub fn classify_namespaces(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
+    const namespaces = resolver.session.namespaces.items;
+    if (namespaces.len == 0) return;
+    const kinds = analysis.token_kinds;
+    const spans = lexer.tokens.column(.span);
+    // the namespace the name before a `.` reached, whose own namespaces are written ``x`name``
+    var reached: ?Resolver.Session.Namespace = null;
+    for (kinds, 0..) |kind, i| {
+        // a `.` passes on what the name before it reached
+        if (kind == .@"xpct_.") continue;
+        const outer = reached;
+        reached = null;
+        if (kind != .identifier or i + 1 >= kinds.len) continue;
+        const next = kinds[i + 1];
+        if (next != .@"xpct_." and next != .@"xpct_=") continue;
+
+        const span = spans[i];
+        const text = analysis.source[span[0]..span[1]];
+        const named = for (namespaces) |namespace| {
+            const name = namespace.name;
+            if (outer) |of| {
+                const of_name = namespaces[of.of].name;
+                const is_inner = name.len == text.len + 1 + of_name.len and
+                    std.mem.startsWith(u8, name, text) and name[text.len] == '`' and
+                    std.mem.endsWith(u8, name, of_name);
+                if (is_inner) break namespace;
+            } else if (std.mem.eql(u8, name, text)) break namespace;
+        } else continue;
+        analysis.token_class[i] = .namespace;
+        analysis.token_modifiers[i] = 0;
+        if (next == .@"xpct_.") reached = named;
+    }
+
+    // what a namespace reaches is the declaration the name landed as, written where it is reached
+    const tree = resolver.tree;
+    for (0..tree.ast_nodes.len()) |n| {
+        const node: u32 = @intCast(n);
+        if (tree.kind(node) != .identifier or tree.arg(node, 1) == 0) continue;
+        const token = tree.arg(node, 0);
+        if (token < 2 or token >= kinds.len or kinds[token - 1] != .@"xpct_.") continue;
+        if (analysis.token_class[token - 2] != .namespace) continue;
+        const declaration = resolver.node_declarations[node];
+        if (declaration == .none) continue;
+        const kind = resolver.decl_pool.get(declaration, .kind);
+        analysis.token_class[token] = symbol_classes.class_of_kind(kind);
+        analysis.token_modifiers[token] =
+            symbol_classes.declaration_modifiers(resolver, @intFromEnum(declaration));
+    }
+}
+
 // a member of a type is a case, of any other value (a tree too) a field
 fn member_class(resolver: *Resolver, base: u32) Type {
     const is_type = symbol_classes.is_type(resolver, base) or resolver.tree.kind(base) == .type_ast;

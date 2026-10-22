@@ -8,4 +8,7 @@ type Holder = *(Word w);
 fun equal_inside = (Holder a, Holder b) -> bool: ret a == b; #! untagged_variant
 fun as_int = () -> u32: ret Word.Int(3) as u32; #! untagged_variant
 
+# unwrapping needs a tag
+fun unwrap = (Word w) -> u32: ret w ?? 0; #! untagged_variant
+
 main = () {}

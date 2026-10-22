@@ -57,6 +57,7 @@ pub fn symbol_kind(class: Type) u8 {
         .enumMember => 22,
         .@"struct" => 23,
         .type => 26,
+        .namespace => 3,
         .comment,
         .keyword,
         .operator,

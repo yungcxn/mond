@@ -1,0 +1,61 @@
+<include "lib/out.mn">;
+# packed variants at run time: each case its own size, functions and methods realized per case,
+# writes through pointers, templates, self tags, `|||` per member type, and the tag read at the
+# address of a case of any size; each also folded at compile time (`st`)
+mut i64 ONE = 0;
+stcfun st = (i64 v) -> i64: ret v;
+fun same = (i64 compile_time, i64 run_time) {
+    if compile_time == run_time {
+        line_i64(run_time);
+    } else {
+        line_i64(-999999);
+    }
+}
+
+trait Weighed = !{ fun weight = () -> u64; }
+variant Msg = ++(Ping(u8 seq), Data(u64 a, u64 b), Quit) implof Weighed !{
+    fun weight = () -> u64: ret match self.* {
+        Msg.Ping(s) => s as u64,
+        Msg.Data(a, b) => a + b,
+        Msg.Quit => 0,
+    };
+}
+variant Gen = (type T): ++(Val(T), Empty) tagtype u16;
+variant Small = ++(Some(u8), None = 0xFF) tagtype self;
+variant Shape = +(Dot, Circle(u32 r));
+type Pt = *(i32 x, i32 y);
+type Slot = *(&Msg any);
+
+fun twice = (Msg m) -> i64: ret m.weight() as i64 * 2;
+fun weigh = (Weighed w) -> i64: ret w.weight() as i64;
+fun bump = (*Msg m) { match m.* { Msg.Ping(s) => { m.* = Msg.Ping(s + 1); }, _ => {} } }
+fun gen = (Gen g) -> i64: ret match g { Gen(u32).Val(v) => v as i64, _ => 0 };
+fun small = (Small s) -> i64: ret match s { Small.Some(v) => v as i64, Small.None => -1 };
+fun pack = (u32 ||| Shape ||| Pt x) -> i64: ret match x {
+    u32 n => n as i64,
+    Shape.Dot => -1,
+    Shape.Circle(r) => r as i64 * 10,
+    Pt(a, b) => (a + b) as i64,
+};
+fun kind = (Slot s) -> i64: ret tagof s.any as i64;
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    line_u64(sizeof Msg.Ping * 100 + sizeof Msg.Data * 10 + sizeof Msg.Quit);  #> 441
+    same(st(twice(Msg.Data(1, 2))), twice(Msg.Data(ONE as u64, 2)));          #> 6
+    same(st(weigh(Msg.Ping(4))), weigh(Msg.Ping(4 * ONE as u8)));              #> 4
+    mut Msg.Ping ping = Msg.Ping(4 * ONE as u8);
+    bump(ping.&);
+    line_u64(ping.seq as u64);                                                 #> 5
+    same(st(gen(Gen(u32).Val(5))), gen(Gen(u32).Val(5 * ONE as u32)));         #> 5
+    same(st(small(Small.None)), small(if ONE == 1: Small.None else: Small.None));  #> -1
+    line_i64(small(Small.Some(3 * ONE as u8)));                                #> 3
+    same(st(pack(Shape.Circle(2))), pack(Shape.Circle(2 * ONE as u32)));       #> 20
+    line_i64(pack(Pt(ONE as i32, 1)) + pack(3 * ONE as u32) + pack(Shape.Dot));  #> 4
+    Msg.Data data = Msg.Data(1, 1);
+    Msg.Quit quit = Msg.Quit;
+    [3]Slot slots = [Slot(ping.&), Slot(data.&), Slot(quit.&)];
+    mut i64 kinds = 0;
+    for s in slots: kinds = kinds * 10 + kind(s) + ONE;
+    line_i64(kinds);                                                           #> 123
+}

@@ -96,30 +96,20 @@ fn build(self: *Types, node: NodeId) Value {
     const tree = resolver.tree;
     const kind = tree.kind(node);
 
-    // `A || B`, `A ||| B`: the members of both sides, a unified variant of the same kind on either
-    // side contributes its members
+    // `A || B`, `A ||| B` (see `StaticPool.unified_of`)
     if (kind == .unify_variants or kind == .unify_variants_packed) {
+        const sides = [_]NodeId{ tree.arg(node, 0), tree.arg(node, 1) };
+        const types = [_]Index{
+            self.type_of_node(sides[0]) orelse return .poison,
+            self.type_of_node(sides[1]) orelse return .poison,
+        };
         const is_packed = kind == .unify_variants_packed;
-        const mark = interpreter.pool_indices.len;
-        defer interpreter.pool_indices.len = mark;
-        for ([_]NodeId{ tree.arg(node, 0), tree.arg(node, 1) }) |side| {
-            const side_type = self.type_of_node(side) orelse return .poison;
-            const is_same_kind = static_pool.tag(side_type) == .unified_variant_type and
-                static_pool.get(side_type).unified_variant_type.is_packed == is_packed;
-            if (is_same_kind) {
-                const side_members = static_pool.get(side_type).unified_variant_type.members;
-                interpreter.pool_indices.append(side_members);
-            } else if (static_pool.is_unstorable(side_type)) {
-                return interpreter.fail(side, .unstorable_outside_parameter, side_type, 0);
-            } else {
-                interpreter.pool_indices.push(side_type);
-            }
-        }
-
-        const members = interpreter.pool_indices.buffer[mark..interpreter.pool_indices.len];
-        return .pooled(static_pool.intern(.{
-            .unified_variant_type = .{ .members = members, .is_packed = is_packed },
-        }));
+        return switch (static_pool.unified_of(types[0], types[1], is_packed)) {
+            .unified => |unified| .pooled(unified),
+            .sizeless_side => |i| {
+                return interpreter.fail(sides[i], .unstorable_outside_parameter, types[i], 0);
+            },
+        };
     }
 
     const element_node = tree.arg(node, if (kind == .type_array) 1 else 0);
@@ -258,7 +248,8 @@ fn tag(self: *Types, node: NodeId, value: Value, target: Index) Value {
     return .int(target, static_pool.get(case_type.tag).int_value.bits);
 }
 
-// another case of the same variant keeps the payload bits
+// another case of the same variant keeps the payload's bytes, the target case reads them as at run
+// time (bytes past the source's payload are zero)
 fn retag(self: *Types, node: NodeId, value: Value, target: Index) Value {
     const interpreter = self.owning_interpreter();
     const static_pool = &interpreter.owning_resolver().static_pool;
@@ -274,40 +265,92 @@ fn retag(self: *Types, node: NodeId, value: Value, target: Index) Value {
         return interpreter.fail(node, .not_static, 0, 0);
     }
 
-    const field_count = static_pool.get(target_payload).record_type.field_types.len;
     const source_payload = static_pool.get(case).variant_case_type.payload;
     // a case without payload has nothing to give the payload of the target case
     if (source_payload == .none) return interpreter.fail(node, .invalid_cast, case, target);
-    if (static_pool.get(source_payload).record_type.field_types.len != field_count) {
+
+    const source_size = static_pool.layout(source_payload).size;
+    const target_size = static_pool.layout(target_payload).size;
+    const bytes = interpreter.owning_resolver().temporary_slice(u8, @max(source_size, target_size));
+    @memset(bytes, 0);
+    const payload_value: Value = .pooled(static_pool.get(value.index()).variant_value.payload);
+    if (!self.store_bytes(payload_value, source_payload, bytes)) {
         return interpreter.fail(node, .not_static, 0, 0);
     }
-
-    const mark = interpreter.pool_indices.len;
-    defer interpreter.pool_indices.len = mark;
-    const payload_value = static_pool.get(value.index()).variant_value.payload;
-    interpreter.pool_indices.append(static_pool.get(payload_value).aggregate_value.elements);
-
-    for (0..field_count) |i| {
-        const source_field = static_pool.field_type(source_payload, i);
-        const target_field = static_pool.field_type(target_payload, i);
-        if (source_field == target_field) continue;
-
-        const field: Value = .of(static_pool, interpreter.pool_indices.buffer[mark + i]);
-        const reinterpreted = Value.reinterpret(field, target_field) orelse
-            return interpreter.fail(node, .not_static, 0, 0);
-        interpreter.pool_indices.buffer[mark + i] = interpreter.interned(reinterpreted);
-    }
-
-    const payload = static_pool.intern(.{ .aggregate_value = .{
-        .value_type = target_payload,
-        .elements = interpreter.pool_indices.buffer[mark..interpreter.pool_indices.len],
-    } });
+    const target_value = self.load_bytes(target_payload, bytes) orelse
+        return interpreter.fail(node, .not_static, 0, 0);
+    const payload = interpreter.interned(target_value);
     const niche = static_pool.niche_case(target, payload);
     if (niche != .none) return .pooled(niche);
     const retagged = static_pool.intern(.{
         .variant_value = .{ .case = target, .payload = payload },
     });
     return .pooled(retagged);
+}
+
+// a value laid out in `bytes` as its type lays it out in memory: numbers, bools, arrays, records,
+// text. false for anything else (a pointer has no static address)
+fn store_bytes(self: *Types, value: Value, value_type: Index, bytes: []u8) bool {
+    const static_pool = &self.owning_interpreter().owning_resolver().static_pool;
+    const size = static_pool.layout(value_type).size;
+    if (Value.is_number(value_type) or value_type == .bool_type) {
+        const scalar = if (value.is_pooled()) Value.of(static_pool, value.index()) else value;
+        const raw = scalar.raw_bits();
+        for (bytes[0..size], 0..) |*byte, i| byte.* = @truncate(raw >> @intCast(i * 8));
+        return true;
+    }
+    if (!value.is_pooled() or value.is(.none)) return false;
+    switch (static_pool.get(value.index())) {
+        .string_value => |text| @memcpy(bytes[0..text.len], text),
+        .aggregate_value => |aggregate| for (aggregate.elements, 0..) |element, i| {
+            const part_type, const offset = part_at(static_pool, value_type, i) orelse return false;
+            if (!self.store_bytes(.of(static_pool, element), part_type, bytes[offset..])) {
+                return false;
+            }
+        },
+        else => return false,
+    }
+    return true;
+}
+
+// a value of `value_type` read from the bytes `store_bytes` lays out, null for what it cannot
+fn load_bytes(self: *Types, value_type: Index, bytes: []const u8) ?Value {
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
+    const size = static_pool.layout(value_type).size;
+    if (Value.is_number(value_type) or value_type == .bool_type) {
+        var raw: u64 = 0;
+        for (bytes[0..size], 0..) |byte, i| raw |= @as(u64, byte) << @intCast(i * 8);
+        return Value.from_raw(value_type, raw);
+    }
+    const is_record = static_pool.tag(value_type) == .record_type;
+    if (!is_record and static_pool.tag(value_type) != .array_type) return null;
+
+    const mark = interpreter.pool_indices.len;
+    defer interpreter.pool_indices.len = mark;
+    const count = if (is_record)
+        static_pool.get(value_type).record_type.field_types.len
+    else
+        static_pool.static_length(value_type) orelse return null;
+    // by index: interning a part may move the type's lists
+    for (0..count) |i| {
+        const part_type, const offset = part_at(static_pool, value_type, i).?;
+        const part = self.load_bytes(part_type, bytes[offset..]) orelse return null;
+        interpreter.pool_indices.push(interpreter.interned(part));
+    }
+    return .pooled(static_pool.intern(.{ .aggregate_value = .{
+        .value_type = value_type,
+        .elements = interpreter.pool_indices.buffer[mark..interpreter.pool_indices.len],
+    } }));
+}
+
+// the type of part `i` of a record or array and where it starts, null for any other type
+fn part_at(static_pool: *StaticPool, aggregate_type: Index, i: usize) ?struct { Index, u64 } {
+    return switch (static_pool.get(aggregate_type)) {
+        .record_type => |record| .{ record.field_types[i], static_pool.field_offset(record, i) },
+        .array_type => |array| .{ array.element, i * static_pool.layout(array.element).size },
+        else => null,
+    };
 }
 
 // a narrowed array is a view on the cells of the original, from the start the target names

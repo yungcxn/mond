@@ -68,7 +68,7 @@ pub fn main(init: std.process.Init) !void {
     const rule = "\n{s} (built in modes none, safe, default, aggressive and minsize, " ++
         "must print its `#>` lines and end as its `#?` lines say)\n";
     try writer.print(bold ++ rule ++ reset, .{directory_path});
-    var counts: [2]usize = .{ 0, 0 };
+    var jobs: std.ArrayList(Job) = .empty;
     for (names.items) |name| {
         const matches_filters = for (filters) |filter| {
             if (std.mem.indexOf(u8, name, filter) != null) break true;
@@ -79,11 +79,24 @@ pub fn main(init: std.process.Init) !void {
         const expected = try expected_output(arena, source);
         const build_with = try build_arguments(arena, source);
         const ending = try expected_ending(arena, source);
-        for (modes) |mode| {
-            const passed =
-                try check(writer, arena, io, mond, name, mode, expected, build_with, ending);
-            counts[@intFromBool(!passed)] += 1;
-        }
+        for (modes) |mode| try jobs.append(arena, .{
+            .name = name,
+            .mode = mode,
+            .expected = expected,
+            .arguments = build_with,
+            .ending = ending,
+        });
+    }
+
+    // a build per task on the cores of the machine, reported in order once all ran
+    var group: std.Io.Group = .init;
+    for (jobs.items) |*job| group.async(io, Job.run, .{ job, io, mond });
+    try group.await(io);
+    var counts: [2]usize = .{ 0, 0 };
+    for (jobs.items) |job| {
+        try writer.writeAll(job.output);
+        std.heap.smp_allocator.free(job.output);
+        counts[@intFromBool(!job.passed)] += 1;
     }
 
     const failed = counts[1];
@@ -145,6 +158,41 @@ fn build_arguments(arena: std.mem.Allocator, source: []const u8) ![]const []cons
     }
     return arguments.items;
 }
+
+// a program built in one mode and run as a task of its own, keeping only what it reports
+const Job = struct {
+    name: []const u8,
+    mode: []const u8,
+    expected: []const u8,
+    arguments: []const []const u8,
+    ending: Ending,
+    output: []const u8 = "",
+    passed: bool = false,
+
+    fn run(job: *Job, io: std.Io, mond: []const u8) void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var output: Writer.Allocating = .init(allocator);
+        const writer = &output.writer;
+        const checked = check(
+            writer,
+            allocator,
+            io,
+            mond,
+            job.name,
+            job.mode,
+            job.expected,
+            job.arguments,
+            job.ending,
+        );
+        job.passed = checked catch |failure| blk: {
+            report(writer, job.name, job.mode, @errorName(failure), "") catch {};
+            break :blk false;
+        };
+        job.output = std.heap.smp_allocator.dupe(u8, output.written()) catch "";
+    }
+};
 
 fn check(
     writer: *Writer,

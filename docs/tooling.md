@@ -11,7 +11,7 @@ zig build                           # builds ./mond (needs llvm and lld, see bel
 ./mond -b app.mn -lc -lm            # with the C library and libm
 ./mond -b app.mn -p tree,ir,llvm    # also prints stages: tree, decls, ir, llvm
 ./mond -b app.mn -i add '#3' ':12'  # inspect declarations by name, index or line
-zig build test [-- filter]          # examples, docs, then the backend tests
+zig build test [-- filter]          # examples, docs, then the backend tests, a file per core
 zig build test-backend [-- filter]  # only the programs of examples/backend
 zig build lsp                       # the language server, into lsp/vscode and lsp/vim
 ```
@@ -93,7 +93,7 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `uninferable_type` | nothing fixes a type (`[]`, a runtime loop length, mutual recursion) |
 | `not_a_type` | a type was expected |
 | `not_callable` | something that isn't a function is called |
-| `invalid_operand` | an operator on something it doesn't take: `lenof` of no array, `tagof` of no variant value |
+| `invalid_operand` | an operator on something it doesn't take: `lenof` of no array, `tagof` of no variant value, `sizeof` or `alignof` of a trait or packed variant |
 | `wrong_arity` | the wrong number of arguments, children or fields |
 | `unknown_named_argument` | no parameter or field has that name |
 | `no_matching_overload` / `ambiguous_overload` | no overload fits / several fit equally |
@@ -104,7 +104,7 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `assertsize_failed` | the size differs from `assertsize` |
 | `tag_overflow` | a tag doesn't fit the tag type |
 | `self_tag_without_niche` | `tagtype self` without exactly one payload case of one scalar field (integer, `bool`, float, pointer) |
-| `untagged_variant` | a case matched, `tagof`, `==` or a case `as` an int on a variant without a tag (`tagtype _`) |
+| `untagged_variant` | a case matched, `tagof`, `==`, `??` or a case `as` an int on a variant without a tag (`tagtype _`) |
 | `trait_member_missing` / `trait_signature_mismatch` | an implementation lacks a member / differs from the trait |
 | `no_deinit` | `deinit` on a value without one |
 | `not_static` | a compile-time value depends on runtime |
@@ -134,5 +134,5 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `invalid_main` | `main` has another signature than `()` or `(argc, &&u8 argv)`, or another result than nothing, an integer or `never` |
 | `stray_unquote` | `@` outside a quote |
 | `frozen_declaration` | a write to a declaration that is already resolved, or a write outside a splice |
-| `include_failed` | the file can't be read, lexed or parsed |
+| `include_failed` | the file can't be read, lexed or parsed, or a namespace is declared in a body (`NamespaceInBody`) |
 | `endless_expansion` | more than 64 expansion passes |

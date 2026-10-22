@@ -1,0 +1,3 @@
+# a private name another library has too: each library keeps its own
+fun helper = () -> u32: ret 10;
+pub fun twin_a = () -> u32: ret helper();

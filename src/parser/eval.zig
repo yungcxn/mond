@@ -197,7 +197,7 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
                 }
                 const def: Node.LayoutStruct(.type_array) = .{
                     .length = parent,
-                    .type = try any(p, .forbid_assign, 0),
+                    .type = try any(p, .forbid_assign, lookahead.prec_unary + 1),
                 };
                 parent = p.tree.push_node(.type_array);
                 p.tree.set_children(parent, def);
@@ -207,7 +207,7 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
     } else {
         p.tok_cursor += 1; // consume "]"
         if (try type_follows(p)) {
-            parent = p.tree.push_node_with(.type_array_unlengthed, .{ .type = try any(p, .forbid_assign, 0) });
+            parent = p.tree.push_node_with(.type_array_unlengthed, .{ .type = try any(p, .forbid_assign, lookahead.prec_unary + 1) });
         } else {
             parent = p.tree.push_node(.array_empty);
         }
@@ -597,10 +597,10 @@ pub fn trait(p: *Parser) anyerror!NodeId {
     return p.tree.push_node_with(.def_trait, .{ .body = body });
 }
 
-pub fn templ_unify_variants(comptime kind: Node.Kind) fn (parser: *Parser, lhs: NodeId) anyerror!NodeId {
+pub fn templ_unify_variants(comptime kind: Node.Kind, comptime prec: u8) fn (parser: *Parser, lhs: NodeId) anyerror!NodeId {
     return struct {
         pub fn eval(p: *Parser, lhs: NodeId) anyerror!NodeId {
-            return p.tree.push_node_with(kind, .{ .left_type = lhs, .right_type = try any(p, .forbid_assign, 0) });
+            return p.tree.push_node_with(kind, .{ .left_type = lhs, .right_type = try any(p, .forbid_assign, prec + 1) });
         }
     }.eval;
 }

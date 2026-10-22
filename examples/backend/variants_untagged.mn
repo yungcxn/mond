@@ -1,0 +1,32 @@
+<include "lib/out.mn">;
+# variants without a tag at run time: the cases share their room, a cast to a case reads its bytes;
+# in arrays and records, written through pointers, with methods, from a template; the same bytes
+# read while compiling (`st`)
+mut u32 ONE = 0;
+stcfun st = (u64 v) -> u64: ret v;
+variant Word = +(Int(u32), Float(f32), Bytes([4]u8)) tagtype _ !{
+    fun bits = () -> u32: ret (self.* as Word.Int).$0;
+}
+variant Raw = (type T): +(Val(T), Bytes([8]u8)) tagtype _;
+type Holder = *(u8 kind, Word word);
+
+fun set_float = (*Word w, f32 f) { w.* = Word.Float(f); }
+fun byte_of = (Word w, u64 i) -> u64: ret (w as Word.Bytes).$0[i] as u64;
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc;
+    line_u64(sizeof Word * 10 + sizeof Holder);                      #> 48
+    mut [3]Word words = [Word.Int(ONE), Word.Float(1.0), Word.Bytes([1, 2, 0, 0])];
+    line_u64(words[0].bits() as u64);                                #> 1
+    line_u64(words[1].bits() as u64);                                #> 1065353216
+    line_u64(words[2].bits() as u64);                                #> 513
+    set_float(words[0].&, 2.0);
+    line_u64(words[0].bits() as u64);                                #> 1073741824
+    mut Holder h = Holder(7, Word.Int(0x01020304 * ONE));
+    line_u64(byte_of(h.word, 0) * 100 + byte_of(h.word, 3));         #> 401
+    Raw(u64) r = Raw(u64).Val(0x0102 * ONE as u64);
+    line_u64((r as Raw(u64).Bytes).$0[1] as u64);                    #> 1
+    u64 folded = st(byte_of(Word.Int(0x01020304), 1) * 10 + byte_of(Word.Float(1.0), 3));
+    u64 run = byte_of(Word.Int(0x01020304 * ONE), 1) * 10 + byte_of(Word.Float(ONE as f32), 3);
+    line_u64(if folded == run: run else: 0);                         #> 93
+}

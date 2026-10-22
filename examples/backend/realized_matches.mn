@@ -1,0 +1,20 @@
+<include "lib/out.mn">;
+<include "lib/private_c.mn">;
+# functions realized per argument type take only the arms of their own type at run time
+mut u32 ONE = 0;
+trait Named = !{ fun id = () -> u32; }
+type Cat = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
+type Dog = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v * 2; }
+fun animal = (Named n) -> u32: ret match n { Cat c => c.v, Dog d => d.v * 10, _ => 0 };
+type Box = (type T): *(T value);
+fun boxed = (Box b) -> u32: ret match b { Box(u8) x => x.value as u32, Box(u32) y => y.value * 2, _ => 0 };
+variant Shape = +(Dot, Circle(u32 r));
+fun circle = (Shape.Circle c) -> u32: ret match c { Shape.Circle(r) => r };
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc;
+    line_u64((animal(Cat(ONE)) + animal(Dog(2 * ONE))) as u64);              #> 21
+    line_u64((boxed(Box(u8)(ONE as u8)) + boxed(Box(u32)(3 * ONE))) as u64);  #> 7
+    line_u64(circle(Shape.Circle(7 * ONE)) as u64);                         #> 7
+    shout();                                                                #> !
+}

@@ -33,4 +33,48 @@ stc i64 of_global = describe(global); #= of_global 25
 fun is_byte = (Wider w) -> bool: ret match w { u8 b => true, i64 i => false, bool b => false };
 stc bool byte = is_byte(3 as u8); #= byte true
 
+# `||` binds looser than prefixes: `&u8 || [2]u8` unifies a pointer and an array
+variant Odd = &u8 || [2]u8 || *[]u8;
+stc u64 odd_size = sizeof Odd; #= odd_size 16
+# a member appears once, a single member is the type itself
+variant Once = u32 || u32;
+stc u64 once_size = sizeof Once; #= once_size 4
+variant Merged = (u8 || u32) || (u32 || f32);
+fun merged = (Merged m) -> u32: ret match m { u8 a => 1, u32 b => 2, f32 c => 3 };
+stc u32 merged_u8 = merged(7); #= merged_u8 1
+stc u32 merged_u32 = merged(300); #= merged_u32 2
+stc u32 merged_f32 = merged(-1); #= merged_f32 3
+# a stcfun makes unified variants of type parameters
+stcfun Either = (type A, type B): ret A || B;
+fun either = (Either(u32, f32) e) -> u32: ret match e { u32 n => n, f32 f => 0 };
+stc u32 either_left = either(4); #= either_left 4
+stc u64 same_both = sizeof Either(u8, u8); #= same_both 1
+# a template whose body is a type expression computes it the same way
+variant Choice = (type A, type B): A || B;
+fun choice = (Choice(u8, i64) c) -> i64: ret match c { u8 b => b as i64, i64 i => i };
+stc i64 chosen = choice(-4) + choice(5); #= chosen 1
+variant Number = (type T): T ||| f32;
+fun doubled = (Number(u32) n) -> f32: ret match n { u32 i => i as f32 * 2.0, f32 f => f * 2.0 };
+stc f32 doubles = doubled(2) + doubled(0.5); #= doubles 5
+
+# records destructure, templates and self-tagged variants are members, a record holds them
+type Box = (type T): *(T value);
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
+variant Holdable = Opt8 || Box(u32) || Pt;
+fun hold = (Holdable h) -> i64: ret match h {
+    Opt8.Some(v) => v as i64,
+    Opt8.None => -1,
+    Box(u32) b => b.value as i64 * 1000,
+    Pt(x, 2) => x as i64 + 500,
+    Pt(x, y) => (x + y) as i64,
+};
+# a self-tagged member keeps its tags (None = 0xFF), the next member's start after them
+fun hold_tag = (Holdable h) -> u16: ret tagof h;
+stc u16 none_tag = hold_tag(Opt8.None); #= none_tag 255
+stc u16 box_tag = hold_tag(Box(u32)(1)); #= box_tag 256
+stc i64 held = hold(Pt(4, 2)) + hold(Pt(1, 5)) + hold(Box(u32)(2)) + hold(Opt8.None); #= held 2509
+type Shelf = *(Holdable item, [2]Holdable more);
+stc Shelf SHELF = Shelf(Opt8.Some(3), [Pt(1, 1), Box(u32)(1)]);
+stc i64 shelved = hold(SHELF.item) + hold(SHELF.more[1]); #= shelved 1003
+
 main = () {}

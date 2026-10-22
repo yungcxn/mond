@@ -1,0 +1,11 @@
+# the arms are checked against the generic parameter, so a type it can't be is a mismatch there;
+# a trait is an open set, its match needs `_`; a value of a case has no other cases
+trait Named = !{ fun id = () -> u32; }
+type Cat = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
+fun open_set = (Named n) -> u32: ret match n { Cat c => 1 }; #! non_exhaustive_match
+fun no_implementer = (Named n) -> u32: ret match n { u8 x => 1, _ => 0 }; #! type_mismatch
+variant Shape = +(Dot, Circle(u32 r));
+fun other_case = (Shape.Circle c) -> u32: ret match c { Shape.Circle(r) => r, Shape.Dot => 0 }; #! type_mismatch
+fun after_case = (Shape.Circle c) -> u32: ret match c { Shape.Circle(r) => r, _ => 0 }; #! redundant_match_arm
+
+main = () {}

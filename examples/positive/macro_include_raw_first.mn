@@ -1,0 +1,8 @@
+# the first include of a file counts: a raw one first shows its private names, the plain one after
+# adds nothing
+<includeraw "../lib/math.mn">;
+<include "../lib/math.mn">;
+stc u32 hidden_shown = hidden(); #= hidden_shown 7
+stc u32 public = lcm(4, 6); #= public 12
+
+main = () {}

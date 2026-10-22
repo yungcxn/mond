@@ -1,0 +1,16 @@
+# a library made to be a namespace: a shown and a private namespace of its own, values, types,
+# overloads, a template and a macro whose code names a private function of the library
+pub nested = <include "inner.mn">;
+hidden_space = <include "inner.mn">;
+pub fun via = () -> u32: ret hidden_space.deep() + nested.deep();
+
+pub stc answer = 42;
+pub mut u32 counter = 0;
+pub type Vec = *(u32 x, u32 y) !{ fun sum = () -> u32: ret self.x + self.y; }
+pub variant Sign = +(Neg, Pos);
+pub type Box = (type T): *(T value);
+pub fun pick = (u32 v) -> u32: ret v;
+pub fun pick = (bool b) -> u32: ret if b: 1 else: 0;
+
+fun helper = (u32 v) -> u32: ret v + 100;
+pub stcfun call_helper = (ast(u32) e) -> ast(u32): ret quote: helper(@e);

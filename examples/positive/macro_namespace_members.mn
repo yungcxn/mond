@@ -1,0 +1,28 @@
+# what a namespace reaches: values, types in every position, cases in patterns, overloads,
+# templates, function values, namespaces of the library itself and macros whose code names the
+# library's private functions
+o = <include "../lib/namespace/outer.mn">;
+same = <include "../lib/namespace/outer.mn">;    # the same file: the same declarations
+<include "../lib/namespace/outer.mn">;           # a plain include of it besides: its own copy
+
+stc u32 answer_of = o.answer; #= answer_of 42
+stc u32 both = o.via(); #= both 6
+stc u32 nested_deep = o.nested.deep(); #= nested_deep 3
+stc u32 from_macro = <o.call_helper(quote: 1)>; #= from_macro 101
+stc u32 plain_copy = via() + answer; #= plain_copy 48
+
+fun sum_of = (o.Vec v) -> u32: ret v.sum();
+type Pair = *(o.Vec first, [2]o.Vec rest);
+stc Pair PAIR = Pair(o.Vec(1, 2), [o.Vec(3, 4), o.Vec(5, 6)]);
+stc u32 sums = sum_of(PAIR.first) + sum_of(PAIR.rest[1]); #= sums 14
+fun aliases = (same.Vec v) -> o.Vec: ret v;      # one type under both names
+stc u32 aliased = aliases(o.Vec(7, 8)).x; #= aliased 7
+
+fun sign = (o.Sign s) -> i32: ret match s { o.Sign.Neg => -1, o.Sign.Pos => 1 };
+stc i32 signs = sign(o.Sign.Pos) * 10 + sign(o.Sign.Neg); #= signs 9
+stc u32 picks = o.pick(5) + o.pick(true); #= picks 6
+stc u32 boxed = o.Box(u32)(9).value; #= boxed 9
+stc via_value = o.via;
+stc u32 called = via_value(); #= called 6
+
+main = () {}

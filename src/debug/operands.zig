@@ -40,7 +40,9 @@ pub fn print_operands(
             .name => {
                 const known = value < resolver.name_pool.text_to_name.count();
                 const text = if (known) resolver.name_pool.text_of(@enumFromInt(value)) else "?";
-                try writer.print(ink.bold ++ "`{s}`" ++ ink.reset, .{text});
+                // a name the compiler made (hygiene, a namespace's ``x`name``) shows as written
+                const written = text[0 .. std.mem.indexOfScalar(u8, text, '`') orelse text.len];
+                try writer.print(ink.bold ++ "`{s}`" ++ ink.reset, .{written});
             },
             .type => {
                 try writer.writeAll(ink.type_color);

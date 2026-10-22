@@ -1,0 +1,51 @@
+<include "lib/out.mn">;
+# unified variants of any types at run time: tags, rooms, members told apart by their type,
+# records destructured, held in arrays and records, compared, and folded at compile time (`st`)
+mut i64 ONE = 0;
+stcfun st = (i64 v) -> i64: ret v;
+fun same = (i64 compile_time, i64 run_time) {
+    if compile_time == run_time {
+        line_i64(run_time);
+    } else {
+        line_i64(-999999);
+    }
+}
+
+type Pt = *(i32 x, i32 y);
+type Box = (type T): *(T value);
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
+variant Mixed = Opt8 || [2]u8 || &u8 || Box(u32) || Pt;
+stcfun Either = (type A, type B): ret A || B;
+type Holder = *(Mixed m, Either(u32, f32) e);
+
+fun show = (Mixed m) -> i64: ret match m {
+    Opt8.Some(v) => v as i64,
+    Opt8.None => -1,
+    [2]u8 a => (a[0] * 10 + a[1]) as i64,
+    &u8 p => p[0] as i64,
+    Box(u32) b => b.value as i64 * 1000,
+    Pt(x, 2) => x as i64 + 500,
+    Pt(x, y) => (x + y) as i64,
+};
+fun either = (Either(u32, f32) e) -> i64: ret match e { u32 n => n as i64, f32 f => (f * 2.0) as i64 };
+fun kind = (Mixed m) -> i64: ret tagof m as i64;
+fun equal = (Either(u32, f32) a, Either(u32, f32) b) -> i64: ret (a == b) as i64;
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    line_u64(sizeof Mixed * 100 + sizeof Either(u32, f32));             #> 1608
+    [2]u8 pair = [1, 2 * ONE as u8];
+    mut [6]Mixed all = [Opt8.Some(7), Opt8.None, pair, "Q".& as &u8, Box(u32)(3), Pt(4, 2)];
+    # a self-tagged member keeps its tags (None = 0xFF), the next member's start after them
+    mut i64 total = 0;
+    for m in all: total = total * 1000 + kind(m);
+    line_i64(total);                                                     #> 255256257258259
+    same(st(show(Pt(4, 2))), show(Pt(4 * ONE as i32, 2)));               #> 504
+    same(st(show(Pt(1, 5))), show(Pt(1, 5 * ONE as i32)));               #> 6
+    same(st(show(Opt8.None)), show(all[1]));                             #> -1
+    line_i64(show(all[2]) + show(all[3]));                               #> 93
+    same(st(show(Box(u32)(3))), show(all[4]));                           #> 3000
+    Holder h = Holder(Pt(9, 9 * ONE as i32), 2.5);
+    line_i64(show(h.m) + either(h.e));                                   #> 23
+    line_i64(equal(3, 3) + equal(3, 1.5) * 10 + equal(1.5, 1.5) * 100);  #> 101
+}

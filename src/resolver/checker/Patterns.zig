@@ -159,14 +159,12 @@ fn pattern(
         // literals, ranges and constant paths (`Toggle.On`): any expression
         else => self.value_pattern(context, node, scrutinee_type),
     };
-    // nothing tells a case of a variant without a tag, unless the value is known to be of it: a
-    // packed variant's is, per realization
+    // nothing tells a case of a variant without a tag, unless the value is known to be of it
     const static_pool = &resolver.static_pool;
     const pattern_type = resolver.node_types[node];
     const tells_untagged_case = pattern_type != scrutinee_type and pattern_type != .none and
         static_pool.tag(pattern_type) == .variant_case_type and
-        static_pool.is_untagged(pattern_type) and
-        !static_pool.is_unstorable(static_pool.get(pattern_type).variant_case_type.variant);
+        static_pool.is_untagged_at_run_time(pattern_type);
     if (tells_untagged_case) resolver.doctor.report(.untagged_variant, node, pattern_type, 0);
     return takes_every_value;
 }

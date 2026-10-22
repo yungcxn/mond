@@ -1,0 +1,3 @@
+# a library including itself: the file is declared once, so it ends there
+<include "self.mn">;
+pub fun itself = () -> u32: ret 5;

@@ -1,0 +1,10 @@
+# a plain include first keeps the private names hidden, a raw one after adds nothing; a library's
+# failing include is reported at the include that reached it; twins keep their private names
+<include "../lib/math.mn">;
+<includeraw "../lib/math.mn">;
+stc u32 still_hidden = hidden(); #! undefined_name
+<include "../lib/include/broken_nested.mn">; #! include_failed
+<include "../lib/include/twin_a.mn">;
+stc u32 private_twin = helper(); #! undefined_name
+
+main = () {}

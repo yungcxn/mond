@@ -4,6 +4,7 @@ const Resolver = @import("../../Resolver.zig");
 const NamePool = @import("../NamePool.zig");
 const StaticPool = @import("../StaticPool.zig");
 const DeclPool = @import("../DeclPool.zig");
+const Macros = @import("Macros.zig");
 const target = @import("../../mond.zig").target;
 const FunctionContext = Resolver.FunctionContext;
 const NodeId = ParseTree.NodeId;
@@ -139,6 +140,14 @@ pub fn declare_local(
     const resolver = self.owning_resolver();
     const declaration = resolver.decl_pool.push(name, node, kind, value_type, .{});
     resolver.scopes.bind(name, declaration);
+    // `ns.x` reaches a namespace wherever it is written (see Macros.reach_namespaces), so no local
+    // takes its name
+    const session = &resolver.session;
+    if (session.namespaces.items.len > 0 and name != .none and
+        session.namespace_named(resolver.name_pool.text_of(name)) != null)
+    {
+        resolver.doctor.report(.duplicate_declaration, node, name, DeclPool.Index.none);
+    }
     return declaration;
 }
 
@@ -443,14 +452,14 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
     if (kind == .function and !is_global) resolver.initialization.import_outer(0, outer, 0);
 
     const self_count = decl_pool.implicit_self_count(declaration);
-    // a trait's method realized for an implementing type has `self` of that type
+    // a method of a trait or a packed variant realized for the receiver's type has `self` of it
     const owner = self.owner_of(declaration);
-    const is_trait_method = self_count == 1 and owner != .none and
-        static_pool.tag(owner) == .trait_type;
+    const is_realized_method = self_count == 1 and owner != .none and
+        static_pool.is_parameter_only(owner);
     var context = FunctionContext{
         .declaration = declaration,
         .return_type = static_pool.get(function_type).function_type.return_type,
-        .self_type = if (is_trait_method)
+        .self_type = if (is_realized_method)
             static_pool.pointee(static_pool.get(function_type).function_type.parameters[0])
         else
             owner,
@@ -567,6 +576,23 @@ pub fn check_statement(
     const static_pool = &resolver.static_pool;
     const decl_pool = &resolver.decl_pool;
     const statement = Stmt.from_node(resolver, node);
+
+    // a namespace is declared at top level only; a global one left as a declaration took a name
+    // taken already (see Macros.declare_namespaces), it is checked as its own declaration
+    const namespace_include = Macros.namespace_include(resolver.tree, node);
+    if (namespace_include != 0) {
+        _ = self.declare(statement.assignees[0], node, .variable, .poison_type, statement.flags);
+        if (context.declaration != .none and decl_pool.get(context.declaration, .node) == node) {
+            return .poison_type;
+        }
+        const path = resolver.tree.arg(namespace_include, 0);
+        const file = if (resolver.tree.kind(path) == .string)
+            resolver.name_pool.intern_copy(resolver.tree.text(path, resolver.src_bytes))
+        else
+            .empty;
+        const because = resolver.name_pool.intern("NamespaceInBody");
+        return resolver.report(.include_failed, namespace_include, file, because);
+    }
 
     // in an interpreted body a type declaration is evaluated right away
     if (context.is_interpreted and statement.kind.is_type_declaration()) {
@@ -947,14 +973,17 @@ fn type_declaration_kind(
     return .type_alias;
 }
 
-// what a stcfun declared as `type` / `variant` / `trait` produces
+// what a stcfun declared as `type` / `variant` / `trait` produces. one whose body is a type
+// expression (`(type A, type B): A || B`, `(type T): [2]T`) computes that type like any stcfun
 pub fn template_kind(self: *Declarations, declaration: DeclPool.Index) DeclPool.Entry.Kind {
     const resolver = self.owning_resolver();
     const tree = resolver.tree;
 
     const declaration_node = resolver.decl_pool.get(declaration, .node);
     if (tree.kind(declaration_node) != .assign_typed) return .variable;
-    if (tree.kind(tree.arg(declaration_node, 1)) != .def_fun) return .variable;
+    const value = tree.arg(declaration_node, 1);
+    if (tree.kind(value) != .def_fun) return .variable;
+    if (tree.props(tree.arg(value, 1)).type_expr) return .variable;
 
     return switch (tree.kind(tree.arg(tree.arg(declaration_node, 0), 0))) {
         .type_type => .record,

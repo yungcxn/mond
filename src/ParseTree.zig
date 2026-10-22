@@ -307,6 +307,8 @@ pub const Node = struct {
             .type_array_unlengthed,
             .def_fun_declaration,
             .typeof,
+            .unify_variants,
+            .unify_variants_packed,
         }) |k| t[@intFromEnum(k)].type_expr = true;
 
         for ([_]Kind{

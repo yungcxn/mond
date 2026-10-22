@@ -31,6 +31,13 @@
 		"configurationDefaults": {
 			"[mond]": {
 				"editor.semanticHighlighting.enabled": true
+			},
+			"editor.semanticTokenColorCustomizations": {
+				"rules": {
+					"namespace:mond": {
+						"italic": true
+					}
+				}
 			}
 		},
 		"semanticTokenScopes": [

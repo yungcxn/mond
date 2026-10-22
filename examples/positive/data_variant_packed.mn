@@ -38,4 +38,48 @@ type Dog = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
 fun animal = (Named n) -> u32: ret match n { Cat c => 1, Dog d => 2, _ => 0 };
 stc u32 animals = animal(Cat(1)) + animal(Dog(1)) * 10; #= animals 21
 
+# methods and traits: `self` is realized per case like a parameter
+trait Weighed = !{ fun weight = () -> u64; }
+variant Job = ++(Short(u8 steps), Long(u64 a, u64 b), Idle) implof Weighed !{
+    fun weight = () -> u64: ret match self.* {
+        Job.Short(s) => s as u64,
+        Job.Long(a, b) => a + b,
+        Job.Idle => 0,
+    };
+}
+fun forward = (Job j) -> u64: ret j.weight();
+fun twice = (Job j) -> u64: ret forward(j) * 2;
+fun weigh = (Weighed w) -> u64: ret w.weight();
+stc u64 forwarded = twice(Job.Long(1, 2)); #= forwarded 6
+stc u64 through_trait = weigh(Job.Short(4)); #= through_trait 4
+stcfun bumped = () -> u8 {
+    mut Job.Short j = Job.Short(4);
+    bump(j.&);
+    ret j.steps;
+}
+fun bump = (*Job j) { match j.* { Job.Short(s) => { j.* = Job.Short(s + 1); }, _ => {} } }
+stc u8 after_bump = bumped(); #= after_bump 5
+
+# templates, written tag types and self tags
+variant Gen = (type T): ++(Val(T), Empty) tagtype u16;
+variant Small = ++(Some(u8), None = 0xFF) tagtype self;
+stc u64 gen_size = sizeof Gen(u32).Val; #= gen_size 8
+stc u64 gen_empty = sizeof Gen(u32).Empty; #= gen_empty 2
+stc u64 small_some = sizeof Small.Some; #= small_some 1
+fun small = (Small s) -> i32: ret match s { Small.Some(v) => v as i32, Small.None => -1 };
+stc i32 smalls = small(Small.Some(3)) + small(Small.None) * 10; #= smalls -7
+
+# `|||` of variants and records is realized per member type, a case per its variant
+variant Shape = +(Dot, Circle(u32 r));
+type Pt = *(i32 x, i32 y);
+fun pack = (u32 ||| Shape ||| Pt x) -> i64: ret match x {
+    u32 n => n as i64,
+    Shape.Dot => -1,
+    Shape.Circle(r) => r as i64 * 10,
+    Pt(a, b) => (a + b) as i64,
+};
+stc i64 packs = pack(3) + pack(Shape.Circle(2)) + pack(Pt(1, 1)) + pack(Shape.Dot); #= packs 24
+fun size_of_member = (u32 ||| [3]u32 x) -> u64: ret sizeof typeof x;
+stc u64 member_sizes = size_of_member(1) * 10 + size_of_member([1, 2, 3]); #= member_sizes 52
+
 main = () {}

@@ -15,4 +15,26 @@ fun doubled = (OptF32 f) -> f32: ret match f { OptF32.Some(v) => v * 2.0, OptF32
 stc f32 twice = doubled(OptF32.Some(1.5)); #= twice 3
 fun first = (OptPtr p) -> u8: ret match p { OptPtr.Some(s) => s[0], OptPtr.None => 0 };
 
+# pointers to anything, writable ones, f64; a payload equal to another case's tag is that case
+type Pt = *(i32 x, i32 y);
+variant OptPt = +(None, Some(&Pt)) tagtype self;
+variant OptMut = +(Some(*u32), None) tagtype self;
+variant OptF64 = +(Some(f64), None = 0x7FF8000000000001) tagtype self;
+variant Flag = +(Some(bool), Off = 1) tagtype self;
+variant Two = +(None, Empty, Some(&u8)) tagtype self;
+stc u64 sizes = sizeof OptPt * 100 + sizeof OptMut * 10 + sizeof OptF64; #= sizes 888
+fun flag = (Flag f) -> i32: ret match f { Flag.Some(b) => b as i32, Flag.Off => -1 };
+stc i32 true_is_off = flag(Flag.Some(true)); #= true_is_off -1
+stc i32 false_is_some = flag(Flag.Some(false)); #= false_is_some 0
+fun two = (Two t) -> u32: ret match t { Two.None => 0, Two.Empty => 1, Two.Some(s) => 2 };
+stc u32 empty = two(Two.Empty); #= empty 1
+fun or_half = (OptF64 f) -> f64: ret f ?? 0.5;
+stc f64 halves = or_half(OptF64.None) + or_half(OptF64.Some(2.0)); #= halves 2.5
+# in a unified variant a niche keeps its tags
+variant Both = OptPt || u32;
+stc u64 both_size = sizeof Both; #= both_size 16
+fun both_tag = (Both b) -> u8: ret tagof b;
+stc u8 none_tag = both_tag(OptPt.None); #= none_tag 0
+stc u8 int_tag = both_tag(5); #= int_tag 2
+
 main = () {}

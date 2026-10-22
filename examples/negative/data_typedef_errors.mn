@@ -10,6 +10,9 @@ variant Rec2 = +(A(u8, u8), B) tagtype self; #! self_tag_without_niche
 variant Arr = +(A([2]u8), B) tagtype self; #! self_tag_without_niche
 variant Bool = +(A(bool), B) tagtype self;
 variant Holder = +(A(Rec2), B) tagtype self; #! self_tag_without_niche
+variant BoolOver = +(A(bool), B = 256) tagtype self; #! tag_overflow
+variant FloatOver = +(A(f32), B = 0x100000000) tagtype self; #! tag_overflow
+variant TwoPayloads = +(A(&u8), B(&u8), C) tagtype self; #! self_tag_without_niche
 variant NoneTagFits = +(Some(u8), None = 0xFF) tagtype self;
 variant NoneTagOver = +(Some(u8), None = 0x100) tagtype self; #! tag_overflow
 type Fits = *(u32 a, u32 b) assertsize 8;

@@ -124,9 +124,7 @@ inline fn matches_typecast(self: *Patterns, pattern: NodeId, value: Value) bool 
     const matched = if (case != .none) blk: {
         const variant = static_pool.get(case).variant_case_type.variant;
         if (variant == wanted_type) break :blk true;
-        if (static_pool.tag(wanted_type) != .unified_variant_type) break :blk false;
-        const members = static_pool.get(wanted_type).unified_variant_type.members;
-        break :blk std.mem.indexOfScalar(Index, members, variant) != null;
+        break :blk static_pool.is_member(wanted_type, variant);
     } else value_type == wanted_type or static_pool.implements(value_type, wanted_type);
     if (matched) self.bind_name(tree.arg(pattern, 1), value);
     return matched;

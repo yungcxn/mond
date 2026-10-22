@@ -1,0 +1,31 @@
+# where `include` reads and what it declares: a path is relative to the file the `include` is
+# written in, at any depth, and a program declares each file once, however it is reached
+<include "../lib/include/chain/one.mn">;           # one -> two -> deeper/three -> ../../../math
+<include "../lib/math.mn">;                        # declared by the chain already: nothing more
+<include "../lib/include/self.mn">;                # includes itself
+<include "../lib/include/cycle_a.mn">;             # cycle_a <-> cycle_b
+<include "../lib/include/chain/../twin_a.mn">;     # the path is normalized
+<include "../lib/include/twin_b.mn">;
+<include "../lib/include/twin_a.mn">;              # the same file by another path: nothing more
+stc u32 chained = chain_one(); #= chained 5
+stc u32 gcd_once = gcd(12, 18); #= gcd_once 6
+stc u32 itself_once = itself(); #= itself_once 5
+stc u32 cycled = cycle_b(); #= cycled 2
+stc u32 twins = twin_a() + twin_b(); #= twins 30
+
+# the path is any static text
+stc []u8 MAKER = "../lib/include/maker.mn";
+<include MAKER>;
+# the macro's `include` reads relative to the library it is written in
+stc u64 tree_decls = lenof (math_tree()).decls; #= tree_decls 3
+stc []u8 maker_path = SELF_PATH; #= maker_path "self.mn"
+
+# an include landed by a top splice is declared once as well
+<quote { <include "../lib/math.mn">; }>;
+
+# a body declares its own locals, as often as it includes
+fun first = () -> u32 { <include "../lib/math.mn">; ret gcd(9, 6); }
+fun second = () -> u32 { <include "../lib/math.mn">; ret lcm(2, 3); }
+stc u32 bodies = first() * 10 + second(); #= bodies 36
+
+main = () {}

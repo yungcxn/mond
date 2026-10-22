@@ -54,13 +54,20 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
         .pointer_type, .function_type => pointer_layout(pool, type_index),
         .array_type => |array| array_layout(pool, array),
         .record_type => |record| record_layout(pool, record),
-        .variant_type => |variant| variant_layout(pool, type_index, variant),
-        .variant_case_type => |case| packed_case_layout(pool, case),
-        // a packed one has no size, only each of its members
+        // a packed variant has no size, only each of its cases
+        .variant_type => |variant| if (variant.is_packed)
+            Partial{}
+        else
+            tagged_layout(pool, type_index, variant.tag_mode, variant.tag_type),
+        .variant_case_type => |case| blk: {
+            const variant = pool.get(case.variant).variant_type;
+            break :blk tagged_layout(pool, type_index, variant.tag_mode, variant.tag_type);
+        },
+        // the members share one tag (see `unified_tag_type`), a packed one has no size
         .unified_variant_type => |unified| if (unified.is_packed)
             Partial{}
         else
-            unified_layout(pool, type_index, unified.members),
+            tagged_layout(pool, type_index, .int, pool.unified_tag_type(type_index)),
         // static-only entries and values have no memory
         .meta_type, .trait_type, .static_function, .template_type => Partial{},
         .type_variable, .ast_type => Partial{},
@@ -129,104 +136,94 @@ fn record_layout(pool: *StaticPool, record: StaticPool.RecordType) Partial {
         if (!record.is_packed) partial.align_log2 = @max(partial.align_log2, field.align_log2);
     }
     // the unpadded end of the last field, a field still unknown above is laid out anew
-    for (record.field_types) |field_type| {
-        const field = pool.layout(field_type);
-        if (!record.is_packed) {
-            const field_alignment = @as(u64, 1) << @intCast(field.align_log2);
-            partial.size = std.mem.alignForward(u64, partial.size, field_alignment);
-        }
-        partial.size += field.size;
+    if (record.field_types.len > 0) {
+        const last = record.field_types.len - 1;
+        const last_size = pool.layout(record.field_types[last]).size;
+        partial.size = field_offset(pool, record, last) + last_size;
     }
     return partial;
 }
 
-// the tag, then the largest payload aligned behind it. a packed variant has no size, only each
-// of its cases
-fn variant_layout(pool: *StaticPool, type_index: Index, variant: StaticPool.VariantType) Partial {
-    if (variant.is_packed) return .{};
-    var payload_size: u64 = 0;
-    var payload_align_log2: u8 = 0;
-    const payload_state = widest_payload(pool, type_index, &payload_size, &payload_align_log2);
-    return tagged_layout(pool, variant, payload_size, payload_align_log2, payload_state);
+// where a field starts: behind the one before it, aligned unless the record is packed
+pub fn field_offset(pool: *StaticPool, record: StaticPool.RecordType, field: usize) u64 {
+    var offset: u64 = 0;
+    for (record.field_types[0 .. field + 1], 0..) |field_type, i| {
+        const field_layout = pool.layout(field_type);
+        if (!record.is_packed) {
+            const field_alignment = @as(u64, 1) << @intCast(field_layout.align_log2);
+            offset = std.mem.alignForward(u64, offset, field_alignment);
+        }
+        if (i == field) break;
+        offset += field_layout.size;
+    }
+    return offset;
 }
 
-// a case of a packed variant: the tag, then only its own payload
-fn packed_case_layout(pool: *StaticPool, case: StaticPool.VariantCaseType) Partial {
-    const variant = pool.get(case.variant).variant_type;
-    if (case.payload == .none) return tagged_layout(pool, variant, 0, 0, .done);
-    const payload = pool.layout(case.payload);
-    return tagged_layout(pool, variant, payload.size, payload.align_log2, payload.state);
-}
-
-// the tag, then a payload aligned behind it. a self-tagged variant without payload bytes is its tag
+// the tag, then the room of the payloads aligned behind it. a self-tagged variant without payload
+// bytes is its tag
 fn tagged_layout(
     pool: *StaticPool,
-    variant: StaticPool.VariantType,
-    payload_size: u64,
-    payload_align_log2: u8,
-    payload_state: Layout.State,
+    type_index: Index,
+    tag_mode: StaticPool.VariantTagMode,
+    tag_type: Index,
 ) Partial {
-    const tag = if (variant.tag_mode == .int)
-        pool.layout(variant.tag_type)
-    else
-        std.mem.zeroes(Layout);
-    var partial = Partial{ .align_log2 = @max(payload_align_log2, tag.align_log2) };
-    partial.infinite = payload_state == .infinite;
-    partial.incomplete = payload_state == .unknown;
-    if (variant.tag_mode == .self and payload_size == 0) {
-        partial.size = pool.layout(variant.tag_type).size;
+    const room = pool.payload_room(type_index);
+    const tag = if (tag_mode == .int) pool.layout(tag_type) else std.mem.zeroes(Layout);
+    var partial = Partial{ .align_log2 = @max(room.align_log2, tag.align_log2) };
+    partial.infinite = room.state == .infinite;
+    partial.incomplete = room.state == .unknown;
+    if (tag_mode == .self and room.size == 0) {
+        partial.size = pool.layout(tag_type).size;
     } else {
-        const payload_alignment = @as(u64, 1) << @intCast(payload_align_log2);
-        partial.size = std.mem.alignForward(u64, tag.size, payload_alignment) + payload_size;
+        const room_alignment = @as(u64, 1) << @intCast(room.align_log2);
+        partial.size = std.mem.alignForward(u64, tag.size, room_alignment) + room.size;
     }
     return partial;
 }
 
-// the members share one tag (see `unified_tag_type`) and the room of the widest payload of any
-// member
-fn unified_layout(pool: *StaticPool, type_index: Index, members: []const Index) Partial {
-    var partial = Partial{};
-    var payload_size: u64 = 0;
-    var payload_align_log2: u8 = 0;
-    for (members) |member| {
-        const state = if (pool.brings_cases(member))
-            widest_payload(pool, member, &payload_size, &payload_align_log2)
-        else blk: {
-            const member_layout = pool.layout(member);
-            payload_size = @max(payload_size, member_layout.size);
-            payload_align_log2 = @max(payload_align_log2, member_layout.align_log2);
-            break :blk member_layout.state;
-        };
-        partial.infinite = partial.infinite or state == .infinite;
-        partial.incomplete = partial.incomplete or state == .unknown;
+pub const Room = struct { size: u64 = 0, align_log2: u8 = 0, state: Layout.State = .done };
+
+// where payloads live: the room of the widest payload of a variant's cases or of a unified
+// variant's members (a member that is one case is a payload itself), a case of a packed variant
+// only has its own
+pub fn payload_room(pool: *StaticPool, type_index: Index) Room {
+    var room = Room{};
+    switch (pool.get(type_index)) {
+        .variant_type => widen_by_cases(pool, &room, type_index),
+        .variant_case_type => |case| widen(pool, &room, case.payload),
+        .unified_variant_type => |unified| for (unified.members) |member| {
+            if (pool.brings_cases(member)) {
+                widen_by_cases(pool, &room, member);
+            } else {
+                widen(pool, &room, member);
+            }
+        },
+        else => {},
     }
-    const tag = pool.layout(pool.unified_tag_type(type_index));
-    partial.align_log2 = @max(payload_align_log2, tag.align_log2);
-    const payload_alignment = @as(u64, 1) << @intCast(payload_align_log2);
-    partial.size = std.mem.alignForward(u64, tag.size, payload_alignment) + payload_size;
-    return partial;
+    return room;
 }
 
-// grows `size` and `align_log2` to fit every payload of the variant,
-// the worst state of them is returned
-fn widest_payload(pool: *StaticPool, variant: Index, size: *u64, align_log2: *u8) Layout.State {
-    var state: Layout.State = .done;
+fn widen_by_cases(pool: *StaticPool, room: *Room, variant: Index) void {
     for (pool.get(variant).variant_type.cases) |case| {
-        const payload = pool.get(case).variant_case_type.payload;
-        if (payload == .none) continue;
-        const payload_layout = pool.layout(payload);
-        if (payload_layout.state != .done) state = payload_layout.state;
-        size.* = @max(size.*, payload_layout.size);
-        align_log2.* = @max(align_log2.*, payload_layout.align_log2);
+        widen(pool, room, pool.get(case).variant_case_type.payload);
     }
-    return state;
 }
 
-// one more than the highest tag of the variant, at least its case count
+// grows the room to fit the payload, keeping the worst state of any
+fn widen(pool: *StaticPool, room: *Room, payload: Index) void {
+    if (payload == .none) return;
+    const payload_layout = pool.layout(payload);
+    if (payload_layout.state != .done) room.state = payload_layout.state;
+    room.size = @max(room.size, payload_layout.size);
+    room.align_log2 = @max(room.align_log2, payload_layout.align_log2);
+}
+
+// one more than the highest tag of the variant (a self-tagged one's too: a unified variant keeps
+// them), at least its case count
 pub fn tag_range(pool: *const StaticPool, variant: Index) u64 {
     const variant_type = pool.get(variant).variant_type;
     var end: u64 = variant_type.cases.len;
-    if (variant_type.tag_mode != .int) return end;
+    if (variant_type.tag_mode == .none) return end;
     for (variant_type.cases) |case| {
         const tag = pool.get(case).variant_case_type.tag;
         if (pool.tag(tag) == .int_value) end = @max(end, pool.get(tag).int_value.bits + 1);
@@ -237,6 +234,26 @@ pub fn tag_range(pool: *const StaticPool, variant: Index) u64 {
 // a member of a unified variant brings its cases when they have tags, any other type is one case
 pub fn brings_cases(pool: *const StaticPool, member: Index) bool {
     return pool.tag(member) == .variant_type and pool.get(member).variant_type.tag_mode != .none;
+}
+
+// the tag a case is written with, 0 for one that has none
+pub fn case_tag(pool: *const StaticPool, case: Index) u64 {
+    const tag = pool.get(case).variant_case_type.tag;
+    return if (pool.tag(tag) == .int_value) pool.get(tag).int_value.bits else 0;
+}
+
+// the tag a value of a case has in `container`: its own in its variant, in a unified variant moved
+// into its member's range; a member that is one case (`u32` of `u32 || f32`) is its range's start
+pub fn tag_in(pool: *const StaticPool, container: Index, case_or_member: Index) u64 {
+    const is_case = pool.tag(case_or_member) == .variant_case_type;
+    const own = if (is_case) pool.case_tag(case_or_member) else 0;
+    if (pool.tag(container) != .unified_variant_type) return own;
+    const member = if (is_case)
+        pool.get(case_or_member).variant_case_type.variant
+    else
+        case_or_member;
+    const offset = pool.unified_offset(container, member);
+    return if (pool.brings_cases(member)) offset + own else offset;
 }
 
 // the members of a unified variant are numbered one after another: where `member`'s tags start

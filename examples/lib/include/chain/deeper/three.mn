@@ -1,0 +1,3 @@
+# three directories down, up again to a library the program may include itself
+<include "../../../math.mn">;
+pub fun chain_three = () -> u32: ret gcd(6, 9);

@@ -48,6 +48,10 @@ fun narrow_count = (Box b) -> u32: ret stcif b oftype Box(u8): b.count else: b.c
 fun small = (Box b stcwhere sizeof b <= 8) -> u32: ret b.count;
 
 type Wrap = (type T): *(T inner, u32 k);
+# a type expression as the body is computed, an alias of each realization
+type Pair = (type T): [2]T;
+stc Pair(u16) PAIR = [1, 2]; #= PAIR [1, 2]
+stc u64 PAIR_SIZE = sizeof Pair(u16); #= PAIR_SIZE 4
 
 # a realization of a template may realize others with its own type
 fun wrapped = (Box b) -> u32 {

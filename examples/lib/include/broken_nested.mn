@@ -1,0 +1,3 @@
+# a library whose own include fails
+<include "not_there.mn">;
+pub fun broken = () -> u32: ret 1;

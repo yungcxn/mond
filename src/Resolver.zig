@@ -45,13 +45,46 @@ pub const Session = struct {
     // names `fresh` and hygiene made so far, so no later pass makes one again
     fresh_name_count: u32 = 0,
     files: std.ArrayList(File) = .empty,
+    namespaces: std.ArrayList(Namespace) = .empty,
 
     // `is_declared`: a top splice of its `include` landed it, the program declares a file once
     pub const File = struct { path: []const u8, at: u32, len: u32, is_declared: bool = false };
 
+    // `name = <include "f">` at top level: what the file shows lands as ``x`name``, `name.x`
+    // reaches it (see Macros.declare_namespaces). `of`: the namespace whose name the file's names
+    // carry, another one when it included the same file as first, alike raw. `include`: its node in
+    // this pass
+    pub const Namespace = struct {
+        name: []const u8,
+        of: u32,
+        file: u32,
+        is_raw: bool,
+        include: ParseTree.NodeId,
+    };
+
     pub fn deinit(self: *Session, allocator: std.mem.Allocator) void {
         for (self.files.items) |file| allocator.free(file.path);
         self.files.deinit(allocator);
+        for (self.namespaces.items) |namespace| allocator.free(namespace.name);
+        self.namespaces.deinit(allocator);
+    }
+
+    // the included file whose text holds a word at `at`, null for the compiled file
+    pub fn file_at(self: *Session, at: u32) ?*File {
+        for (self.files.items) |*file| if (at >= file.at and at - file.at < file.len) return file;
+        return null;
+    }
+
+    pub fn namespace_named(self: *Session, name: []const u8) ?*Namespace {
+        for (self.namespaces.items) |*namespace| {
+            if (std.mem.eql(u8, namespace.name, name)) return namespace;
+        }
+        return null;
+    }
+
+    pub fn namespace_of_include(self: *Session, include: ParseTree.NodeId) ?*Namespace {
+        for (self.namespaces.items) |*namespace| if (namespace.include == include) return namespace;
+        return null;
     }
 };
 
@@ -171,6 +204,7 @@ pub fn resolve(self: *Resolver) !void {
 
     var passes: u32 = 0;
     while (true) : (passes += 1) {
+        if (self.tree.macros) self.macros.declare_namespaces();
         self.declarations.collect_globals();
 
         // the source has no `@` outside a quote, later passes hold only what landed in it
@@ -179,6 +213,7 @@ pub fn resolve(self: *Resolver) !void {
             for (self.roots) |root| self.macros.report_stray_unquotes(root, false);
         }
         try self.fail_on_errors();
+        if (self.session.namespaces.items.len > 0) self.macros.reach_namespaces();
 
         // top-level splices run first, in order, before anything they could change is resolved
         const has_top_splices = self.tree.macros and self.macros.expand_roots();

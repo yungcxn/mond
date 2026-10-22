@@ -1,0 +1,2 @@
+<include "cycle_a.mn">;
+pub fun cycle_b = () -> u32: ret cycle_a() + 1;

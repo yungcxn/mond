@@ -1,0 +1,2 @@
+fun helper = () -> u32: ret 20;
+pub fun twin_b = () -> u32: ret helper();

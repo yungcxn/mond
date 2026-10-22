@@ -364,6 +364,10 @@ pub fn check_unwrap(
 
     const payload_type = resolver.static_pool.payload_of(operand_type);
     if (payload_type == .none) return resolver.report_mismatch(operand, operand_type, .none);
+    // which case it is needs a tag
+    if (resolver.static_pool.is_untagged_at_run_time(operand_type)) {
+        return resolver.report(.untagged_variant, operand, operand_type, 0);
+    }
 
     switch (kind) {
         .selftag_unwrap => return payload_type,

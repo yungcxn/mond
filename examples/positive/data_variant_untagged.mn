@@ -15,4 +15,34 @@ fun store = (*Word p, f32 f) { p.* = Word.Float(f); }
 fun whole = (Word w) -> Word: ret match w { any => any };
 stc u32 from_call = bits(Word.Float(2.0)); #= from_call 1073741824
 
+# templates, methods, traits, payload-free cases and asserted sizes as for any variant
+trait Bits = !{ fun bits = () -> u32; }
+variant Raw = (type T): +(Val(T), Bytes([4]u8)) tagtype _;
+variant Reg = +(Int(u32), Float(f32), Empty) tagtype _ assertsize 4 implof Bits !{
+    fun bits = () -> u32: ret (self.* as Reg.Int).$0;
+}
+variant Nothing = +(A, B) tagtype _;
+stc u64 raw_size = sizeof Raw(u16); #= raw_size 4
+stc u64 nothing_size = sizeof Nothing; #= nothing_size 0
+stc u32 method_bits = Reg.Float(1.0).bits(); #= method_bits 1065353216
+fun through_trait = (Bits b) -> u32: ret b.bits();
+stc u32 trait_bits = through_trait(Reg.Int(5)); #= trait_bits 5
+stc Reg empty = Reg.Empty;
+
+# while compiling the case is known: `stcmatch` tells it
+stc u32 static_case = stcmatch Reg.Int(3) { Reg.Int(i) => i, _ => 0 }; #= static_case 3
+
+# in records and arrays, cast from a case to another one
+type Holder = *(Reg r, [2]Reg rs);
+stc Holder HOLDER = Holder(Reg.Int(1), [Reg.Int(2), Reg.Float(0.5)]);
+stc u32 held = (HOLDER.rs[0] as Reg.Int).$0; #= held 2
+stc u32 case_to_case = (Reg.Float(2.0) as Reg.Int).$0; #= case_to_case 1073741824
+# while compiling a cast reads the bytes as at run time: arrays, records at their offsets, floats;
+# bytes past a smaller payload are zero
+variant Overlay = +(Half(u16), Bytes([4]u8), Pair(u8 a, u16 b), F(f32)) tagtype _;
+stc Overlay HALF = Overlay.Half(258);
+stc [4]u8 half_bytes = (HALF as Overlay.Bytes).$0; #= half_bytes [2, 1, 0, 0]
+stc u16 pair_b = (Overlay.Bytes([1, 0, 7, 1]) as Overlay.Pair).b; #= pair_b 263
+stc f32 from_bytes = (Overlay.Bytes([0, 0, 128, 63]) as Overlay.F).$0; #= from_bytes 1
+
 main = () {}

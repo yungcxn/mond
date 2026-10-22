@@ -10,4 +10,13 @@ variant WithWord = u32 || Word;
 fun equal = (WithWord a, WithWord b) -> bool: ret a == b; #! untagged_variant
 fun field = (Num n) -> i32: ret n.x; #! unknown_member
 
+# a value goes in as a member's own type: an array literal of `u32` is no `[2]u8`, an element
+# pointer no array pointer; an arm after every member is redundant
+variant Bytes = [2]u8 || &u8;
+stc Bytes pair = [1, 2]; #! type_mismatch
+stc Bytes text = "Q".&; #! type_mismatch
+variant Small = u8 || u16;
+stc Small negative = -1; #! type_mismatch
+fun again = (Num n) -> u32: ret match n { u32 i => i, f32 f => 0, Pt p => 0, u32 j => 1 }; #! redundant_match_arm
+
 main = () {}

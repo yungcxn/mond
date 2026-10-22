@@ -1,0 +1,19 @@
+<include "lib/out.mn">;
+# libraries reached through chains, cycles and twice over, built and run: each declared once
+<include "../lib/include/chain/one.mn">;
+<include "../lib/math.mn">;
+<include "../lib/include/cycle_a.mn">;
+<include "../lib/include/twin_a.mn">;
+<include "../lib/include/twin_b.mn">;
+<include "lib/out.mn">;
+
+mut u32 ONE = 0;
+fun local = () -> u32 { <include "../lib/math.mn">; ret gcd(12 * ONE, 8); }
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc;
+    line_u64((chain_one() * ONE) as u64);              #> 5
+    line_u64(gcd(18 * ONE, 12) as u64);                #> 6
+    line_u64((cycle_b() + twin_a() + twin_b()) as u64);    #> 32
+    line_u64(local() as u64);                          #> 4
+}

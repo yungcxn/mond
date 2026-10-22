@@ -14,4 +14,10 @@ fun untagged = (&Bare b) -> u8: ret tagof b; #! untagged_variant
 fun local_set = (u32 ||| f32 x) { u32 ||| f32 y = x; } #! unstorable_outside_parameter
 variant Mixed = Msg || u32; #! unstorable_outside_parameter
 
+# only its cases have a size, like a trait has none
+stc u64 size = sizeof Msg; #! invalid_operand
+stc u64 alignment = alignof Msg; #! invalid_operand
+trait Named = !{ fun id = () -> u32; }
+stc u64 trait_size = sizeof Named; #! invalid_operand
+
 main = () {}

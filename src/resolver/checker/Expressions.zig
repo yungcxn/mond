@@ -586,13 +586,24 @@ fn infer_static_query(
     result_type: StaticPool.Index,
 ) StaticPool.Index {
     const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
     const operand = resolver.tree.arg(node, 0);
 
-    _ = self.infer(context, operand, .none);
+    const operand_type = self.infer(context, operand, .none);
 
     const names_template = resolver.tree.kind(operand) == .identifier and
         resolver.generics.is_template(resolver.node_declarations[operand]);
     if (names_template) return resolver.report(.unrealized_template, operand, 0, 0);
+    // a trait or packed variant has no size, only each type a parameter of it is realized for
+    const queried = if (static_pool.tag(operand_type) == .meta_type)
+        resolver.static_values.try_evaluate(context, operand) orelse .none
+    else
+        operand_type;
+    if (!context.is_abstract and queried != .none and static_pool.is_parameter_only(queried)) {
+        const is_size = resolver.tree.kind(node) == .sizeof;
+        const operator = resolver.name_pool.intern(if (is_size) "sizeof" else "alignof");
+        return resolver.report(.invalid_operand, node, operator, queried);
+    }
 
     _ = resolver.static_values.try_evaluate(context, node);
     return result_type;

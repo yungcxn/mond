@@ -43,11 +43,7 @@ pub fn print(io: std.Io, resolver: *Resolver, path: []const u8) !void {
         }
         const word = if (resolver.tree.token(leaf) == null) 0 else resolver.tree.arg(leaf, 1);
         const word_at = if (word == 0) 0 else resolver.tree.words.column(.at)[word - 1];
-        const file = for (resolver.session.files.items) |included| {
-            if (word != 0 and word_at >= included.at and word_at - included.at < included.len) {
-                break included;
-            }
-        } else null;
+        const file = if (word == 0) null else resolver.session.file_at(word_at);
         if (file == null) {
             try writer.print("{s}:{d}:{d}: ", .{ path, line + 1, column + 1 });
         } else {

@@ -184,18 +184,23 @@ fn width(value_type: Index) u7 {
 pub fn reinterpret(self: Value, target_type: Index) ?Value {
     const target_is_scalar = is_number(target_type) or target_type == .bool_type;
     if (self.value_type == .none or self.is_boxed() or !target_is_scalar) return null;
+    return from_raw(target_type, self.raw_bits());
+}
 
-    // the bits of a scalar as its type lays them out in memory
-    const raw: u64 = blk: {
-        const bit_width = width(self.value_type);
-        if (is_float(self.value_type)) break :blk switch (bit_width) {
-            16 => @as(u16, @bitCast(@as(f16, @floatCast(self.as_float())))),
-            32 => @as(u32, @bitCast(@as(f32, @floatCast(self.as_float())))),
-            else => self.bits,
-        };
-        if (bit_width == 64) break :blk self.bits;
-        break :blk self.bits & ((@as(u64, 1) << @intCast(bit_width)) - 1);
+// the bits of a scalar as its type lays them out in memory
+pub fn raw_bits(self: Value) u64 {
+    const bit_width = width(self.value_type);
+    if (is_float(self.value_type)) return switch (bit_width) {
+        16 => @as(u16, @bitCast(@as(f16, @floatCast(self.as_float())))),
+        32 => @as(u32, @bitCast(@as(f32, @floatCast(self.as_float())))),
+        else => self.bits,
     };
+    if (bit_width == 64) return self.bits;
+    return self.bits & ((@as(u64, 1) << @intCast(bit_width)) - 1);
+}
+
+// a bool or number of `target_type` read from the bits of memory
+pub fn from_raw(target_type: Index, raw: u64) Value {
     if (target_type == .bool_type) return boolean(raw != 0);
     if (is_int(target_type)) return int(target_type, raw);
     const number: f64 = switch (width(target_type)) {
@@ -331,7 +336,7 @@ pub fn binary(
     };
 }
 
-fn is_number(value_type: Index) bool {
+pub fn is_number(value_type: Index) bool {
     return is_int(value_type) or is_float(value_type);
 }
 

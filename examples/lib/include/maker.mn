@@ -1,0 +1,3 @@
+# an `include` written in a library reads relative to the library, also when a macro of it runs
+pub stcfun math_tree = () -> ast: ret include "../math.mn";
+pub stc []u8 SELF_PATH = "self.mn";

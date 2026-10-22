@@ -1,0 +1,49 @@
+<include "lib/out.mn">;
+# self tags in the bit patterns a payload never has, at run time: null addresses, writable
+# pointers, floats, bools (a payload equal to a tag is that case), two payload-free cases, `??`,
+# and a niche variant inside a unified one; each also folded at compile time where it can be (`st`)
+mut i64 ONE = 0;
+stcfun st = (i64 v) -> i64: ret v;
+fun same = (i64 compile_time, i64 run_time) {
+    if compile_time == run_time {
+        line_i64(run_time);
+    } else {
+        line_i64(-999999);
+    }
+}
+
+type Pt = *(i32 x, i32 y);
+variant OptPt = +(None, Some(&Pt)) tagtype self;
+variant OptMut = +(Some(*u32), None) tagtype self;
+variant OptF64 = +(Some(f64), None = 0x7FF8000000000001) tagtype self;
+variant Flag = +(Some(bool), Off = 1) tagtype self;
+variant Two = +(None, Empty, Some(&u8)) tagtype self;
+variant Both = OptPt || u32;
+
+fun x_of = (OptPt p) -> i64: ret match p { OptPt.Some(q) => q.x as i64, OptPt.None => -1 };
+fun write = (OptMut m) { match m { OptMut.Some(p) => { p.* += 1; }, OptMut.None => {} } }
+fun float = (OptF64 f) -> i64: ret ((f ?? 0.5) * 10.0) as i64;
+fun flag = (Flag f) -> i64: ret match f { Flag.Some(b) => b as i64, Flag.Off => -1 };
+fun two = (Two t) -> i64: ret match t { Two.None => 0, Two.Empty => 1, Two.Some(s) => s[0] as i64 };
+fun both = (Both b) -> i64: ret match b {
+    OptPt.Some(q) => q.y as i64,
+    OptPt.None => -1,
+    u32 n => n as i64 * 10,
+};
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    line_u64(sizeof OptPt * 1000 + sizeof OptF64 * 100 + sizeof Flag * 10 + sizeof Two);  #> 8818
+    Pt pt = Pt(3 * ONE as i32, 4);
+    line_i64(x_of(OptPt.Some(pt.&)) * 10 + x_of(if ONE == 1: OptPt.None else: OptPt.Some(pt.&)));  #> 29
+    mut u32 n = ONE as u32;
+    write(OptMut.Some(n.&));
+    write(OptMut.None);
+    line_u64(n as u64);                                                     #> 2
+    same(st(float(OptF64.Some(2.0))), float(OptF64.Some(2.0 * ONE as f64)));  #> 20
+    same(st(float(OptF64.None)), float(if ONE == 1: OptF64.None else: OptF64.Some(1.0)));  #> 5
+    same(st(flag(Flag.Some(true))), flag(Flag.Some(ONE == 1)));             #> -1
+    same(st(flag(Flag.Some(false))), flag(Flag.Some(ONE == 2)));            #> 0
+    line_i64(two(Two.None) + two(Two.Empty) * 10 + two(Two.Some("A".&)) * 100 * ONE);  #> 6510
+    line_i64(both(OptPt.Some(pt.&)) + both(OptPt.None) + both(5 * ONE as u32));  #> 53
+}

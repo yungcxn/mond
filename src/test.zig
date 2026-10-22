@@ -47,22 +47,29 @@ pub fn main(init: std.process.Init) !void {
     var file_writer = std.Io.File.stdout().writerStreaming(io, &buffer);
     const writer = &file_writer.interface;
 
-    const examples = try check_directory(writer, io, "examples", false, filters);
-    const positive = try check_directory(writer, io, "examples/positive", false, filters);
-    const general_purpose = try check_directory(
-        writer,
-        io,
-        "examples/general-purpose",
-        false,
-        filters,
-    );
+    // every file of every directory is a task on the cores of the machine, reported in order
+    var group: std.Io.Group = .init;
+    const process_arena = init.arena.allocator();
+    // the negative examples start first, the evaluation budget tests among them run longest
+    const queued = [_]Directory{
+        try queue_directory(process_arena, io, &group, "examples/negative", true, filters),
+        try queue_directory(process_arena, io, &group, "examples", false, filters),
+        try queue_directory(process_arena, io, &group, "examples/positive", false, filters),
+        try queue_directory(process_arena, io, &group, "examples/general-purpose", false, filters),
+        // the docs show the language as it is: their code is checked like the examples
+        try queue_directory(process_arena, io, &group, "docs", false, filters),
+    };
+    try group.await(io);
+
+    const examples = try report_directory(writer, queued[1]);
+    const positive = try report_directory(writer, queued[2]);
+    const general_purpose = try report_directory(writer, queued[3]);
     const positive_counts: [2]usize = .{
         examples[0] + positive[0] + general_purpose[0],
         examples[1] + positive[1] + general_purpose[1],
     };
-    const negative_counts = try check_directory(writer, io, "examples/negative", true, filters);
-    // the docs show the language as it is: their code is checked like the examples
-    const docs = try check_directory(writer, io, "docs", false, filters);
+    const negative_counts = try report_directory(writer, queued[0]);
+    const docs = try report_directory(writer, queued[4]);
 
     // and they name every keyword, tree kind and diagnostic, so no feature goes undocumented
     const unnamed = blk: {
@@ -116,18 +123,17 @@ pub fn main(init: std.process.Init) !void {
     if (failed > 0) std.process.exit(1);
 }
 
-// returns how many files passed and how many failed
-fn check_directory(
-    writer: *Writer,
+// the files of a directory (or blocks of its docs), each checked by a task of `group`
+const Directory = struct { path: []const u8, negative: bool, jobs: []Job };
+
+fn queue_directory(
+    allocator: Allocator,
     io: std.Io,
+    group: *std.Io.Group,
     path: []const u8,
     negative: bool,
     filters: []const [:0]const u8,
-) ![2]usize {
-    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
+) !Directory {
     var directory = try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
     defer directory.close(io);
     // sorted, so the output does not depend on the file system
@@ -145,13 +151,7 @@ fn check_directory(
         }
     }.less_than);
 
-    const rule = if (negative)
-        "must report exactly the `#!` diagnostics"
-    else
-        "must resolve without diagnostics";
-    try writer.print(bold ++ "\n{s} ({s})\n" ++ reset, .{ path, rule });
-
-    var counts: [2]usize = .{ 0, 0 };
+    var jobs: std.ArrayList(Job) = .empty;
     for (names.items) |name| {
         // without filters every file is checked
         const matches_filters = blk: {
@@ -165,8 +165,7 @@ fn check_directory(
 
         const source = try directory.readFileAlloc(io, name, allocator, .limited(50 << 20));
         if (!std.mem.endsWith(u8, name, ".md")) {
-            const passed = try check_source(writer, allocator, io, path, name, source, negative);
-            counts[@intFromBool(!passed)] += 1;
+            try jobs.append(allocator, .{ .label = name, .source = source });
             continue;
         }
 
@@ -193,14 +192,53 @@ fn check_directory(
                 try block.?.appendSlice(allocator, "main = () {}\n");
             }
             const label = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ name, block_line });
-            const passed =
-                try check_source(writer, allocator, io, path, label, block.?.items, negative);
-            counts[@intFromBool(!passed)] += 1;
+            try jobs.append(allocator, .{ .label = label, .source = block.?.items });
             block = null;
         }
     }
+
+    for (jobs.items) |*job| group.async(io, Job.run, .{ job, io, path, negative });
+    return .{ .path = path, .negative = negative, .jobs = jobs.items };
+}
+
+// prints what the tasks of a directory reported, returns how many files passed and how many failed
+fn report_directory(writer: *Writer, directory: Directory) ![2]usize {
+    const rule = if (directory.negative)
+        "must report exactly the `#!` diagnostics"
+    else
+        "must resolve without diagnostics";
+    try writer.print(bold ++ "\n{s} ({s})\n" ++ reset, .{ directory.path, rule });
+    var counts: [2]usize = .{ 0, 0 };
+    for (directory.jobs) |job| {
+        try writer.writeAll(job.output);
+        std.heap.smp_allocator.free(job.output);
+        counts[@intFromBool(!job.passed)] += 1;
+    }
     return counts;
 }
+
+// a file or doc block checked as a task of its own, keeping only what it reports
+const Job = struct {
+    label: []const u8,
+    source: []u8,
+    output: []const u8 = "",
+    passed: bool = false,
+
+    fn run(job: *Job, io: std.Io, path: []const u8, negative: bool) void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var output: Writer.Allocating = .init(allocator);
+        const writer = &output.writer;
+        const checked = check_source(writer, allocator, io, path, job.label, job.source, negative);
+        job.passed = checked catch |failure| blk: {
+            const failed_format = "  " ++ red ++ "✗" ++ reset ++ " {s}/{s}  {s}\n";
+            writer.print(failed_format, .{ path, job.label, @errorName(failure) }) catch {};
+            break :blk false;
+        };
+        job.output = std.heap.smp_allocator.dupe(u8, output.written()) catch "";
+    }
+};
 
 // whether `source` reports exactly its `#!` diagnostics and passes its checks, shown as `path/name`
 fn check_source(

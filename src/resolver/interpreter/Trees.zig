@@ -754,6 +754,7 @@ fn include(self: *Trees, node: NodeId) Value {
 }
 
 const max_include_bytes = 50 << 20;
+const no_file = std.math.maxInt(u32);
 
 const Read = union(enum) { included: NodeId, failed: struct { at: NodeId, reason: anyerror } };
 
@@ -769,6 +770,15 @@ fn read(self: *Trees, node: NodeId, name: []const u8) Read {
     const path = std.fs.path.resolve(allocator, &.{ directory, name }) catch |err| {
         return .{ .failed = .{ .at = node, .reason = err } };
     };
+    // a file another namespace has lands nothing again, both reach the same names
+    const namespace = resolver.session.namespace_of_include(node);
+    if (namespace) |declared| for (resolver.session.namespaces.items, 0..) |other, i| {
+        if (other.file == no_file or other.is_raw != declared.is_raw) continue;
+        if (!std.mem.eql(u8, resolver.session.files.items[other.file].path, path)) continue;
+        declared.of = @intCast(i);
+        allocator.free(path);
+        return .{ .included = tree.push_node(.block) };
+    };
     const io = resolver.session.io orelse {
         allocator.free(path);
         return .{ .failed = .{ .at = node, .reason = error.NoIo } };
@@ -782,6 +792,7 @@ fn read(self: *Trees, node: NodeId, name: []const u8) Read {
     const region = tree.text_bytes.len;
     tree.text_bytes.append(bytes);
     const length: u32 = @intCast(bytes.len);
+    if (namespace) |declared| declared.file = @intCast(resolver.session.files.items.len);
     resolver.session.files.append(allocator, .{ .path = path, .at = region, .len = length }) catch {
         @panic("OOM");
     };
@@ -811,6 +822,9 @@ fn read(self: *Trees, node: NodeId, name: []const u8) Read {
     const raw = tree.kind(node) == .include_raw;
     var private_names: std.ArrayList(NodeId) = .empty;
     defer private_names.deinit(allocator);
+    // what a namespace shows, as written
+    var shown_names: std.ArrayList([]const u8) = .empty;
+    defer shown_names.deinit(allocator);
     for (parser.global_store.items()) |root| {
         const first_of_root = tree.ast_nodes.len();
         const copied = tree.copy(&parser.tree, root, bytes, false, null);
@@ -826,10 +840,20 @@ fn read(self: *Trees, node: NodeId, name: []const u8) Read {
             tree.ast_nodes.column(.args)[leaf] = .{ origin, tree.words.len() };
         }
         tree.scratch.push(copied);
-        if (raw or parser.tree.kind(root) == .mod_pub) continue;
-        const declared = name_view(tree, copied, def_var(tree, copied), .{});
+        const is_shown = raw or parser.tree.kind(root) == .mod_pub;
+        if (is_shown and namespace == null) continue;
+        const bare = without_modifiers(tree, copied);
+        const declared = name_view(tree, bare, def_var(tree, copied), .{});
         if (declared == 0 or tree.kind(declared) != .identifier) continue;
         if (tree.arg(declared, 1) == 0) continue;
+        if (is_shown) {
+            const word = tree.arg(declared, 1) - 1;
+            const written = bytes[tree.words.column(.at)[word] - region ..];
+            shown_names.append(allocator, written[0..tree.words.column(.len)[word]]) catch {
+                @panic("OOM");
+            };
+            continue;
+        }
         tree.words.column(.binds)[tree.arg(declared, 1) - 1] = true;
         private_names.append(allocator, declared) catch @panic("OOM");
     }
@@ -840,6 +864,17 @@ fn read(self: *Trees, node: NodeId, name: []const u8) Read {
             const text = tree.text(declared, resolver.src_bytes);
             if (!std.mem.eql(u8, tree.text(copied, resolver.src_bytes), text)) continue;
             tree.words.column(.owner)[tree.arg(copied, 1) - 1] = owner;
+        }
+        // a namespace's names land as ``x`name``
+        for (shown_names.items) |written| {
+            if (!std.mem.eql(u8, tree.text(copied, resolver.src_bytes), written)) continue;
+            const word = tree.arg(copied, 1) - 1;
+            tree.words.column(.at)[word] = tree.text_bytes.len;
+            tree.words.column(.len)[word] += @intCast(1 + namespace.?.name.len);
+            tree.text_bytes.append(written);
+            tree.text_bytes.push('`');
+            tree.text_bytes.append(namespace.?.name);
+            break;
         }
     }
 
@@ -857,11 +892,7 @@ fn included_file(resolver: *Resolver, node: NodeId) ?*Resolver.Session.File {
         const leaf: NodeId = @intCast(i);
         if (tree.token(leaf) != null and tree.arg(leaf, 1) != 0) break tree.arg(leaf, 1);
     } else return null;
-    const at = tree.words.column(.at)[word - 1];
-    for (resolver.session.files.items) |*file| {
-        if (at >= file.at and at - file.at < file.len) return file;
-    }
-    return null;
+    return resolver.session.file_at(tree.words.column(.at)[word - 1]);
 }
 
 // a file is declared once like a module: a top splice of an `include` of a file the program
@@ -872,6 +903,7 @@ fn is_declared_again(self: *Trees, splice_node: NodeId, block: NodeId) bool {
     const operand_kind = tree.kind(tree.arg(splice_node, 0));
     const declares_file = operand_kind == .include or operand_kind == .include_raw;
     if (!resolver.macros.top or !declares_file or tree.manychildren(block).len == 0) return false;
+    if (resolver.session.namespace_of_include(tree.arg(splice_node, 0)) != null) return false;
 
     const file = included_file(resolver, tree.manychildren(block)[0]) orelse return false;
     for (resolver.session.files.items) |other| {
@@ -883,26 +915,26 @@ fn is_declared_again(self: *Trees, splice_node: NodeId, block: NodeId) bool {
 
 // views of trees: a declaration, function, type, field or parameter by its parts, a node by fields
 
-// what a declaration declares (`fun f = ..` is its function), anything else itself
-fn subject(tree: *const ParseTree, declaration: NodeId) NodeId {
+// a declaration without its `pub`, `mut` and `stc`
+fn without_modifiers(tree: *const ParseTree, declaration: NodeId) NodeId {
     var bare = declaration;
     while (true) {
         const kind = tree.kind(bare);
-        if (kind != .mod_pub and kind != .mod_mut and kind != .mod_stc) break;
+        if (kind != .mod_pub and kind != .mod_mut and kind != .mod_stc) return bare;
         bare = tree.arg(bare, 0);
     }
+}
+
+// what a declaration declares (`fun f = ..` is its function), anything else itself
+fn subject(tree: *const ParseTree, declaration: NodeId) NodeId {
+    const bare = without_modifiers(tree, declaration);
     const kind = tree.kind(bare);
     if (kind == .assign or kind == .assign_typed) return tree.arg(bare, 1);
     return bare;
 }
 
 fn def_var(tree: *const ParseTree, declaration: NodeId) NodeId {
-    var bare = declaration;
-    while (true) {
-        const kind = tree.kind(bare);
-        if (kind != .mod_pub and kind != .mod_mut and kind != .mod_stc) break;
-        bare = tree.arg(bare, 0);
-    }
+    const bare = without_modifiers(tree, declaration);
     if (tree.kind(bare) == .assign_typed) return tree.arg(bare, 0);
     if (tree.kind(bare) == .def_var) return bare;
     return 0;

@@ -1,0 +1,4 @@
+# a namespace of a file that does not lex is `include_failed`, the passes end with it
+broken = <include "../lib/broken_lex.mn">; #! include_failed
+
+main = () {}

@@ -184,8 +184,7 @@ pub fn coercion(pool: *StaticPool, from_type: Index, to_type: Index) CoercionKin
             .member_to_packed
         else
             .member_to_unified;
-        for (to_key.unified_variant_type.members) |member| if (member == from) return into;
-        return .incompatible;
+        return if (pool.is_member(to, from)) into else .incompatible;
     }
     if (to_key == .trait_type and pool.implements(from, to)) return .impl_to_trait;
     if (from_key == .pointer_type and to_key == .pointer_type) {
@@ -205,6 +204,38 @@ pub fn coercion(pool: *StaticPool, from_type: Index, to_type: Index) CoercionKin
     const wraps_payload = payload != .none and from_key != .variant_type and
         pool.coercion(from, payload) != .incompatible;
     return if (wraps_payload) .payload_to_self_tagged else .incompatible;
+}
+
+// the members of both sides, each once, a unified variant of the same kind on a side brings its
+// members; a single one is just itself. a member is stored in it, or in a packed one a function is
+// realized for it, so it needs a size
+pub fn unified_of(
+    pool: *StaticPool,
+    left: Index,
+    right: Index,
+    is_packed: bool,
+) StaticPool.UnifiedOf {
+    const mark = pool.scratch.len;
+    defer pool.scratch.len = mark;
+    for ([_]Index{ left, right }, 0..) |side, i| {
+        if (side == .poison_type) continue;
+        const is_same_kind = pool.tag(side) == .unified_variant_type and
+            pool.get(side).unified_variant_type.is_packed == is_packed;
+        const side_members: []const Index = if (is_same_kind)
+            pool.get(side).unified_variant_type.members
+        else
+            &.{side};
+        if (!is_same_kind and pool.is_unstorable(side)) return .{ .sizeless_side = @intCast(i) };
+        for (side_members) |member| {
+            const known = pool.scratch.buffer[mark..pool.scratch.len];
+            if (std.mem.indexOfScalar(Index, known, member) == null) pool.scratch.push(member);
+        }
+    }
+    const members = pool.scratch.buffer[mark..pool.scratch.len];
+    if (members.len == 1) return .{ .unified = members[0] };
+    return .{ .unified = pool.intern(.{
+        .unified_variant_type = .{ .members = members, .is_packed = is_packed },
+    }) };
 }
 
 // the type both branches of a choice become, and how each side gets there

@@ -1,0 +1,12 @@
+# a namespace's name is taken everywhere: by a global, a second namespace, a parameter, a local and
+# a binder (`ns.x` reaches the namespace wherever it is written)
+kit = <include "../lib/macro_kit.mn">;
+stc u32 kit = 3; #! duplicate_declaration
+math = <include "../lib/math.mn">;
+math = <include "../lib/macro_kit.mn">; #! duplicate_declaration
+
+fun parameter = (u32 math) -> u32: ret 1; #! duplicate_declaration
+fun local = () -> u32 { u32 math = 1; ret 1; } #! duplicate_declaration
+fun binder = (u32 x) -> u32: ret match x { math => 1 }; #! duplicate_declaration
+
+main = () {}

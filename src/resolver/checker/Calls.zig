@@ -563,10 +563,10 @@ fn call_declared(
     if (static_pool.is_length_generic(resolver.decl_pool.get(callee, .value_type))) {
         const generic_buffer = resolver.temporary_slice(StaticPool.Index, arguments.nodes.len + 1);
         var generic_count: usize = 0;
-        // a trait's method realizes its `self` for the receiver's type
+        // a method of a trait or a packed variant realizes its `self` for the receiver's type
         if (self_count == 1) {
             const self_parameter = resolver.types.signature(callee).parameters[0];
-            if (static_pool.trait_of(self_parameter) != .none) {
+            if (static_pool.is_realized_per_type(self_parameter)) {
                 const self_node = if (receiver != 0)
                     receiver
                 else
@@ -574,7 +574,7 @@ fn call_declared(
                 const self_type = static_pool.substitute_type_variables(
                     resolver.node_types[self_node],
                 );
-                generic_buffer[0] = static_pool.unwrapped(self_type);
+                generic_buffer[0] = static_pool.realized_for(self_type);
                 generic_count = 1;
             }
         }
@@ -589,12 +589,8 @@ fn call_declared(
                 // what a generic parameter takes from its argument
                 const argument_type = arguments.types[i];
                 generic_buffer[generic_count] = blk: {
-                    // a packed variant per case: each has a size of its own
-                    if (static_pool.packed_of(parameter_type) != .none) {
-                        break :blk static_pool.through_pointer(argument_type);
-                    }
                     if (static_pool.is_realized_per_type(parameter_type)) {
-                        break :blk static_pool.unwrapped(argument_type);
+                        break :blk static_pool.realized_for(argument_type);
                     }
                     if (static_pool.tag(parameter_type) != .meta_type) {
                         const length = static_pool.argument_length(argument_type, parameter_type);
@@ -626,11 +622,12 @@ fn call_declared(
             if (context.is_interpreted) resolver.node_declarations[node] = callee;
             return .poison_type;
         }
-        // none is ruled out above. a template or trait argument comes from an abstract body,
-        // which is checked once
+        // none is ruled out above. a template, trait or packed argument comes from an abstract
+        // body, which is checked once
         for (generic_arguments) |generic| {
-            const tag = static_pool.tag(generic);
-            if (tag != .template_type and tag != .trait_type) continue;
+            const is_abstract = static_pool.tag(generic) == .template_type or
+                static_pool.is_parameter_only(generic);
+            if (!is_abstract) continue;
 
             resolver.declarations.check_body(callee);
             return resolver.types.signature(callee).return_type;

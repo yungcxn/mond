@@ -166,9 +166,17 @@ pub fn literal_type(
     if (value == .poison_type) return value;
     if (kind == .string) return static_pool.type_of(value);
 
-    // a single-payload variant takes the literal as its payload (`Opt8 x = 42`)
+    // a single-payload variant takes the literal as its payload (`Opt8 x = 42`), a unified variant
+    // as its first number member it fits (`u8 || i64 v = -4` is an i64)
     if (target != .none and static_pool.tag(target) == .variant_type) {
         target = static_pool.single_payload(target);
+    } else if (target != .none and static_pool.tag(target) == .unified_variant_type) {
+        target = for (static_pool.get(target).unified_variant_type.members) |member| {
+            const member_properties = static_pool.properties(member);
+            if (member_properties.is_float) break member;
+            if (kind == .float) continue;
+            if (member_properties.is_integer and static_pool.fits(value, member)) break member;
+        } else .none;
     }
     const properties = if (target == .none)
         StaticPool.TagProperties{}

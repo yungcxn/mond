@@ -1,0 +1,3 @@
+# the head of a chain of libraries, each including the next by a path relative to itself
+<include "two.mn">;
+pub fun chain_one = () -> u32: ret chain_two() + 1;

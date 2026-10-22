@@ -174,6 +174,9 @@ pub const JoinResult = struct {
     right: CoercionKind,
 };
 
+// `A || B`, `A ||| B`, or the side of no size that can be no member
+pub const UnifiedOf = union(enum) { unified: Index, sizeless_side: u1 };
+
 // the first entries are fixed, so `u8`, `bool`, ... are known without any lookup
 pub const Index = enum(u32) {
     u8_type,
@@ -388,6 +391,7 @@ pub const template_of = type_queries.template_of;
 pub const trait_of = type_queries.trait_of;
 pub const is_realized_per_type = type_queries.is_realized_per_type;
 pub const packed_of = type_queries.packed_of;
+pub const realized_for = type_queries.realized_for;
 pub const is_parameter_only = type_queries.is_parameter_only;
 pub const contains_parameter_only = type_queries.contains_parameter_only;
 pub const contains_template = type_queries.contains_template;
@@ -404,6 +408,7 @@ pub const is_element_pointer = type_queries.is_element_pointer;
 pub const element_type = type_queries.element_type;
 pub const implements = type_queries.implements;
 pub const tag_type_of = type_queries.tag_type_of;
+pub const stored_tag_type = type_queries.stored_tag_type;
 pub const lookup_member = type_queries.lookup_member;
 pub const first_payload_case = type_queries.first_payload_case;
 pub const niche_case = type_queries.niche_case;
@@ -414,17 +419,25 @@ pub const is_tree = type_queries.is_tree;
 pub const contains_trees = type_queries.contains_trees;
 pub const holds_function_value = type_queries.holds_function_value;
 pub const is_untagged = type_queries.is_untagged;
+pub const is_untagged_at_run_time = type_queries.is_untagged_at_run_time;
+pub const is_member = type_queries.is_member;
 pub const holds_untagged_variant = type_queries.holds_untagged_variant;
 pub const is_unstorable = type_queries.is_unstorable;
 pub const tag_range = type_layouts.tag_range;
 pub const unified_offset = type_layouts.unified_offset;
+pub const Room = type_layouts.Room;
+pub const payload_room = type_layouts.payload_room;
+pub const field_offset = type_layouts.field_offset;
 pub const brings_cases = type_layouts.brings_cases;
+pub const case_tag = type_layouts.case_tag;
+pub const tag_in = type_layouts.tag_in;
 pub const unified_tag_type = type_layouts.unified_tag_type;
 pub const layout = type_layouts.layout;
 pub const smallest_tag_type = type_layouts.smallest_tag_type;
 pub const unify = type_relations.unify;
 pub const coercion = type_relations.coercion;
 pub const join = type_relations.join;
+pub const unified_of = type_relations.unified_of;
 pub const cast_kind = type_relations.cast_kind;
 pub const substitute_type_variables = type_relations.substitute_type_variables;
 pub const occurs_in = type_relations.occurs_in;
