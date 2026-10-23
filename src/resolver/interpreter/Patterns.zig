@@ -48,6 +48,8 @@ pub fn match(self: *Patterns, node: NodeId) Value {
     for (0..tree.manychildren(arms).len) |arm_index| {
         const arm = tree.manychildren(arms)[arm_index];
         if (self.matches(tree.arg(arm, 0), value)) return interpreter.evaluate(tree.arg(arm, 1));
+        // a guard that jumped leaves the arms after it
+        if (interpreter.unwind != .none) return .poison;
     }
     return interpreter.fail(node, .non_exhaustive_match, interpreter.interned(value), .none);
 }

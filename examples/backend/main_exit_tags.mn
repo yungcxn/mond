@@ -1,0 +1,5 @@
+# `main` returning a variant without payloads exits with the tag, any tag (modulo 256)
+#+
+#? exit 173
+variant Status = +(Ok = 0, Bad = 3, Worse = 0xDEAD);
+main = (i32 argc, &&u8 argv) -> Status: ret if argc == 1: Status.Worse else: Status.Bad;

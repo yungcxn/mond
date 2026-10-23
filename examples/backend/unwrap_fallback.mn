@@ -1,0 +1,172 @@
+# a bare `x??` that finds no payload returns the fallback of the function's result, defers run;
+# the values come from argc (1), so nothing is known while compiling
+<include "lib/out.mn">;
+mut i64 ONE = 0;
+variant Opt = +(Some(i32), None);
+variant Res = +(Ok(i32), Err(u8));
+fun some = (i32 v) -> Opt: ret if ONE == 1: Opt.Some(v) else: Opt.None;
+fun none = () -> Opt: ret if ONE == 1: Opt.None else: Opt.Some(1);
+fun err = (u8 code) -> Res: ret if ONE == 1: Res.Err(code) else: Res.Ok(1);
+
+# numbers, `bool`, operations the unwrap ends
+fun to_u8 = (Opt o) -> u8: ret o?? as u8;
+fun to_f64 = (Opt o) -> f64: ret o?? as f64 + 0.5;
+fun positive = (Opt o) -> bool: ret o?? > 0;
+fun sum = (Opt o) -> i32: ret (o?? + 1) * 100;
+fun listed = (Opt o) -> [2]i32: ret [o??, 100];
+fun indexed = (Opt o) -> u8 { [3]u8 a = [7, 8, 9]; ret a[o?? as u64] + 100; }
+fun divided = (Opt o) -> i32: ret 100 / o??;
+
+# arrays and records: every element, every field its default (run at the failure) or fallback
+type Point = *(i32 x = 1, i32 y, f32 z = 0.5);
+fun stamp = () -> u32 {
+    line_u64(77);
+    ret 9;
+}
+type Stamped = *(u32 at = stamp(), u8 n);
+fun point = (Opt o) -> Point { i32 v = o??; ret Point(v, v, 2.0); }
+fun stamped = (Opt o) -> Stamped { i32 v = o??; ret Stamped(1, 1); }
+fun wide = (Opt o) -> [64]u32 { i32 v = o??; mut [64]u32 a; a[63] = 1; ret a; }
+fun points = (Opt o) -> [3]Point { i32 v = o??; ret [Point(v, v), Point(v, v), Point(v, v)]; }
+fun options = (Res r) -> [2]Opt { i32 v = r??; ret [Opt.Some(v), Opt.Some(v)]; }
+
+# variants: a case without payload, else the case held, else the case tagged smallest
+type Span = *(u32 from, u32 to = 10);
+variant Many = +(Ok(u32), Short(u8), Long(Span), Named(u8 code, bool fatal));
+variant Late = +(Second(u8) = 9, First(Span) = 4);
+variant Bare = +(A = 2, B = 1, C = 3);
+variant Err8 = +(Err = 0xFF, Fine(u8)) tagtype self;
+fun short = (u8 s) -> Many: ret if ONE == 1: Many.Short(s) else: Many.Ok(1);
+fun long = () -> Many: ret if ONE == 1: Many.Long(Span(1, 2)) else: Many.Ok(1);
+fun named = () -> Many: ret if ONE == 1: Many.Named(3, true) else: Many.Ok(1);
+fun again = (Res r) -> Res { i32 v = r??; ret Res.Ok(v + 1); }
+fun many = (Many m) -> Many { u32 v = m??; ret Many.Ok(v + 1); }
+fun late = (Opt o) -> Late { i32 v = o??; ret Late.Second(1); }
+fun bare = (Opt o) -> Bare { i32 v = o??; ret Bare.C; }
+fun err8 = (Opt o) -> Err8 { i32 v = o??; ret Err8.Fine(v as u8); }
+fun to_opt = (Res r) -> Opt { i32 v = r??; ret Opt.Some(v); }
+fun code_of = (Res r) -> u64: ret match r { Res.Ok(v) => v as u64, Res.Err(e) => e as u64 + 1000 };
+fun many_of = (Many m) -> u64: ret match m {
+    Many.Ok(v) => v as u64,
+    Many.Short(s) => s as u64 + 10,
+    Many.Long(span) => (span.from + span.to) as u64 + 20,
+    Many.Named(code, fatal) => code as u64 + 30 + (if fatal: 100 else: 0),
+};
+
+# unified variants pick among their cases alike
+variant Num = u64 || f32;
+variant Either = u64 || Opt;
+variant Both = Res || Many;
+fun num = (Opt o) -> Num { i32 v = o??; ret 3.0 as f32; }
+fun either = (Opt o) -> Either { i32 v = o??; ret 3 as u64; }
+fun both = (Many m) -> Both { u32 v = m??; ret Res.Ok(1); }
+fun num_of = (Num n) -> u64: ret match n { u64 u => u + 1, f32 f => 50 };
+fun either_of = (Either e) -> u64: ret match e { u64 u => u, Opt.Some(v) => 60, Opt.None => 70 };
+fun both_of = (Both b) -> u64: ret match b { Many.Short(s) => s as u64 + 80, _ => 90 };
+
+# the innermost function returns; defers run; loops, guards and closures are left
+type IntFn = (Opt) -> i32;
+type Counter = *(mut u32 n) !{
+    fun take = (Opt o) -> u32 { i32 v = o??; self.n += v as u32; ret self.n; };
+};
+stcfun pick = (type T): (Opt o, T other) -> T { i32 v = o??; ret other; }
+fun call = (IntFn f, Opt o) -> i32: ret f(o) + 1000;
+fun lambda = (Opt o) -> i32: ret call((Opt p) -> i32: ret p?? + 1, o);
+fun method = (Opt o) -> u32 { mut Counter c = Counter(5); ret c.take(o) + 10; }
+fun deferred = (Opt o) -> u32 {
+    defer line_u64(5);
+    i32 v = o??;
+    line_u64(6);
+    ret 1;
+}
+fun looped = (Opt o) -> u32 {
+    mut u32 s = 0;
+    for i in 0..<3: s += o?? as u32;
+    ret s + 100;
+}
+fun guard = (Opt o, i32 n where n > 0 else o??) -> i32: ret n + 100;
+fun closure = (Opt o) -> i32 {
+    i32 k = 7;
+    fun add = (Opt p) -> i32: ret p?? + k;
+    ret add(o) + 100;
+}
+fun inferred = (Opt o): o?? + 1;
+mut u32 BUMPS = 0;
+fun bump = () -> i32 {
+    BUMPS += 1;
+    ret 1;
+}
+fun skipped = (Opt o) -> i32: ret o?? + bump();
+type Box = *(u8 x, u8 y);
+variant OptBox = +(Some(Box), None);
+fun member = (OptBox b) -> u16: ret (b??).y as u16 + 100;
+fun matched = (Opt o) -> i32: ret (match o?? { 0 => 10, _ => 20 }) + 100;
+fun tested = (Opt o) -> i32 { if o?? > 0 { ret 1; } ret 2; }
+stcfun unwrapping = (ast e) -> ast: ret quote: @e??;
+fun spliced = (Opt o) -> i32: ret <unwrapping(quote: o)> + 1;
+trait Counted = !{
+    fun count = () -> u32;
+    fun safe = (Opt o) -> u32: ret o?? as u32 + self.count();
+}
+type Five = *(u8 n) implof Counted !{ fun count = () -> u32: ret 5; }
+fun via_trait = (&Counted c, Opt o) -> u32: ret c.safe(o) + 100;
+fun unit = (Opt o) { i32 v = o??; line_u64(v as u64); }
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    line_u64(to_u8(none()) as u64 + to_u8(some(4)) as u64);   #> 4
+    line_u64(((to_f64(none()) + to_f64(some(1))) * 10.0) as u64);   #> 15
+    line_u64(positive(none()) as u64);                         #> 0
+    line_i64(sum(none()) as i64);                              #> 0
+    line_i64(listed(none())[1] as i64);                        #> 0
+    line_u64(indexed(none()) as u64 + indexed(some(2)) as u64);   #> 109
+    line_i64(divided(none()) as i64 + divided(some(4)) as i64);   #> 25
+
+    Point p = point(none());
+    line_i64((p.x * 100 + p.y) as i64 + (p.z * 10.0) as i64);  #> 105
+    Stamped s = stamped(none());                               #> 77
+    line_u64(s.at as u64 * 10 + s.n as u64);                   #> 90
+    line_u64(wide(none())[63] as u64 + wide(some(1))[63] as u64 * 10);   #> 10
+    line_i64(points(none())[2].x as i64);                      #> 1
+    line_u64(tagof options(err(1))[1] as u64);                 #> 1
+
+    line_u64(code_of(again(err(7))));                          #> 1000
+    line_u64(code_of(again(Res.Ok(1))));                       #> 2
+    line_u64(many_of(many(short(3))));                         #> 10
+    line_u64(many_of(many(long())));                           #> 30
+    line_u64(many_of(many(named())));                          #> 30
+    line_u64(many_of(many(Many.Ok(3))));                       #> 4
+    line_u64(tagof late(none()) as u64);                       #> 4
+    line_u64(tagof bare(none()) as u64);                       #> 1
+    line_u64((err8(none()) == Err8.Err) as u64);               #> 1
+    line_u64(tagof to_opt(err(1)) as u64);                     #> 1
+
+    line_u64(num_of(num(none())));                             #> 1
+    line_u64(either_of(either(none())));                       #> 70
+    line_u64(both_of(both(short(8))));                         #> 80
+
+    line_i64(lambda(none()) as i64);                           #> 1000
+    line_u64(method(none()) as u64);                           #> 10
+    line_u64(pick(u8)(none(), 7) as u64 + pick(u8)(some(1), 7) as u64);   #> 7
+    line_u64(deferred(none()) as u64);                         #> 5
+                                                               #> 0
+    line_u64(looped(none()) as u64 + looped(some(2)) as u64);  #> 106
+    line_i64(guard(none(), 0) as i64 + guard(none(), 1) as i64);   #> 101
+    line_i64(closure(none()) as i64 + closure(some(1)) as i64);    #> 208
+    line_i64(inferred(none()) as i64 + inferred(some(4)) as i64);  #> 5
+    line_i64(skipped(none()) as i64 * 10 + BUMPS as i64);          #> 0
+    line_i64(skipped(some(1)) as i64 * 10 + BUMPS as i64);         #> 21
+    OptBox boxed = if ONE == 1: OptBox.None else: OptBox.Some(Box(1, 1));
+    line_u64(member(boxed) as u64);                                #> 0
+    line_i64(matched(none()) as i64 + matched(some(0)) as i64);    #> 110
+    line_i64(tested(none()) as i64 * 10 + tested(some(1)) as i64); #> 1
+    line_i64(spliced(none()) as i64 * 10 + spliced(some(4)) as i64);   #> 5
+    Five five = Five(1);
+    u64 traited = via_trait(five.&, none()) as u64 * 1000 + via_trait(five.&, some(4)) as u64;
+    line_u64(traited);                                             #> 100109
+    unit(none());
+    unit(some(3));                                             #> 3
+    # a unit `main` returns too, nothing after the failure runs
+    none()??;
+    line_u64(99);
+}

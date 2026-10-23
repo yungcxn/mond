@@ -1,0 +1,12 @@
+# a failed `x??` in `main` returns the case tagged smallest when none is tagged 0
+<include "lib/out.mn">;
+#? exit 3
+variant Status = +(Worse = 9, Bad = 3);
+variant Opt = +(Some(i32), None);
+main = (i32 argc, &&u8 argv) -> Status {
+    Opt o = if argc > 1: Opt.Some(argc) else: Opt.None;
+    line_u64(1);   #> 1
+    i32 n = o??;
+    line_u64(2);
+    ret Status.Worse;
+}

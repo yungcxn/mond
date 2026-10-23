@@ -1,0 +1,101 @@
+# a `ret`, `brk` or `cont` inside an operand ends the operations around it, like while compiling
+# (positive/flow_jumps_in_operands.mn); the inputs come from argc (1)
+<include "lib/out.mn">;
+mut i64 ONE = 0;
+variant Opt = +(Some(u32), None);
+type Pair = *(u32 a, u32 b);
+fun yes = () -> bool: ret ONE == 1;
+fun no = () -> bool: ret ONE != 1;
+
+fun left = (bool c) -> i32 { i32 x = (if c: ret 5 else: 1) + 10; ret x; }
+fun right = (bool c) -> i32 { i32 x = 10 + (if c: ret 5 else: 1); ret x; }
+fun unary = (bool c) -> i32: ret -(if c: ret 5 else: 1);
+fun anded = (bool c) -> bool: ret (if c: ret true else: false) and false;
+fun listed = (bool c) -> u32 { [2]u32 a = [1, if c: ret 5 else: 2]; ret a[1]; }
+fun add = (u32 a, u32 b) -> u32: ret a + b;
+fun called = (bool c) -> u32: ret add(1, if c: ret 5 else: 2);
+fun made = (bool c) -> u32: ret Pair(if c: ret 5 else: 1, 2).b;
+fun indexed = (bool c) -> u32 { [3]u32 a = [7, 8, 9]; ret a[if c: ret 5 else: 2]; }
+fun cast = (bool c) -> u64: ret (if c: ret 5 else: 1) as u64 + 10;
+
+mut u32 BUMPS = 0;
+fun bump = () -> u32 {
+    BUMPS += 1;
+    ret 1;
+}
+fun skipped = (bool c) -> u32: ret (if c: ret 0 else: 1) + bump();
+
+fun broken = (u32 n) -> u32 {
+    mut u32 s = 0;
+    for i in 0..<n { u32 x = (if i == 2: brk else: i) + 10; s += x; }
+    ret s;
+}
+fun continued = (u32 n) -> u32 {
+    mut u32 s = 0;
+    for i in 0..<n { u32 x = 10 + (if i == 1: cont else: i); s += x; }
+    ret s;
+}
+fun waited = (u32 n) -> u32 {
+    mut u32 i = 0;
+    mut u32 s = 0;
+    while i < n { i += 1; s += (if i == 3: brk else: i) * 10; }
+    ret s;
+}
+fun looped = () -> u32 {
+    mut u32 i = 0;
+    loop { i += 1; u32 x = [i, if i == 4: brk else: 0][0]; }
+    ret i;
+}
+fun nested = (u32 n) -> u32 {
+    mut u32 s = 0;
+    for i in 0..<n { for j in 0..<n { s += (if j == 1: brk else: 1) + i * 0; } s += 100; }
+    ret s;
+}
+
+mut u32 DEFERS = 0;
+fun deferred = (bool c) -> u32 {
+    defer DEFERS += 1;
+    ret (if c: ret 7 else: 2) + 100;
+}
+fun loop_defer = (u32 n) -> u32 {
+    mut u32 k = 0;
+    for i in 0..<n { defer k += 1; u32 x = (if i == 2: brk else: i) + 1; }
+    ret k;
+}
+fun first_some = (Opt a, Opt b) -> u32 {
+    mut u32 s = 0;
+    for o in [a, b] { s += o ?? cont; }
+    ret s;
+}
+fun until_none = (Opt a, Opt b) -> u32 {
+    mut u32 s = 0;
+    for o in [a, b] { s += (o ?? brk) + 1; }
+    ret s;
+}
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    u32 n = argc * 3;
+    line_i64((left(yes()) * 100 + left(no())) as i64);              #> 511
+    line_i64((right(yes()) * 100 + right(no())) as i64);            #> 511
+    line_i64((unary(yes()) * 100 + unary(no())) as i64);            #> 499
+    line_u64((anded(yes()) and !anded(no())) as u64);               #> 1
+    line_u64((listed(yes()) * 10 + listed(no())) as u64);           #> 52
+    line_u64((called(yes()) * 10 + called(no())) as u64);           #> 53
+    line_u64((made(yes()) * 10 + made(no())) as u64);               #> 52
+    line_u64((indexed(yes()) * 10 + indexed(no())) as u64);         #> 59
+    line_u64(cast(yes()) * 100 + cast(no()));                       #> 511
+    u32 skips = skipped(yes()) * 10 + skipped(no());
+    line_u64((BUMPS * 100 + skips) as u64);                         #> 102
+    line_u64(broken(n + 2) as u64);                                 #> 21
+    line_u64(continued(n) as u64);                                  #> 22
+    line_u64(waited(n + 2) as u64);                                 #> 30
+    line_u64(looped() as u64);                                      #> 4
+    line_u64(nested(n) as u64);                                     #> 303
+    u64 defers = (deferred(yes()) * 1000 + deferred(no())) as u64;
+    line_u64(defers + DEFERS as u64 * 1000000);                     #> 2007102
+    line_u64(loop_defer(n + 2) as u64);                             #> 3
+    Opt none = if ONE == 1: Opt.None else: Opt.Some(1);
+    Opt four = if ONE == 1: Opt.Some(4) else: Opt.None;
+    line_u64(first_some(none, four) as u64 * 10 + until_none(four, none) as u64);   #> 45
+}

@@ -219,7 +219,9 @@ pub fn realize(
     const type_variables_before = static_pool.type_variables.count();
     const outer_session = resolver.initialization.enter();
     const diagnostics_mark = resolver.doctor.diagnostics.len();
+    const unwraps_mark = resolver.flow.bare_unwraps.len;
     resolver.declarations.check_function_result(&context, unit);
+    resolver.flow.check_fallbacks(&context, unwraps_mark);
     resolver.doctor.settle(diagnostics_mark);
     context.is_interpreted = false;
     resolver.initialization.leave(outer_session);

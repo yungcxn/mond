@@ -9,6 +9,7 @@ const Completion = @import("Completion.zig");
 const Analysis = @import("Analysis.zig");
 const positions = @import("positions.zig");
 const symbol_classes = @import("symbol_classes.zig");
+const fallbacks = @import("fallbacks.zig");
 const Range = Analysis.Range;
 const Type = Analysis.Type;
 const StaticIndex = std.meta.Child(@FieldType(Resolver, "node_types"));
@@ -355,6 +356,7 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
         analysis.token_meaning[token] = analysis.token_meaning[first_token];
     }
 
+    fallbacks.link(analysis, lexer, resolver);
     for (analysis.token_meaning, spans) |meaning, span| {
         if (meaning == none or meaning == undefined_name) continue;
         const name_range = positions.range(analysis, span[0], span[1]);
@@ -629,7 +631,7 @@ fn case_owner(analysis: *Analysis, resolver: *Resolver, case: anytype) ?Range {
     return analysis.declarations.items()[case_declaration].range;
 }
 
-fn type_text(analysis: *Analysis, resolver: *Resolver, type_index: StaticIndex) []const u8 {
+pub fn type_text(analysis: *Analysis, resolver: *Resolver, type_index: StaticIndex) []const u8 {
     var text: std.Io.Writer.Allocating = .init(analysis.allocator);
     if (type_index != .none and type_index != .poison_type) {
         const pool = &resolver.static_pool;

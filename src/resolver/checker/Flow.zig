@@ -17,6 +17,8 @@ const Flow = @This();
 jumps: [2]u32 = .{ 0, 0 },
 // per open loop the set of unwritten locals its exits merge into
 exits: DynamicBuffer(u32),
+// the bare `x??` of the bodies being checked, their fallback needs the result inferred
+bare_unwraps: DynamicBuffer(NodeId),
 
 const brk_slot = 0;
 const cont_slot = 1;
@@ -26,11 +28,12 @@ const when_true = 0;
 const when_false = 1;
 
 pub fn init(alloc: std.mem.Allocator) Flow {
-    return .{ .exits = .init(alloc, 16) };
+    return .{ .exits = .init(alloc, 16), .bare_unwraps = .init(alloc, 16) };
 }
 
 pub fn deinit(self: *Flow) void {
     self.exits.deinit();
+    self.bare_unwraps.deinit();
 }
 
 pub fn owning_resolver(self: *Flow) *Resolver {
@@ -370,7 +373,18 @@ pub fn check_unwrap(
     }
 
     switch (kind) {
-        .selftag_unwrap => return payload_type,
+        // in a function a failed bare unwrap returns the result's fallback, elsewhere it is an
+        // error while compiling, so its operand has to be static there
+        .selftag_unwrap => {
+            // quoted code is checked where it lands
+            if (resolver.macros.quoting != 0) return payload_type;
+            if (context.return_type != .none) {
+                if (!context.is_abstract) self.bare_unwraps.push(node);
+            } else if (!context.is_static_context) {
+                _ = resolver.interpreter.evaluate_static(context, node);
+            }
+            return payload_type;
+        },
         .selftag_unwrap_fallback => {
             const before_fallback = resolver.initialization.save(0);
             _ = resolver.expressions.check(context, resolver.tree.arg(node, 1), payload_type);
@@ -385,6 +399,84 @@ pub fn check_unwrap(
         // the construct table sends only unwrap kinds here, `<-` is bound above
         else => unreachable,
     }
+}
+
+// the bare unwraps since `mark` once the body's result is inferred: the fallback for each case
+// they fail on
+pub fn check_fallbacks(self: *Flow, context: *FunctionContext, mark: u32) void {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    defer self.bare_unwraps.len = mark;
+    const declared = static_pool.substitute_type_variables(context.return_type);
+    // a stcfun without a declared result returns what its body makes
+    const result = if (declared == .poison_type and context.declaration != .none) blk: {
+        const produced = resolver.declarations.produced_node(context.declaration);
+        break :blk static_pool.substitute_type_variables(resolver.node_types[produced]);
+    } else declared;
+    for (self.bare_unwraps.buffer[mark..self.bare_unwraps.len]) |node| {
+        const operand = resolver.tree.arg(node, 0);
+        const operand_type = static_pool.substitute_type_variables(resolver.node_types[operand]);
+        // a value typed as a case always holds its payload
+        if (static_pool.tag(operand_type) != .variant_type) continue;
+        const missing = self.missing_fallback(result, operand_type);
+        if (missing != .none) resolver.doctor.report(.no_fallback, node, missing, 0);
+    }
+}
+
+// the part of `fallback_type` without a fallback, none when it has one: numbers 0, `false`, every
+// element, every field its default or fallback, the case `fallback_case` picks per failing case
+pub fn missing_fallback(
+    self: *Flow,
+    fallback_type: StaticPool.Index,
+    failing_variant: StaticPool.Index,
+) StaticPool.Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const properties = static_pool.properties(fallback_type);
+    const is_scalar = properties.is_integer or properties.is_float or fallback_type == .bool_type;
+    const is_unit = fallback_type == .unit_type or fallback_type == .runit_type;
+    if (is_scalar or is_unit or fallback_type == .poison_type) return .none;
+    switch (static_pool.get(fallback_type)) {
+        .array_type => |array| {
+            if (static_pool.tag(array.length) != .int_value) return fallback_type;
+            return self.missing_fallback(array.element, .none);
+        },
+        .record_type => {
+            for (resolver.types.field_nodes_of(fallback_type), 0..) |field_node, i| {
+                if (ParseTree.Param.from_node(resolver.tree, field_node).default != 0) continue;
+                const field_type = static_pool.field_type(fallback_type, i);
+                const missing = self.missing_fallback(field_type, .none);
+                if (missing != .none) return missing;
+            }
+            return .none;
+        },
+        .variant_type, .unified_variant_type, .variant_case_type => {
+            if (failing_variant == .none) {
+                return self.missing_case_fallback(fallback_type, .none);
+            }
+            const unwrapped = static_pool.first_payload_case(failing_variant);
+            for (static_pool.get(failing_variant).variant_type.cases) |failing| {
+                if (failing == unwrapped) continue;
+                const missing = self.missing_case_fallback(fallback_type, failing);
+                if (missing != .none) return missing;
+            }
+            return .none;
+        },
+        else => return fallback_type,
+    }
+}
+
+fn missing_case_fallback(
+    self: *Flow,
+    fallback_type: StaticPool.Index,
+    failing: StaticPool.Index,
+) StaticPool.Index {
+    const static_pool = &self.owning_resolver().static_pool;
+    const case = static_pool.fallback_case(fallback_type, failing);
+    if (case == .none) return fallback_type;
+    if (static_pool.tag(case) != .variant_case_type) return self.missing_fallback(case, .none);
+    const payload = static_pool.get(case).variant_case_type.payload;
+    return if (payload == .none) .none else self.missing_fallback(payload, .none);
 }
 
 // a branch of if / match: unit blocks and nested ifs / matches are runit, a plain unit value is not

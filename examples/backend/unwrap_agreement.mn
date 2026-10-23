@@ -1,0 +1,93 @@
+# every fallback rule computed while compiling and at run time agrees; run-time inputs come from
+# argc (1), so LLVM can't fold them
+<include "lib/out.mn">;
+mut i64 ONE = 0;
+variant Opt = +(Some(i32), None);
+fun none = () -> Opt: ret if ONE == 1: Opt.None else: Opt.Some(1);
+fun held = (Many m) -> Many: ret if ONE == 1: m else: Many.Ok(1);
+
+type Span = *(u32 from, u32 to = 10);
+type Guarded = *(u32 n where n > 0 else 9, i16 k = -3);
+type Mixed = *(f32 f, bool b, [2]i8 a, Span s, Opt o);
+variant Many = +(Ok(u32), Short(u8), Long(Span), Named(u8 code, bool fatal));
+variant Signed = +(Hi(u8) = 3, Low = -1, Mid = 2) tagtype i8;
+variant Zeroed = +(Has(u8) = 0, Last = 5, First = 4);
+variant Late = +(Second(u8) = 9, First(Span) = 4);
+variant Niches = +(Code(u8), Bad = 0xFE, Worse = 0xFD) tagtype self;
+variant Pointed = +(Some(&u8), Null) tagtype self;
+variant Either = u64 || Opt;
+variant Both = Opt || Many;
+
+fun f_i8 = (Opt o) -> i8: ret o?? as i8;
+fun f_u64 = (Opt o) -> u64: ret o?? as u64;
+fun f_f32 = (Opt o) -> f32: ret o?? as f32;
+fun f_bool = (Opt o) -> bool: ret o?? > 0;
+fun f_array = (Opt o) -> [3]i16 { i32 v = o??; ret [1, 1, 1]; }
+fun f_spans = (Opt o) -> [2]Span { i32 v = o??; ret [Span(1), Span(1)]; }
+fun f_guarded = (Opt o) -> Guarded { i32 v = o??; ret Guarded(1, 1); }
+fun f_mixed = (Opt o) -> Mixed { i32 v = o??; ret Mixed(1.0, true, [1, 1], Span(1), o); }
+fun f_signed = (Opt o) -> Signed { i32 v = o??; ret Signed.Hi(1); }
+fun f_zeroed = (Opt o) -> Zeroed { i32 v = o??; ret Zeroed.Has(1); }
+fun f_late = (Opt o) -> Late { i32 v = o??; ret Late.Second(1); }
+fun f_niches = (Opt o) -> Niches { i32 v = o??; ret Niches.Code(1); }
+fun f_pointed = (Opt o) -> Pointed { i32 v = o??; ret Pointed.Null; }
+fun f_many = (Many m) -> Many { u32 v = m??; ret Many.Ok(v); }
+fun f_either = (Opt o) -> Either { i32 v = o??; ret 1 as u64; }
+fun f_both = (Many m) -> Both { u32 v = m??; ret Opt.Some(1); }
+
+stc i8 I8 = f_i8(Opt.None);
+stc u64 U64 = f_u64(Opt.None);
+stc f32 F32 = f_f32(Opt.None);
+stc bool BOOL = f_bool(Opt.None);
+stc [3]i16 ARRAY = f_array(Opt.None);
+stc [2]Span SPANS = f_spans(Opt.None);
+stc Guarded GUARDED = f_guarded(Opt.None);
+stc Mixed MIXED = f_mixed(Opt.None);
+stc Signed SIGNED = f_signed(Opt.None);
+stc Zeroed ZEROED = f_zeroed(Opt.None);
+stc Late LATE = f_late(Opt.None);
+stc Niches NICHES = f_niches(Opt.None);
+stc Pointed POINTED = f_pointed(Opt.None);
+stc Many SHORT = f_many(Many.Short(3));
+stc Many LONG = f_many(Many.Long(Span(1, 2)));
+stc Many NAMED = f_many(Many.Named(1, true));
+stc Either EITHER = f_either(Opt.None);
+stc Both BOTH = f_both(Many.Named(1, true));
+
+fun same_mixed = (Mixed a, Mixed b) -> bool: ret a.f == b.f and a.b == b.b and
+    a.a[0] == b.a[0] and a.a[1] == b.a[1] and a.s.from == b.s.from and a.s.to == b.s.to and
+    a.o == b.o;
+fun either_of = (Either e) -> u64: ret match e { u64 u => u, Opt.Some(v) => 60, Opt.None => 70 };
+fun both_of = (Both b) -> u64: ret match b {
+    Opt.None => 1,
+    Many.Named(code, fatal) => code as u64 + 10 + (if fatal: 100 else: 0),
+    _ => 99,
+};
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    line_u64((f_i8(none()) == I8 and f_u64(none()) == U64) as u64);             #> 1
+    line_u64((f_f32(none()) == F32 and f_bool(none()) == BOOL) as u64);         #> 1
+    [3]i16 array = f_array(none());
+    line_u64((array[0] == ARRAY[0] and array[2] == ARRAY[2]) as u64);           #> 1
+    [2]Span spans = f_spans(none());
+    line_u64((spans[1].from == SPANS[1].from and spans[1].to == SPANS[1].to) as u64);   #> 1
+    line_u64(SPANS[1].to as u64);                                               #> 10
+    Guarded guarded = f_guarded(none());
+    line_u64((guarded.n == GUARDED.n and guarded.k == GUARDED.k) as u64);       #> 1
+    line_i64(GUARDED.n as i64 * 100 + GUARDED.k as i64);                       #> 897
+    line_u64(same_mixed(f_mixed(none()), MIXED) as u64);                        #> 1
+    line_u64((f_signed(none()) == SIGNED) as u64);                              #> 1
+    line_i64(tagof SIGNED as i64);                                              #> -1
+    line_u64((f_zeroed(none()) == ZEROED and tagof ZEROED == 4) as u64);        #> 1
+    line_u64((f_late(none()) == LATE and tagof LATE == 4) as u64);              #> 1
+    line_u64((f_niches(none()) == NICHES and NICHES == Niches.Worse) as u64);   #> 1
+    line_u64((f_pointed(none()) == POINTED and POINTED == Pointed.Null) as u64);   #> 1
+    line_u64((f_many(held(Many.Short(3))) == SHORT and SHORT == Many.Short(0)) as u64);   #> 1
+    Many long = f_many(held(Many.Long(Span(1, 2))));
+    line_u64((long == LONG and LONG == Many.Long(Span(0, 10))) as u64);         #> 1
+    Many named = f_many(held(Many.Named(1, true)));
+    line_u64((named == NAMED and NAMED == Many.Named(0, false)) as u64);        #> 1
+    line_u64(either_of(f_either(none())) * 1000 + either_of(EITHER));           #> 70070
+    line_u64(both_of(f_both(held(Many.Named(1, true)))) * 1000 + both_of(BOTH));   #> 1001
+}

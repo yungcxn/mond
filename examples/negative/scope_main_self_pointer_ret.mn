@@ -1,0 +1,3 @@
+# a self tag of a pointer, bool or float is no exit code
+variant Text = +(Some(&u8), None) tagtype self;
+main = () -> Text: ret Text.None; #! invalid_main

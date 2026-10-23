@@ -1889,7 +1889,7 @@ fn unwrap(self: *HighLowerer, node: NodeId) Ref {
     self.builder.branch_if(has_payload, payload_block, empty_block);
     if (kind == .selftag_unwrap) {
         self.builder.go_to(empty_block);
-        self.emit_unreachable();
+        self.return_fallback(value, value_type, case);
         self.builder.go_to(payload_block);
         return self.case_payload(value, case);
     }
@@ -1906,6 +1906,84 @@ fn unwrap(self: *HighLowerer, node: NodeId) Ref {
     self.builder.go_to(merge);
     if (self.builder.is_unreachable) return .none;
     return self.read_current(result);
+}
+
+// a failed bare `x??` returns the fallback of the result, which may be the case `value` holds:
+// each failing case that picks itself is tested in turn, the last failing one needs no test
+fn return_fallback(self: *HighLowerer, value: Ref, value_type: Index, unwrapped: Index) void {
+    const cases = self.static_pool.get(value_type).variant_type.cases;
+    // the unwrapped case alone never fails
+    if (cases.len == 1) return self.emit_unreachable();
+    var tested: usize = 0;
+    var last_failing: Index = .none;
+    for (cases) |failing| {
+        if (failing == unwrapped) continue;
+        if (self.static_pool.fallback_case(self.return_type, failing) != failing) continue;
+        tested += 1;
+        if (tested == cases.len - 1) {
+            last_failing = failing;
+            break;
+        }
+        const own_block = self.builder.new_block();
+        const next_block = self.builder.new_block();
+        self.builder.branch_if(self.tests_case(value, value_type, failing), own_block, next_block);
+        self.builder.go_to(own_block);
+        self.emit_return(self.fallback(self.return_type, failing));
+        self.builder.go_to(next_block);
+    }
+    self.emit_return(self.fallback(self.return_type, last_failing));
+}
+
+// the value `Interpreter.fallback_value` makes, built where it is returned
+fn fallback(self: *HighLowerer, fallback_type: Index, failing: Index) Ref {
+    const pool = self.static_pool;
+    if (!has_value(fallback_type)) return unit();
+    switch (pool.tag(fallback_type)) {
+        .array_type => {
+            const element_type = pool.get(fallback_type).array_type.element;
+            var innermost = element_type;
+            while (pool.tag(innermost) == .array_type) innermost = pool.element_type(innermost);
+            // numbers and `false` are zero bits, arrays of them one zeroed value
+            const is_built = switch (pool.tag(innermost)) {
+                .record_type, .variant_type, .unified_variant_type, .variant_case_type => true,
+                else => false,
+            };
+            if (!is_built) return self.builder.emit(.zeroed, fallback_type, 0, 0);
+            const element = self.fallback(element_type, .none);
+            const mark = self.scratch.len;
+            const length = pool.static_length(fallback_type).?;
+            for (0..length) |_| self.scratch.push(@intFromEnum(element));
+            const elements = self.builder.list(self.scratch.buffer[mark..self.scratch.len]);
+            self.scratch.len = mark;
+            return self.builder.emit(.aggregate, fallback_type, 0, elements);
+        },
+        .record_type, .variant_type, .unified_variant_type, .variant_case_type => {},
+        else => return self.builder.emit(.zeroed, fallback_type, 0, 0),
+    }
+
+    // a record is built like a case, a member of a unified variant that is one case is itself
+    const case = if (pool.tag(fallback_type) == .record_type)
+        fallback_type
+    else
+        pool.fallback_case(fallback_type, failing);
+    const is_case = pool.tag(case) == .variant_case_type;
+    const value = if (!is_case and case != fallback_type) self.fallback(case, .none) else blk: {
+        const record = if (is_case) pool.get(case).variant_case_type.payload else case;
+        const mark = self.scratch.len;
+        const types = &self.resolver.types;
+        const field_nodes = if (record == .none) &.{} else types.field_nodes_of(record);
+        for (field_nodes, 0..) |field_node, i| {
+            if (ParseTree.Param.from_node(self.resolver.tree, field_node).default != 0) {
+                self.scratch.push(none);
+                continue;
+            }
+            const field_value = self.fallback(pool.field_type(record, i), .none);
+            self.scratch.push(@intFromEnum(field_value));
+        }
+        break :blk self.constructed(case, mark);
+    };
+    if (pool.tag(fallback_type) != .unified_variant_type) return value;
+    return self.coerce(value, case, fallback_type);
 }
 
 // loops
@@ -2370,6 +2448,24 @@ fn direct_call(
 fn construct(self: *HighLowerer, target_type: Index, arguments: []const NodeId) Ref {
     const pool = self.static_pool;
     const is_case = pool.tag(target_type) == .variant_case_type;
+    const record = if (is_case) pool.get(target_type).variant_case_type.payload else target_type;
+    const mark = self.scratch.len;
+    if (record == .none) return self.constructed(target_type, mark);
+
+    for (self.resolver.types.field_nodes_of(record)) |_| self.scratch.push(none);
+    for (arguments, 0..) |argument, i| {
+        const field = self.field_index(record, argument, i);
+        const field_type = self.static_pool.field_type(record, field);
+        const value = self.expression_as(self.resolver.tree.arg_value(argument), field_type);
+        self.scratch.buffer[mark + field] = @intFromEnum(value);
+    }
+    return self.constructed(target_type, mark);
+}
+
+// a record or case of the fields in the scratch at `mark`, those still missing defaulted or zeroed
+fn constructed(self: *HighLowerer, target_type: Index, mark: u32) Ref {
+    const pool = self.static_pool;
+    const is_case = pool.tag(target_type) == .variant_case_type;
     const of_variant = if (is_case)
         pool.get(target_type).variant_case_type.variant
     else
@@ -2382,14 +2478,6 @@ fn construct(self: *HighLowerer, target_type: Index, arguments: []const NodeId) 
         return self.builder.emit(.variant_make, variant, case_index, @intFromEnum(Ref.none));
     }
 
-    const mark = self.scratch.len;
-    for (self.resolver.types.field_nodes_of(record)) |_| self.scratch.push(none);
-    for (arguments, 0..) |argument, i| {
-        const field = self.field_index(record, argument, i);
-        const field_type = self.static_pool.field_type(record, field);
-        const value = self.expression_as(self.resolver.tree.arg_value(argument), field_type);
-        self.scratch.buffer[mark + field] = @intFromEnum(value);
-    }
     self.complete_fields(record, mark);
     const fields = self.builder.list(self.scratch.buffer[mark..self.scratch.len]);
     self.scratch.len = mark;

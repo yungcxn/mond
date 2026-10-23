@@ -1,0 +1,224 @@
+# a bare `x??` that finds no payload returns the fallback of the function's result: numbers 0,
+# `false`, every element and field (defaults run), of a variant a case without payload (tagged 0,
+# else the smallest tag), else the case `x` holds when the result has it, else the case tagged
+# smallest; a payload its fallback. outside a function the operand is static
+variant Opt = +(Some(i32), None);
+variant Res = +(Ok(i32), Err(u8));
+stc Opt NONE = Opt.None;
+stc Opt SOME = Opt.Some(4);
+
+# numbers, `bool`, unit
+stcfun to_u8 = (Opt o) -> u8: ret o?? as u8;
+stcfun to_i64 = (Opt o) -> i64: ret o?? as i64;
+stcfun to_f32 = (Opt o) -> f32: ret o?? as f32;
+stcfun to_f64 = (Opt o) -> f64: ret o?? as f64 + 0.5;
+stcfun positive = (Opt o) -> bool: ret o?? > 0;
+stcfun count = (Opt o) -> u32 {
+    mut u32 n = 1;
+    fun add = () { i32 v = o??; n += v as u32; };
+    add();
+    ret n + 1;
+}
+stc u8 U8S = to_u8(NONE) + to_u8(SOME);        #= U8S 4
+stc i64 I64 = to_i64(NONE);                     #= I64 0
+stc f32 F32 = to_f32(NONE);                     #= F32 0
+stc f64 F64 = to_f64(NONE) + to_f64(SOME);      #= F64 4.5
+stc bool BOOLS = positive(NONE) or !positive(SOME);   #= BOOLS false
+stc u32 UNITS = count(NONE) * 10 + count(SOME); #= UNITS 26
+
+# the unwrap ends the operation it is in; a token after `??` that can start an expression starts
+# a fallback, `(x??) * 2` multiplies, a `{` is the block of what holds the unwrap
+stcfun sum = (Opt o) -> i32: ret o?? + 100;
+stcfun product = (Opt o) -> i32: ret (o?? + 1) * 100;
+stcfun negated = (Opt o) -> i32: ret -(o??) - 100;
+stcfun listed = (Opt o) -> [2]i32: ret [o??, 100];
+stcfun indexed = (Opt o) -> u8 { [3]u8 a = [7, 8, 9]; ret a[o?? as u64] + 100; }
+stcfun compared = (Opt o) -> bool: ret o?? == 0;
+stcfun called = (Opt o) -> i32: ret sum(Opt.Some(o??)) + 100;
+stcfun both = (Opt a, Opt b) -> i32: ret (a??) * 10 + b??;
+stcfun minus = (Opt o) -> i32: ret o?? - 1;
+stcfun divided = (Opt o) -> i32: ret 100 / o??;
+stc i32 OPS = sum(NONE) + product(NONE) + negated(NONE) + listed(NONE)[1];   #= OPS 0
+stc u8 IDX = indexed(NONE) + indexed(Opt.Some(2));                          #= IDX 109
+stc bool CMP = compared(NONE) or compared(Opt.Some(0));                     #= CMP true
+stc i32 CALLED = called(NONE) * 1000 + called(SOME);                        #= CALLED 204
+stc i32 BOTH = both(SOME, NONE) * 1000 + both(SOME, SOME);                  #= BOTH 44
+stc i32 DIVIDED = divided(NONE) + divided(SOME);                            #= DIVIDED 25
+stc i32 MINUS = minus(NONE) * 10 + minus(SOME);                             #= MINUS -6
+stcfun matched = (Opt o) -> i32: ret (match o?? { 0 => 10, _ => 20 }) + 100;
+stcfun tested = (OptB b) -> i32 { if b?? { ret 1; } ret 2; }
+stcfun or_false = (OptB b) -> i32 { if (b ?? false) { ret 1; } ret 2; }
+stcfun looping = (OptB b) -> u32 { mut u32 n = 0; while b?? { n += 1; brk; } ret n + 100; }
+stcfun block_fallback = (Opt o) -> i32: ret o ?? ({ i32 k = 3; k * 2; });
+stcfun ranged = (Opt o) -> u32 { mut u32 s = 0; for k in 0..<o?? as u32: s += 1; ret s + 100; }
+stc i32 MATCHED_UNWRAP = matched(NONE) + matched(Opt.Some(0));              #= MATCHED_UNWRAP 110
+stc u32 RANGED = ranged(NONE) + ranged(SOME);                               #= RANGED 104
+stc i32 TESTED = tested(OptB.None) * 100 + tested(YES) * 10 + tested(NO);   #= TESTED 12
+stc i32 OR_FALSE = or_false(OptB.None) * 10 + or_false(YES);               #= OR_FALSE 21
+stc u32 LOOPING = looping(OptB.None) + looping(YES) + looping(NO);         #= LOOPING 201
+stc i32 BLOCK_FALLBACK = block_fallback(NONE) + block_fallback(SOME);      #= BLOCK_FALLBACK 10
+
+# a jump leaves what follows it: the right operand, the right side of `and`; the operation it is
+# in sees no value of another type (`(b??).y` in a function returning `u16`)
+variant OptB = +(Some(bool), None);
+type Box = *(u8 x, u8 y);
+variant OptBox = +(Some(Box), None);
+stcfun skipped = (Opt o) -> u32 {
+    mut u32 n = 0;
+    fun bump = () -> i32 { n += 1; ret 1; };
+    fun inner = () -> i32: ret o?? + bump();
+    i32 r = inner();
+    ret n;
+}
+stcfun anded = (OptB b) -> u32 {
+    mut u32 n = 0;
+    fun bump = () -> bool { n += 1; ret true; };
+    fun inner = () -> bool: ret b?? and bump();
+    bool r = inner();
+    ret n;
+}
+stcfun member = (OptBox b) -> u16: ret (b??).y as u16 + 100;
+stcfun explicit = (Opt o) -> i32: ret (o ?? ret 7) + 5;
+stc u32 SKIPPED = skipped(NONE) * 10 + skipped(SOME);                       #= SKIPPED 1
+stc OptB YES = OptB.Some(true);
+stc OptB NO = OptB.Some(false);
+stc u32 ANDED = anded(OptB.None) * 100 + anded(YES) * 10 + anded(NO);       #= ANDED 10
+stc u16 MEMBER = member(OptBox.None) + member(OptBox.Some(Box(1, 2)));     #= MEMBER 102
+stc i32 EXPLICIT = explicit(NONE) * 100 + explicit(SOME);                   #= EXPLICIT 709
+
+# arrays: every element
+type Small = *(u8 a, bool b);
+stcfun numbers = (Opt o) -> [3]u16 { i32 v = o??; ret [1, 2, 3]; }
+stcfun grid = (Opt o) -> [2][2]f32 { i32 v = o??; ret [[1.0, 1.0], [1.0, 1.0]]; }
+stcfun smalls = (Opt o) -> [2]Small { i32 v = o??; ret [Small(1, true), Small(2, true)]; }
+stcfun options = (Res r) -> [2]Opt { i32 v = r??; ret [Opt.Some(v), Opt.Some(v)]; }
+stcfun empty = (Opt o) -> [0]u8 { i32 v = o??; ret []; }
+stc [3]u16 NUMBERS = numbers(NONE);    #= NUMBERS [0, 0, 0]
+stc [2][2]f32 GRID = grid(NONE);       #= GRID [[0, 0], [0, 0]]
+stc [2]Small SMALLS = smalls(NONE);    #= SMALLS [[0, false], [0, false]]
+stc bool OPTIONS = options(Res.Err(1))[1] == Opt.None;   #= OPTIONS true
+stc u64 EMPTY = lenof empty(NONE);     #= EMPTY 0
+
+# records: a default, else the field's fallback; defaults see the fields before them
+fun doubled = (u32 n) -> u32: ret n * 2;
+type Point = *(i32 x = 1, i32 y, f32 z = 0.5);
+type Config = *(u32 base = 3, u32 twice = doubled(base), Opt mode, Point at, [3]u8 name = "cfg");
+type Pair = *(u8, i16);
+type Guarded = *(u32 n where n > 0 else 9);
+stcfun point = (Opt o) -> Point { i32 v = o??; ret Point(v, v, 2.0); }
+stcfun config = (Opt o) -> Config { i32 v = o??; ret Config(mode = o, at = point(o)); }
+stcfun pair = (Opt o) -> Pair { i32 v = o??; ret Pair(1, 1); }
+stcfun guarded = (Opt o) -> Guarded { i32 v = o??; ret Guarded(5); }
+stc Point POINT = point(NONE);                   #= POINT [1, 0, 0.5]
+stc u32 CONFIG = config(NONE).base * 10 + config(NONE).twice;   #= CONFIG 36
+stc bool MODE = config(NONE).mode == Opt.None;   #= MODE true
+stc Point AT = config(NONE).at;                  #= AT [1, 0, 0.5]
+stc u8 NAME = config(NONE).name[2];              #= NAME 103
+stc Pair PAIR = pair(NONE);                      #= PAIR [0, 0]
+stc u32 GUARDED = guarded(NONE).n;               #= GUARDED 9
+
+# variants: a case without payload first, tagged 0 or else the smallest tag
+variant Bare = +(A = 2, B = 1, C = 3);
+variant Zeroed = +(Has(u8) = 0, Last = 5, First = 4);
+variant Signed = +(Hi(u8) = 3, Low = -1, Mid = 2) tagtype i8;
+variant Zero = +(Hi(u8), Low = -1, Nil = 0, Mid = 2) tagtype i8;
+variant Opt8 = +(Some(u8), None = 0xFF) tagtype self;
+variant Err8 = +(Err = 0xFF, Fine(u8)) tagtype self;
+variant Codes = +(Code(i8), Bad = -1, Worse = -2) tagtype self;
+stcfun bare = (Opt o) -> Bare { i32 v = o??; ret Bare.C; }
+stcfun zeroed = (Opt o) -> Zeroed { i32 v = o??; ret Zeroed.Has(1); }
+stcfun signed = (Opt o) -> Signed { i32 v = o??; ret Signed.Hi(1); }
+stcfun zero = (Opt o) -> Zero { i32 v = o??; ret Zero.Hi(1); }
+stcfun opt8 = (Opt o) -> Opt8 { i32 v = o??; ret v as u8; }
+stcfun err8 = (Opt o) -> Err8 { i32 v = o??; ret Err8.Fine(v as u8); }
+stcfun codes = (Opt o) -> Codes { i32 v = o??; ret Codes.Code(v as i8); }
+stc u8 BARE = tagof bare(NONE);                      #= BARE 1
+stc u8 ZEROED = tagof zeroed(NONE);                  #= ZEROED 4
+stc i8 SIGNED = tagof signed(NONE);                  #= SIGNED -1
+stc i8 ZERO = tagof zero(NONE);                      #= ZERO 0
+stc bool OPT8 = opt8(NONE) == Opt8.None and opt8(SOME) == Opt8.Some(4);   #= OPT8 true
+stc bool ERR8 = err8(NONE) == Err8.Err;              #= ERR8 true
+stc bool CODES = codes(NONE) == Codes.Worse;         #= CODES true
+
+# without one the case `x` holds when the result has it, its payload the fallback
+type Span = *(u32 from, u32 to = 10);
+variant Many = +(Ok(u32), Short(u8), Long(Span), Named(u8 code, bool fatal));
+stcfun again = (Res r) -> Res { i32 v = r??; ret Res.Ok(v + 1); }
+stcfun many = (Many m) -> Many { u32 v = m??; ret Many.Ok(v + 1); }
+stc bool AGAIN = again(Res.Err(7)) == Res.Err(0) and again(Res.Ok(1)) == Res.Ok(2);   #= AGAIN true
+stc bool SHORT = many(Many.Short(3)) == Many.Short(0);                  #= SHORT true
+stc bool LONG = many(Many.Long(Span(1, 2))) == Many.Long(Span(0, 10));  #= LONG true
+stc bool NAMED = many(Many.Named(3, true)) == Many.Named(0, false);     #= NAMED true
+stc bool OK = many(Many.Ok(3)) == Many.Ok(4);                           #= OK true
+
+# else the case tagged smallest, its payload the fallback
+variant Late = +(Second(u8) = 9, First(Span) = 4);
+stcfun ok_of = (Opt o) -> Res { i32 v = o??; ret Res.Ok(v); }
+stcfun late = (Opt o) -> Late { i32 v = o??; ret Late.Second(1); }
+stc bool OK_OF = ok_of(NONE) == Res.Ok(0);                #= OK_OF true
+stc bool LATE = late(NONE) == Late.First(Span(0, 10));    #= LATE true
+
+# a unified variant picks among its cases alike: its first member, or a case without payload
+variant Num = u64 || f32;
+variant Either = u64 || Opt;
+variant Both = Res || Many;
+stcfun num = (Opt o) -> Num { i32 v = o??; ret 3.0 as f32; }
+stcfun either = (Opt o) -> Either { i32 v = o??; ret 3 as u64; }
+stcfun mixed = (Many m) -> Both { u32 v = m??; ret Res.Ok(1); }
+stcfun unified_tag = (Num n) -> u8: ret tagof n;
+stcfun is_none = (Either e) -> bool: ret match e { Opt.None => true, _ => false };
+stcfun short_of = (Both b) -> u8: ret match b { Many.Short(s) => s + 1, _ => 0 };
+stc u8 NUM = unified_tag(num(NONE));     #= NUM 0
+stc bool EITHER = is_none(either(NONE)); #= EITHER true
+stc u8 MIXED = short_of(mixed(Many.Short(8)));   #= MIXED 1
+
+# the innermost function returns: a lambda, a local function, a method, a realization
+type Counter = *(mut u32 n) !{
+    fun take = (Opt o) -> u32 { i32 v = o??; self.n += v as u32; ret self.n; };
+};
+type OptFn = (Opt) -> u32;
+fun apply = (OptFn f, Opt o) -> u32: ret f(o);
+stcfun lambda = (Opt o) -> u32: ret apply((Opt p) -> u32: ret p?? as u32 + 1, o) + 10;
+stcfun local = (Opt o) -> u32 { fun f = (Opt p) -> u32: ret p?? as u32 + 1; ret f(o) + 10; }
+stcfun method = (Opt o) -> u32 { mut Counter c = Counter(5); ret c.take(o) + 10; }
+stcfun pick = (type T): (Opt o, T other) -> T { i32 v = o??; ret other; }
+stc u32 LAMBDA = lambda(NONE);       #= LAMBDA 10
+stc u32 LOCAL = local(NONE);         #= LOCAL 10
+stc u32 METHOD = method(NONE);       #= METHOD 10
+stc u8 PICKED = pick(u8)(NONE, 7) + pick(u8)(SOME, 7);    #= PICKED 7
+stc bool PICKED_OPT = pick(Opt)(NONE, SOME) == Opt.None;  #= PICKED_OPT true
+
+# a default is static; spliced code returns from where it lands, quoted code is no code yet; a
+# trait's default returns from the realization for the implementer
+fun static_default = (Opt o, i32 k = SOME??) -> i32: ret k;
+stcfun unwrapping = (ast e) -> ast: ret quote: @e??;
+fun spliced = (Opt o) -> i32: ret <unwrapping(quote: o)> + 1;
+fun quoted = (Opt o) -> &u8 { stc q = quote: o??; ret "x"; }
+trait Counted = !{
+    fun count = () -> u32;
+    fun safe = (Opt o) -> u32: ret o?? as u32 + self.count();
+}
+type Five = *(u8 n) implof Counted !{ fun count = () -> u32: ret 5; }
+fun via_trait = (&Counted c, Opt o) -> u32: ret c.safe(o) + 100;
+stc Five FIVE = Five(1);
+stc i32 DEFAULTED = static_default(NONE);                                   #= DEFAULTED 4
+stc i32 SPLICED = spliced(NONE) * 10 + spliced(SOME);                       #= SPLICED 5
+stc u32 VIA_TRAIT = via_trait(FIVE.&, NONE) * 1000 + via_trait(FIVE.&, SOME);   #= VIA_TRAIT 100109
+
+# an inferred result, a guard's `else`, nested unwraps, a fallback that is a bare unwrap
+stcfun inferred = (Opt o): o?? + 1;
+fun inferred_fun = (Opt o): o?? + 1;
+fun guard = (Opt o, i32 n where n > 0 else o??) -> i32: ret n + 100;
+stcfun nested = (Opt o) -> i32: ret Opt.Some(o??)?? + 100;
+stcfun chained = (Opt a, Opt b) -> i32: ret a ?? b?? + 100;
+stc i32 INFERRED = inferred(NONE) + inferred(SOME) + inferred_fun(NONE);   #= INFERRED 5
+stc i32 GUARD = guard(NONE, 0) + guard(NONE, 1);       #= GUARD 101
+stc i32 NESTED = nested(NONE) + nested(SOME);          #= NESTED 104
+stc i32 CHAINED = chained(NONE, NONE) + chained(NONE, SOME) + chained(SOME, NONE);   #= CHAINED 108
+
+# outside a function a bare unwrap is static: its payload
+stc i32 STATIC = SOME??;       #= STATIC 4
+i32 TOP = SOME?? + 1;
+u32 MATCHED = match SOME { Opt.Some(_) => (SOME?? as u32), Opt.None => 0 };
+
+main = () {}

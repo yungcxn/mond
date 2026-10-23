@@ -473,6 +473,73 @@ pub fn first_payload_case(pool: *const StaticPool, variant: Index) Index {
     return .none;
 }
 
+// the case a failed bare `x??` returns of a variant result: one without payload, else the failing
+// case when it is one of the result's, else any; tagged 0 or else smallest first. a member of a
+// unified variant that is one case is itself, a result without tag has none
+pub fn fallback_case(pool: *const StaticPool, result: Index, failing: Index) Index {
+    var search: FallbackSearch = .{ .pool = pool, .result = result, .failing = failing };
+    switch (pool.get(result)) {
+        .variant_case_type => return result,
+        .variant_type => |variant| {
+            if (variant.tag_mode == .none) return .none;
+            for (variant.cases) |case| search.consider(case);
+        },
+        .unified_variant_type => |unified| for (unified.members) |member| {
+            if (!pool.brings_cases(member)) {
+                search.consider(member);
+                continue;
+            }
+            for (pool.get(member).variant_type.cases) |case| search.consider(case);
+        },
+        else => return .none,
+    }
+    if (search.payload_less != .none) return search.payload_less;
+    return if (search.holds_failing) failing else search.any;
+}
+
+const FallbackSearch = struct {
+    pool: *const StaticPool,
+    result: Index,
+    failing: Index,
+    holds_failing: bool = false,
+    payload_less: Index = .none,
+    payload_less_tag: i128 = 0,
+    any: Index = .none,
+    any_tag: i128 = 0,
+
+    fn consider(search: *FallbackSearch, entry: Index) void {
+        const pool = search.pool;
+        const tag = if (pool.tag(search.result) == .unified_variant_type)
+            pool.tag_in(search.result, entry)
+        else
+            signed_tag(pool, pool.get(entry).variant_case_type.tag);
+        if (entry == search.failing) search.holds_failing = true;
+        if (search.any == .none or comes_first(tag, search.any_tag)) {
+            search.any = entry;
+            search.any_tag = tag;
+        }
+        const is_case = pool.tag(entry) == .variant_case_type;
+        if (!is_case or pool.get(entry).variant_case_type.payload != .none) return;
+        if (search.payload_less == .none or comes_first(tag, search.payload_less_tag)) {
+            search.payload_less = entry;
+            search.payload_less_tag = tag;
+        }
+    }
+
+    fn comes_first(tag: i128, other: i128) bool {
+        if (tag == 0 or other == 0) return tag == 0 and other != 0;
+        return tag < other;
+    }
+
+    fn signed_tag(pool: *const StaticPool, tag: Index) i128 {
+        if (pool.tag(tag) != .int_value) return 0;
+        const int = pool.get(tag).int_value;
+        const is_signed = pool.tag(int.value_type) == .int_type and
+            pool.get(int.value_type).int_type.signedness == .signed;
+        return if (is_signed) @as(i64, @bitCast(int.bits)) else int.bits;
+    }
+};
+
 // the single payload field of a variant with exactly one payload case (`Opt8.Some(u8)`), or none
 pub fn single_payload(pool: *const StaticPool, variant: Index) Index {
     if (pool.tag(variant) != .variant_type) return .none;

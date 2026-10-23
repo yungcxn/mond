@@ -34,7 +34,7 @@ Diagnostics go to stderr as `file:line:column: code operands`, which editors and
 
 Records, arrays and variants live in memory: they are passed by address and returned through a pointer the caller gives. LLVM's passes promote small ones to registers in every mode but `none`.
 
-The runtime checks stop the program with a trap (a debugger shows the line) on a division or remainder by zero (and of the smallest integer by `-1`), a shift by the width or more, an index past the end of an array, and on reaching code that can't be reached, like a failing `x??`. Without them these are undefined behavior. At compile time the same operations have no value (`static_eval_failed`). Debug symbols (`-d`) are independent of the mode: `-m none -d` is what other compilers call a debug build.
+The runtime checks stop the program with a trap (a debugger shows the line) on a division or remainder by zero (and of the smallest integer by `-1`), a shift by the width or more, an index past the end of an array, and on reaching code that can't be reached. Without them these are undefined behavior. At compile time the same operations have no value (`static_eval_failed`). Debug symbols (`-d`) are independent of the mode: `-m none -d` is what other compilers call a debug build.
 
 ### C functions
 
@@ -75,7 +75,7 @@ The programs in `examples/backend/` are built and run after that, in the modes `
 
 ## Editor
 
-`mond-lsp` provides highlighting, diagnostics, go to definition, references, outline, hover and completion (also for `ast.` kinds, views and the compiler's `__` names). Setup is described in `lsp/vscode/README.md` and `lsp/vim/README.md`.
+`mond-lsp` provides highlighting, diagnostics, go to definition, references, outline, hover and completion (also for `ast.` kinds, views and the compiler's `__` names). Hovering the `??` of a bare `x??` shows what a failure returns (`ret Opt.None  # Opt`), per realization of a template. Setup is described in `lsp/vscode/README.md` and `lsp/vim/README.md`.
 
 A file that another file includes isn't asked for a `main`.
 
@@ -124,6 +124,7 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `escaping_closure` | a closure, or a value that may hold one, outlives its frame (returned, stored outside it, given to C) |
 | `brk_outside_loop` / `cont_outside_loop` | a jump outside a loop |
 | `ret_type_mismatch` | `ret` disagrees with the result type |
+| `no_fallback` | a bare `x??` in a function whose result has no fallback for it, the operand is the part without one (see [control.md](control.md#unwrapping)) |
 | `non_exhaustive_match` | some value matches no arm |
 | `redundant_match_arm` | (warning) an arm can never be reached first |
 | `assign_to_immutable` | a write to something not `mut` |
@@ -131,7 +132,7 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `use_before_initialization` | a read before every path wrote it |
 | `destructure_type_conflict` | the names of a multi-assignment need different types |
 | `missing_main` | there is no `main` |
-| `invalid_main` | `main` has another signature than `()` or `(argc, &&u8 argv)`, or another result than nothing, an integer or `never` |
+| `invalid_main` | `main` has another signature than `()` or `(argc, &&u8 argv)`, or another result than nothing, an integer, a variant that is one integer or `never` |
 | `stray_unquote` | `@` outside a quote |
 | `frozen_declaration` | a write to a declaration that is already resolved, or a write outside a splice |
 | `include_failed` | the file can't be read, lexed or parsed, or a namespace is declared in a body (`NamespaceInBody`) |

@@ -34,12 +34,15 @@ pub fn jump(self: *Flow, node: NodeId, kind: Kind) Value {
     const tree = interpreter.owning_resolver().tree;
 
     const result: Value = if (kind == .ret) interpreter.evaluate(tree.arg(node, 0)) else .unit;
+    if (interpreter.unwind != .none) return result;
+    interpreter.jumped = result;
     interpreter.unwind = switch (kind) {
         .brk => .brk,
         .cont => .cont,
         else => .ret,
     };
-    return result;
+    // what a jump leaves is poison, `finish_unwind` returns the value of a `ret`
+    return .poison;
 }
 
 pub fn defer_statement(self: *Flow, node: NodeId, kind: Kind) Value {
@@ -97,6 +100,7 @@ pub fn block(self: *Flow, node: NodeId) Value {
     }
 
     const unwind = interpreter.unwind;
+    const jumped = interpreter.jumped;
     // latest first; each defer runs as if no jump were under way
     while (self.defers.len > defers_mark) {
         self.defers.len -= 1;
@@ -110,6 +114,7 @@ pub fn block(self: *Flow, node: NodeId) Value {
         }
     }
     interpreter.unwind = unwind;
+    interpreter.jumped = jumped;
     return result;
 }
 
@@ -277,9 +282,8 @@ pub fn loop(self: *Flow, node: NodeId) Value {
             if (condition.bits == 0) break;
         }
 
+        // a jump leaves poison, what it does is in `unwind`
         const value = interpreter.evaluate(parts.body);
-        if (value.is(.poison_type)) return value;
-
         switch (interpreter.unwind) {
             .brk => {
                 interpreter.unwind = .none;
@@ -287,7 +291,10 @@ pub fn loop(self: *Flow, node: NodeId) Value {
             },
             .ret => return value,
             .cont => interpreter.unwind = .none,
-            .none => if (collects) interpreter.argument_values.push(value),
+            .none => {
+                if (value.is(.poison_type)) return value;
+                if (collects) interpreter.argument_values.push(value);
+            },
         }
 
         const repeat_after = !repeat_first and parts.repeat != 0;
@@ -339,7 +346,7 @@ pub fn unwrap(self: *Flow, node: NodeId) Value {
         const case = interpreter.patterns.case_of(value);
         if (case == .none) break :blk interpreter.patterns.payload_of(value);
 
-        const operand_type = interpreter.node_info(.node_type, operand);
+        const operand_type = interpreter.checked_type(operand);
         if (static_pool.tag(operand_type) == .variant_case_type) {
             break :blk interpreter.patterns.payload_of(value);
         }
@@ -356,7 +363,31 @@ pub fn unwrap(self: *Flow, node: NodeId) Value {
             break :blk .boolean(payload != null);
         },
         .selftag_unwrap_fallback => payload orelse interpreter.evaluate(tree.arg(node, 1)),
-        else => payload orelse
-            interpreter.fail(node, .static_eval_failed, interpreter.interned(value), 0),
+        else => payload orelse blk: {
+            // in a function a failed bare unwrap returns the fallback of its result
+            const resolver = interpreter.owning_resolver();
+            const function = interpreter.current_frame().body.declaration;
+            const in_function = interpreter.has_body_frame() and function != .none and
+                resolver.decl_pool.get(function, .kind).is_function();
+            if (!in_function) {
+                const failed = interpreter.interned(value);
+                break :blk interpreter.fail(node, .static_eval_failed, failed, 0);
+            }
+            const static_pool = &resolver.static_pool;
+            const declared = static_pool.substitute_type_variables(
+                resolver.types.signature(function).return_type,
+            );
+            // a stcfun without a declared result returns what its body makes
+            const result = if (declared == .poison_type)
+                interpreter.node_info(.node_type, resolver.declarations.produced_node(function))
+            else
+                declared;
+            const failing = interpreter.patterns.case_of(value);
+            const fallback = interpreter.fallback_value(result, failing);
+            if (fallback.is(.poison_type)) break :blk fallback;
+            interpreter.jumped = fallback;
+            interpreter.unwind = .ret;
+            break :blk .poison;
+        },
     };
 }

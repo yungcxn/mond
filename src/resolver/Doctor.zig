@@ -74,6 +74,7 @@ const definition_table = .{
     .{ "brk_outside_loop", .@"error", no_operand, no_operand },
     .{ "cont_outside_loop", .@"error", no_operand, no_operand },
     .{ "ret_type_mismatch", .@"error", operand(.type, "found"), operand(.type, "expected") },
+    .{ "no_fallback", .@"error", operand(.type, "type"), no_operand },
     .{ "non_exhaustive_match", .@"error", operand(.type, "type"), no_operand },
     .{ "redundant_match_arm", .warning, no_operand, no_operand },
     .{ "assign_to_immutable", .@"error", no_operand, no_operand },

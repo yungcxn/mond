@@ -79,7 +79,7 @@ fun never_called = () { crash "checked all the same"; }   #! crash
 
 - Values are copied: assignment, parameters, returns and loop variables all copy, and a pointer is the only way to share. Pointers work inside an evaluation but can't escape it.
 - Integers wrap, `/` truncates toward zero, and `>>` is arithmetic on signed types. Floats are rounded to their type at every step.
-- These fail with `static_eval_failed`: `/ 0`, `% 0`, a shift of at least the width, an index out of bounds, a failing `x??`, more than 1,000,000 steps per top-level evaluation (a loop iteration costs a few), and 256 nested calls. A read out of bounds through a pointer is `not_static`.
+- These fail with `static_eval_failed`: `/ 0`, `% 0`, a shift of at least the width, an index out of bounds, a failing `x??` outside a function, more than 1,000,000 steps per top-level evaluation (a loop iteration costs a few), and 256 nested calls. A read out of bounds through a pointer is `not_static`.
 
 ```mond
 stc i8 WR = 127 + 1;                   #= WR -128

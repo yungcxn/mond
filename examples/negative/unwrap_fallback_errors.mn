@@ -1,0 +1,82 @@
+# a bare `x??` needs a fallback of the function's result: pointers, functions, `never`, types and
+# variants without tag have none, a part without one is named. outside a function the operand is
+# static
+variant Opt = +(Some(i32), None);
+variant Res = +(Ok(i32), Err(u8));
+variant Raw = +(Word(u32), Byte(u8)) tagtype _;
+variant Bare = +(A, B);
+type Named = *(&u8 name, u32 n);
+type Defaulted = *(&u8 name = "x", u32 n);
+type IntFn = (i32) -> i32;
+variant Holds = +(Ok(u8), Text(&u8), Code(u8));
+variant Pointing = +(Ok(u8), Text(&u8 at));
+
+fun pointer = (Opt o) -> &u8 { i32 v = o??; ret "x"; }              #! no_fallback
+fun writable = (Opt o, *u32 p) -> *u32 { i32 v = o??; ret p; }     #! no_fallback
+fun function = (Opt o) -> IntFn { i32 v = o??; ret (i32 x) -> i32: ret x; }   #! no_fallback
+fun endless = (Opt o): loop { i32 v = o??; }                       #! no_fallback
+stcfun typed = (Opt o) -> type { i32 v = o??; ret u8; }            #! no_fallback
+stc type TYPED = typed(Opt.None);
+fun untagged = (Opt o) -> Raw { i32 v = o??; ret Raw.Byte(1); }    #! no_fallback
+fun named = (Opt o) -> Named { i32 v = o??; ret Named("x", 1); }  #! no_fallback
+fun pointers = (Opt o) -> [2]&u8 { i32 v = o??; ret ["a", "b"]; } #! no_fallback
+fun nested = (Opt o) -> [1]Named { i32 v = o??; ret [Named("x", 1)]; }   #! no_fallback
+fun inferred = (Opt o, &u8 p) { i32 v = o??; ret p; }              #! no_fallback
+fun string = (Opt o) { i32 v = o??; ret "x"; }
+
+# the case a failing case picks needs a fallback, the others don't matter
+fun held = (Holds h) -> Holds { u8 v = h??; ret Holds.Ok(v); }     #! no_fallback
+fun pointing = (Holds h) -> Pointing { u8 v = h??; ret Pointing.Ok(v); }
+fun reaching = (Pointing p) -> Pointing { u8 v = p??; ret Pointing.Ok(v); }   #! no_fallback
+
+# fine: a default, a case without payload, a unit result, an operand that always holds its payload
+fun defaulted = (Opt o) -> Defaulted { i32 v = o??; ret Defaulted(n = 1); }
+fun optional = (Res r) -> Opt { i32 v = r??; ret Opt.None; }
+fun unit = (Opt o) { i32 v = o??; }
+fun case_typed = () -> &u8 { i32 v = Opt.Some(3)??; ret "x"; }
+
+# a realization, a lambda, a method and a trait default have their own result
+type PtrFn = (Opt) -> &u8;
+fun apply = (PtrFn f, Opt o) -> &u8: ret f(o);
+stcfun pick = (type T): (Opt o, T other) -> T { i32 v = o??; ret other; }   #! no_fallback
+fun use_pick = () -> u8 { &u8 s = pick(&u8)(Opt.None, "x"); ret pick(u8)(Opt.None, 1); }
+fun lambda = (Opt o) -> &u8: ret apply((Opt p) -> &u8 { i32 v = p??; ret "x"; }, o); #! no_fallback
+type Holder = *(u8 n) !{ fun text = (Opt o) -> &u8 { i32 v = o??; ret "x"; }; };   #! no_fallback
+trait Labeled = !{
+    fun id = () -> u32;
+    fun label = (Opt o) -> &u8: ret if (o??) > 0: "a" else: "b";   #! no_fallback
+}
+type Thing = *(u8 n) implof Labeled !{ fun id = () -> u32: ret 1; }
+fun labeled = (Thing t) -> &u8: ret t.label(Opt.None);
+
+# a default runs where its function is called or its record made, no function body: static
+fun runtime_default = (Opt o, i32 k = o??) -> i32: ret k;          #! not_static
+fun failing_default = (Opt o, i32 k = NONE??) -> i32: ret k;       #! static_eval_failed
+type RuntimeField = *(Opt o, i32 c = o??);                         #! not_static
+type FailingField = *(i32 c = NONE??);                             #! static_eval_failed
+
+# quoted code returns from the function it lands in
+fun quoted = (Opt o) -> &u8 { stc q = quote: o??; ret "x"; }
+stcfun unwrapping = (ast e) -> ast: ret quote: @e??;
+fun spliced = (Opt o) -> &u8 { i32 v = <unwrapping(quote: o)>; ret "x"; }   #! no_fallback
+
+# the unwrap still needs a variant with a payload case, and a tag
+fun bare = (Bare e) -> u8: ret e??;                                #! type_mismatch
+fun raw = (Raw r) -> u32: ret r??;                                 #! untagged_variant
+
+# outside a function the operand is static, a failure is an error while compiling
+stc Opt NONE = Opt.None;
+mut Opt RUNTIME = Opt.Some(1);
+stc i32 FAILED = NONE??;                                           #! static_eval_failed
+i32 GLOBAL = NONE??;                                               #! static_eval_failed
+i32 READ = RUNTIME??;                                              #! not_static
+stc i32 FINE = Opt.Some(2)?? + 1;                                  #= FINE 3
+
+# a crash in the fallback is the static error a stcfun asks for
+stcfun loud = (Opt o) -> i32: ret o ?? crash "empty";             #! crash
+stc i32 LOUD = loud(NONE);
+
+# in `main` a unit result is a plain `ret`
+main = () {
+    RUNTIME??;
+}

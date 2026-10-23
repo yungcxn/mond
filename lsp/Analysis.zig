@@ -413,6 +413,119 @@ test "names the resolver never met" {
     try std.testing.expectEqualStrings("&u8", result.decls[result.links[1][3]].detail);
 }
 
+test "a bare unwrap shows the fallback it returns" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\variant Opt = +(Some(i32), None);
+        \\variant Res = +(Ok(i32), Err(u8));
+        \\type Span = *(u32 from, u32 to = 10);
+        \\variant Many = +(Ok(u32), Short(u8), Long(Span));
+        \\variant Err8 = +(Err = 0xFF, Fine(u8)) tagtype self;
+        \\variant Either = u64 || Opt;
+        \\fun stamp = (u32 n) -> u32: ret n;
+        \\type P = *(i32 x = 1, i32 y, &u8 name = "hi", u32 at = stamp(2));
+        \\type Pair = *(u8, i16);
+        \\fun int = (Opt o) -> i32: ret o?? + 1;
+        \\fun float = (Opt o) -> f64: ret o?? as f64;
+        \\fun truth = (Opt o) -> bool: ret o?? > 0;
+        \\fun unit = (Opt o) { i32 v = o??; }
+        \\fun bytes = (Opt o) -> [3]u8 { i32 v = o??; ret [1, 2, 3]; }
+        \\fun long = (Opt o) -> [8]u8 { i32 v = o??; ret [1, 2, 3, 4, 5, 6, 7, 8]; }
+        \\fun record = (Opt o) -> P { i32 v = o??; ret P(y = v); }
+        \\fun pair = (Opt o) -> Pair { i32 v = o??; ret Pair(1, 1); }
+        \\fun option = (Res r) -> Opt { i32 v = r??; ret Opt.Some(v); }
+        \\fun err8 = (Opt o) -> Err8 { i32 v = o??; ret Err8.Fine(1); }
+        \\fun again = (Res r) -> Res { i32 v = r??; ret r; }
+        \\fun many = (Many m) -> Many { u32 v = m??; ret m; }
+        \\fun foreign = (Opt o) -> Res { i32 v = o??; ret Res.Ok(v); }
+        \\fun either = (Opt o) -> Either { i32 v = o??; ret 1 as u64; }
+        \\fun pointer = (Opt o) -> &u8 { i32 v = o??; ret "x"; }
+        \\stcfun pick = (type T): (Opt o, T other) -> T { i32 v = o??; ret other; }
+        \\fun lambda = (Opt o) -> u8 { fun f = (Opt p) -> bool: ret p?? > 0; ret 1; }
+        \\fun nested = (Opt o) -> i32: ret Opt.Some(o??)??;
+        \\fun call = () -> i32: ret option(Res.Ok(1))??;
+        \\fun deref = (&Opt p) -> u8: ret p.*?? as u8;
+        \\fun fallback = (Opt o) -> i32: ret o ?? 3;
+        \\fun case_typed = () -> &u8 { i32 v = Opt.Some(1)??; ret "x"; }
+        \\stc Opt SOME = Opt.Some(2);
+        \\stc i32 TOP = SOME??;
+        \\main = () { a = pick(u8)(Opt.None, 1); b = pick(Opt)(Opt.None, Opt.None); }
+    );
+    const result = analyze(arena.allocator(), source);
+    try std.testing.expectEqual(1, result.diagnostics.len);
+    try std.testing.expectEqualStrings("no_fallback  type &u8", result.diagnostics[0].message);
+    // the `??` at line and character, what hovering it shows
+    const expected = [_]struct { u32, u32, []const u8 }{
+        .{ 9, 31, "ret 0  # i32" },
+        .{ 10, 33, "ret 0.0  # f64" },
+        .{ 11, 34, "ret false  # bool" },
+        .{ 12, 30, "ret" },
+        .{ 13, 40, "ret [0, 0, 0]  # [3]u8" },
+        .{ 14, 39, "ret [0, 0, 0, 0, ..]  # [8]u8" },
+        // defaults as written
+        .{ 15, 37, "ret P(x = 1, y = 0, name = \"hi\", at = stamp(2))  # P" },
+        .{ 16, 38, "ret Pair(0, 0)  # Pair" },
+        // a case without payload, the self tag's one, the case held, else the case tagged 0
+        .{ 17, 39, "ret Opt.None  # Opt" },
+        .{ 18, 38, "ret Err8.Err  # Err8" },
+        .{ 19, 38, "ret Res.Err(0)  # Res" },
+        .{ 20, 39, "ret Many.Short(0) or Many.Long(Span(from = 0, to = 10))  # Many" },
+        .{ 21, 40, "ret Res.Ok(0)  # Res" },
+        .{ 22, 42, "ret Opt.None  # u64 || +(Some, None)" },
+        .{ 23, 40, "no fallback: &u8" },
+        // each realization, the innermost function
+        .{ 24, 57, "ret 0  # u8 | ret Opt.None  # Opt" },
+        .{ 25, 59, "ret false  # bool" },
+        // after brackets, a call and a dereference; an operand typed as a case
+        .{ 26, 43, "ret 0  # i32" },
+        .{ 26, 46, "never fails" },
+        .{ 27, 43, "ret 0  # i32" },
+        .{ 28, 35, "ret 0  # u8" },
+        .{ 30, 48, "never fails" },
+        .{ 32, 18, "outside a function: static_eval_failed" },
+    };
+    for (expected) |unwrap| {
+        const found = try link_at(result, unwrap[0], unwrap[1]);
+        try std.testing.expectEqual(unwrap[1] + 2, found[2]);
+        const declaration = result.decls[found[3]];
+        try std.testing.expectEqualStrings("??", declaration.name);
+        try std.testing.expectEqualStrings(unwrap[2], declaration.detail);
+        try std.testing.expectEqual(null, declaration.selectionRange);
+    }
+    // an unwrap with a fallback shows nothing
+    try std.testing.expectError(error.TestUnexpectedResult, link_at(result, 29, 37));
+}
+
+test "a bare unwrap in a default, a guard and a quote" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\variant Opt = +(Some(i32), None);
+        \\type IntFn = (Opt) -> i32;
+        \\fun apply = (IntFn f, Opt o) -> i32: ret f(o);
+        \\fun defaulted = (Opt o, i32 k = Opt.Some(1)??) -> i32: ret k;
+        \\fun guarded = (Opt o, i32 k where k > 0 else o??) -> u8: ret 1;
+        \\fun inside = (Opt o, i32 k = apply((Opt p) -> i32: ret p?? + 1, o)) -> i32: ret k;
+        \\fun quoted = (Opt o) -> &u8 { stc q = quote: o??; ret "x"; }
+        \\main = () {}
+    );
+    const result = analyze(arena.allocator(), source);
+    try std.testing.expectEqual(0, result.diagnostics.len);
+    // a default runs where the function is called, a guard's `else` and a lambda return
+    const expected = [_]struct { u32, u32, []const u8 }{
+        .{ 3, 43, "outside a function: static_eval_failed" },
+        .{ 4, 46, "ret 0  # u8" },
+        .{ 5, 56, "ret 0  # i32" },
+    };
+    for (expected) |unwrap| {
+        const declaration = result.decls[(try link_at(result, unwrap[0], unwrap[1]))[3]];
+        try std.testing.expectEqualStrings(unwrap[2], declaration.detail);
+    }
+    // quoted code returns from where it lands
+    try std.testing.expectError(error.TestUnexpectedResult, link_at(result, 6, 46));
+}
+
 test "the target, machine code and alignment" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

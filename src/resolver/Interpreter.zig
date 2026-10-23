@@ -47,6 +47,8 @@ pool_indices: DynamicBuffer(Index),
 // a block stored into a cell older than its frame stays until that cell is gone
 floor: u32 = 0,
 floor_cell: u32 = no_cell,
+// the value of a `ret` under way, the operations it leaves get poison
+jumped: Value = .unit,
 // evaluation by kind of node
 variables: Variables,
 flow: Flow,
@@ -180,7 +182,11 @@ pub fn current_frame(self: *Interpreter) Frame {
 
 pub fn finish_unwind(self: *Interpreter, value: Value) Value {
     defer self.unwind = .none;
-    return if (self.unwind == .none or self.unwind == .ret) value else .unit;
+    return switch (self.unwind) {
+        .none => value,
+        .ret => self.jumped,
+        .brk, .cont => .unit,
+    };
 }
 
 pub fn charge_steps(self: *Interpreter, node: NodeId, cost: u32) bool {
@@ -436,6 +442,49 @@ pub fn zero_value(self: *Interpreter, zeroed_type: Index) Value {
     return .block(zeroed_type, first_cell, length);
 }
 
+// what a failed bare `x??` returns, the rules of `Flow.missing_fallback`: numbers 0, `false`, every
+// element, every field its default or fallback, the case `fallback_case` picks for `failing`
+pub fn fallback_value(self: *Interpreter, fallback_type: Index, failing: Index) Value {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    if (fallback_type == .unit_type or fallback_type == .runit_type) return .unit;
+    switch (static_pool.tag(fallback_type)) {
+        .array_type => {
+            const array_type = static_pool.get(fallback_type).array_type;
+            const length: u32 = @intCast(static_pool.get(array_type.length).int_value.bits);
+            const first_cell = self.allocate_cells(length);
+            for (0..length) |i| {
+                const fallback_element = self.fallback_value(array_type.element, .none);
+                self.memory.buffer[first_cell + i] = fallback_element;
+            }
+            return .block(fallback_type, first_cell, length);
+        },
+        .record_type, .variant_type, .unified_variant_type, .variant_case_type => {},
+        else => return self.zero_value(fallback_type),
+    }
+
+    // a record is built like a case, a member of a unified variant that is one case is itself
+    const case = if (static_pool.tag(fallback_type) == .record_type)
+        fallback_type
+    else
+        static_pool.fallback_case(fallback_type, failing);
+    const is_case = static_pool.tag(case) == .variant_case_type;
+    if (!is_case and case != fallback_type) return self.fallback_value(case, .none);
+    const record = if (is_case) static_pool.get(case).variant_case_type.payload else case;
+    if (record == .none) return .pooled(case);
+
+    const field_nodes = resolver.types.field_nodes_of(record);
+    const first_cell = self.allocate_cells(@intCast(field_nodes.len));
+    for (field_nodes, 0..) |field_node, i| {
+        if (ParseTree.Param.from_node(resolver.tree, field_node).default != 0) continue;
+        const field_type = static_pool.field_type(record, i);
+        const value = self.fallback_value(field_type, .none);
+        if (value.is(.poison_type)) return value;
+        self.store_converted(first_cell + i, value, field_type);
+    }
+    return self.calls.constructed(case, record, first_cell);
+}
+
 pub fn evaluate(self: *Interpreter, node: NodeId) Value {
     const resolver = self.owning_resolver();
     if (!self.charge_steps(node, 1)) return .poison;
@@ -465,12 +514,13 @@ pub fn evaluate(self: *Interpreter, node: NodeId) Value {
         .declaration => self.variables.declare(node),
         .compound_assignment, .increment => self.variables.update(node, kind),
         .short_circuit_logic => self.short_circuit(node, kind, first_operand, second_operand),
-        .arithmetic, .comparison, .logical_xor => self.evaluate_binary(
-            node,
-            operators.binary_operator_of(kind),
-            self.evaluate(first_operand),
-            self.evaluate(second_operand),
-        ),
+        .arithmetic, .comparison, .logical_xor => blk: {
+            const left = self.evaluate(first_operand);
+            // a left operand that jumped leaves the right one
+            if (left.is(.poison_type)) break :blk left;
+            const operator = operators.binary_operator_of(kind);
+            break :blk self.evaluate_binary(node, operator, left, self.evaluate(second_operand));
+        },
         .branch => self.flow.branch(node),
         .match => self.patterns.match(node),
         .loop => self.flow.loop(node),
@@ -517,6 +567,7 @@ inline fn short_circuit(
 ) Value {
     const operator = operators.binary_operator_of(kind);
     const left = self.evaluate(left_node);
+    if (left.is(.poison_type)) return left;
     const decided = left.value_type == .bool_type and (left.bits != 0) == (operator == .logic_or);
     if (decided) return left;
     return self.evaluate_binary(node, operator, left, self.evaluate(right_node));

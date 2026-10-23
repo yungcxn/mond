@@ -465,6 +465,7 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
             owner,
         .is_abstract = abstract,
     };
+    const unwraps_mark = resolver.flow.bare_unwraps.len;
     const self_type = if (self_count == 1) context.self_type else .none;
     self.open_declaration_scope(decl_pool.get(declaration, .flags).is_global, self_type, value);
 
@@ -482,8 +483,11 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
         const parameter = ParseTree.Param.from_node(resolver.tree, parameter_node);
         const parameter_types = static_pool.get(function_type).function_type.parameters;
         const parameter_type = parameter_types[i + self_count];
+        // a default runs where the function is called, it is no part of the function's body
         if (parameter.default != 0) {
-            _ = resolver.expressions.check(&context, parameter.default, parameter_type);
+            var default_context = context;
+            default_context.return_type = .none;
+            _ = resolver.expressions.check(&default_context, parameter.default, parameter_type);
         }
 
         const parameter_declaration = self.declare_local(
@@ -515,6 +519,7 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
         self.check_parameter_guards(&context, parameter, parameter_type);
     }
     self.check_function_result(&context, resolver.tree.arg(value, 1));
+    resolver.flow.check_fallbacks(&context, unwraps_mark);
     resolver.scopes.close();
 
     // the first row of a method body is its `self`, a write to it makes the method a writing one
@@ -993,6 +998,13 @@ pub fn template_kind(self: *Declarations, declaration: DeclPool.Index) DeclPool.
     };
 }
 
+// what a function without a declared result returns: its body, or the value its body returns
+pub fn produced_node(self: *Declarations, declaration: DeclPool.Index) NodeId {
+    const tree = self.owning_resolver().tree;
+    const body = tree.arg(self.value_node(declaration), 1);
+    return if (tree.kind(body) == .ret) tree.arg(body, 0) else body;
+}
+
 pub fn value_node(self: *Declarations, declaration: DeclPool.Index) NodeId {
     const resolver = self.owning_resolver();
     const node = resolver.decl_pool.get(declaration, .node);
@@ -1158,7 +1170,7 @@ pub fn check_main(self: *Declarations) void {
         return resolver.doctor.report(.duplicate_declaration, second_node, name, main);
     }
 
-    // `()` or `(u32 argc, &&u8 argv)`, a unit, never or integer result
+    // `()` or `(u32 argc, &&u8 argv)`, a unit, never, integer or integer-like variant result
     const main_type = decl_pool.get(main, .value_type);
     if (main_type == .none) return;
     if (static_pool.tag(main_type) != .function_type) {
@@ -1172,9 +1184,23 @@ pub fn check_main(self: *Declarations) void {
         static_pool.is_pointer(static_pool.pointee(parameters[1])) and
         static_pool.pointee(static_pool.pointee(parameters[1])) == .u8_type;
     const return_type = function.return_type;
+    // a variant whose bits are one int exits with it: self-tagged by an int, or without payloads
+    const is_integer_variant = blk: {
+        if (static_pool.tag(return_type) != .variant_type) break :blk false;
+        const variant = static_pool.get(return_type).variant_type;
+        if (variant.tag_mode == .self) {
+            break :blk static_pool.properties(static_pool.single_payload(return_type)).is_integer;
+        }
+        if (variant.tag_mode == .none) break :blk false;
+        for (variant.cases) |case| {
+            if (static_pool.get(case).variant_case_type.payload != .none) break :blk false;
+        }
+        break :blk true;
+    };
     const result_fits = return_type == .unit_type or
         return_type == .runit_type or
         return_type == .never_type or
-        static_pool.properties(return_type).is_integer;
+        static_pool.properties(return_type).is_integer or
+        is_integer_variant;
     if (!parameters_fit or !result_fits) resolver.doctor.report(.invalid_main, node, main_type, 0);
 }

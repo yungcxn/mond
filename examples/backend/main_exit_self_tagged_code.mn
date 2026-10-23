@@ -1,0 +1,10 @@
+# without the c library: the bits of the payload case are the exit code, modulo 256
+#+
+#? args a bb
+#? exit 254
+variant Exit = +(Code(i32), Fail = 1) tagtype self;
+variant Opt = +(Some(i32), None);
+main = (i32 argc, &&u8 argv) -> Exit {
+    Opt o = if argc > 1: Opt.Some(argc) else: Opt.None;
+    ret Exit.Code((o??) - 5);
+}

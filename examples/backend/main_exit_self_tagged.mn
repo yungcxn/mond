@@ -1,0 +1,13 @@
+# `main` returning a variant self-tagged by an int exits with its bits: a failed `x??` returns the
+# case without payload, `Fail`
+<include "lib/out.mn">;
+#? exit 1
+variant Exit = +(Code(i32), Fail = 1) tagtype self;
+variant Opt = +(Some(i32), None);
+main = (i32 argc, &&u8 argv) -> Exit {
+    Opt o = if argc > 1: Opt.Some(argc) else: Opt.None;
+    line_u64(1);   #> 1
+    i32 n = o??;
+    line_u64(2);
+    ret Exit.Code(n);
+}

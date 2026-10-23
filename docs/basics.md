@@ -10,7 +10,7 @@ fun square = (u32 x) -> u32: ret x * x;
 main = () -> u32: ret square(7);
 ```
 
-`main` takes nothing, or C's pair of the arguments' count and a pointer to them (`u32 argc, &&u8 argv`, any integer type for the count). It returns nothing, an integer (the exit code) or `never`, and falling off the end returns `0`. Any other signature is `invalid_main`.
+`main` takes nothing, or C's pair of the arguments' count and a pointer to them (`u32 argc, &&u8 argv`, any integer type for the count). It returns nothing, an integer (the exit code), a variant that is one integer (self-tagged by an integer, exiting with its bits, or without payloads, exiting with its tag) or `never`, and falling off the end returns `0`. Any other signature is `invalid_main`.
 
 ```mond
 main = (u32 argc, &&u8 argv) -> u8 { ret argc as u8; }

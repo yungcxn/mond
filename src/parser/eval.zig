@@ -750,7 +750,10 @@ pub fn selftag_arrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
 }
 
 pub fn selftag_unwrap(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    if (lookahead.pre[@intFromEnum(try p.peek_tok())] == null) {
+    // a block after `??` belongs to what holds the unwrap (`match x?? {`), a block fallback is in
+    // parentheses like any block operand
+    const next = try p.peek_tok();
+    if (next == .@"pct_{" or lookahead.pre[@intFromEnum(next)] == null) {
         return p.tree.push_node_with(.selftag_unwrap, .{ .value = lhs });
     }
 

@@ -1,0 +1,101 @@
+# a `ret`, `brk` or `cont` inside an operand ends the operations around it: the operands after it
+# are not evaluated, defers run. a stcfun with a known condition checks the branch it takes only
+variant Opt = +(Some(u32), None);
+type Pair = *(u32 a, u32 b);
+
+# `ret` on either side, inside a unary operator, `and`, an array, a call, a constructor, an index
+stcfun left = (bool c) -> i32 { i32 x = (if c: ret 5 else: 1) + 10; ret x; }
+stcfun right = (bool c) -> i32 { i32 x = 10 + (if c: ret 5 else: 1); ret x; }
+fun unary = (bool c) -> i32: ret -(if c: ret 5 else: 1);
+fun anded = (bool c) -> bool: ret (if c: ret true else: false) and false;
+fun listed = (bool c) -> u32 { [2]u32 a = [1, if c: ret 5 else: 2]; ret a[1]; }
+fun add = (u32 a, u32 b) -> u32: ret a + b;
+fun called = (bool c) -> u32: ret add(1, if c: ret 5 else: 2);
+fun made = (bool c) -> u32: ret Pair(if c: ret 5 else: 1, 2).b;
+fun indexed = (bool c) -> u32 { [3]u32 a = [7, 8, 9]; ret a[if c: ret 5 else: 2]; }
+fun cast = (bool c) -> u64: ret (if c: ret 5 else: 1) as u64 + 10;
+stc i32 LEFT = left(true) * 100 + left(false);       #= LEFT 511
+stc i32 RIGHT = right(true) * 100 + right(false);    #= RIGHT 511
+stc i32 UNARY = unary(true) * 100 + unary(false);    #= UNARY 499
+stc bool ANDED = anded(true) and !anded(false);      #= ANDED true
+stc u32 LISTED = listed(true) * 10 + listed(false);  #= LISTED 52
+stc u32 CALLED = called(true) * 10 + called(false);  #= CALLED 53
+stc u32 MADE = made(true) * 10 + made(false);        #= MADE 52
+stc u32 INDEXED = indexed(true) * 10 + indexed(false);   #= INDEXED 59
+stc u64 CAST = cast(true) * 100 + cast(false);       #= CAST 511
+
+# the operand after a jump is not evaluated
+stcfun skipped = (bool c) -> u32 {
+    mut u32 n = 0;
+    fun bump = () -> u32 { n += 1; ret 1; };
+    fun inner = () -> u32: ret (if c: ret 0 else: 1) + bump();
+    u32 r = inner();
+    ret n * 10 + r;
+}
+stc u32 SKIPPED = skipped(true) * 100 + skipped(false);   #= SKIPPED 12
+
+# `brk` and `cont` in operands, in `for`, `while` and `loop`, in arrays a loop collects
+stcfun broken = (u32 n) -> u32 {
+    mut u32 s = 0;
+    for i in 0..<n { u32 x = (if i == 2: brk else: i) + 10; s += x; }
+    ret s;
+}
+stcfun continued = (u32 n) -> u32 {
+    mut u32 s = 0;
+    for i in 0..<n { u32 x = 10 + (if i == 1: cont else: i); s += x; }
+    ret s;
+}
+fun waited = (u32 n) -> u32 {
+    mut u32 i = 0;
+    mut u32 s = 0;
+    while i < n { i += 1; s += (if i == 3: brk else: i) * 10; }
+    ret s;
+}
+fun looped = () -> u32 {
+    mut u32 i = 0;
+    loop { i += 1; u32 x = [i, if i == 4: brk else: 0][0]; }
+    ret i;
+}
+stcfun collected = (u32 n) -> []u32: ret for i in 0..<n: (if i % 2 == 0: cont else: i) * 10;
+stcfun nested = () -> u32 {
+    mut u32 s = 0;
+    for i in 0..<3 { for j in 0..<3 { s += (if j == 1: brk else: 1) + i * 0; } s += 100; }
+    ret s;
+}
+stc u32 BROKEN = broken(5);         #= BROKEN 21
+stc u32 CONTINUED = continued(3);   #= CONTINUED 22
+stc u32 WAITED = waited(5);         #= WAITED 30
+stc u32 LOOPED = looped();          #= LOOPED 4
+stc []u32 COLLECTED = collected(6); #= COLLECTED [10, 30, 50]
+stc u32 NESTED = nested();          #= NESTED 303
+
+# defers run, and the value of `ret` is taken before them
+stcfun deferred = (bool c) -> u32 {
+    mut u32 n = 1;
+    fun inner = () -> u32 { defer n = n * 10; ret (if c: ret n else: 2) + 100; };
+    u32 r = inner();
+    ret n * 1000 + r;
+}
+stcfun loop_defer = () -> u32 {
+    mut u32 n = 0;
+    for i in 0..<5 { defer n += 1; u32 x = (if i == 2: brk else: i) + 1; }
+    ret n;
+}
+stc u32 DEFERRED = deferred(true) * 100000 + deferred(false);   #= DEFERRED 1000110102
+stc u32 LOOP_DEFER = loop_defer();                              #= LOOP_DEFER 3
+
+# a fallback that jumps
+stcfun first_some = (Opt a, Opt b) -> u32 {
+    mut u32 s = 0;
+    for o in [a, b] { s += o ?? cont; }
+    ret s;
+}
+stcfun until_none = (Opt a, Opt b) -> u32 {
+    mut u32 s = 0;
+    for o in [a, b] { s += (o ?? brk) + 1; }
+    ret s;
+}
+stc u32 FIRST = first_some(Opt.None, Opt.Some(4));    #= FIRST 4
+stc u32 UNTIL = until_none(Opt.Some(4), Opt.None);    #= UNTIL 5
+
+main = () {}

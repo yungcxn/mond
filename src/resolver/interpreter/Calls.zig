@@ -230,7 +230,7 @@ fn call_static_function(
         const parameter_type = static_pool.get(function_type).function_type.parameters[i];
         const value_node = resolver.tree.arg_value(argument);
         const value = interpreter.evaluate(value_node);
-        if (value.is(.poison_type)) return value;
+        if (value.is(.poison_type) or interpreter.unwind != .none) return value;
         if (interpreter.escapes(value)) return interpreter.fail(value_node, .not_static, 0, 0);
 
         const argument_index = interpreter.interned(value);
@@ -313,6 +313,8 @@ fn invoke(
         return interpreter.fail(interpreter.failure_origin(node), .static_eval_failed, 0, 0);
     }
 
+    // a receiver that jumped ends the call
+    if (interpreter.unwind != .none) return .poison;
     const mark = interpreter.argument_values.len;
     defer interpreter.argument_values.len = mark;
     for (all_arguments) |argument| {
@@ -554,10 +556,19 @@ pub fn construct(self: *Calls, target: Index, arguments: []const NodeId) Value {
     const field_count: u32 = @intCast(resolver.types.field_nodes_of(record).len);
     const first_cell = interpreter.allocate_cells(field_count);
     if (self.fill_arguments(record, first_cell, arguments)) |failure| return failure;
+    return self.constructed(target, record, first_cell);
+}
+
+// a record or case of its fields at `first_cell`, those still missing defaulted or zeroed
+pub fn constructed(self: *Calls, target: Index, record: Index, first_cell: u32) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
     if (!self.complete(record, first_cell)) return .poison;
 
+    const field_count: u32 = @intCast(resolver.types.field_nodes_of(record).len);
     const payload: Value = .block(record, first_cell, field_count);
-    if (!is_case) return payload;
+    if (static_pool.tag(target) != .variant_case_type) return payload;
     // a payload that cannot be interned keeps the case value a heap block
     if (interpreter.escapes(payload)) return .block(target, first_cell, field_count);
     const payload_index = interpreter.interned(payload);

@@ -1,0 +1,3 @@
+# a variant result is the exit code only when its bits are one int
+variant Mixed = +(Done, Failed(u8));
+main = () -> Mixed: ret Mixed.Done; #! invalid_main

@@ -143,7 +143,7 @@ fun again = (bool b) -> u8: ret match b { _ => 0, true => 1 };   #! redundant_ma
 | | |
 |---|---|
 | `x ?? fallback` | the payload of the first payload case (so declare the success case first), else `fallback` (which may be `ret ..`) |
-| `x??` | the payload; failing it is an error |
+| `x??` | the payload, else `ret` of the result's fallback; outside a function body (also in a default of a parameter or field) failing is `static_eval_failed` |
 | `x ?<- v` | `bool`; binds the payload as `v` in the then-branch or the `while` body |
 | `e <- v` · `e <- a, b` | the value is `e`; binds `v` to it, or `a, b` to its fields, for the rest of the statement |
 
@@ -154,6 +154,27 @@ stcfun bound = (Opt o) -> i32: ret if o ?<- v: v * 2 else: -1;
 type P = *(i32 a, i32 b);
 stcfun parts = () -> i32: ret (P(3, 4) <- a, b).a + a * b;
 stc i32 U = or_zero(Opt.Some(5)) + bound(Opt.None) + parts();   #= U 19
+```
+
+The fallback of the result, which a failed `x??` returns (hovering `??` in the editor shows it):
+
+- nothing for a unit result, `0`, `0.0` and `false` for numbers and `bool`, every element of an array, every field of a record its default (run where `x??` fails) or else its fallback
+- of a variant a case without payload, else the case `x` holds if it is one of the result's, else any; tagged 0 or else the smallest tag first, a payload its fallback. So `Res.Err(7)??` returns `Res.Err(0)` from a function returning `Res`. A unified variant picks among its cases alike
+- pointers, functions, `never`, types and variants without tag have none: `no_fallback`
+- the innermost function returns: a lambda, a method, a realization of a template or trait default; a parameter's `where .. else x??` returns from its function, quoted code from where it lands
+- a token after `??` that can start an expression starts a fallback: `x?? - 1` is `x ?? -1`, so write `(x??) - 1`. A `{` doesn't (`match x?? {`), a block fallback is in parentheses
+
+```mond
+variant Opt = +(Some(i32), None);
+variant Res = +(Ok(i32), Err(u8));
+type Point = *(i32 x = 1, i32 y);
+stcfun more = (Opt o) -> i32: ret o?? + 2;
+stcfun at = (Opt o) -> Point { i32 v = o??; ret Point(v, v); }
+stcfun again = (Res r) -> Res { i32 v = r??; ret Res.Ok(v + 1); }
+stcfun some = (Res r) -> Opt { i32 v = r??; ret Opt.Some(v); }
+stc i32 T = more(Opt.None) + at(Opt.None).x * 10 + at(Opt.None).y;   #= T 10
+stc bool A = again(Res.Err(7)) == Res.Err(0) and some(Res.Err(7)) == Opt.None;   #= A true
+fun name = (Opt o) -> &u8 { i32 v = o??; ret "x"; }   #! no_fallback
 ```
 
 ## defer, deinit

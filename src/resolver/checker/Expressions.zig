@@ -1136,7 +1136,9 @@ fn join_operands(
         return .poison_type;
     }
 
-    const second_type = self.infer_operand(context, second, first_type);
+    // a first operand that never ends (`(if c: ret 5 else: 1) + 10` with `c` known) types nothing
+    const second_hint = if (first_type == .never_type) hint else first_type;
+    const second_type = self.infer_operand(context, second, second_hint);
 
     const offsets_second = is_add and
         static_pool.is_element_pointer(second_type) and

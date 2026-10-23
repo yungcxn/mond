@@ -1,0 +1,8 @@
+# `main` may return a variant that is one int: self-tagged by an int, or without payloads
+variant Exit = +(Code(i32), Fail = 1) tagtype self;
+variant Opt = +(Some(i32), None);
+main = (i32 argc, &&u8 argv) -> Exit {
+    Opt o = if argc > 1: Opt.Some(argc) else: Opt.None;
+    i32 n = o??; #: n i32
+    ret Exit.Code(n);
+}

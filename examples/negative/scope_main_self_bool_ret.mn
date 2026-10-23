@@ -1,0 +1,3 @@
+# a self tag of a bool is no exit code
+variant Flag = +(Some(bool), None = 2) tagtype self;
+main = () -> Flag: ret Flag.None; #! invalid_main

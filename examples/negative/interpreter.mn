@@ -12,9 +12,9 @@ stc u32 S = spin(); #! static_eval_failed
 
 variant V = +(A, B(u8));
 
-stcfun unwrapped = (V v) -> u8: ret v??; #! static_eval_failed
+stcfun unwrapped = (V v) -> u8: ret v??;
 
-stc u8 U = unwrapped(V.A);
+stc u8 U = unwrapped(V.A); #= U 0
 
 fun down = (u32 n) -> u32: ret if n == 0: 0 else: 1 + down(n - 1);
 

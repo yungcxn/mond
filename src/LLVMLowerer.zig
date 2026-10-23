@@ -378,6 +378,13 @@ fn define_main(self: *LLVMLowerer) void {
     const parameters = self.pool.get(main_type_index).function_type.parameters;
     const mark = self.value_stack.items.len;
     defer self.value_stack.shrinkRetainingCapacity(mark);
+    const return_type = self.pool.get(main_type_index).function_type.return_type;
+    const in_memory = self.types.is_in_memory(return_type);
+    const result_slot = if (in_memory)
+        llvm.LLVMBuildAlloca(self.builder, self.types.of(return_type), "")
+    else
+        null;
+    if (in_memory) self.value_stack.append(self.allocator, result_slot) catch @panic("OOM");
     if (parameters.len == 2) {
         const count_type = self.types.of(parameters[0]);
         const signed: c_int = @intFromBool(self.is_signed(parameters[0]));
@@ -385,18 +392,25 @@ fn define_main(self: *LLVMLowerer) void {
         self.value_stack.append(self.allocator, count) catch @panic("OOM");
         self.value_stack.append(self.allocator, argument_vector) catch @panic("OOM");
     }
-    const result = self.build_call(
+    const called = self.build_call(
         self.function_types[main_function],
         self.functions[main_function],
         self.value_stack.items[mark..],
     );
+    const result = if (in_memory) result_slot else called;
 
-    const return_type = self.pool.get(main_type_index).function_type.return_type;
-    const signed: c_int = @intFromBool(self.is_signed(return_type));
+    // a variant exits with its int: the bits of a self tag, else the tag
+    const is_variant = self.pool.tag(return_type) == .variant_type;
+    const code_type = if (is_variant) self.types.tag_type(return_type) else return_type;
+    const exit_int = if (is_variant and in_memory)
+        values.variant_tag(self, return_type, result)
+    else
+        result;
+    const signed: c_int = @intFromBool(self.is_signed(code_type));
     const exit_code = if (!Types.has_value(return_type))
         llvm.LLVMConstInt(int, 0, 0)
     else
-        llvm.LLVMBuildIntCast2(self.builder, result, int, signed, "");
+        llvm.LLVMBuildIntCast2(self.builder, exit_int, int, signed, "");
     if (!is_bare_linux) {
         _ = llvm.LLVMBuildRet(self.builder, exit_code);
         return;
