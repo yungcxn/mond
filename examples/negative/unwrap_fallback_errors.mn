@@ -3,7 +3,7 @@
 # static
 variant Opt = +(Some(i32), None);
 variant Res = +(Ok(i32), Err(u8));
-variant Raw = +(Word(u32), Byte(u8)) tagtype _;
+variant Raw = +(Word(u32), Byte(u8)) notagtype;
 variant Bare = +(A, B);
 type Named = *(&u8 name, u32 n);
 type Defaulted = *(&u8 name = "x", u32 n);

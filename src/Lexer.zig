@@ -30,6 +30,7 @@ pub const Token = struct {
         kw_self,
         kw_tagof,
         kw_tagtype,
+        kw_notagtype,
         kw_and,
         kw_xor,
         kw_or,
@@ -39,6 +40,7 @@ pub const Token = struct {
         kw_implof,
         kw_ret,
         kw_typeof,
+        kw_isstc,
         kw_sizeof,
         kw_alignof,
         kw_lenof,
@@ -78,6 +80,8 @@ pub const Token = struct {
         kw_trait,
         kw_deinit,
         kw_stc,
+        // `stc?` before a parameter: static when the argument is (no `kw_` name, so no keyword)
+        stc_maybe,
         kw_stcif,
         kw_stcmatch,
         kw_stcwhile,
@@ -118,6 +122,7 @@ pub const Token = struct {
         @"xpct_<",
         @"xpct_>",
         @"xpct_@",
+        @"xpct_~",
 
         @"xpct_==",
         @"xpct_++",
@@ -390,7 +395,11 @@ inline fn gen_next_tok(self: *@This()) !bool {
                     return LexingError.ReservedName;
                 }
 
-                if (Token.Kind.kw_from_str(self.src_bytes[cursor0..self.cursor])) |found_kw| {
+                const is_stc_maybe = std.mem.eql(u8, name, "stc") and self.peek_srcbyte() == '?';
+                if (is_stc_maybe) {
+                    self.cursor += 1;
+                    self.push_tok(.stc_maybe, cursor0);
+                } else if (Token.Kind.kw_from_str(name)) |found_kw| {
                     self.push_tok(found_kw, cursor0);
                 } else {
                     self.push_tok(.identifier, cursor0);

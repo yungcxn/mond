@@ -59,7 +59,7 @@ stc [3]u8 BYTES = [1, 2, 3];
 stc u32 B = len(BYTES.&);             #= B 3
 ```
 
-A tie is `ambiguous_overload`, and no fit at all is `no_matching_overload`. Used as a value, an overloaded name is the overload whose type is expected: `(u8) -> u32 f = show;`. A different result type alone doesn't make a new overload (`duplicate_declaration`).
+A tie is `ambiguous_overload`, and no fit at all is `no_matching_overload`. Used as a value, an overloaded name is the overload whose type is expected: `(u8) -> u32 f = show;`. A different result type alone doesn't make a new overload (`duplicate_declaration`). `stcfun`s overload `stcfun`s, picked the same way (a `type` parameter takes any type), and `fun`s overload `fun`s and `inlfun`s: a `stcfun` and a `fun` of one name are a `duplicate_declaration`.
 
 ### `where` dispatch
 
@@ -152,7 +152,7 @@ A function declared without a body is external: `fun malloc = (u64 n) -> *u8;`.
 
 ## Length-generic functions
 
-A parameter `[]T`, `&[]T` or `*[]T` is realized (compiled as a copy of its own) once per argument length, and `lenof` is static inside. The element type must match exactly.
+A parameter `[]T`, `&[]T` or `*[]T` is realized (compiled as a copy of its own) once per argument length, and `lenof` is static inside. The element type must match exactly. A `[..]T` parameter is one function for every length instead: it takes a slice, whose length is known while the program runs (see [slices](basics.md#slices)).
 
 ```mond
 fun total = (&[]u32 a) -> u32 {
@@ -163,6 +163,23 @@ fun total = (&[]u32 a) -> u32 {
 stc [3]u32 XS = [1, 2, 3];
 stc [2]u32 YS = [10, 20];
 stc u32 TOT = total(XS.&) + total(YS.&);   #= TOT 36
+```
+
+## Parameters static where they can be: `stc?`
+
+A parameter `stc? T x` makes one function both: called with a static value for every `stc?` parameter, the function is realized for those values (once per tuple), and inside that realization they are static. There an `if` or `match` on a static condition takes one side only, which alone is checked and compiled (as `stcif` would), and nothing after a side that leaves is checked. A loop over a static value runs over a constant, which the optimizer unrolls. Called with a runtime value, it is the function as written. `isstc x` is a static `bool`: whether `x` is a static value here.
+
+```mond
+fun power = (u64 x, stc? u64 n) -> u64 {
+    if n == 0: ret 1;
+    if n % 2 == 0 { u64 half = power(x, n / 2); ret half * half; }
+    ret x * power(x, n - 1);
+}
+fun cube = (u64 x) -> u64: ret power(x, 3);     # x * (x * x), no branch left
+fun any = (u64 x, u64 n) -> u64: ret power(x, n);
+stc u64 P = cube(4) + any(2, 10);                 #= P 1088
+fun label = (stc? u32 code) -> u32: ret if isstc code: 1000 + code else: code;
+stc u32 L = label(7);                             #= L 1007
 ```
 
 ## Methods

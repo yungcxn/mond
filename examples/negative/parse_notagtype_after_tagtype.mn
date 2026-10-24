@@ -1,0 +1,4 @@
+# a variant has one tag type at most: `notagtype` after `tagtype` ends the declaration
+variant Both = +(A(u8)) tagtype u8 notagtype; #! ExpectedSemicolon
+
+main = () {}

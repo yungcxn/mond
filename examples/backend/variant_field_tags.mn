@@ -1,0 +1,50 @@
+<include "lib/out.mn">;
+# `tagtype self.field` at run time: a list whose end is a null tail, slots whose kind field holds
+# the other cases, in a unified variant, unwrapped, retagged, compared, as static data
+mut u8 ONE = 0;
+variant Slot = +(Used(u32 value, u8 kind), Free = 255, Gone = 254) tagtype self.kind;
+variant Extra = +(Big(u64), Small);
+variant List = +(Cons(u64 head, &List tail), Nil) tagtype self.tail;
+fun sum = (&List l) -> u64: ret match l.* { List.Cons(h, t) => h + sum(t), List.Nil => 0 };
+fun describe = (Slot s) -> u64: ret match s { Slot.Used(v, k) => v as u64 * 10 + k, Slot.Free => 1, Slot.Gone => 2 };
+stc List STATIC_NIL = List.Nil;
+type Node = *(i32 v, *Node next);
+variant OptNode = +(Some(Node), None = 0) tagtype self.next;
+fun node_value = (OptNode o) -> i32: ret match o { OptNode.Some(n) => n.v, OptNode.None => -1 };
+# a payload case whose tag a written tag takes gets another one: `None = 0` and `Some` were both 0
+variant Ref = +(Some(&u8), None = 0) tagtype self;
+fun deref = (Ref r) -> u64: ret match r { Ref.Some(x) => x.*, Ref.None => 7 };
+type Any = Slot || Extra;
+fun used = (Slot s) -> u32: ret (s ?? ret 5).value;
+fun first = (Slot s) -> u32: ret if s ?<- u: u.value else: 99;
+fun kind_of = (Any a) -> u64: ret match a { Slot.Used(v, k) => v as u64 * 10 + k, Slot.Free => 1, Slot.Gone => 2, Extra.Big(b) => b, Extra.Small => 3 };
+fun back = (Any a) -> u64: ret match a { Slot s => (s as Slot.Used).value as u64, _ => 7 };
+stcfun at_compile = () -> [3]u64 {
+    Any a = Slot.Used(4, 2);
+    Any f = Slot.Free;
+    ret [kind_of(a), kind_of(f), kind_of(Extra.Big(5))];
+}
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as u8;
+    Slot u = Slot.Used(42, ONE);
+    line_u64(used(u) as u64 * 1000 + used(Slot.Free));                  #> 42005
+    line_u64(first(u) as u64 * 1000 + first(Slot.Gone) as u64);         #> 42099
+    [4]Any all = [u, Slot.Free, Extra.Big(5), Slot.Gone];
+    mut u64 total = 0;
+    for a in all: total = total * 1000 + kind_of(a);
+    line_u64(total);                                                    #> 421001005002
+    line_u64(back(all[0]));                                             #> 42
+    [3]u64 c = at_compile();
+    line_u64(c[0] * 10000 + c[1] * 100 + c[2]);                         #> 420105
+    List nil = List.Nil;
+    List one = List.Cons(2 * ONE as u64, nil.&);
+    List two = List.Cons(3, one.&);
+    line_u64(sum(two.&) + sizeof List * 1000 + sum(STATIC_NIL.&));       #> 16005
+    [3]Slot slots = [Slot.Used(9, 255 * ONE), Slot.Free, Slot.Used(1, 1) as Slot.Gone];
+    line_u64((if slots[0] == slots[1]: 100 else: 0) + describe(slots[2]));  #> 102
+    *Node elsewhere = 8 asbits *Node;
+    OptNode some = OptNode.Some(Node(5 * ONE as i32, elsewhere));
+    line_i64(node_value(some) * 100 + node_value(OptNode.None) + sizeof OptNode as i64 * 10000);  #> 160499
+    u8 nine = 9 * ONE;
+    line_u64(deref(Ref.Some(nine.&)) * 10 + deref(Ref.None));        #> 97
+}

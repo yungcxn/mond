@@ -1,0 +1,12 @@
+# examples/lib/dyn.mn: a new implementer joins the variant, so a match written for the others
+# misses it
+<include "../lib/dyn.mn">;
+trait Named = !{ fun id = () -> u32; }
+type Cat = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v; }
+type Dog = *(u32 v) implof Named !{ fun id = () -> u32: ret self.v * 2; }
+type Fish = *(u16 f) implof Named !{ fun id = () -> u32: ret 7; }
+variant AnyNamed = <implementers("Named")>;
+fun by_hand = (AnyNamed a) -> u32: ret match a { Cat c => c.v, Dog d => d.v }; #! non_exhaustive_match
+fun dispatched = (AnyNamed a) -> u32: ret <dispatch(quote: a, "Named", quote: id, [])>;
+
+main = () {}

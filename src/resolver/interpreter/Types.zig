@@ -1,3 +1,5 @@
+const std = @import("std");
+const builtin = @import("builtin");
 const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const StaticPool = @import("../StaticPool.zig");
@@ -83,6 +85,7 @@ pub fn static_value(self: *Types, node: NodeId, kind: Kind) Value {
         .type_ptrmut,
         .unify_variants,
         .unify_variants_packed,
+        .variant_difference,
         => self.build(node),
         else => .pooled(self.define(node)),
     };
@@ -108,6 +111,22 @@ fn build(self: *Types, node: NodeId) Value {
             .unified => |unified| .pooled(unified),
             .sizeless_side => |i| {
                 return interpreter.fail(sides[i], .unstorable_outside_parameter, types[i], 0);
+            },
+        };
+    }
+
+    // `A -- B` (see `StaticPool.difference_of`)
+    if (kind == .variant_difference) {
+        const sides = [_]NodeId{ tree.arg(node, 0), tree.arg(node, 1) };
+        const types = [_]Index{
+            self.type_of_node(sides[0]) orelse return .poison,
+            self.type_of_node(sides[1]) orelse return .poison,
+        };
+        return switch (static_pool.difference_of(types[0], types[1])) {
+            .difference => |difference| .pooled(difference),
+            .wrong_side => |i| {
+                const expected = if (i == 0) Index.variant_type else types[0];
+                return interpreter.fail(sides[i], .type_mismatch, types[i], expected);
             },
         };
     }
@@ -210,6 +229,8 @@ pub fn cast(self: *Types, node: NodeId) Value {
             },
             .variant_retag => return self.retag(node, value, target),
             .array_narrow, .pointer_relength => return self.shrink(node, value, target),
+            .array_to_slice => return interpreter.sliced(value, target, 0, null),
+            .slice_to_pointer => return .ref(target, value.cell()),
             .identity,
             .int_resize,
             .int_to_float,
@@ -288,6 +309,153 @@ fn retag(self: *Types, node: NodeId, value: Value, target: Index) Value {
     return .pooled(retagged);
 }
 
+extern "c" fn syscall(number: c_long, ...) c_long;
+
+// the kernel's call: on linux directly, elsewhere through the c library. -errno when it failed
+fn kernel(at: [7]u64) i64 {
+    if (builtin.os.tag != .linux) {
+        const c: [7]c_long = @bitCast(at);
+        const result = syscall(c[0], c[1], c[2], c[3], c[4], c[5], c[6]);
+        return if (result == -1) -@as(i64, std.c._errno().*) else result;
+    }
+    return switch (builtin.cpu.arch) {
+        .x86_64 => asm volatile ("syscall"
+            : [ret] "={rax}" (-> i64),
+            : [number] "{rax}" (at[0]),
+              [arg1] "{rdi}" (at[1]),
+              [arg2] "{rsi}" (at[2]),
+              [arg3] "{rdx}" (at[3]),
+              [arg4] "{r10}" (at[4]),
+              [arg5] "{r8}" (at[5]),
+              [arg6] "{r9}" (at[6]),
+            : .{ .rcx = true, .r11 = true, .memory = true }),
+        .aarch64 => asm volatile ("svc #0"
+            : [ret] "={x0}" (-> i64),
+            : [number] "{x8}" (at[0]),
+              [arg1] "{x0}" (at[1]),
+              [arg2] "{x1}" (at[2]),
+              [arg3] "{x2}" (at[3]),
+              [arg4] "{x3}" (at[4]),
+              [arg5] "{x4}" (at[5]),
+              [arg6] "{x5}" (at[6]),
+            : .{ .memory = true }),
+        else => @compileError("the kernel's calls are known on x86_64 and aarch64"),
+    };
+}
+
+// `syscall (n, ..)` while compiling runs as it does in the program: integers and bools go as they
+// are, a pointer as the address of what it points to laid out in bytes, which a `*T` gets back
+// after the call. a pointer to an element reaches the elements after it. the result is the
+// kernel's, or the negated error number
+pub fn system_call(self: *Types, node: NodeId, arguments: []const NodeId) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    // room after a pointer's bytes, so a length past them does not reach other memory
+    const slack = 1 << 16;
+    if (arguments.len > 7 or interpreter.speculative > 0) {
+        return interpreter.fail(node, .not_static, 0, 0);
+    }
+
+    var registers: [7]u64 = @splat(0);
+    var buffers: [7][]u8 = @splat(&.{});
+    // where the bytes of a `*T` go back to: its first cell, how many there are and their type
+    var written: [7]?struct { u32, u32, Index } = @splat(null);
+    defer for (buffers) |buffer| resolver.allocator.free(buffer);
+    for (arguments, 0..) |argument, i| {
+        const value_node = resolver.tree.arg_value(argument);
+        const value = interpreter.evaluate(value_node);
+        if (value.is(.poison_type) or interpreter.unwind != .none) return value;
+
+        const argument_type = interpreter.checked_type(value_node);
+        if (!static_pool.is_pointer(argument_type)) {
+            const scalar = if (value.is_pooled()) Value.of(static_pool, value.index()) else value;
+            registers[i] = scalar.raw_bits();
+            continue;
+        }
+        const pointer = static_pool.get(argument_type).pointer_type;
+        // the cells of what a `*T` points to are written after the call, so they are thawed
+        if (pointer.is_mutable and value.is_ref()) _ = interpreter.thaw_cell(value.cell());
+        const target = interpreter.dereference(value);
+        const element_size = static_pool.layout(pointer.pointee).size;
+        // an element is followed by the others of its array, up to the next value of another type
+        var run: u32 = 1;
+        if (value.is_ref() and !target.is_heap() and !target.is_pooled()) {
+            const cells = interpreter.memory.buffer[value.cell()..interpreter.memory.len];
+            while (run < cells.len and cells[run].value_type == target.value_type) run += 1;
+        }
+        // an array without a length in its type has the length of its value
+        const size = if (static_pool.tag(pointer.pointee) == .array_type)
+            (interpreter.aggregate_length(target) orelse 0) *
+                static_pool.layout(static_pool.element_type(pointer.pointee)).size
+        else
+            run * element_size;
+        buffers[i] = resolver.allocator.alloc(u8, size + slack) catch @panic("OOM");
+        @memset(buffers[i], 0);
+        for (0..run) |r| {
+            const part = if (value.is_ref())
+                interpreter.memory.buffer[value.cell() + r]
+            else
+                target;
+            if (!self.lay_out(part, pointer.pointee, buffers[i][r * element_size ..])) {
+                return interpreter.fail(value_node, .not_static, interpreter.interned(value), 0);
+            }
+        }
+        registers[i] = @intFromPtr(buffers[i].ptr);
+        if (pointer.is_mutable and value.is_ref()) {
+            written[i] = .{ value.cell(), run, pointer.pointee };
+        }
+    }
+
+    interpreter.system_calls += 1;
+    const returned = kernel(registers);
+
+    for (written, buffers) |back, buffer| {
+        const cell, const run, const pointee = back orelse continue;
+        const element_size = static_pool.layout(pointee).size;
+        for (0..run) |r| {
+            self.read_back(cell + @as(u32, @intCast(r)), pointee, buffer[r * element_size ..]);
+        }
+    }
+    return .int(.i64_type, @bitCast(returned));
+}
+
+// the bytes of a value: a block by its cells, anything else as `store_bytes` lays it out
+fn lay_out(self: *Types, value: Value, value_type: Index, bytes: []u8) bool {
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
+    // a bit-packed record is laid out whole, its fields share bytes
+    const is_bit_packed = static_pool.tag(value_type) == .record_type and
+        static_pool.is_bit_packed(static_pool.get(value_type).record_type);
+    if (is_bit_packed and value.is_heap()) {
+        return self.store_bytes(.pooled(interpreter.interned(value)), value_type, bytes);
+    }
+    if (!value.is_heap()) return self.store_bytes(value, value_type, bytes);
+    for (0..value.len()) |i| {
+        const part_type, const offset = part_at(static_pool, value_type, i) orelse return false;
+        const part = interpreter.memory.buffer[value.cell() + i];
+        if (!self.lay_out(part, part_type, bytes[offset..])) return false;
+    }
+    return true;
+}
+
+// the cell's value read from the bytes `lay_out` made, a block's cells one by one
+fn read_back(self: *Types, cell: u32, value_type: Index, bytes: []const u8) void {
+    const interpreter = self.owning_interpreter();
+    const value = interpreter.memory.buffer[cell];
+    const static_pool = &interpreter.owning_resolver().static_pool;
+    const is_bit_packed = static_pool.tag(value_type) == .record_type and
+        static_pool.is_bit_packed(static_pool.get(value_type).record_type);
+    if (value.is_heap() and !is_bit_packed) {
+        for (0..value.len()) |i| {
+            const part_type, const offset = part_at(static_pool, value_type, i) orelse return;
+            self.read_back(value.cell() + @as(u32, @intCast(i)), part_type, bytes[offset..]);
+        }
+        return;
+    }
+    if (self.load_bytes(value_type, bytes)) |loaded| interpreter.store_cell(cell, loaded);
+}
+
 // a value laid out in `bytes` as its type lays it out in memory: numbers, bools, arrays, records,
 // text. false for anything else (a pointer has no static address)
 fn store_bytes(self: *Types, value: Value, value_type: Index, bytes: []u8) bool {
@@ -303,6 +471,24 @@ fn store_bytes(self: *Types, value: Value, value_type: Index, bytes: []u8) bool 
     switch (static_pool.get(value.index())) {
         .string_value => |text| @memcpy(bytes[0..text.len], text),
         .aggregate_value => |aggregate| for (aggregate.elements, 0..) |element, i| {
+            // a bit field's bits go where they start
+            const is_bit_field = static_pool.tag(value_type) == .record_type and
+                static_pool.is_bit_field(static_pool.get(value_type).record_type, i);
+            if (is_bit_field) {
+                const record = static_pool.get(value_type).record_type;
+                const offset = static_pool.field_bit_offset(record, i);
+                const raw = Value.of(static_pool, element).raw_bits();
+                for (0..static_pool.field_bits(record.field_types[i])) |bit| {
+                    const at = offset + bit;
+                    const mask = @as(u8, 1) << @intCast(at % 8);
+                    if (raw >> @intCast(bit) & 1 != 0) {
+                        bytes[at / 8] |= mask;
+                    } else {
+                        bytes[at / 8] &= ~mask;
+                    }
+                }
+                continue;
+            }
             const part_type, const offset = part_at(static_pool, value_type, i) orelse return false;
             if (!self.store_bytes(.of(static_pool, element), part_type, bytes[offset..])) {
                 return false;
@@ -335,6 +521,18 @@ fn load_bytes(self: *Types, value_type: Index, bytes: []const u8) ?Value {
     // by index: interning a part may move the type's lists
     for (0..count) |i| {
         const part_type, const offset = part_at(static_pool, value_type, i).?;
+        const is_bit_field = is_record and
+            static_pool.is_bit_field(static_pool.get(value_type).record_type, i);
+        if (is_bit_field) {
+            const start = static_pool.field_bit_offset(static_pool.get(value_type).record_type, i);
+            var raw: u64 = 0;
+            for (0..static_pool.field_bits(part_type)) |bit| {
+                const at = start + bit;
+                raw |= @as(u64, bytes[at / 8] >> @intCast(at % 8) & 1) << @intCast(bit);
+            }
+            interpreter.pool_indices.push(interpreter.interned(Value.from_raw(part_type, raw)));
+            continue;
+        }
         const part = self.load_bytes(part_type, bytes[offset..]) orelse return null;
         interpreter.pool_indices.push(interpreter.interned(part));
     }
@@ -465,9 +663,34 @@ pub fn type_test(self: *Types, node: NodeId) Value {
     if (static_pool.tag(wanted) == .template_type) {
         return .boolean(resolver.generics.realizes(subject_type, wanted));
     }
-    return .boolean(subject_type == wanted or
+    const matches = subject_type == wanted or
         static_pool.type_of(subject) == wanted or
-        static_pool.implements(subject_type, wanted));
+        static_pool.implements(subject_type, wanted);
+    if (matches) return .boolean(true);
+
+    // a value is of the type its case or member is, which may need the value
+    const operand_type = static_pool.through_pointer(if (framed)
+        interpreter.node_info(.node_type, operand)
+    else
+        static_type);
+    if (operand_type == .none) return .boolean(false);
+    switch (static_pool.units_covered(operand_type, wanted)) {
+        .all => return .boolean(true),
+        .none => return .boolean(false),
+        .some => {},
+    }
+    const value = if (known)
+        interpreter.dereference(interpreter.evaluate(operand))
+    else
+        Value.of(static_pool, subject);
+    if (value.is(.poison_type)) return value;
+    const case = interpreter.patterns.case_of(value);
+    const variant = if (case == .none) Index.none else static_pool.get(case).variant_case_type.variant;
+    for ([_]Index{ case, variant, interpreter.value_type(value) }) |unit| {
+        if (unit == .none or !static_pool.covers_unit(operand_type, unit)) continue;
+        return .boolean(static_pool.covers_unit(wanted, unit));
+    }
+    return .boolean(false);
 }
 
 // the type named on the right of `oftype` as the checker knows it, none when it does not

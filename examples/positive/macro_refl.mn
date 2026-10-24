@@ -45,6 +45,22 @@ fun use_point = () -> i32 {
 stc i32 pt = use_point(); #= pt 48
 fun as_trait = (*Shown s) -> i32: ret s.shown();
 
+# a type without `!{}` or `implof` has no methods and implements nothing: its lists are empty
+type Plain = *(u8 a);
+variant PlainCases = +(A, B);
+type OwnMethods = *(u8 a) !{ fun get = () -> u8: ret self.a; }
+stc []u64 EMPTY_VIEWS = [ #= EMPTY_VIEWS [0, 0, 0, 0, 0, 1]
+    lenof (refl Plain).traits, lenof (refl Plain).methods,
+    lenof (refl PlainCases).traits, lenof (refl PlainCases).methods,
+    lenof (refl OwnMethods).traits, lenof (refl OwnMethods).methods,
+];
+stcfun implemented = () -> u64 {
+    mut u64 count = 0;
+    for d in refl.decls: if d.* oftype ast(type) or d.* oftype ast(variant): count += lenof d.traits;
+    ret count;
+}
+stc u64 IMPLEMENTED = implemented(); #= IMPLEMENTED 1
+
 # lists of the program by index, and the file itself: its declarations to read and to append to
 stcfun widen_first = (*ast(type) t) {
     t.fields[0] = quote: u64 wide;
@@ -64,7 +80,7 @@ stcfun counted = (&ast file) -> u64 {
     for d in file.decls: if d oftype ast(type): n += 1;
     ret n;
 }
-stc u64 types = counted(refl); #= types 3
+stc u64 types = counted(refl); #= types 5
 
 # a whole function from parts, by a splice in its declaration
 stcfun getter = (&ast(type) t, u64 i) -> ast(fun): ret quote: (@(t.name) v) -> @(t.fields[i].type): ret v.@(t.fields[i].name);

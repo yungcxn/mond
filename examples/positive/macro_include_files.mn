@@ -1,0 +1,57 @@
+# examples/lib/files.mn: files read and written while compiling, by the kernel's calls from
+# `stcfun`s. paths are relative to where the compiler runs (the tests run in the repository)
+<include "../lib/files.mn">;
+
+# a file's bytes, its size and lines, as static values
+stc []u8 TEXT = read_file("examples/lib/data/lines.txt");
+stc bool WHOLE = TEXT == "first line\nsecond\n\nlast, no newline"; #= WHOLE true
+stc []u64 SIZES = [lenof TEXT, file_size("examples/lib/data/lines.txt") as u64, line_count(TEXT)]; #= SIZES [35, 35, 4]
+stc []bool LINES = [line(TEXT, 0) == "first line", line(TEXT, 1) == "second", lenof line(TEXT, 2) == 0, line(TEXT, 3) == "last, no newline", lenof line(TEXT, 9) == 0]; #= LINES [true, true, true, true, true]
+stc []i64 MISSING = [file_size("examples/lib/data/missing.txt"), file_exists("examples/lib/data/missing.txt") as i64]; #= MISSING [-2, 0]
+
+# a file written while compiling and read back
+stc i64 WRITTEN = write_file("/tmp/mond_files_test.txt", "made by the compiler\n"); #= WRITTEN 21
+stc bool READ_BACK = read_file("/tmp/mond_files_test.txt") == "made by the compiler\n"; #= READ_BACK true
+
+# a stcfun that calls the kernel runs again for the same arguments: each read is the next byte
+stcfun open_lines = () -> i64 {
+    []u8 name = "examples/lib/data/lines.txt\0";
+    ret syscall (OPEN_AT, HERE, name.&, READ_ONLY, 0);
+}
+stcfun read_byte = (i64 file) -> u8 {
+    mut [1]u8 byte = [0];
+    syscall (READ, file, byte.&, 1);
+    ret byte[0];
+}
+stcfun three_bytes = () -> [3]u8 {
+    i64 file = open_lines();
+    [3]u8 got = [read_byte(file), read_byte(file), read_byte(file)];
+    syscall (CLOSE, file);
+    ret got;
+}
+stc [3]u8 THREE = three_bytes(); #= THREE [102, 105, 114]
+
+# a `match` on a kernel call runs it once, not also while it is checked
+stcfun matched_once = () -> [2]u8 {
+    i64 file = open_lines();
+    u8 first = match read_byte(file) { 'f' => 1, _ => 0 };
+    u8 next = read_byte(file);
+    syscall (CLOSE, file);
+    ret [first, next];
+}
+stc [2]u8 ONCE = matched_once(); #= ONCE [1, 105]
+
+# a pointer to an element passes the elements after it, a record goes as it is laid out
+type Head = *(u8 a, u8 b, u16 rest);
+stcfun into_parts = () -> [4]u64 {
+    i64 file = open_lines();
+    mut [6]u8 bytes = [0, 0, 0, 0, 0, 0];
+    syscall (READ, file, bytes[2].&, 4);
+    mut Head head = Head(0, 0, 0);
+    syscall (READ, file, head.&, 4);
+    syscall (CLOSE, file);
+    ret [bytes[1], bytes[2], bytes[5], head.a as u64 * 1000 + head.rest as u64 % 256];
+}
+stc [4]u64 PARTS = into_parts(); #= PARTS [0, 102, 115, 116108]
+
+main = () {}

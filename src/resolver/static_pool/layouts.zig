@@ -31,6 +31,8 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
         const variant = pool.get(type_index).variant_case_type.variant;
         if (!pool.get(variant).variant_type.is_packed) return pool.layout(variant);
     }
+    // a subset is laid out as its whole
+    if (pool.tag(type_index) == .variant_subset_type) return pool.layout(pool.whole_of(type_index));
     const i = @intFromEnum(type_index);
     const state = &pool.layouts.column(.state)[i];
     switch (state.*) {
@@ -52,13 +54,22 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
             .niche = .{ .offset = 0, .bits = 8, .start = 2, .count = 254 },
         } else Partial{},
         .pointer_type, .function_type => pointer_layout(pool, type_index),
+        // the address of the first element and the length
+        .slice_type => Partial{
+            .size = pointer_bytes + 8,
+            .align_log2 = std.math.log2_int(u64, @max(pointer_bytes, 8)),
+        },
         .array_type => |array| array_layout(pool, array),
         .record_type => |record| record_layout(pool, record),
         // a packed variant has no size, only each of its cases
         .variant_type => |variant| if (variant.is_packed)
             Partial{}
-        else
-            tagged_layout(pool, type_index, variant.tag_mode, variant.tag_type),
+        else if (variant.tag_mode == .custom) blk: {
+            // a strategy stores every case in its `storage` (an integer, else reported)
+            const storage = pool.get(variant.strategy).aggregate_value.elements[0];
+            if (pool.tag(storage) != .int_type) break :blk Partial{};
+            break :blk primitive(pool.get(storage).int_type.bits);
+        } else tagged_layout(pool, type_index, variant.tag_mode, variant.tag_type),
         .variant_case_type => |case| blk: {
             const variant = pool.get(case.variant).variant_type;
             break :blk tagged_layout(pool, type_index, variant.tag_mode, variant.tag_type);
@@ -68,6 +79,8 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
             Partial{}
         else
             tagged_layout(pool, type_index, .int, pool.unified_tag_type(type_index)),
+        // laid out as its whole above
+        .variant_subset_type => unreachable,
         // static-only entries and values have no memory
         .meta_type, .trait_type, .static_function, .template_type => Partial{},
         .type_variable, .ast_type => Partial{},
@@ -95,8 +108,10 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
     return result;
 }
 
+// a width without a keyword (`u7`, `i24`) takes the bytes of the next one that has one
 fn primitive(bits: u16) Partial {
-    const size = bits / 8;
+    const bytes = std.math.divCeil(u16, bits, 8) catch unreachable;
+    const size = std.math.ceilPowerOfTwoAssert(u64, bytes);
     return .{ .size = size, .align_log2 = std.math.log2_int(u64, size) };
 }
 
@@ -129,6 +144,13 @@ fn array_layout(pool: *StaticPool, array: StaticPool.ArrayType) Partial {
 
 fn record_layout(pool: *StaticPool, record: StaticPool.RecordType) Partial {
     var partial = Partial{};
+    if (is_bit_packed(pool, record)) {
+        const last = record.field_types.len - 1;
+        const last_bits = field_bits(pool, record.field_types[last]);
+        const end = field_bit_offset(pool, record, last) + last_bits;
+        partial.size = std.math.divCeil(u64, end, 8) catch unreachable;
+        return partial;
+    }
     for (record.field_types) |field_type| {
         const field = pool.layout(field_type);
         partial.infinite = partial.infinite or field.state == .infinite;
@@ -144,8 +166,10 @@ fn record_layout(pool: *StaticPool, record: StaticPool.RecordType) Partial {
     return partial;
 }
 
-// where a field starts: behind the one before it, aligned unless the record is packed
+// where a field starts: behind the one before it, aligned unless the record is packed. in a
+// bit-packed record the byte its first bit is in
 pub fn field_offset(pool: *StaticPool, record: StaticPool.RecordType, field: usize) u64 {
+    if (is_bit_packed(pool, record)) return field_bit_offset(pool, record, field) / 8;
     var offset: u64 = 0;
     for (record.field_types[0 .. field + 1], 0..) |field_type, i| {
         const field_layout = pool.layout(field_type);
@@ -157,6 +181,39 @@ pub fn field_offset(pool: *StaticPool, record: StaticPool.RecordType, field: usi
         offset += field_layout.size;
     }
     return offset;
+}
+
+// a packed record with an integer of a width without a keyword (`**(u3 a, u5 b)`) is laid out bit
+// by bit: each field right behind the one before it, an integer in its own width, anything else
+// in its bytes
+pub fn is_bit_packed(pool: *StaticPool, record: StaticPool.RecordType) bool {
+    if (!record.is_packed) return false;
+    for (record.field_types) |field_type| {
+        if (pool.tag(field_type) == .int_type and pool.get(field_type).int_type.bits % 8 != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+pub fn field_bits(pool: *StaticPool, field_type: Index) u64 {
+    if (pool.tag(field_type) == .int_type) return pool.get(field_type).int_type.bits;
+    return pool.layout(field_type).size * 8;
+}
+
+pub fn field_bit_offset(pool: *StaticPool, record: StaticPool.RecordType, field: usize) u64 {
+    if (!is_bit_packed(pool, record)) return field_offset(pool, record, field) * 8;
+    var offset: u64 = 0;
+    for (record.field_types[0..field]) |field_type| offset += field_bits(pool, field_type);
+    return offset;
+}
+
+// a field of a bit-packed record that shares a byte with another, read and written through the
+// bytes around it
+pub fn is_bit_field(pool: *StaticPool, record: StaticPool.RecordType, field: usize) bool {
+    if (!is_bit_packed(pool, record)) return false;
+    const offset = field_bit_offset(pool, record, field);
+    return offset % 8 != 0 or field_bits(pool, record.field_types[field]) % 8 != 0;
 }
 
 // the tag, then the room of the payloads aligned behind it. a self-tagged variant without payload
@@ -198,6 +255,7 @@ pub fn payload_room(pool: *StaticPool, type_index: Index) Room {
                 widen(pool, &room, member);
             }
         },
+        .variant_subset_type => |subset| return pool.payload_room(subset.whole),
         else => {},
     }
     return room;
@@ -244,7 +302,8 @@ pub fn case_tag(pool: *const StaticPool, case: Index) u64 {
 
 // the tag a value of a case has in `container`: its own in its variant, in a unified variant moved
 // into its member's range; a member that is one case (`u32` of `u32 || f32`) is its range's start
-pub fn tag_in(pool: *const StaticPool, container: Index, case_or_member: Index) u64 {
+pub fn tag_in(pool: *const StaticPool, subset_or_container: Index, case_or_member: Index) u64 {
+    const container = pool.whole_of(subset_or_container);
     const is_case = pool.tag(case_or_member) == .variant_case_type;
     const own = if (is_case) pool.case_tag(case_or_member) else 0;
     if (pool.tag(container) != .unified_variant_type) return own;

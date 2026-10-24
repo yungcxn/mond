@@ -10,9 +10,9 @@ fun conflicts = (i8 s8, bool on) {
 }
 
 fun ranges = ([6]u8 arr, *[6]u8 wp) {
-    u8 e1 = arr[2..]; #! genexpr_index
-    u8 e2 = arr[..=3]; #! genexpr_index
-    u8 e3 = wp[1..=2]; #! genexpr_index
+    u8 e1 = arr[2..]; #! type_mismatch
+    u8 e2 = arr[..=3]; #! type_mismatch
+    u8 e3 = wp[1..=2]; #! type_mismatch
     u8 ok = arr[5];
 }
 

@@ -1,0 +1,49 @@
+# `a ~ b`: the elements of two arrays or slices of one element type, one after the other. arrays
+# join to an array of both lengths, wherever the program runs
+stc []u8 GREETING = "hello, " ~ "world"; #= GREETING "hello, world"
+stc [5]u32 NUMBERS = [1, 2] ~ [3] ~ [4, 5]; #= NUMBERS [1, 2, 3, 4, 5]
+stc u64 LENGTH = lenof ("ab" ~ "cde"); #= LENGTH 5
+stc []u8 EMPTY_SIDES = "" ~ "x" ~ ""; #= EMPTY_SIDES "x"
+stc bool EQUAL = "ab" ~ "c" == "abc"; #= EQUAL true
+
+# a literal takes the elements of the other side, or of the result expected
+stc [1]u8 SMALL = [7];
+stc []u8 ADAPTED = SMALL ~ [255, 0]; #= ADAPTED [7, 255, 0]
+stc [3]i16 EXPECTED = [-1] ~ [2, 3]; #= EXPECTED [-1, 2, 3]
+
+# arrays of arrays and of records, through pointers
+type Point = *(i32 x, i32 y);
+stc [3]Point POINTS = [Point(1, 2)] ~ [Point(3, 4), Point(5, 6)];
+stc i32 THIRD_X = POINTS[2].x; #= THIRD_X 5
+stc [3][2]u8 ROWS = [[1, 2]] ~ [[3, 4], [5, 6]]; #= ROWS [[1, 2], [3, 4], [5, 6]]
+fun doubled = (&[3]u32 p) -> [6]u32: ret p ~ p;
+stc [3]u32 THREE = [4, 5, 6];
+stc [6]u32 TWICE = doubled(THREE.&); #= TWICE [4, 5, 6, 4, 5, 6]
+
+# at run time too: values and places joined, in loops and length-generic functions
+fun framed = (u8 open, [..]u8 inner, u8 close) -> u64: ret lenof inner + open as u64 + close as u64;
+fun around = (&[]u8 text) -> u64 {
+    mut u64 sum = 0;
+    for c in "[" ~ text.* ~ "]": sum += c;
+    ret sum;
+}
+stc u64 AROUND = around("ab".&); #= AROUND 379
+fun rotated = (u32 k) -> [4]u32 {
+    mut [4]u32 a = [1, 2, 3, 4];
+    for _ in 0..<k: a = a[1..] ~ a[..<1];
+    ret a;
+}
+stc [4]u32 ROTATED = rotated(3); #= ROTATED [4, 1, 2, 3]
+
+# slices have their length while the program runs, so their joins are made while compiling: in a
+# stcfun, a static value, a length the stcfun learns
+stcfun wrapped = ([..]u8 inner) -> []u8: ret "<" ~ inner ~ ">";
+stc []u8 WRAPPED = wrapped("tag"); #= WRAPPED "<tag>"
+stcfun repeated = ([..]u8 part, u64 n) -> []u8: ret if n == 0: "" else: part ~ repeated(part, n - 1);
+stc []u8 REPEATED = repeated("ab", 3); #= REPEATED "ababab"
+stc [..]u8 VIEW = "view";
+stc []u8 FROM_VIEW = VIEW ~ VIEW[..<2]; #= FROM_VIEW "viewvi"
+stcfun joined_numbers = ([..]u32 a, [..]u32 b) -> []u32: ret a ~ b;
+stc []u32 JOINED = joined_numbers([2, 3], THREE); #= JOINED [2, 3, 4, 5, 6]
+
+main = () {}

@@ -1,0 +1,56 @@
+# integers of a width without a keyword: `u1` .. `u63`, `i1` .. `i63`, wrapping at their width
+stc u7 WRAPS = 100 + 30; #= WRAPS 2
+stc i24 LOW = -8388608;
+stc i24 BELOW = LOW - 1; #= BELOW 8388607
+stc u1 BIT = 1;
+stc u1 FLIPPED = BIT + 1; #= FLIPPED 0
+stc i1 SIGN = -1; #= SIGN -1
+stc u63 HUGE = 9223372036854775807; #= HUGE 9223372036854775807
+stc u63 HUGE_WRAPS = HUGE + 1; #= HUGE_WRAPS 0
+
+# the bytes of the next width with a keyword, in arrays too
+stc []u64 SIZES = [sizeof u1, sizeof u7, sizeof u9, sizeof i24, sizeof u33, sizeof i63, sizeof [4]u7]; #= SIZES [1, 1, 2, 4, 8, 8, 4]
+stc []u64 ALIGNS = [alignof u7, alignof u24, alignof i48]; #= ALIGNS [1, 4, 8]
+
+# widening as for the others: the same signedness wider, or a strictly wider signed type
+fun widened = (u7 a, i5 b, u3 c) -> [3]i64 {
+    u8 wide = a;
+    i8 signed = b;
+    i4 bigger = c;
+    ret [wide, signed, bigger];
+}
+stc [3]i64 WIDENED = widened(127, -16, 7); #= WIDENED [127, -16, 7]
+stc []u64 MIXED = [(3 as u7 + 200 as u9) as u64, (5 as u3 * 3 as u3) as u64]; #= MIXED [203, 7]
+
+# casts wrap to the width, signed widths extend their sign
+stc []i64 CASTS = [300 as u7, 255 as i7, -1 as u5, 17 as i5, 2.9 as u3]; #= CASTS [44, -1, 31, -15, 2]
+stc i64 SATURATED = 1000.0 as i5; #= SATURATED 15
+stc []u8 SHIFTS = [(1 as u5 << 4) as u8, (16 as u5 >> 2) as u8, (31 as u5 << 1) as u8]; #= SHIFTS [16, 4, 30]
+
+# a name like a width is a variable where a declaration has it, the type everywhere else
+fun shadowed = () -> u64 {
+    u32 i2 = 7;
+    u5 u = 31;
+    ret i2 + u;
+}
+stc u64 SHADOWED = shadowed(); #= SHADOWED 38
+type Small = u3;
+stc Small SMALL = 5; #= SMALL 5
+stc u64 SMALL_SIZE = sizeof Small; #= SMALL_SIZE 1
+
+# in records, parameters, results and generic code, lifted into quotes
+type Pixel = *(u5 r, u6 g, u5 b);
+stc u64 PIXEL = sizeof Pixel; #= PIXEL 3
+stcfun largest = (type T): ([..]T xs) -> T {
+    mut T m = xs[0];
+    for x in xs: if x > m: m = x;
+    ret m;
+}
+stc [3]u12 TWELVES = [4095, 7, 100];
+stc u12 LARGEST = largest(u12)(TWELVES); #= LARGEST 4095
+stcfun declared = (type T) -> ast: ret quote: *(@T a, @T b);
+type Lifted = <declared(i9)>;
+stc u64 LIFTED = sizeof Lifted; #= LIFTED 4
+stc i9 LIFTED_FIELD = Lifted(-256, 255).a; #= LIFTED_FIELD -256
+
+main = () {}

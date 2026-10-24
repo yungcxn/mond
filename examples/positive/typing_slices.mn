@@ -1,0 +1,134 @@
+# `[..]T`: the address of the first element and the length, of an array, a part of one, a string
+fun sum = ([..]u32 xs) -> u32 {
+    mut u32 s = 0;
+    for x in xs: s += x;
+    ret s;
+}
+stc [5]u32 NUMS = [1, 2, 3, 4, 5];
+stc u32 ALL = sum(NUMS); #= ALL 15
+stc u64 SIZE = sizeof [..]u8; #= SIZE 16
+stc u64 ALIGN = alignof [..]u64; #= ALIGN 8
+
+# a range of an array is an array when its bounds are static and no slice is expected, else a slice
+stc [2]u32 TAIL = NUMS[3..]; #= TAIL [4, 5]
+stc [3]u32 HEAD = NUMS[..<3]; #= HEAD [1, 2, 3]
+stc [3]u32 MIDDLE = NUMS[1..=3]; #= MIDDLE [2, 3, 4]
+stc u32 PART = sum(NUMS[1..<3]); #= PART 5
+fun part_of = (u64 from, u64 to) -> u32: ret sum(NUMS[from..<to]);
+stc u32 RUNTIME_PART = part_of(2, 5); #= RUNTIME_PART 12
+stc u32 AS_SLICE = sum(NUMS[0..<2] as [..]u32); #= AS_SLICE 3
+stc u32 WHOLE = sum(NUMS as [..]u32); #= WHOLE 15
+
+# a slice of a slice, its length and elements while the program runs
+fun first_word = ([..]u8 text) -> [..]u8 {
+    mut u64 i = 0;
+    while i < lenof text and text[i] != ' ': i += 1;
+    ret text[0..<i];
+}
+fun rest = ([..]u8 text) -> [..]u8: ret text[lenof first_word(text)..];
+stc u64 WORD = lenof first_word("hello world"); #= WORD 5
+stc u64 REST = lenof rest("hello world"); #= REST 6
+stc u8 LAST = rest("ab cd")[2]; #= LAST 100
+
+# slices compare by their length and elements, with arrays too
+stcfun equal_word = () -> bool: ret first_word("abc def") == "abc";
+stc bool EQUAL = equal_word(); #= EQUAL true
+stcfun unequal = () -> []bool: ret [first_word("abc") == "ab", first_word("ab") != "abc", rest("a b") == rest("c b")];
+stc []bool UNEQUAL = unequal(); #= UNEQUAL [false, true, true]
+
+# writes through a slice reach the array it is of
+fun fill = ([..]u8 dst, u8 v) { for i in 0..<lenof dst: dst[i] = v; }
+stcfun filled = () -> [5]u8 {
+    mut [5]u8 buf = [0, 0, 0, 0, 0];
+    fill(buf[1..=3], 7);
+    [..]u8 view = buf;
+    view[4] = 9;
+    ret buf;
+}
+stc [5]u8 FILLED = filled(); #= FILLED [0, 7, 7, 7, 9]
+stcfun through_pointer = () -> [3]u8 {
+    mut [3]u8 bytes = [1, 2, 3];
+    *[3]u8 p = bytes.&;
+    fill(p, 5);
+    ret bytes;
+}
+stc [3]u8 THROUGH = through_pointer(); #= THROUGH [5, 5, 5]
+
+# a pointer to a slice indexes through it, a slice of slices
+fun second = (&[..]u8 p) -> u8: ret p[1];
+stcfun pointed = () -> u8 {
+    [..]u8 s = "xyz";
+    ret second(s.&) + p_star(s.&);
+}
+fun p_star = (&[..]u8 p) -> u8: ret p.*[0] - 'x';
+stc u8 POINTED = pointed(); #= POINTED 121
+fun total_length = ([..][..]u8 texts) -> u64 {
+    mut u64 n = 0;
+    for t in texts: n += lenof t;
+    ret n;
+}
+stcfun lengths = () -> u64 {
+    [3][..]u8 parts = ["a", "bc", "def"];
+    ret total_length(parts);
+}
+stc u64 LENGTHS = lengths(); #= LENGTHS 6
+
+# in records, variants and generic functions
+type Lexer = *([..]u8 source, mut u64 at = 0) !{
+    fun next_char = () -> u8 {
+        if self.at >= lenof self.source: ret 0;
+        self.at += 1;
+        ret self.source[self.at - 1];
+    }
+}
+stcfun lexed = () -> u32 {
+    mut Lexer l = Lexer("ab");
+    ret l.next_char() as u32 * 1000 + l.next_char() as u32 + l.next_char() as u32;
+}
+stc u32 LEXED = lexed(); #= LEXED 97098
+variant Token = +(Word([..]u8), Number(u64), End);
+fun token_length = (Token t) -> u64: ret match t { Token.Word(w) => lenof w, Token.Number(n) => n, Token.End => 0 };
+stc u64 TOKEN = token_length(Token.Word("four")); #= TOKEN 4
+stcfun largest = (type T): ([..]T xs) -> T {
+    mut T m = xs[0];
+    for x in xs: if x > m: m = x;
+    ret m;
+}
+stc [3]i16 SIGNED = [3, -9, 7];
+stc i16 LARGEST = largest(i16)(SIGNED); #= LARGEST 7
+
+# an element pointer or a runtime-length array sliced up to a bound given, unchecked
+fun from_pointer = (&u8 p, u64 n) -> u64: ret sum_bytes(p[0..<n]);
+fun sum_bytes = ([..]u8 bytes) -> u64 {
+    mut u64 s = 0;
+    for b in bytes: s += b;
+    ret s;
+}
+stcfun pointer_sum = () -> u64 {
+    [4]u8 bytes = [1, 2, 3, 4];
+    ret from_pointer(bytes[1].&, 3);
+}
+stc u64 POINTER_SUM = pointer_sum(); #= POINTER_SUM 9
+
+# a slice's elements as a pointer
+fun first_address = ([..]u8 s) -> &u8: ret s as &u8;
+stcfun first_of = () -> u8 {
+    [..]u8 s = "q";
+    ret first_address(s).*;
+}
+stc u8 FIRST = first_of(); #= FIRST 113
+
+# `$it` and a loop collecting from a slice
+stcfun doubled = () -> [3]u32 {
+    [..]u32 xs = NUMS[0..<3];
+    ret for xs: $it * 2;
+}
+stc [3]u32 DOUBLED = doubled(); #= DOUBLED [2, 4, 6]
+
+# a static slice is of a static array
+stc [..]u8 NAME = "mond";
+stc u64 NAME_LENGTH = lenof NAME; #= NAME_LENGTH 4
+stc u8 NAME_FIRST = NAME[0]; #= NAME_FIRST 109
+stc bool NAME_EQUAL = NAME == "mond"; #= NAME_EQUAL true
+
+main = () {}

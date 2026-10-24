@@ -1,0 +1,46 @@
+<include "lib/out.mn">;
+# widths without a keyword at run time: wrapping arithmetic, conversions, bit-packed records read
+# and written in memory, `bits(..)` patterns as shifts and compares
+mut u32 ONE = 0;
+type Insn = **(mut u7 opcode, mut u5 rd, mut u3 f3, mut u5 rs1, mut u12 imm);
+type Frame = **(mut u4 kind, mut u4 flags, mut u16 length, mut bool last, mut u7 crc);
+
+fun add = (u7 a, u7 b) -> u7: ret a + b;
+fun bump = (*Insn i) { i.rs1 += 1; i.imm = 4095; }
+fun decode = (u32 insn) -> u64: ret match insn {
+    bits(u7 0x33, u5 rd, u3 0, u5 rs1, u5 rs2, u7 0) => 1000000 + rd as u64 * 10000 + rs1 as u64 * 100 + rs2,
+    bits(u7 0x13, u5 rd, u3 f3, ..immediate) => 2000000 + rd as u64 + f3 as u64 * 100 + immediate as u64 * 1000,
+    _ => 0,
+};
+fun nibbles = (i8 x) -> i64: ret match x { bits(i4 low, i4 high) => low as i64 * 100 + high };
+stc Insn ADDI = Insn(0x13, 1, 0, 2, 300);
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc;
+    line_u64(add((100 * ONE) as u7, 100) as u64);                    #> 72
+    i24 low = (-8388608 * ONE as i32) as i24;
+    line_i64((low - 1) as i64);                                       #> 8388607
+    u3 small = (5 * ONE) as u3;
+    line_u64((small << 1) as u64 + sizeof [4]u7);                     #> 6
+
+    mut Insn i = ADDI;
+    i.rd = (31 * ONE) as u5;
+    i.f3++;
+    bump(i.&);
+    line_u64(i.rd as u64 * 1000000 + i.f3 as u64 * 100000 + i.rs1 as u64 * 10000 + i.imm); #> 31134095
+    Insn changed = i with (opcode = 0x33);
+    line_u64(changed.opcode as u64 + (if changed == i: 1000 else: 0)); #> 51
+    [2]Insn two = [ADDI, i];
+    line_u64(two[0].imm + two[1].rd + sizeof [2]Insn);                #> 339
+
+    mut Frame f = Frame(3, 9, 1000, true, 99);
+    *u16 length = f.length.&;
+    length.* = 2000 * ONE as u16;
+    f.crc += 30;
+    line_u64(f.length + f.kind as u64 * 10000 + (if f.last: 100000 else: 0) + f.crc + sizeof Frame * 1000000); #> 5132001
+
+    line_u64(decode(0x003100B3 * ONE));                              #> 1010203
+    line_u64(decode(0x00A02093 * ONE));                              #> 2320201
+    line_u64(decode(7 * ONE));                                       #> 0
+    line_i64(nibbles((-2 * ONE as i32) as i8));                      #> -201
+}

@@ -1,0 +1,19 @@
+# a `where` guard is a bool, sees the binders of its arm only, and covers nothing
+variant Opt = +(Some(i32), None);
+fun not_bool = (Opt o) -> i32: ret match o { Opt.Some(v) where v => v, _ => 0 }; #! type_mismatch
+fun unknown = (Opt o) -> i32: ret match o { Opt.Some(v) where w > 0 => v, _ => 0 }; #! undefined_name
+fun binder_scope = (Opt o) -> i32 { i32 r = match o { Opt.Some(v) where v > 0 => 1, _ => 0 }; ret v; } #! undefined_name
+
+# guarded arms never make a match exhaustive, even when the guards cover every value
+fun only_guarded = (Opt o) -> i32: ret match o { Opt.Some(v) where v > 0 => v, Opt.None where true => 0 }; #! non_exhaustive_match
+fun all_ints = (u8 x) -> u8: ret match x { 0..=100 => 0, y where y > 100 => 1 }; #! non_exhaustive_match
+fun only_true = (bool b) -> u8: ret match b { false => 0, c where c => 1 }; #! non_exhaustive_match
+
+# an arm after a catch-all stays redundant with a guard
+fun after_all = (u8 x) -> u8: ret match x { _ => 1, y where y > 3 => 2 }; #! redundant_match_arm
+fun after_case = (Opt o) -> u8: ret match o { Opt.Some(_) => 1, Opt.Some(v) where v > 3 => 2, _ => 0 }; #! redundant_match_arm
+
+# the guards of a stcmatch are static
+fun stc_runtime = (i32 a) -> i32: ret stcmatch 3 { n where n > a => 1, _ => 0 }; #! not_static
+
+main = () {}

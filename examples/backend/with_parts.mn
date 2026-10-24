@@ -1,0 +1,32 @@
+<include "lib/out.mn">;
+# `x with (a.b[i] = ..)` at run time: a copy with parts of fields replaced, in order, the guards of
+# the records on the way run again
+mut i64 ONE = 0;
+type Pos = *(i64 x, i64 y);
+type Clamped = *(u8 level where level < 10 else 9, u8 other = 1);
+type Player = *(Pos pos, u8 hp, [3]Pos trail, Clamped power);
+type World = *(Player player, u64 tick);
+
+fun moved = (World w, u64 i, i64 by) -> World:
+    ret w with (player.trail[i].x = w.player.trail[i].x + by, tick = w.tick + 1);
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    World w = World(Player(Pos(ONE, 2 * ONE), 50, [Pos(0, 0), Pos(ONE, ONE), Pos(2, 2)], Clamped(3)), 7);
+    World deep = w with (player.pos.x = 3 * ONE, player.hp = 10, tick = 8);
+    line_i64(deep.player.pos.x);                                           #> 3
+    line_i64(deep.player.pos.y);                                           #> 2
+    line_u64(deep.player.hp as u64);                                       #> 10
+    line_u64(deep.tick);                                                   #> 8
+    line_i64(w.player.pos.x);                                              #> 1
+    World stepped = moved(w, (2 * ONE) as u64, 10 * ONE);
+    line_i64(stepped.player.trail[2].x);                                   #> 12
+    line_u64(stepped.tick);                                                #> 8
+    World later = w with (player.pos.x = 9, player.pos = Pos(0, ONE), player.pos.y = 5 * ONE);
+    line_i64(later.player.pos.x * 10 + later.player.pos.y);                #> 5
+    World clamped = w with (player.power.level = (50 * ONE) as u8, player.power.other = 4);
+    line_u64(clamped.player.power.level as u64 * 10 + clamped.player.power.other as u64);   #> 94
+    mut World walker = w;
+    for i in 0..<4: walker = walker with (player.trail[(i % 3) as u64].y = i as i64 * ONE);
+    line_i64(walker.player.trail[0].y * 100 + walker.player.trail[1].y * 10 + walker.player.trail[2].y);   #> 312
+}

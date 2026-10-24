@@ -1,0 +1,9 @@
+# examples/lib/ornaments.mn: a forget of a recursive variant and a case the base doesn't have are
+# `crash`es of the library, reported where it is included
+<include "../lib/ornaments.mn">; #! crash crash
+variant Expr = +(Num(i64 value), Neg(&Expr inner), Hole);
+variant Tagged = <ornament(refl Expr, quote: Tagged, quote: *(u8 tag = 0))>;
+fun back = <forget(refl Expr, quote: Tagged)>;
+variant Unknown = <ornament_cases(refl Expr, quote: Unknown, quote: +(Mul(u8 x)))>;
+
+main = () {}

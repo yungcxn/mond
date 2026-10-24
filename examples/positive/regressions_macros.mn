@@ -6,4 +6,24 @@ stcfun fresh_long = () -> ast {
 fun long_fresh = () -> u32: <fresh_long()>;
 stc u32 lf = long_fresh(); #= lf 5
 
+# the names of the arm a statement `match` takes on a static tree, in the holes of a quote
+stcfun undo_add = (ast s) -> ast {
+    match s {
+        ast.AssignmentAdd(l, e) => ret quote: @l -= @e,
+        _ => {},
+    }
+    ret s;
+}
+fun undone_add = () -> u32 {
+    mut u32 x = 5;
+    <undo_add(quote: x += 2)>;
+    ret x;
+}
+stc u32 ua = undone_add(); #= ua 3
+
+# a quote typed on the side naming the declaration its splice makes
+stcfun self_named = (ast n) -> ast: ret quote: +(A(*@n next), B);
+variant SelfNamed = <self_named(quote: SelfNamed)>;
+stc u64 sn = sizeof SelfNamed; #= sn 16
+
 main = () {}

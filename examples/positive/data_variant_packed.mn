@@ -1,7 +1,7 @@
 # `++( )`: a packed variant, each case only its tag and its own payload; the variant is a parameter
 # type realized per case, `match` picks the arm while compiling; `|||` is the untagged form of types
 variant Msg = ++(Ping(u8 seq), Data(u64 a, u64 b), Quit);
-variant Bare = ++(Small(u8), Large(u64)) tagtype _;
+variant Bare = ++(Small(u8), Large(u64)) notagtype;
 stc u64 ping_size = sizeof Msg.Ping; #= ping_size 2
 stc u64 data_size = sizeof Msg.Data; #= data_size 24
 stc u64 quit_size = sizeof Msg.Quit; #= quit_size 1

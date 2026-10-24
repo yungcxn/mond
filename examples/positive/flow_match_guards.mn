@@ -1,0 +1,138 @@
+# `pattern where cond =>`: the arm is taken when the pattern matches and its guard holds, else the
+# arms below are tried
+variant Tok = +(Num(i64), Op(u8), Word(u8 first, u8 len), End);
+
+fun kind = (Tok t) -> u32: ret match t {
+    Tok.End => 0,
+    Tok.Num(n) where n > 0 => 1,
+    Tok.Num(n) where n < 0 => 2,
+    Tok.Num(_) => 3,
+    Tok.Op(c) where c == '+' or c == '-' => 4,
+    Tok.Op(_) => 5,
+    Tok.Word(first = f, len = l) where l > 3 and f == 'a' => 6,
+    Tok.Word(_, l) where l == 0 => 7,
+    _ => 8,
+};
+stc []u32 KINDS = [ #= KINDS [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    kind(Tok.End), kind(Tok.Num(9)), kind(Tok.Num(-9)), kind(Tok.Num(0)), kind(Tok.Op('-')),
+    kind(Tok.Op('*')), kind(Tok.Word('a', 4)), kind(Tok.Word('b', 0)), kind(Tok.Word('a', 2)),
+];
+
+# integers: a guard on a binder, a range or a literal; the guard sees parameters and globals
+stc i32 LIMIT = 100;
+fun bucket = (i32 x, i32 step) -> u8: ret match x {
+    0 => 0,
+    y where y % step == 0 => 1,
+    1..=9 where x > 5 => 2,
+    ..<0 => 3,
+    y where y > LIMIT => 4,
+    _ => 5,
+};
+stc []u8 BUCKETS = [bucket(0, 3), bucket(6, 3), bucket(7, 3), bucket(-4, 3), bucket(101, 3), bucket(4, 3)]; #= BUCKETS [0, 1, 2, 3, 4, 5]
+
+# a guard after alternatives applies to all of them
+fun near = (i32 x) -> bool: ret match x { 1 | 2 | 3 where x != 2 => true, _ => false };
+stc []bool NEAR = [near(1), near(2), near(3), near(4)]; #= NEAR [true, false, true, false]
+
+# labels and type patterns bind before the guard runs
+variant Res = +(Ok(i32), Err(u8 code, u8 extra));
+fun severe = (Res r) -> i32: ret match r {
+    Res.Err <- e where e.code > 10 => -(e.code as i32),
+    Res.Err(code = c) where c == 0 => 0,
+    Res.Err => -1,
+    Res.Ok(v) => v,
+};
+stc []i32 SEVERE = [severe(Res.Err(20, 0)), severe(Res.Err(0, 1)), severe(Res.Err(5, 5)), severe(Res.Ok(3))]; #= SEVERE [-20, 0, -1, 3]
+
+variant Number = u32 || f32;
+fun big = (Number n) -> bool: ret match n {
+    u32 i where i > 1000 => true,
+    f32 f where f > 1000.0 => true,
+    _ => false,
+};
+stc []bool BIG = [big(5000), big(3), big(2000.5), big(0.5)]; #= BIG [true, false, true, false]
+
+# records: fields by position or name, guards across both
+type Pt = *(i32 x, i32 y);
+fun quadrant = (Pt p) -> u8: ret match p {
+    Pt(0, 0) => 0,
+    Pt(x, y) where x == y => 1,
+    Pt(x = a, y = b) where a > 0 and b > 0 => 2,
+    _ => 3,
+};
+stc []u8 QUADRANTS = [quadrant(Pt(0, 0)), quadrant(Pt(4, 4)), quadrant(Pt(1, 9)), quadrant(Pt(-1, 9))]; #= QUADRANTS [0, 1, 2, 3]
+
+# guards run in order and only until an arm is taken: calls with effects show it
+fun count = (*u32 calls, bool answer) -> bool { calls.* += 1; ret answer; }
+fun guarded_calls = (u32 x) -> u32 {
+    mut u32 calls = 0;
+    u32 taken = match x {
+        0 where count(calls.&, false) => 1,
+        _ where count(calls.&, true) => 2,
+        _ where count(calls.&, true) => 3,
+        _ => 4,
+    };
+    ret taken * 10 + calls;
+}
+stc u32 CALLS = guarded_calls(0); #= CALLS 22
+stc u32 CALLS_OTHER = guarded_calls(1); #= CALLS_OTHER 21
+
+# a guarded arm makes no later arm redundant, and the arm after a failed guard is taken
+fun twice = (u8 x) -> u8: ret match x { y where y > 9 => 1, y where y > 9 => 2, _ => 3 };
+stc u8 TWICE = twice(10); #= TWICE 1
+
+# stcmatch: the scrutinee and the guards are static, only the taken arm is checked
+stc u32 STATIC = stcmatch Tok.Num(3) { #= STATIC 2
+    Tok.Num(n) where n > 5 => 1,
+    Tok.Num(n) where n > 2 => 2,
+    _ => this_is_never_checked,
+};
+stc type PICKED = stcmatch sizeof u32 { n where n > 8 => u64, n where n > 2 => u32, _ => u8 }; #= PICKED u32
+
+# in generic code the guard is checked per realization
+stcfun clamp_to = (type T): (T x, T hi) -> T: ret match x { y where y > hi => hi, y => y };
+stc u8 CLAMP_U8 = clamp_to(u8)(200, 100); #= CLAMP_U8 100
+stc i64 CLAMP_I64 = clamp_to(i64)(-5, 100); #= CLAMP_I64 -5
+
+# a match as a value in a loop, a guard on the loop variable
+stc []u32 FIZZ = for i in 1..<8: match i { n where n % 3 == 0 => 3, n where n % 2 == 0 => 2, n => n }; #= FIZZ [1, 2, 3, 2, 5, 3, 7]
+
+# trees: a guard after a kind or quote pattern
+stcfun op_name = (ast e) -> []u8: ret match e {
+    ast.BinaryAdd(lhs = l) where l oftype ast.IntegerValue => "add of int",
+    ast.BinaryAdd => "add",
+    quote: @a * @b where a oftype ast.IntegerValue => "scaled",
+    quote: @_ * @_ => "product",
+    _ => "other",
+};
+stc []u8 OP1 = op_name(quote: 1 + x); #= OP1 "add of int"
+stc []u8 OP2 = op_name(quote: x + 1); #= OP2 "add"
+stc []u8 OP3 = op_name(quote: 2 * y); #= OP3 "scaled"
+stc []u8 OP4 = op_name(quote: x * y); #= OP4 "product"
+stc []u8 OP5 = op_name(quote: x - y); #= OP5 "other"
+
+# macros: a quoted match with a guard, its binder fresh in pattern and guard alike, and guarded
+# arms made as quotes, spread into a match
+stcfun sign_match = (ast x) -> ast(u32): ret quote: match @x { v where v > 0 => 1, 0 => 0, _ => 2 };
+fun sign_of = (i32 x) -> u32 {
+    i32 v = -100;
+    ret <sign_match(quote: x)> + (if v < 0: 0 else: 100);
+}
+stc []u32 SIGNS = [sign_of(5), sign_of(0), sign_of(-5)]; #= SIGNS [1, 0, 2]
+stcfun with_arms = (ast x, []ast arms) -> ast(u32): ret quote: match @x { @..arms, _ => 9 };
+fun classify = (i32 x) -> u32: ret <with_arms(quote: x, [quote: v where v > 5 => 1, quote: v where v < 0 => 2])>;
+stc []u32 CLASSES = [classify(9), classify(-1), classify(3)]; #= CLASSES [1, 2, 9]
+
+# a guard reading a local of a stcfun, its scrutinee static where it runs
+stcfun guarded_local = (u32 n) -> u32 {
+    mut u32 limit = 3;
+    limit += 1;
+    match n {
+        v where v > limit => ret 2,
+        _ => {},
+    }
+    ret 1;
+}
+stc []u32 GUARDED_LOCAL = [guarded_local(9), guarded_local(4)]; #= GUARDED_LOCAL [2, 1]
+
+main = () {}

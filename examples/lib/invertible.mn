@@ -1,0 +1,156 @@
+# partially invertible functions, a library for `include`: `fun undo = <invert(refl f, quote: undo,
+# [])>` is the inverse of `f`, made from its tree. `f` updates what its `*T` parameters point to,
+# its other parameters are fixed: the inverse takes the same ones and puts the updated values back.
+# integers wrap, so these statements are undone exactly, in reverse order:
+#   x += e  x -= e         by the other one, `e` must not read `x`
+#   x = x ^ e  x = -x  x = !x   by themselves (`e` must not read `x`)
+#   x *= 3                 by the inverse of the odd number modulo 2^64, its low bits for x's type
+#   g(..)                  by the inverse paired with `g` in `inverses` (`[quote: g, quote: ungo]`),
+#                          `f` itself by `undo`
+#   if c: s else: t        by the same test undoing the branches, `c` must not read what they write
+#   for i in a..<b: s      by the loop run backwards (`a..=b` too), `s` must not write i, a or b
+#   T x = e                kept, in front, when `e` reads nothing the function writes
+#   { .. }                 its statements undone in reverse order
+# anything else is a `crash` at the statement. the updated places are `p.*`, `p.*.f`, `p.*[i]`
+
+# whether two texts are equal
+stcfun same = ([]u8 a, []u8 b) -> bool {
+    if lenof a != lenof b: ret false;
+    for i in 0..<lenof a: if a[i] != b[i]: ret false;
+    ret true;
+}
+
+stcfun contains = ([]ast names, []u8 name) -> bool {
+    for n in names: if same(n.src, name): ret true;
+    ret false;
+}
+
+# whether a tree mentions one of the names anywhere, a length or a size not being a value
+stcfun reads = (ast e, []ast names) -> bool {
+    if e oftype ast.Identifier: ret contains(names, e.src);
+    if e oftype ast.LengthOf or e oftype ast.SizeOf: ret false;
+    for c in e.children: if reads(c, names): ret true;
+    ret false;
+}
+
+# the name a place starts at: `p` of `p.*.f[i]`
+stcfun root = (ast place) -> ast: ret match place {
+    ast.Dereference(inner) => root(inner),
+    ast.MemberAccess(parent, _) => root(parent),
+    ast.ArrayIndexing(indexable, _) => root(indexable),
+    _ => place,
+};
+
+# the names a statement writes: places it updates, updatable names it passes to a call
+stcfun written = (ast s, []ast updatable) -> []ast {
+    mut []ast names = [];
+    match s {
+        ast.AssignmentAdd(l, _) | ast.AssignmentSubtract(l, _) | ast.AssignmentMultiply(l, _) => names += root(l),
+        ast.Assignment(l, _) => names += root(l),
+        ast.FunctionCall(_, args) => for a in args.children: if contains(updatable, root(a).src): names += root(a),
+        _ => for c in s.children: for n in written(c, updatable): names += n,
+    }
+    ret names;
+}
+
+# the value of a decimal integer literal, 0 for any other tree
+stcfun decimal = (ast e) -> u64 {
+    if !(e oftype ast.IntegerValue): ret 0;
+    mut u64 v = 0;
+    for c in e.src: if c >= '0' and c <= '9': v = v * 10 + (c - '0') as u64 else: ret 0;
+    ret v;
+}
+
+# the number times which an odd number is 1, modulo 2^64 (each step doubles the bits that are right)
+stcfun odd_inverse = (u64 c) -> u64 {
+    mut u64 d = c;
+    for _ in 0..<6: d *= 2 - c * d;
+    ret d;
+}
+
+# what the inverse needs to know: the inverse's name, `f`'s name, the pairs of inverses and the
+# names `f` may update
+type Inverting = *(ast name, []u8 self_name, []ast inverses, []ast updatable);
+
+# the inverse of a call's function, a crash when there is none
+stcfun inverse_of = (Inverting how, ast call, ast callee) -> ast {
+    if same(callee.src, how.self_name): ret how.name;
+    for i in 0..<lenof how.inverses / 2: if same(how.inverses[2 * i].src, callee.src): ret how.inverses[2 * i + 1];
+    crash (call, "invert: a call to a function without an inverse given");
+    ret callee;
+}
+
+# the statement undoing `s`
+stcfun undone = (Inverting how, ast s) -> ast {
+    match s {
+        ast.CodeBlock => {
+            # the fixed locals first, they read nothing the block writes so they are the same
+            mut []ast statements = [];
+            for t in s.children: if t oftype ast.AssignmentTyped {
+                if reads(t.assigned, written(s, how.updatable)) {
+                    crash (t, "invert: a local reading what its block writes");
+                }
+                statements += t;
+            }
+            []ast forward = s.children;
+            for i in 0..<lenof forward {
+                ast t = forward[lenof forward - 1 - i];
+                if !(t oftype ast.AssignmentTyped): statements += undone(how, t);
+            }
+            ret quote { @..statements; };
+        },
+        ast.AssignmentAdd(l, e) where !reads(e, [root(l)]) => ret ast.AssignmentSubtract(l, e),
+        ast.AssignmentSubtract(l, e) where !reads(e, [root(l)]) => ret ast.AssignmentAdd(l, e),
+        ast.AssignmentMultiply(l, e) where decimal(e) % 2 == 1 => {
+            u64 d = odd_inverse(decimal(e));
+            ret quote: @l *= (@d as u64) as typeof @l;
+        },
+        ast.AssignmentAdd | ast.AssignmentSubtract => crash (s, "invert: the change reads the place it changes"),
+        ast.AssignmentMultiply => crash (s, "invert: a multiplication by other than an odd number"),
+        ast.Assignment(l, ast.BinaryNumericalXor(l2, e)) where same(l.src, l2.src) and !reads(e, [root(l)]) => ret s,
+        ast.Assignment(l, ast.NegateNumerical(l2)) | ast.Assignment(l, ast.NegateLogical(l2)) where same(l.src, l2.src) => ret s,
+        ast.FunctionCall(callee, args) => ret ast.FunctionCall(inverse_of(how, s, callee), args),
+        ast.IfThen(c, then) where !reads(c, written(then, how.updatable)) => ret ast.IfThen(c, undone(how, then)),
+        ast.IfElse(ast.IfThen(c, then)) => {
+            ast otherwise = s.children[1];
+            if reads(c, written(then, how.updatable)) or reads(c, written(otherwise, how.updatable)) {
+                crash (s, "invert: the test reads what its branches write");
+            }
+            ret ast.IfElse(ast.IfThen(c, undone(how, then)), undone(how, otherwise));
+        },
+        ast.ForVarInSeq(ast.ForSeq(range, body), i) => {
+            mut []ast fixed = written(body, how.updatable);
+            fixed += i;
+            if !(range oftype ast.GenerateExclusive) and !(range oftype ast.GenerateInclusive) {
+                crash (s, "invert: a loop over something other than a range");
+            }
+            ast lower = range.lower;
+            ast upper = range.upper;
+            if reads(lower, fixed) or reads(upper, fixed) {
+                crash (s, "invert: the loop writes its variable or its bounds");
+            }
+            ast j = fresh "j";
+            ast at = if range oftype ast.GenerateExclusive: quote: @upper - 1 - (@j - @lower) else: quote: @upper - (@j - @lower);
+            ast back = undone(how, body);
+            ret quote: for @j in @range { @i = @at; @back; };
+        },
+        _ => {},
+    }
+    crash (s, "invert: a statement that can't be undone");
+    ret s;
+}
+
+pub stcfun invert = (&ast(fun) f, ast name, []ast inverses) -> ast {
+    if f.assigned.fun_header oftype ast.FunctionDefinitionHeaderReturning {
+        crash (f.assigned.fun_header, "invert: a function with a result");
+    }
+    mut []ast updatable = [];
+    mut []ast params = [];
+    for p in f.params {
+        if p.type oftype ast.TypePointerMutable: updatable += p.name;
+        params += p;
+    }
+    Inverting how = Inverting(name, f.name.src, inverses, updatable);
+    ast back = undone(how, f.body);
+    ret quote: (@..params) { @back; };
+}

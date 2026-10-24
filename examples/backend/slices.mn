@@ -1,0 +1,60 @@
+<include "lib/out.mn">;
+# slices at run time: the address of the first element and the length, checked indices and ranges,
+# loops, equality, slices of slices, in records, across the c abi
+mut u64 ONE = 0;
+fun sum = ([..]u32 xs) -> u64 {
+    mut u64 s = 0;
+    for x in xs: s += x;
+    ret s;
+}
+fun fill = ([..]u8 dst, u8 v) { for i in 0..<lenof dst: dst[i] = v; }
+fun first_word = ([..]u8 text) -> [..]u8 {
+    mut u64 i = 0;
+    while i < lenof text and text[i] != ' ': i += 1;
+    ret text[0..<i];
+}
+type Lexer = *([..]u8 source, mut u64 at = 0) !{
+    fun next_char = () -> u8 {
+        if self.at >= lenof self.source: ret 0;
+        self.at += 1;
+        ret self.source[self.at - 1];
+    }
+}
+fun total_length = ([..][..]u8 texts) -> u64 {
+    mut u64 n = 0;
+    for t in texts: n += lenof t;
+    ret n;
+}
+stc [..]u8 NAME = "mond";
+fun clib_slice_sum = ([..]u8 s) -> u64;
+fun clib_slice_tail = ([..]u8 s) -> [..]u8;
+fun clib_slice_fill = ([..]u8 s, u8 value);
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as u64;
+    [6]u32 numbers = [1, 2, 3, 4, 5, 6];
+    line_u64(sum(numbers));                                       #> 21
+    line_u64(sum(numbers[ONE..<4 * ONE]));                        #> 9
+    line_u64(sum(numbers[(2 * ONE)..]));                          #> 18
+    # the bounds of a range are whole expressions
+    line_u64(sum(numbers[ONE + 1..<ONE * 5 - 1]));                #> 7
+    line_u64(sum(numbers[2 * ONE..]) + sum(numbers[..<ONE + 1])); #> 21
+    mut [8]u8 buf = [0, 0, 0, 0, 0, 0, 0, 0];
+    fill(buf[ONE..=3 * ONE], 7);
+    [..]u8 view = buf;
+    view[7] = 9;
+    line_u64(buf[0] as u64 * 100 + buf[2] as u64 * 10 + buf[7] as u64);   #> 79
+    line_u64(lenof first_word("hello world"));                    #> 5
+    line_u64(if first_word("abc def") == "abc": 1 else: 0);       #> 1
+    line_u64(if first_word("abc") != "ab": 1 else: 0);            #> 1
+    mut Lexer l = Lexer("ab");
+    line_u64(l.next_char() as u64 * 1000 + l.next_char() as u64 + l.next_char() as u64);   #> 97098
+    [3][..]u8 parts = ["a", "bc", "def"];
+    line_u64(total_length(parts[0..<3 * ONE]));                   #> 6
+    line_u64(lenof NAME * 1000 + NAME[ONE] as u64);               #> 4111
+    mut [5]u8 bytes = [1, 2, 3, 4, 5];
+    line_u64(clib_slice_sum(bytes));                              #> 15
+    line_u64(lenof clib_slice_tail(bytes));                       #> 4
+    clib_slice_fill(bytes[(3 * ONE)..], 0);
+    line_u64(clib_slice_sum(bytes));                              #> 6
+}

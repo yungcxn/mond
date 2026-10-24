@@ -1,0 +1,137 @@
+# `A -- B`: a variant without some of its cases, in the layout and tags of its whole
+variant IoErr = +(NotFound, Timeout, Denied, Busy(u8 retries));
+type Config = *(u32 port, u32 flags);
+
+type Narrow = IoErr -- IoErr.NotFound;
+stc u64 SIZE = sizeof Narrow; #= SIZE 2
+stc u64 WHOLE_SIZE = sizeof IoErr; #= WHOLE_SIZE 2
+stc u64 ALIGN = alignof Narrow; #= ALIGN 1
+
+# one type however it is written: chains, subsets of subsets, a `||` of cases, unified wholes
+type Two = IoErr -- IoErr.NotFound -- IoErr.Timeout;
+stc bool CHAIN = Two == (IoErr -- (IoErr.NotFound || IoErr.Timeout)); #= CHAIN true
+stc bool NESTED = Two == (Narrow -- IoErr.Timeout); #= NESTED true
+stc bool ORDER = Two == (IoErr -- IoErr.Timeout -- IoErr.NotFound); #= ORDER true
+stc bool AGAIN = Narrow == (Narrow -- IoErr.NotFound); #= AGAIN true
+type Loaded = Config || (IoErr -- IoErr.NotFound);
+stc bool UNIFIED = Loaded == ((Config || IoErr) -- IoErr.NotFound); #= UNIFIED true
+stc u64 LOADED_SIZE = sizeof Loaded; #= LOADED_SIZE 12
+
+# members of a unified variant: a whole member, a member of one case
+variant Number = u32 || f32 || bool;
+type Real = Number -- u32 -- bool;
+fun only_float = (Real r) -> f32: ret match r { f32 f => f };
+stc f32 FLOAT = only_float(2.5); #= FLOAT 2.5
+type NoErrors = Loaded -- IoErr;
+fun port = (NoErrors n) -> u32: ret match n { Config c => c.port };
+stc u32 PORT = port(Config(8080, 0)); #= PORT 8080
+
+# a value goes in when each case it may be is kept; out into the whole or a wider subset for free
+fun widen = (Two t) -> Narrow: ret t;
+fun to_whole = (Narrow n) -> IoErr: ret n;
+fun to_unified = (Narrow n) -> Config || IoErr: ret n;
+stc IoErr WIDENED = to_whole(widen(IoErr.Denied));
+stc u8 WIDENED_TAG = tagof WIDENED; #= WIDENED_TAG 2
+stc Narrow CASE = IoErr.Busy(3);
+stc u8 CASE_TAG = tagof CASE; #= CASE_TAG 3
+stc u8 UNIFIED_TAG = tagof to_unified(IoErr.Timeout); #= UNIFIED_TAG 2
+
+# a match needs the cases kept only
+fun describe = (Narrow n) -> u32: ret match n {
+    IoErr.Timeout => 1,
+    IoErr.Denied => 2,
+    IoErr.Busy(r) => 10 + r as u32,
+};
+stc []u32 DESCRIBED = [describe(IoErr.Timeout), describe(IoErr.Denied), describe(IoErr.Busy(5))]; #= DESCRIBED [1, 2, 15]
+
+# a bare name after arms that took whole cases is of the scrutinee without them
+fun retry = (IoErr e) -> u32: ret match e {
+    IoErr.NotFound => 0,
+    IoErr.Busy(_) => 1,
+    rest => describe_two(rest),
+};
+fun describe_two = (IoErr -- IoErr.NotFound -- IoErr.Busy t) -> u32: ret match t { IoErr.Timeout => 7, IoErr.Denied => 8 };
+stc []u32 RETRIED = [retry(IoErr.NotFound), retry(IoErr.Busy(1)), retry(IoErr.Timeout), retry(IoErr.Denied)]; #= RETRIED [0, 1, 7, 8]
+fun by_label = (IoErr e) -> u32: ret match e { IoErr.Busy <- b => b as u32, IoErr.NotFound | IoErr.Denied => 100, rest => only_timeout(rest) };
+fun only_timeout = (IoErr -- IoErr.Busy -- IoErr.NotFound -- IoErr.Denied t) -> u32: ret 200;
+stc []u32 LABELLED = [by_label(IoErr.Busy(4)), by_label(IoErr.Denied), by_label(IoErr.Timeout)]; #= LABELLED [4, 100, 200]
+fun by_type = (Loaded l) -> u32: ret match l {
+    Config c => c.port,
+    rest => match rest { IoErr.Timeout => 1, IoErr.Denied => 2, IoErr.Busy(r) => 10 + r as u32 },
+};
+stc u32 BY_TYPE = by_type(IoErr.Busy(1)); #= BY_TYPE 11
+
+# a guard, a payload pattern or a value pattern takes a case only partly: it stays
+fun partial = (IoErr e) -> IoErr: ret match e {
+    IoErr.Busy(0) => IoErr.Timeout,
+    IoErr.Timeout where false => e,
+    rest => rest,
+};
+stc u8 PARTIAL = tagof partial(IoErr.Busy(2)); #= PARTIAL 3
+
+# both branches of a choice: the cases neither leaves out
+fun either = (
+    bool c,
+    IoErr -- IoErr.NotFound -- IoErr.Busy t,
+    IoErr -- IoErr.Timeout -- IoErr.Denied -- IoErr.Busy u,
+) -> IoErr -- IoErr.Busy: ret if c: t else: u;
+stc u8 EITHER = tagof either(false, IoErr.Denied, IoErr.NotFound); #= EITHER 0
+
+# `??` unwraps the first payload case kept, the fallback of a subset result is a kept case
+variant Res = +(Ok(i32), Err(u8), Skip(i32), Empty);
+type NoOk = Res -- Res.Ok;
+stc NoOk SKIP = Res.Skip(5);
+stc i32 SKIPPED = SKIP ?? 0; #= SKIPPED 0
+fun first_value = (Res -- Res.Ok r) -> u8: ret r ?? 9;
+stc u8 FIRST = first_value(Res.Err(3)); #= FIRST 3
+stc u8 OTHER = first_value(Res.Skip(1)); #= OTHER 9
+stcfun fallback_static = (Res r) -> Res -- Res.Empty { i32 v = r??; ret Res.Ok(v + 1); }
+stc u8 FALLBACK = tagof fallback_static(Res.Empty); #= FALLBACK 0
+
+# methods, casts and equality work as on the whole
+variant Light = +(Red, Yellow, Green) !{
+    fun following = () -> Light: ret match self.* {
+        Light.Red => Light.Green,
+        Light.Green => Light.Yellow,
+        Light.Yellow => Light.Red,
+    };
+}
+type Going = Light -- Light.Red;
+stc Going GO = Light.Green;
+stc bool NEXT = GO.following() == Light.Yellow; #= NEXT true
+stc bool EQUAL = GO == Light.Green; #= EQUAL true
+stc u32 GREEN_TAG = (GO as Light.Green) as u32; #= GREEN_TAG 2
+
+# in records, arrays and templates
+type Holder = *(Narrow err, [2]Two errs);
+stc Holder H = Holder(IoErr.Timeout, [IoErr.Denied, IoErr.Busy(1)]);
+stc u8 HELD = tagof H.errs[1]; #= HELD 3
+variant Maybe = (type T): +(Just(T), Nothing);
+type Surely = Maybe(u16) -- Maybe(u16).Nothing;
+fun surely = (Surely s) -> u16: ret match s { Maybe(u16).Just(v) => v };
+stc u16 SURELY = surely(Maybe(u16).Just(12)); #= SURELY 12
+
+# zeroing: a subset keeping its zero case zeroes as its whole, one leaving it out is written first
+type Kept = *(IoErr -- IoErr.Denied err);
+stc u8 KEPT = tagof Kept.init().err; #= KEPT 0
+type Dropped = *(Narrow err, u8 n);
+fun written = () -> u8 {
+    mut Dropped d;
+    d = Dropped(IoErr.Denied, 1);
+    ret tagof d.err;
+}
+stc u8 WRITTEN = written(); #= WRITTEN 2
+type Defaulted = *(Narrow err = IoErr.Timeout, u8 n);
+stc u8 DEFAULTED = tagof Defaulted.init().err; #= DEFAULTED 1
+
+# as code: a subset lifts to `V -- V.Case`
+stc u64 LIFTED = <quote: sizeof @(Narrow)>; #= LIFTED 2
+stcfun lifted_type = (type T) -> ast(type): ret quote: @(T);
+type Relifted = <lifted_type(Two)>;
+stc bool RELIFTED = Relifted == Two; #= RELIFTED true
+
+# a return type ending in a group right before `:` is no lambda
+fun grouped = () -> Config || (IoErr -- IoErr.NotFound): ret IoErr.Denied;
+stc u8 GROUPED = tagof grouped(); #= GROUPED 3
+
+main = () {}

@@ -53,3 +53,15 @@ double clib_average(int32_t count, ...) {
     va_end(arguments);
     return sum / count;
 }
+
+// slices cross as a record of the address of the first element and the length
+typedef struct { uint8_t *bytes; uint64_t length; } Bytes;
+uint64_t clib_slice_sum(Bytes s) {
+    uint64_t total = 0;
+    for (uint64_t i = 0; i < s.length; i++) total += s.bytes[i];
+    return total;
+}
+Bytes clib_slice_tail(Bytes s) { return (Bytes){s.bytes + 1, s.length - 1}; }
+void clib_slice_fill(Bytes s, uint8_t value) {
+    for (uint64_t i = 0; i < s.length; i++) s.bytes[i] = value;
+}

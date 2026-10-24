@@ -1,0 +1,8 @@
+# examples/lib/dyn.mn: a trait nobody implements has no variant, the library's `crash` is reported
+# where it is included
+<include "../lib/dyn.mn">; #! crash
+trait Lonely = !{ fun alone = () -> u32; }
+type Rock = *(u8 w);
+variant NoOne = <implementers("Lonely")>;
+
+main = () {}

@@ -5,7 +5,7 @@ stats = <include "../lib/namespace/stats.mn">;
 
 variant Value = u32 || i64 || f32;
 variant Event = ++(Tick(u32 at), Sample(u32 at, Value value), Stop);
-variant Bits = +(Float(f32), Word(u32)) tagtype _;
+variant Bits = +(Float(f32), Word(u32)) notagtype;
 variant Link = +(End, Next(&Node)) tagtype self;
 type Node = *(u32 id, Link next);
 

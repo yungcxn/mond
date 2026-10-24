@@ -1,0 +1,18 @@
+# a test of a value's case is known only at run time: no static branch or value of it, and the
+# tested type must be one
+variant Opt = +(Some(u32 v), None);
+type Num = u32 || Opt;
+fun static_branch = (Opt o) -> u32 {
+    stcif o oftype Opt.Some: ret 1; #! not_static
+    ret 0;
+}
+fun static_value = (Num n) -> u32 {
+    stc bool known = n oftype u32; #! not_static
+    # the type alone tells these
+    stc bool always = n oftype Num;
+    stc bool never = n oftype f32;
+    ret 0;
+}
+fun unknown_type = (Opt o) -> bool: ret o oftype Missing; #! undefined_name
+fun no_type = (Opt o) -> bool: ret o oftype 5; #! not_a_type
+main = () {}

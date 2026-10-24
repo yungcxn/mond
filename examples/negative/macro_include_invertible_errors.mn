@@ -1,0 +1,32 @@
+# examples/lib/invertible.mn: a statement that can't be undone is a `crash` where it is written
+<include "../lib/invertible.mn">;
+fun overwrite = (*u32 x) { x.* = 5; } #! crash
+fun unoverwrite = <invert(refl overwrite, quote: unoverwrite, [])>;
+fun doubles = (*u32 x) { x.* += x.*; } #! crash
+fun undoubles = <invert(refl doubles, quote: undoubles, [])>;
+fun even = (*u32 x) { x.* *= 4; } #! crash
+fun uneven = <invert(refl even, quote: uneven, [])>;
+fun helper = (*u32 x) { x.* += 1; }
+fun calls = (*u32 x) { helper(x); } #! crash
+fun uncalls = <invert(refl calls, quote: uncalls, [])>;
+fun tests = (*u32 x) {
+    if x.* > 3 { x.* += 1; } else { x.* -= 1; } #! crash
+}
+fun untests = <invert(refl tests, quote: untests, [])>;
+fun bounded = (*u32 x, *u64 n) {
+    for i in 0..<n.*: n.* += 1; #! crash
+}
+fun unbounded = <invert(refl bounded, quote: unbounded, [])>;
+fun local = (*u32 x) {
+    u32 t = x.*; #! crash
+    x.* += t;
+}
+fun unlocal = <invert(refl local, quote: unlocal, [])>;
+fun result = (*u32 x) -> u32 { x.* += 1; ret x.*; } #! crash
+fun unresult = <invert(refl result, quote: unresult, [])>;
+fun over_array = (*u32 x, [3]u32 xs) {
+    for v in xs: x.* += v; #! crash
+}
+fun unover_array = <invert(refl over_array, quote: unover_array, [])>;
+
+main = () {}

@@ -252,10 +252,12 @@ pub fn print_type_definition(
         .simple_type,
         .meta_type,
         .array_type,
+        .slice_type,
         .pointer_type,
         .function_type,
         .variant_case_type,
         .unified_variant_type,
+        .variant_subset_type,
         .trait_type,
         .static_function,
         .template_type,
@@ -356,6 +358,10 @@ fn print_type(
             }
             try writer.writeAll("]");
         },
+        .slice_type => |slice| {
+            try print_type(writer, lowerer, slice.element);
+            try writer.writeAll(type_color ++ "[..]");
+        },
         .function_type => |function| try print_function_type(writer, lowerer, function),
         .record_type => |record| {
             if (try print_nominal(writer, lowerer, record.declaration)) return;
@@ -379,6 +385,13 @@ fn print_type(
             for (unified.members, 0..) |member, i| {
                 if (i > 0) try writer.print(type_color ++ "{s}", .{separator});
                 try print_type(writer, lowerer, member);
+            }
+        },
+        .variant_subset_type => |subset| {
+            try print_type(writer, lowerer, subset.whole);
+            for (subset.removed) |unit| {
+                try writer.writeAll(type_color ++ " -- ");
+                try print_type(writer, lowerer, unit);
             }
         },
         .int_type,
@@ -500,6 +513,7 @@ fn print_value(writer: *Writer, lowerer: *HighLowerer, value: StaticPool.Index) 
         .simple_type,
         .meta_type,
         .array_type,
+        .slice_type,
         .pointer_type,
         .mutable_pointer_type,
         .function_type,
@@ -507,6 +521,7 @@ fn print_value(writer: *Writer, lowerer: *HighLowerer, value: StaticPool.Index) 
         .variant_type,
         .variant_case_type,
         .unified_variant_type,
+        .variant_subset_type,
         .trait_type,
         .static_function,
         .template_type,

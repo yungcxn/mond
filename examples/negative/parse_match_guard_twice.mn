@@ -1,0 +1,4 @@
+# one guard per arm: conditions join with `and`
+fun f = (u8 x) -> u8: ret match x { y where y > 1 where y < 5 => 1, _ => 0 }; #! ExpectedMatchArrow
+
+main = () {}

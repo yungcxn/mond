@@ -1,0 +1,67 @@
+<include "lib/out.mn">;
+# `where` guards at run time: a switch takes the arms before the first guard, the others are tested
+# in order from its default; a failed guard goes on with the arms below
+mut i64 ONE = 0;
+variant Tok = +(Num(i64), Op(u8), Word(u8 first, u8 len), End, Sep);
+
+fun kind = (Tok t) -> u64: ret match t {
+    Tok.End => 0,
+    Tok.Sep => 9,
+    Tok.Op(c) => 7,
+    Tok.Num(n) where n > 0 => 1,
+    Tok.Num(n) where n < 0 => 2,
+    Tok.Word(f, l) where f == 'a' and l > 2 => 3,
+    Tok.Num(_) => 4,
+    Tok.Word(_, _) => 5,
+};
+
+fun bucket = (i64 x) -> u64: ret match x {
+    0 => 0,
+    1..=9 where x % 2 == 1 => 1,
+    1..=9 => 2,
+    y where y > 1000 => 3,
+    ..<0 => 4,
+    _ => 5,
+};
+
+mut u64 CALLS = 0;
+fun noted = (bool answer) -> bool { CALLS += 1; ret answer; }
+fun ordered = (i64 x) -> u64: ret match x {
+    0 where noted(false) => 1,
+    _ where noted(x > 5) => 2,
+    _ where noted(true) => 3,
+    _ => 4,
+};
+
+type Pt = *(i64 x, i64 y);
+fun diagonal = (Pt p) -> u64: ret match p { Pt(a, b) where a == b => 1, Pt(a, _) where a < 0 => 2, _ => 3 };
+
+variant Number = u32 || f64;
+fun large = (Number n) -> u64: ret match n { u32 i where i > 100 => 1, f64 f where f > 100.5 => 2, _ => 3 };
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    line_u64(kind(Tok.End));                                    #> 0
+    line_u64(kind(Tok.Sep));                                    #> 9
+    line_u64(kind(Tok.Op('+')));                                #> 7
+    line_u64(kind(Tok.Num(5 * ONE)));                           #> 1
+    line_u64(kind(Tok.Num(-5 * ONE)));                          #> 2
+    line_u64(kind(Tok.Num(0 * ONE)));                           #> 4
+    line_u64(kind(Tok.Word('a', 3 * ONE as u8)));               #> 3
+    line_u64(kind(Tok.Word('b', 3 * ONE as u8)));               #> 5
+    line_u64(bucket(0 * ONE));                                  #> 0
+    line_u64(bucket(3 * ONE));                                  #> 1
+    line_u64(bucket(4 * ONE));                                  #> 2
+    line_u64(bucket(5000 * ONE));                               #> 3
+    line_u64(bucket(-2 * ONE));                                 #> 4
+    line_u64(bucket(50 * ONE));                                 #> 5
+    line_u64(ordered(0 * ONE) * 10 + CALLS);                    #> 33
+    CALLS = 0;
+    line_u64(ordered(9 * ONE) * 10 + CALLS);                    #> 21
+    line_u64(diagonal(Pt(4 * ONE, 4 * ONE)));                   #> 1
+    line_u64(diagonal(Pt(-4 * ONE, 4 * ONE)));                  #> 2
+    line_u64(diagonal(Pt(4 * ONE, 3 * ONE)));                   #> 3
+    line_u64(large(500 * ONE as u32));                          #> 1
+    line_u64(large(300.0 * ONE as f64));                        #> 2
+    line_u64(large(5 * ONE as u32));                            #> 3
+}

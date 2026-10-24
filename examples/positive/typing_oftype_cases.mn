@@ -1,0 +1,48 @@
+# `x oftype T`: a value is of its own type, a trait it implements, and the type its case or member
+# is. a variant value tests its case, of a variant, of a subset or of a unified variant, which is
+# static where the type alone tells
+variant Opt = +(Some(u32 v), None);
+variant Shape = +(Dot, Box(u32 side), Ring(u32 r));
+type Num = u32 || f32 || Opt;
+
+stcfun is_some = (Opt o) -> bool: ret o oftype Opt.Some;
+stc []bool SOME = [is_some(Opt.Some(1)), is_some(Opt.None)]; #= SOME [true, false]
+
+# a subset or a unified variant of cases holds several
+stcfun round = (Shape s) -> bool: ret s oftype Shape -- Shape.Box;
+stc []bool ROUND = [round(Shape.Dot), round(Shape.Box(2)), round(Shape.Ring(3))]; #= ROUND [true, false, true]
+
+# the members of a unified variant, a variant member as a whole or by its cases
+stcfun kind = (Num n) -> u32: ret if n oftype u32: 1 else: if n oftype Opt.None: 2 else: if n oftype Opt: 3 else: 4;
+stc []u32 KINDS = [kind(5 as u32), kind(Opt.None), kind(Opt.Some(1)), kind(1.5 as f32)]; #= KINDS [1, 2, 3, 4]
+
+# through a pointer
+stcfun behind = (Opt o) -> bool: ret o.& oftype Opt.None;
+stc []bool BEHIND = [behind(Opt.Some(3)), behind(Opt.None)]; #= BEHIND [false, true]
+
+# static answers: a case is of its variant, of a subset keeping it and of a unified variant
+# holding it; a value of a member is of the unified variant; a case it is not, is never
+stc bool CASE_OF_VARIANT = Shape.Box(1) oftype Shape; #= CASE_OF_VARIANT true
+stc bool CASE_OF_SUBSET = Shape.Dot oftype Shape -- Shape.Box; #= CASE_OF_SUBSET true
+stc bool CASE_NOT_IN_SUBSET = Shape.Box(1) oftype Shape -- Shape.Box; #= CASE_NOT_IN_SUBSET false
+stc bool CASE_OF_UNIFIED = Opt.None oftype Num; #= CASE_OF_UNIFIED true
+stc bool MEMBER_OF_UNIFIED = 7 as u32 oftype Num; #= MEMBER_OF_UNIFIED true
+stc bool OTHER_CASE = Opt.None oftype Opt.Some; #= OTHER_CASE false
+stc bool OTHER_VARIANT = Opt.None oftype Shape; #= OTHER_VARIANT false
+fun typed = (Shape -- Shape.Dot s) -> bool {
+    stc bool NEVER_DOT = s oftype Shape.Dot; #= NEVER_DOT false
+    stc bool ALWAYS = s oftype Shape; #= ALWAYS true
+    ret s oftype Shape.Ring;
+}
+
+# in conditions, guards and loops
+stcfun count_some = ([]Opt all) -> u32 {
+    mut u32 c = 0;
+    for o in all: if o oftype Opt.Some and !(o oftype Opt.None): c += 1;
+    ret c;
+}
+stc u32 COUNTED = count_some([Opt.Some(1), Opt.None, Opt.Some(2)]); #= COUNTED 2
+stcfun guarded = (Num n) -> u32: ret match n { Opt o where o oftype Opt.Some => 1, _ => 0 };
+stc []u32 GUARDED = [guarded(Opt.Some(1)), guarded(Opt.None), guarded(2 as u32)]; #= GUARDED [1, 0, 0]
+
+main = () {}

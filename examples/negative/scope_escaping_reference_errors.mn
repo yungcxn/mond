@@ -1,0 +1,38 @@
+# an address in a function's frame may not outlive the call
+fun direct = () -> &u32 { u32 x = 1; ret x.&; } #! escaping_reference
+fun mutable = () -> *u32 { mut u32 x = 1; ret x.&; } #! escaping_reference
+fun through_local = () -> &u32 {
+    u32 x = 1;
+    &u32 p = x.&;
+    &u32 q = p;
+    ret q; #! escaping_reference
+}
+fun field = () -> &u8 {
+    type Pair = *(u8 a, u8 b);
+    Pair pair = Pair(1, 2);
+    ret pair.b.&; #! escaping_reference
+}
+fun element = () -> &u8 { [3]u8 b = [1, 2, 3]; ret b[1].&; } #! escaping_reference
+fun range = () -> [..]u8 { [4]u8 b = [1, 2, 3, 4]; ret b[1..<3]; } #! escaping_reference
+fun made_slice = () -> [..]u8 { [4]u8 b = [1, 2, 3, 4]; ret b; } #! escaping_reference
+fun parameter = ([4]u8 b) -> [..]u8: ret b[0..<2]; #! escaping_reference
+fun branch = (bool c, &u32 p) -> &u32 { u32 x = 1; ret if c: x.& else: p; } #! escaping_reference
+type Holder = *(&u32 p);
+fun record = () -> Holder { u32 x = 1; ret Holder(x.&); } #! escaping_reference
+fun record_local = () -> Holder {
+    u32 x = 1;
+    Holder h = Holder(x.&);
+    ret h; #! escaping_reference
+}
+type Viewer = *([..]u8 view);
+fun viewer = () -> Viewer { [2]u8 b = [1, 2]; ret Viewer(b); } #! escaping_reference
+fun id = (&u32 p) -> &u32: ret p;
+fun call = () -> &u32 { u32 x = 2; ret id(x.&); } #! escaping_reference
+mut &u32 KEEP = 8 asbits &u32;
+fun global = () { u32 x = 3; KEEP = x.&; } #! escaping_reference
+type Out = *(mut &u32 p);
+fun stored = (*Out out) { u32 x = 4; out.p = x.&; } #! escaping_reference
+fun through_pointer = (*&u32 out) { u32 x = 5; out.* = x.&; } #! escaping_reference
+fun expression_body = () -> &u32: ret (8 asbits &u32);
+
+main = () {}

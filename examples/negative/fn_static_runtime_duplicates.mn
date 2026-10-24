@@ -1,0 +1,14 @@
+# a stcfun and a fun of one name are one name declared twice, whichever comes first and also when
+# their parameters differ: stcfuns overload stcfuns, funs overload funs and inlfuns
+fun runtime_first = (u32 a) -> u32: ret 1;
+stcfun runtime_first = (u32 a) -> u32: ret 2; #! duplicate_declaration
+stcfun static_first = (u32 a) -> u32: ret 1;
+fun static_first = (u64 a) -> u32: ret 2; #! duplicate_declaration
+inlfun inlined_first = (u32 a) -> u32: ret 1;
+stcfun inlined_first = (u64 a) -> u32: ret 2; #! duplicate_declaration
+# a third one is reported too, against the first
+stcfun three = (u8 a) -> u32: ret 1;
+stcfun three = (u16 a) -> u32: ret 2;
+fun three = (u32 a) -> u32: ret 3; #! duplicate_declaration
+
+main = () {}

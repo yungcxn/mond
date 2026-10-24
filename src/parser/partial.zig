@@ -1,3 +1,4 @@
+const std = @import("std");
 const Parser = @import("../Parser.zig");
 const Lexer = @import("../Lexer.zig");
 const lookahead = @import("lookahead.zig");
@@ -26,6 +27,10 @@ pub fn ee_fun_header(p: *Parser, early_node0_in_tuple: ?NodeId) anyerror!NodeId 
         });
     }
 
+    // like a head, a group ending the type right before `:` or `{` is no lambda: `-> A || (B): ..`
+    const outer = p.head;
+    p.head = true;
+    defer p.head = outer;
     return p.tree.push_node_with(.partial__fun_def_header_ret, .{
         .param_tuple = param_tuple,
         .return_type = try eval.any(p, .forbid_assign, 0),
@@ -57,11 +62,19 @@ pub fn ee_fun_param(p: *Parser, early_node0: NodeId) anyerror!NodeId {
     // here, we could encounter <expr> <expr> or <expr>
     // + they are followed by , OR ) OR = OR where
 
+    // in a quote `@..ps` spreads parameters a macro made, `@p` alone is one
+    const next_tok = try p.peek_tok();
+    const is_last = next_tok == .@"pct_," or next_tok == .@"pct_)";
+    switch (p.tree.kind(early_node0)) {
+        .unquote_list => return early_node0,
+        .unquote => if (is_last) return early_node0,
+        else => {},
+    }
+
     // first expr is safe:
     var node = p.tree.push_node_with(.partial__fun_def_param, .{ .type = early_node0 });
 
-    const next_tok = try p.peek_tok();
-    if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where and next_tok != .kw_stcwhere) {
+    if (!is_last and next_tok != .@"xpct_=" and next_tok != .kw_where and next_tok != .kw_stcwhere) {
         try p.eat_assert_tok(.identifier);
         node = p.tree.push_node_with(.partial__fun_def_param_named, .{
             .param = node,
@@ -103,8 +116,7 @@ pub fn match_body(p: *Parser) anyerror!NodeId {
     try p.eat_assert_tok(.@"pct_{");
     const match_cases = p.scratch.len;
     while (true) {
-        // `@..arms` spreads arms a macro made
-        const spread = try p.peek_eq_tok(.@"xpct_@") and (p.tokens.get_field(.tk, p.tok_cursor + 1) orelse .none) == .@"xpct_..";
+        const spread = try lookahead.spread_follows(p);
         if (spread) p.tok_cursor += 1;
         p.scratch.push(if (spread) try eval.unquote(p) else try match_case(p));
         switch (try p.peek_tok()) {
@@ -121,7 +133,7 @@ pub fn match_body(p: *Parser) anyerror!NodeId {
     return parent;
 }
 
-// <pattern> => <body> (',' | '}')
+// <pattern> [where <cond>] => <body> (',' | '}')
 // patterns: <node> | <node>, <identifier> | <node>, {'|', <node>}, ['|']
 // could be aswell: partial__match_case_pattern_or and partial__match_case_pattern_typecast
 pub fn match_case(p: *Parser) anyerror!NodeId {
@@ -130,7 +142,7 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
 
     const outer = p.pattern;
     p.pattern = true;
-    def.pattern = try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|"));
+    def.pattern = try arm_pattern(p);
     p.pattern = outer;
     switch (try p.peek_tok()) {
         .identifier => {
@@ -149,7 +161,7 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
             while (try p.peek_eq_tok(.@"xpct_|")) {
                 p.tok_cursor += 1;
                 if (try p.peek_eq_tok(.@"xpct_=>")) break;
-                p.scratch.push(try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")));
+                p.scratch.push(try arm_pattern(p));
             }
             const or_node = p.tree.push_node(.partial__match_case_pattern_or);
             p.close(or_node, or_patterns);
@@ -157,11 +169,56 @@ pub fn match_case(p: *Parser) anyerror!NodeId {
         },
         else => {},
     }
+    // `pattern where cond =>`: taken when the pattern matches and cond holds for its binders
+    if (try p.peek_eq_tok(.kw_where)) {
+        p.tok_cursor += 1;
+        def.pattern = p.tree.push_node_with(.partial__match_case_where, .{
+            .pattern = def.pattern,
+            .where_predicate = try eval.any(p, .forbid_assign, 0),
+        });
+    }
 
     try p.eat_assert_tok(.@"xpct_=>");
     def.body = try eval.any(p, .allow_assign, 0);
 
     p.tree.set_children(parent, def);
+    return parent;
+}
+
+// a pattern of an arm or of one of its alternatives
+fn arm_pattern(p: *Parser) anyerror!NodeId {
+    const spans = p.tokens.column(.span);
+    const is_bits = p.tok_cursor + 1 < p.tokens.len() and
+        p.tokens.column(.tk)[p.tok_cursor] == .identifier and
+        std.mem.eql(u8, p.src_bytes[spans[p.tok_cursor][0]..spans[p.tok_cursor][1]], "bits") and
+        p.tokens.column(.tk)[p.tok_cursor + 1] == .@"pct_(";
+    if (!is_bits) return eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|"));
+
+    // `bits(u4 4, u4 ihl, ..rest)`: an integer's bits from the lowest up, each field a width and
+    // a pattern, `..` the bits left
+    p.tok_cursor += 2;
+    const parent = p.tree.push_node(.partial__match_case_pattern_bits);
+    const fields = p.scratch.len;
+    while (!try p.peek_eq_tok(.@"pct_)")) {
+        if (try p.peek_eq_tok(.@"xpct_..")) {
+            p.tok_cursor += 1;
+            const name = if (try p.peek_eq_tok(.identifier)) blk: {
+                p.tok_cursor += 1;
+                break :blk try eval.identifier(p);
+            } else 0;
+            p.scratch.push(p.tree.push_node_with(.partial__bits_rest, .{ .subnode = name }));
+            break;
+        }
+        const width = try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|"));
+        p.scratch.push(p.tree.push_node_with(.partial__bits_field, .{
+            .type = width,
+            .pattern = try eval.any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")),
+        }));
+        if (!try p.peek_eq_tok(.@"pct_,")) break;
+        p.tok_cursor += 1;
+    }
+    try p.eat_assert_tok(.@"pct_)");
+    p.close(parent, fields);
     return parent;
 }
 
@@ -273,7 +330,9 @@ pub fn type_param_tuple(p: *Parser) anyerror!NodeId {
 
     const params = p.scratch.len;
     while (!try p.peek_eq_tok(.@"pct_)")) {
-        p.scratch.push(try type_param(p));
+        const spread = try lookahead.spread_follows(p);
+        if (spread) p.tok_cursor += 1;
+        p.scratch.push(if (spread) try eval.unquote(p) else try type_param(p));
         if (!try p.peek_eq_tok(.@"pct_,")) break;
         p.tok_cursor += 1;
     }
@@ -292,10 +351,12 @@ pub fn type_param(p: *Parser) anyerror!NodeId {
 
     const next_tok = try p.peek_tok();
     if (next_tok != .@"pct_," and next_tok != .@"pct_)" and next_tok != .@"xpct_=" and next_tok != .kw_where) {
-        try p.eat_assert_tok(.identifier);
+        // in a quote the name may be a hole: `*(@t @(f.name))`
+        const is_hole = next_tok == .@"xpct_@";
+        if (!is_hole) try p.eat_assert_tok(.identifier) else p.tok_cursor += 1;
         node = p.tree.push_node_with(.partial__type_def_param_named, .{
             .param = node,
-            .identifier = try eval.identifier(p),
+            .identifier = if (is_hole) try eval.unquote(p) else try eval.identifier(p),
         });
     }
 

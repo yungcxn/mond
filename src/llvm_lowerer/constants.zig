@@ -46,7 +46,14 @@ pub fn zeros(lowerer: *LLVMLowerer, zeroed_type: Index) Value {
 pub fn lower(lowerer: *LLVMLowerer, value: Index, expected: Index) Value {
     const pool = lowerer.pool;
     const types = &lowerer.types;
-    const into = if (expected == .none) pool.type_of(value) else expected;
+    // a subset of a variant is laid out as its whole
+    const into = pool.whole_of(if (expected == .none) pool.type_of(value) else expected);
+    // a static slice is of a static array, read-only data: its address and its length
+    if (pool.tag(into) == .slice_type) {
+        const length = pool.static_length(pool.type_of(value)) orelse 0;
+        var parts = [_]Value{ operand(lowerer, value), llvm.LLVMConstInt(types.length, length, 0) };
+        return llvm.LLVMConstStructInContext(lowerer.context, &parts, parts.len, 0);
+    }
     if (pool.tag(into) == .unified_variant_type) {
         const value_type = if (pool.tag(value) == .variant_case_type)
             value
@@ -137,6 +144,9 @@ fn lower_aggregate(lowerer: *LLVMLowerer, value: Index, aggregate_type: Index) V
     defer allocator.free(parts);
 
     const is_record = pool.tag(aggregate_type) == .record_type;
+    if (is_record and pool.is_bit_packed(pool.get(aggregate_type).record_type)) {
+        return bit_packed(lowerer, value, aggregate_type);
+    }
     const element_type = if (is_record) .none else pool.get(aggregate_type).array_type.element;
     var offset: u64 = 0;
     var of_bytes = false;
@@ -195,6 +205,26 @@ fn lower_variant(lowerer: *LLVMLowerer, variant_value: StaticPool.VariantValue, 
     else
         pool.get(variant_value.payload).aggregate_value.elements[0];
 
+    // tagged in a field of its payload: the payload, or zeros with the tag in that field
+    if (types.is_field_tagged(case.variant) and !into_unified) {
+        if (variant_value.payload != .none) {
+            return lower(lowerer, variant_value.payload, case.payload);
+        }
+        const payload = pool.get(pool.first_payload_case(case.variant)).variant_case_type.payload;
+        var offset: u64 = 0;
+        var record = payload;
+        for (pool.get(case.variant).variant_type.tag_path) |field| {
+            offset += pool.field_offset(pool.get(record).record_type, field);
+            record = pool.field_type(record, field);
+        }
+        const tag_type = pool.stored_tag_type(case.variant);
+        const parts = [_]Part{.{
+            .offset = offset,
+            .size = pool.layout(tag_type).size,
+            .value = llvm.LLVMConstInt(types.of(tag_type), pool.case_tag(variant_value.case), 0),
+        }};
+        return packed_struct(lowerer, &parts, pool.layout(payload).size);
+    }
     if (self_tagged and !into_unified) {
         if (first_field == .none) return llvm.LLVMConstInt(
             types.of(case.variant),
@@ -282,6 +312,64 @@ fn member_constant(lowerer: *LLVMLowerer, value: Index, member: Index, unified: 
 }
 
 const Part = struct { offset: u64, size: u64, value: Value };
+
+// a bit-packed record: its bytes with the bits of its bit fields in them, any other field lowered
+// at its byte
+fn bit_packed(lowerer: *LLVMLowerer, value: Index, record_type: Index) Value {
+    const pool = lowerer.pool;
+    const allocator = lowerer.allocator;
+    const size = pool.layout(record_type).size;
+    const bytes = allocator.alloc(u8, size) catch @panic("OOM");
+    defer allocator.free(bytes);
+    @memset(bytes, 0);
+    var parts: std.ArrayList(Part) = .empty;
+    defer parts.deinit(allocator);
+
+    const field_count = pool.get(value).aggregate_value.elements.len;
+    for (0..field_count) |i| {
+        // read anew: lowering a part may intern and move the pool's memory
+        const element = pool.get(value).aggregate_value.elements[i];
+        const record = pool.get(record_type).record_type;
+        const field_type = record.field_types[i];
+        if (!pool.is_bit_field(record, i)) {
+            const part_value = lower(lowerer, element, field_type);
+            parts.append(allocator, .{
+                .offset = pool.field_offset(record, i),
+                .size = pool.layout(field_type).size,
+                .value = part_value,
+            }) catch @panic("OOM");
+            continue;
+        }
+        const raw: u64 = switch (pool.get(element)) {
+            .int_value => |int| int.bits,
+            else => @intFromBool(element == .bool_true),
+        };
+        const offset = pool.field_bit_offset(record, i);
+        for (0..pool.field_bits(field_type)) |bit| {
+            const at = offset + bit;
+            if (raw >> @intCast(bit) & 1 != 0) bytes[at / 8] |= @as(u8, 1) << @intCast(at % 8);
+        }
+    }
+
+    // the bytes of the bit fields between the other fields
+    var all: std.ArrayList(Part) = .empty;
+    defer all.deinit(allocator);
+    const byte = llvm.LLVMInt8TypeInContext(lowerer.context);
+    var at: u64 = 0;
+    var next: usize = 0;
+    while (at < size) {
+        if (next < parts.items.len and parts.items[next].offset == at) {
+            all.append(allocator, parts.items[next]) catch @panic("OOM");
+            at += parts.items[next].size;
+            next += 1;
+            continue;
+        }
+        const bits = llvm.LLVMConstInt(byte, bytes[at], 0);
+        all.append(allocator, .{ .offset = at, .size = 1, .value = bits }) catch @panic("OOM");
+        at += 1;
+    }
+    return packed_struct(lowerer, all.items, size);
+}
 
 // the parts at their offsets, zero bytes in between and up to `size`
 fn packed_struct(lowerer: *LLVMLowerer, parts: []const Part, size: u64) Value {

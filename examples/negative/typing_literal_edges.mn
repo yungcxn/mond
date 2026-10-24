@@ -27,10 +27,12 @@ stc f64 float_remainder = 5.0 % 2.0;                        #! type_mismatch
 # bitwise binds looser than comparisons: this is `6 & (3 == 2)`
 stc u32 bitwise_after_compare = 6 & 3 == 2;                 #! type_mismatch
 
-# casts: no int to bool, `asbits` only to a type at least as large, no chain without parentheses
+# casts: no int to bool, `asbits` only to a type at least as large, a chain casts left to right
 stc bool int_to_bool = 1 as bool;                           #! invalid_cast
 stc u64 asbits_smaller = 1 asbits u8;                       #! invalid_cast
-stc u8 unparenthesized = 1 as u8 as u16;                    #! invalid_cast
+stc u8 chained = 1 as u8 as u16;                            #! type_mismatch
+stc u16 unparenthesized = 1 as u8 as u16;
 stc u16 parenthesized = (1 as u8) as u16;
+stc bool chained_test = 1 as u8 oftype u8;                  #= chained_test true
 
 main = () {}

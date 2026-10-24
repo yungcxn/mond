@@ -1,0 +1,218 @@
+# forward-mode automatic differentiation, a library for `include`: `fun df = <derive(refl f,
+# quote: x, [])>` is the derivative of `f` by its parameter `x`, made from the tree of `f`. every
+# float local gets a tangent `d_name` computed next to it, so `df` costs about what `f` costs:
+#   a + b  a - b  -a       the tangents added, subtracted, negated
+#   a * b  a / b           the product and quotient rules
+#   g(a)                   the chain rule, with the derivative paired with `g` in `derivatives`
+#                          (`[quote: g, quote: dg]`, `dg` taking what `g` takes)
+#   if c: a else: b        the tangent of the branch taken
+#   e as T                 the tangent converted
+#   T v = e  v = e  v += e  v -= e  v *= e  v /= e   the tangent updated first, from the old values
+#   for, while, if, blocks, the other statements   kept, their statements differentiated
+# literals and the other parameters are constant. an expression without a rule is a `crash` there.
+# `gradient(refl f, [])` gives every float parameter's derivative at once, as an array
+
+# whether two texts are equal
+stcfun same = ([]u8 a, []u8 b) -> bool {
+    if lenof a != lenof b: ret false;
+    for i in 0..<lenof a: if a[i] != b[i]: ret false;
+    ret true;
+}
+
+stcfun contains = ([]ast names, []u8 name) -> bool {
+    for n in names: if same(n.src, name): ret true;
+    ret false;
+}
+
+stcfun is_float = (ast t) -> bool: ret t oftype ast.TypeFloat64 or t oftype ast.TypeFloat32 or t oftype ast.TypeFloat16;
+
+stcfun is_literal = (ast e, []u8 text) -> bool: ret e oftype ast.IntegerValue and same(e.src, text);
+
+# sums and products without the terms that are zero or one
+stcfun plus = (ast a, ast b) -> ast {
+    if is_literal(a, "0"): ret b;
+    if is_literal(b, "0"): ret a;
+    ret quote: @a + @b;
+}
+stcfun minus = (ast a, ast b) -> ast {
+    if is_literal(b, "0"): ret a;
+    if is_literal(a, "0"): ret quote: -@b;
+    ret quote: @a - @b;
+}
+stcfun times = (ast a, ast b) -> ast {
+    if is_literal(a, "0") or is_literal(b, "0"): ret quote: 0;
+    if is_literal(a, "1"): ret b;
+    if is_literal(b, "1"): ret a;
+    ret quote: @a * @b;
+}
+
+# the parameter differentiated by, the locals with a tangent, the pairs of functions and derivatives
+type Tangents = *(ast by, []ast names, []ast derivatives);
+
+# the locals a body declares, in order: `tracked` are those with a tangent, the float ones and
+# those declared without a type (`v = e` naming nothing declared before)
+type Locals = *(mut []ast tracked, mut []ast seen);
+stcfun locals = (ast s, Locals before) -> Locals {
+    mut Locals found = before;
+    match s {
+        ast.ModifierMutable(inner) => found = locals(inner, found),
+        ast.AssignmentTyped(ast.VariableDefinition(t, v), _) => {
+            found.seen += v;
+            if is_float(t): found.tracked += v;
+        },
+        ast.Assignment(v, _) where v oftype ast.Identifier and !contains(found.seen, v.src) => {
+            found.seen += v;
+            found.tracked += v;
+        },
+        ast.CodeBlock | ast.IfThen | ast.IfElse | ast.ForVarInSeq | ast.ForSeq | ast.While => {
+            for c in s.children: found = locals(c, found);
+        },
+        _ => {},
+    }
+    ret found;
+}
+
+# the tangent of an expression
+stcfun tangent = (Tangents t, ast e) -> ast {
+    match e {
+        ast.Identifier => {
+            if same(e.src, t.by.src): ret quote: 1;
+            ret if contains(t.names, e.src): quote: d_@(e) else: quote: 0;
+        },
+        ast.IntegerValue | ast.FloatingPointValue => ret quote: 0,
+        ast.BinaryAdd(a, b) => ret plus(tangent(t, a), tangent(t, b)),
+        ast.BinarySubtract(a, b) => ret minus(tangent(t, a), tangent(t, b)),
+        ast.BinaryMultiply(a, b) => ret plus(times(tangent(t, a), b), times(a, tangent(t, b))),
+        ast.BinaryDivide(a, b) => {
+            ast da = tangent(t, a);
+            ast db = tangent(t, b);
+            if is_literal(db, "0"): ret quote: @da / @b;
+            ret quote: (@(minus(times(da, b), times(a, db)))) / (@b * @b);
+        },
+        ast.NegateNumerical(a) => ret minus(quote: 0, tangent(t, a)),
+        ast.As(v, ty) => {
+            ast dv = tangent(t, v);
+            ret if is_literal(dv, "0"): dv else: quote: @dv as @ty;
+        },
+        ast.IfElse(ast.IfThen(c, a), b) => ret quote: if @c: @(tangent(t, a)) else: @(tangent(t, b)),
+        ast.FunctionCall(callee, args) => {
+            if lenof args.children != 1: crash (e, "derive: a call with more than one argument");
+            ast argument = args.children[0];
+            ast da = tangent(t, argument);
+            if is_literal(da, "0"): ret quote: 0;
+            for i in 0..<lenof t.derivatives / 2 {
+                if same(t.derivatives[2 * i].src, callee.src) {
+                    ret times(quote: @(t.derivatives[2 * i + 1])(@argument), da);
+                }
+            }
+            crash (e, "derive: a call to a function without a derivative given");
+        },
+        _ => {},
+    }
+    crash (e, "derive: an expression without a derivative rule");
+    ret e;
+}
+
+stcfun tracked = (Tangents t, ast v) -> bool: ret v oftype ast.Identifier and contains(t.names, v.src);
+
+# a statement with its tangents: the tangent's statement before it, or itself differentiated
+stcfun differentiated = (Tangents t, ast s) -> []ast {
+    mut []ast out = [];
+    match s {
+        ast.CodeBlock => {
+            mut []ast inner = [];
+            for c in s.children: for o in differentiated(t, c): inner += o;
+            out += quote { @..inner; };
+        },
+        ast.ModifierMutable(ast.AssignmentTyped(ast.VariableDefinition(ty, v), e)) where tracked(t, v) => {
+            out += quote: mut @ty d_@(v) = @(tangent(t, e));
+            out += s;
+        },
+        ast.AssignmentTyped(ast.VariableDefinition(ty, v), e) where tracked(t, v) => {
+            out += quote: @ty d_@(v) = @(tangent(t, e));
+            out += s;
+        },
+        ast.Assignment(v, e) where tracked(t, v) => {
+            out += quote: d_@(v) = @(tangent(t, e));
+            out += s;
+        },
+        ast.AssignmentAdd(v, e) where tracked(t, v) => {
+            out += quote: d_@(v) += @(tangent(t, e));
+            out += s;
+        },
+        ast.AssignmentSubtract(v, e) where tracked(t, v) => {
+            out += quote: d_@(v) -= @(tangent(t, e));
+            out += s;
+        },
+        ast.AssignmentMultiply(v, e) where tracked(t, v) => {
+            out += quote: d_@(v) = @(plus(times(quote: d_@(v), e), times(v, tangent(t, e))));
+            out += s;
+        },
+        ast.AssignmentDivide(v, e) where tracked(t, v) => {
+            ast change = minus(times(quote: d_@(v), e), times(v, tangent(t, e)));
+            out += quote: d_@(v) = (@change) / (@e * @e);
+            out += s;
+        },
+        ast.Return(e) => out += quote: ret @(tangent(t, e)),
+        ast.IfThen(c, a) => out += ast.IfThen(c, quote { @..(differentiated(t, a)); }),
+        ast.IfElse(ast.IfThen(c, a), b) => {
+            ast then = quote { @..(differentiated(t, a)); };
+            ast otherwise = quote { @..(differentiated(t, b)); };
+            out += ast.IfElse(ast.IfThen(c, then), otherwise);
+        },
+        ast.ForVarInSeq(ast.ForSeq(seq, body), i) => {
+            ast d_body = quote { @..(differentiated(t, body)); };
+            out += ast.ForVarInSeq(ast.ForSeq(seq, d_body), i);
+        },
+        ast.While(c, body) => out += ast.While(c, quote { @..(differentiated(t, body)); }),
+        _ => out += s,
+    }
+    ret out;
+}
+
+# the derivative of `f` by its parameter named `by`, as a function
+pub stcfun derive = (&ast(fun) f, ast by, []ast derivatives) -> ast {
+    mut []ast params = [];
+    mut ast by_type = quote: f64;
+    mut bool found = false;
+    for p in f.params {
+        params += p;
+        if same(p.name.src, by.src) {
+            by_type = p.type;
+            found = true;
+        }
+    }
+    if !found: crash (by, "derive: not a parameter of the function");
+    if !is_float(by_type): crash (by, "derive: a parameter that is no float");
+    mut []ast seen = [];
+    for p in f.params: seen += p.name;
+    Locals declared = locals(f.body, Locals([], seen));
+    Tangents t = Tangents(by, declared.tracked, derivatives);
+    ast body = if f.body oftype ast.CodeBlock: f.body else: quote { @(f.body); };
+    ast rettype = f.rettype;
+    ret quote: (@..params) -> @rettype { @..(differentiated(t, body)); };
+}
+
+# every float parameter's derivative, in their order, as an array
+pub stcfun gradient = (&ast(fun) f, []ast derivatives) -> ast {
+    mut []ast params = [];
+    mut []ast arguments = [];
+    mut []ast partials = [];
+    mut []ast calls = [];
+    for p in f.params {
+        params += p;
+        arguments += p.name;
+    }
+    for p in f.params {
+        if !is_float(p.type): cont;
+        ast name = fresh "partial";
+        ast partial = derive(f, p.name, derivatives);
+        partials += (quote: fun g = h) with (def_var.identifier = name, assigned = partial);
+        calls += quote: @name(@..arguments);
+    }
+    ast rettype = f.rettype;
+    ret quote: (@..params) -> [@(lenof calls)]@rettype {
+        @..partials;
+        ret [@..calls];
+    };
+}

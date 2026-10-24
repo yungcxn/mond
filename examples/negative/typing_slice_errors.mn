@@ -1,0 +1,44 @@
+# the elements of a slice of something read-only (a string, an immutable or static array, a `&`
+# pointer) must not be written, wherever the slice goes; reported where it is made
+fun fill = ([..]u8 dst, u8 v) { for i in 0..<lenof dst: dst[i] = v; }
+fun pass_on = ([..]u8 d) { fill(d, 1); }
+fun keep = ([..]u8 d) -> [..]u8: ret d;
+type Buf = *([..]u8 data, mut u64 len) !{ fun put = (u8 b) { self.data[self.len] = b; self.len += 1; } }
+stc [3]u8 STATIC_BYTES = [1, 2, 3];
+fun literal = () { fill("abc", 1); } #! write_through_immutable_pointer
+fun immutable = () { [4]u8 fixed = [1, 2, 3, 4]; fill(fixed[0..<2], 0); } #! write_through_immutable_pointer
+fun static_array = () { fill(STATIC_BYTES, 0); } #! write_through_immutable_pointer
+fun read_pointer = (&[4]u8 p) { fill(p, 0); } #! write_through_immutable_pointer
+fun passed_on = () { pass_on("xyz"); } #! write_through_immutable_pointer
+fun returned = () { [..]u8 k = keep("abc"); k[0] = 1; } #! write_through_immutable_pointer
+fun in_record = () { Buf w = Buf("const", 0); } #! write_through_immutable_pointer
+fun element_pointer = () { [..]u8 s = "abc"; *u8 q = s[0].&; } #! write_through_immutable_pointer
+fun as_pointer = () { [..]u8 s = "abc"; *u8 q = s as *u8; } #! write_through_immutable_pointer
+fun directly = () { ("abc" as [..]u8)[0] = 1; } #! write_through_immutable_pointer
+fun copied = () { "abc"[0..<2][0] = 1; } #! assign_to_immutable
+type Writer = ([..]u8) -> ();
+fun through_value = () { Writer w = fill_one; w("abc"); } #! write_through_immutable_pointer
+fun fill_one = ([..]u8 d) { d[0] = 1; }
+
+# a range of an array with bounds known only at run time needs a slice expected
+fun runtime_bounds = ([8]u8 a, u64 n) -> u8 { x = a[0..<n]; ret 0; } #! genexpr_index
+fun no_room = ([4]u8 a) -> [..]u8: ret a[2..<6]; #! static_eval_failed
+fun backwards = ([4]u8 a) -> [2]u8: ret a[3..<1]; #! static_eval_failed
+fun element_type = ([..]u16 s) {}
+fun wrong_element = () { [3]u8 bytes = [1, 2, 3]; element_type(bytes); } #! type_mismatch
+
+# slices are equal or not, they have no order; a static one is of a static array, one made while
+# compiling is gone with the evaluation that made it
+fun ordered = ([..]u8 a, [..]u8 b) -> bool: ret a < b; #! invalid_operand
+stcfun made = () -> [..]u8 { [..]u8 s = "abc"; ret s[1..]; } #! not_static
+stc [..]u8 MADE = made();
+stcfun past_end = () -> u8 { [..]u8 s = "ab"; ret s[2]; } #! static_eval_failed
+stc u8 PAST = past_end();
+stcfun range_past = () -> u64 { [..]u8 s = "ab"; ret lenof s[1..<3]; } #! static_eval_failed
+stc u64 RANGE_PAST = range_past();
+
+# a slice is no array: casts to and from pointers and arrays only
+fun to_record = ([..]u8 s) -> u64: ret s as u64; #! invalid_cast
+fun other_element = ([..]u8 s) -> &u16: ret s as &u16; #! invalid_cast
+
+main = () {}

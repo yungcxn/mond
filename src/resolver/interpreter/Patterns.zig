@@ -35,10 +35,12 @@ pub fn match(self: *Patterns, node: NodeId) Value {
     if (scoped) resolver.scopes.open();
     defer if (scoped) resolver.scopes.close();
 
-    // the checker matched a static scrutinee itself and checked only the arm it took
+    // the checker matched a static scrutinee itself and checked only the arm it took, matching it
+    // again binds its names
     if (!scoped) {
         for (tree.manychildren(arms)) |arm| {
             if (interpreter.node_info(.static_value, arm) == .bool_true) {
+                _ = self.matches(tree.arg(arm, 0), value);
                 return interpreter.evaluate(tree.arg(arm, 1));
             }
         }
@@ -83,12 +85,18 @@ pub fn matches(self: *Patterns, pattern: NodeId, value: Value) bool {
         },
         .partial__match_case_pattern_or => return self.matches_any(pattern, value),
         .partial__match_case_pattern_typecast => return self.matches_typecast(pattern, value),
+        .partial__match_case_where => {
+            if (!self.matches(tree.arg(pattern, 0), value)) return false;
+            const holds = interpreter.evaluate(tree.arg(pattern, 1));
+            return holds.value_type == .bool_type and holds.bits != 0;
+        },
         .labelarrow => {
             if (!self.matches(tree.arg(pattern, 0), value)) return false;
             self.bind_label(tree.arg(pattern, 1), self.payload_of(value) orelse value);
             return true;
         },
         .fun_call => return self.matches_fields(pattern, value),
+        .partial__match_case_pattern_bits => return self.matches_bits(pattern, value),
         .gen_incl,
         .gen_excl,
         .gen_lowerbound,
@@ -97,6 +105,40 @@ pub fn matches(self: *Patterns, pattern: NodeId, value: Value) bool {
         => return self.matches_range(pattern, value),
         else => return self.matches_value(pattern, value),
     }
+}
+
+// `bits(..)`: each part matches its bits from the lowest up, as its width's type
+fn matches_bits(self: *Patterns, pattern: NodeId, value: Value) bool {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const tree = resolver.tree;
+    const static_pool = &resolver.static_pool;
+    const integer = if (value.is_pooled()) Value.of(static_pool, value.index()) else value;
+    var offset: u64 = 0;
+    // by index: a part's pattern may evaluate a quote, which moves child lists
+    const total = static_pool.get(integer.value_type).int_type.bits;
+    for (0..tree.manychildren(pattern).len) |i| {
+        const part = tree.manychildren(pattern)[i];
+        // a pattern the checker matched itself (a static scrutinee) has no types noted
+        const noted = interpreter.node_info(.node_type, part);
+        const part_type = if (noted != .none)
+            noted
+        else if (tree.kind(part) == .partial__bits_rest)
+            Index.int_of(.unsigned, @intCast(total - offset))
+        else
+            resolver.types.type_from_node(interpreter.function_context, tree.arg(part, 0));
+        if (static_pool.tag(part_type) != .int_type) return false;
+        const bits = static_pool.get(part_type).int_type.bits;
+        const raw = if (offset >= 64) 0 else integer.raw_bits() >> @intCast(offset);
+        offset += bits;
+        const part_value = Value.int(part_type, raw);
+        if (tree.kind(part) == .partial__bits_rest) {
+            if (tree.arg(part, 0) != 0) self.bind_name(tree.arg(part, 0), part_value);
+            continue;
+        }
+        if (!self.matches(tree.arg(part, 1), part_value)) return false;
+    }
+    return true;
 }
 
 inline fn matches_any(self: *Patterns, alternatives: NodeId, value: Value) bool {
@@ -222,6 +264,10 @@ pub fn bind_name(self: *Patterns, id: NodeId, value: Value) void {
     const declaration = resolver.declarations.declare_local(name, id, .pattern_binder, binder_type);
     resolver.node_declarations[id] = declaration;
     interpreter.variables.bind(declaration, value);
+    // matched while checking (a static scrutinee): the name is that static value where it is used
+    if (!interpreter.escapes(value)) {
+        resolver.decl_pool.set(declaration, .static_value, interpreter.interned(value));
+    }
 }
 
 // a destructuring label binds each name to an element, missing elements to poison

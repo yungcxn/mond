@@ -37,16 +37,29 @@ stc q_free = quote: unknown + 1;     #: q_free ast
 stc ast(i32) bad = quote: true;      #! type_mismatch
 ```
 
+A quote expected as `ast(T)`, `T` a type of values (a macro's result `-> ast(u32)`, a typed variable), is checked where it is written, once: each hole is a value of what its tree produces (`ast(u32) e` makes `@e` a `u32`), errors in it are reported there, and what it gives must be a `T`. A quote naming something only the place it lands has (a free name) is checked there instead, as is any quote of plain `ast`. So typing a macro's trees is the opt-in to checking its code before any use.
+
+```mond
+stcfun twice = (ast(u32) e) -> ast(u32): ret quote: @e * 2;
+stc u32 TW = <twice(quote: 21)>;                                      #= TW 42
+stcfun mixed = (ast(u32) e) -> ast(u32): ret quote: @e and true;      #! type_mismatch
+stcfun compares = (ast(u32) e) -> ast(u32): ret quote: @e == 2;       #! type_mismatch
+stcfun loose = (ast e) -> ast: ret quote: @e and true;                 # checked where it lands
+stcfun outer = (ast(u32) e) -> ast(u32): ret quote: @e + nearby;       # `nearby` is the caller's
+fun use_outer = () -> u32 { u32 nearby = 4; ret <outer(quote: 1)>; }
+stc u32 UO = use_outer();                                             #= UO 5
+```
+
 ### Holes
 
 | hole | puts in |
 |---|---|
 | `@x` | the tree `x` (a copy). A known static value is lifted to code. An unknown `x` stays the plain name `x` (unhygienic, so it reaches the caller's names) |
 | `@(expr)` | the same, for any expression |
-| `@..xs` | the items of a `[]ast`, spread into a list: arguments, array elements, statements, match arms (an arm is `quote: pattern => body`) |
+| `@..xs` | the items of a `[]ast`, spread into a list: arguments, parameters, array elements, statements, match arms (an arm is `quote: pattern => body`, alternatives, `T x` and a `where` guard too), cases and fields |
 | `name_@(x)` | one identifier pasted together from text or a name |
 
-Holes also work in member, type and pattern position: `a.@(f.name)`, `(@(t.name) a)`, `@(v.name).@(c.name) => ..`.
+Holes also work in member, type and pattern position: `a.@(f.name)`, `(@(t.name) a)`, `@v.@(c.name) => ..`. A field's name can be one (`*(@t @name = 0)`), and a hole alone in a parameter list is a whole parameter: `(@(f.params[1]), @p) -> ..`.
 
 Values lift to code: bools, ints (negative ones too), floats (also `inf` and `nan`), `[]u8` text, and types (`*T`, `[N]T`, `Box(u64)`, ...). Records don't lift (`not_static`).
 
@@ -142,7 +155,7 @@ stc u32 K = kind(quote: name);                #= K 2
 
 - Every kind and its children are listed in [trees.md](trees.md).
 - Children go by position, or by field name (`e.lhs`, `e.cond`).
-- `x with (field = tree)` makes a copy with some children replaced.
+- `x with (field = tree)` makes a copy with some children replaced, also deeper down by a path of field names (`e with (rhs.lhs = t)`).
 - `ast.Kind(children..)` builds a node. Data kinds take text, as in `ast.Identifier("x")`.
 - `oftype` tests the root only, so `oftype ast(u32)` is false for every expression.
 
@@ -176,7 +189,7 @@ Each name binds once in a pattern, so `@a + @a` is not an equality test.
 | `name` `type` `defval` `guard` `ismut` | declarations, parameters, fields | `ismut` is a read-only `bool` |
 | `assigned` | declaration | what it declares |
 | `params` `rettype` `body` | function | |
-| `fields` · `cases` · `methods` · `traits` | record · variant · type · type | lists, `+=` appends (and creates a missing `!{}` / `implof`) |
+| `fields` · `cases` · `methods` · `traits` | record · variant · type · type | lists, `+=` appends (and creates a missing `!{}` / `implof`); a type without them reads empty ones |
 | `decls` | block, `include`, bare `refl` | top-level statements |
 
 List views are `[]ast` (`[]*ast` on a `*ast`), and `lenof` counts them. A view the node doesn't have is `unknown_member`.

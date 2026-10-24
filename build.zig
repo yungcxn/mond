@@ -114,13 +114,12 @@ pub fn build(b: *std.Build) void {
 
 // the llvm c api as the module `llvm_c`, lld through a small c++ shim, and where the linker finds
 // the system's libraries (`link_paths`). `-Dllvm-config=..` picks the llvm installation, else the
-// first llvm-config in PATH or in a package manager's place; lld is looked for next to it
+// first llvm-config of llvm 19 or newer in PATH or in a package manager's place; lld is looked for next to it
 fn add_backend(b: *std.Build, module: *std.Build.Module) void {
     const target = module.resolved_target.?;
     const darwin = target.result.os.tag.isDarwin();
     const llvm_config = b.option([]const u8, "llvm-config", "the llvm-config to use") orelse
-        b.findProgram(&llvm_config_names, &llvm_config_places) catch
-        std.process.fatal("llvm-config not found, pass -Dllvm-config=/path/to/it", .{});
+        find_llvm_config(b);
     const llvm_prefix = ask(b, llvm_config, "--prefix");
     const llvm_include = ask(b, llvm_config, "--includedir");
     const llvm_lib = ask(b, llvm_config, "--libdir");
@@ -173,10 +172,42 @@ fn add_backend(b: *std.Build, module: *std.Build.Module) void {
     else
         b.option([]const u8, "crt-dir", "where Scrt1.o and libc are") orelse find_crt_dir(b);
     link_paths.addOption([]const u8, "crt_dir", crt_dir);
+    // lld comes as static archives: what they need is linked too, the libraries llvm names and
+    // the c++ library it was built with when that isn't libc++ (libstdc++ of a distribution, which
+    // shares no symbols with zig's libc++ the shim uses)
+    if (target.result.os.tag == .linux) {
+        const cxxflags = ask(b, llvm_config, "--cxxflags");
+        if (std.mem.indexOf(u8, cxxflags, "-stdlib=libc++") == null) {
+            module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ crt_dir, "libstdc++.so.6" }) });
+        }
+        const system_libs = b.run(&.{ llvm_config, "--link-static", "--system-libs" });
+        var libs = std.mem.tokenizeAny(u8, system_libs, " \n\r");
+        while (libs.next()) |flag| {
+            if (std.mem.startsWith(u8, flag, "-l")) module.linkSystemLibrary(flag[2..], .{});
+        }
+    }
     // zig knows the loader of the target, `-Ddynamic-linker=..` overrides it
     const dynamic_linker = target.result.dynamic_linker.get() orelse "";
     link_paths.addOption([]const u8, "dynamic_linker", dynamic_linker);
     module.addOptions("link_paths", link_paths);
+}
+
+// the first llvm-config of llvm 19 or newer: an older one in PATH (a distribution's default) is
+// passed over
+fn find_llvm_config(b: *std.Build) []const u8 {
+    var candidates: [llvm_config_names.len + llvm_config_places.len]?[]const u8 = undefined;
+    for (llvm_config_names, 0..) |name, i| candidates[i] = b.findProgram(&.{name}, &.{}) catch null;
+    for (llvm_config_places, llvm_config_names.len..) |place, i| {
+        const found = exists(b, place, "llvm-config");
+        candidates[i] = if (found) b.pathJoin(&.{ place, "llvm-config" }) else null;
+    }
+    for (candidates) |candidate| {
+        const llvm_config = candidate orelse continue;
+        const version = ask(b, llvm_config, "--version");
+        const major = version[0 .. std.mem.indexOfScalar(u8, version, '.') orelse version.len];
+        if ((std.fmt.parseInt(u32, major, 10) catch 0) >= 19) return llvm_config;
+    }
+    std.process.fatal("no llvm-config of llvm 19 or newer, pass -Dllvm-config=/path/to/it", .{});
 }
 
 fn find_lld(b: *std.Build, llvm_prefix: []const u8) []const u8 {

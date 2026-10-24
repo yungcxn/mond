@@ -1,0 +1,13 @@
+# a runtime check stops the program: a part of `with` past the end of an array. the line before is printed, the one after isn't
+#+
+#? trap
+<include "lib/raw.mn">;
+mut i64 ONE = 0;
+type Box = *([4]u32 items, u32 count);
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    say_u64(1);   #> 1
+    Box b = Box([1, 2, 3, 4], 4);
+    Box c = b with (items[(4 * ONE) as u64] = 9);
+    say_u64(c.items[0] as u64);
+}

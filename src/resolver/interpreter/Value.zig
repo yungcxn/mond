@@ -14,8 +14,17 @@ pub const poison = pooled(.poison_type);
 pub const unit = pooled(.unit_value);
 pub const empty = pooled(.none);
 
-// indexed by the integer types, which come first in `Index`
-const integer_widths = [_]u7{ 8, 16, 32, 64, 8, 16, 32, 64 };
+// the width of each integer type by its index: `u8` to `i64` come first, the odd widths after the
+// other fixed entries
+const integer_widths = blk: {
+    var widths: [Index.first_dynamic]u7 = @splat(0);
+    for (0..8) |i| widths[i] = 8 << (i % 4);
+    for (Index.odd_widths, 0..) |bits, i| {
+        widths[Index.first_odd_int + i] = bits;
+        widths[Index.first_odd_int + Index.odd_widths.len + i] = bits;
+    }
+    break :blk widths;
+};
 const ref_bit: u64 = 1 << 63;
 
 pub fn pooled(pool_index: Index) Value {
@@ -57,6 +66,15 @@ pub fn ref(pointer_type: Index, target_cell: u32) Value {
     return .{ .value_type = pointer_type, .bits = ref_bit | target_cell };
 }
 
+// a slice refers to the cells of its elements: the first one and how many
+pub fn slice(slice_type: Index, first_cell: u32, length: u32) Value {
+    return .{ .value_type = slice_type, .bits = ref_bit | @as(u64, length) << 32 | first_cell };
+}
+
+pub fn slice_len(self: Value) u32 {
+    return @intCast(self.bits >> 32 & ~(ref_bit >> 32));
+}
+
 pub fn index(self: Value) Index {
     return @enumFromInt(@as(u32, @truncate(self.bits)));
 }
@@ -76,7 +94,8 @@ pub fn is_pooled(self: Value) bool {
 // integers, floats and booleans hold their value in `bits`, any other type a block or reference
 pub fn is_boxed(self: Value) bool {
     if (self.value_type == .none) return false;
-    return @intFromEnum(self.value_type) > @intFromEnum(Index.bool_type);
+    const ordinal = @intFromEnum(self.value_type);
+    return ordinal > @intFromEnum(Index.bool_type) and !is_int(self.value_type);
 }
 
 pub fn is_heap(self: Value) bool {
@@ -92,7 +111,9 @@ pub fn is(self: Value, pool_index: Index) bool {
 }
 
 pub fn is_int(value_type: Index) bool {
-    return @intFromEnum(value_type) <= @intFromEnum(Index.i64_type);
+    const ordinal = @intFromEnum(value_type);
+    return ordinal <= @intFromEnum(Index.i64_type) or
+        ordinal >= Index.first_odd_int and ordinal < Index.first_dynamic;
 }
 
 pub fn is_float(value_type: Index) bool {
@@ -101,7 +122,12 @@ pub fn is_float(value_type: Index) bool {
 }
 
 fn is_signed(value_type: Index) bool {
-    return @intFromEnum(value_type) >= @intFromEnum(Index.i8_type) and is_int(value_type);
+    const ordinal = @intFromEnum(value_type);
+    if (ordinal >= Index.first_odd_int) {
+        const first_signed = Index.first_odd_int + Index.odd_widths.len;
+        return ordinal >= first_signed and ordinal < Index.first_dynamic;
+    }
+    return ordinal >= @intFromEnum(Index.i8_type) and ordinal <= @intFromEnum(Index.i64_type);
 }
 
 pub fn as_float(self: Value) f64 {

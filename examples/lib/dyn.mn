@@ -1,0 +1,42 @@
+# closed-world dispatch, a library for `include`: the variant of every type the program has that
+# implements a trait, and the `match` calling a method on each. a new implementer joins it, and a
+# match missing it is `non_exhaustive_match`
+
+# whether two texts are equal
+pub stcfun same_text = ([]u8 a, []u8 b) -> bool {
+    if lenof a != lenof b: ret false;
+    for i in 0..<lenof a: if a[i] != b[i]: ret false;
+    ret true;
+}
+
+# the names of the types and variants of the program implementing the trait (as written after
+# `implof`: `Cmp(Money)` for a generic one)
+pub stcfun implementer_names = ([]u8 trait_name) -> []ast {
+    mut []ast found = [];
+    for d in refl.decls: if d.* oftype ast(type) or d.* oftype ast(variant) {
+        # only a definition with `implof` implements something, an alias or splice has no views
+        bool implements = match d.assigned {
+            ast.TypeDefinitionWithTrait | ast.VariantDefinitionWithTrait => true,
+            _ => false,
+        };
+        if implements: for t in d.traits: if same_text(t.src, trait_name): found += d.name;
+    }
+    ret found;
+}
+
+# `A || B || ..` of the implementers: stored inline, the widest of them and a tag
+pub stcfun implementers = ([]u8 trait_name) -> ast {
+    []ast names = implementer_names(trait_name);
+    if lenof names == 0: crash "no type implements the trait";
+    mut ast all = names[0];
+    for i in 1..<lenof names: all = quote: @all || @(names[i]);
+    ret all;
+}
+
+# `match value { A x => x.method(arguments..), .. }` over the implementers: a switch on the tag and
+# direct calls, no table of functions
+pub stcfun dispatch = (ast value, []u8 trait_name, ast method, []ast arguments) -> ast {
+    mut []ast arms = [];
+    for name in implementer_names(trait_name): arms += quote: @name it => it.@method(@..arguments);
+    ret quote: match @value { @..arms };
+}

@@ -43,6 +43,9 @@ const Method = enum {
     @"textDocument/documentSymbol",
     @"textDocument/hover",
     @"textDocument/completion",
+    @"textDocument/inlayHint",
+    // the program before and after each macro pass, as code
+    @"mond/expansions",
 };
 
 const Message = struct {
@@ -167,6 +170,8 @@ fn handle(server: *Server, allocator: std.mem.Allocator, message: Message) !void
         .@"textDocument/hover",
         .@"textDocument/completion",
         .@"textDocument/references",
+        .@"textDocument/inlayHint",
+        .@"mond/expansions",
         => try server.answer(allocator, message, method, params),
     }
 }
@@ -186,6 +191,7 @@ const capabilities = .{
         .referencesProvider = true,
         .documentSymbolProvider = true,
         .hoverProvider = true,
+        .inlayHintProvider = true,
         .completionProvider = .{ .triggerCharacters = &[_][]const u8{ ".", "_" } },
     },
     .serverInfo = .{ .name = "mond-lsp" },
@@ -233,15 +239,34 @@ fn answer(
         .@"textDocument/definition" => {
             try server.respond(allocator, id, definition(result, link, uri));
         },
+        // a name's declaration, in a splice what it expanded to in each pass
         .@"textDocument/hover" => {
-            const found = link orelse return server.respond(allocator, id, null);
-            const declaration = result.decls[found[3]];
-            const separator = if (declaration.detail.len > 0) ": " else "";
-            const parts = .{ declaration.name, separator, declaration.detail };
-            const text = try std.fmt.allocPrint(allocator, "```mond\n{s}{s}{s}\n```", parts);
+            var text: std.Io.Writer.Allocating = .init(allocator);
+            var range: ?Analysis.Range = null;
+            if (link) |found| {
+                const declaration = result.decls[found[3]];
+                const separator = if (declaration.detail.len > 0) ": " else "";
+                const parts = .{ declaration.name, separator, declaration.detail };
+                try text.writer.print("```mond\n{s}{s}{s}\n```", parts);
+                range = link_range(found);
+            }
+            for (result.expansions) |expansion| {
+                const within = !Analysis.before(params.position, expansion.range.start) and
+                    !Analysis.before(expansion.range.end, params.position);
+                if (!within) continue;
+                if (text.written().len > 0) try text.writer.writeAll("\n\n");
+                if (expansion.code.len == 0) {
+                    try text.writer.print("pass {d} expands this to nothing", .{expansion.pass});
+                } else {
+                    const parts = .{ expansion.pass, expansion.code };
+                    try text.writer.print("pass {d} expands this to\n```mond\n{s}\n```", parts);
+                }
+                range = range orelse expansion.range;
+            }
+            if (range == null) return server.respond(allocator, id, null);
             const hover = .{
-                .contents = .{ .kind = "markdown", .value = text },
-                .range = link_range(found),
+                .contents = .{ .kind = "markdown", .value = text.written() },
+                .range = range.?,
             };
             try server.respond(allocator, id, hover);
         },
@@ -250,6 +275,9 @@ fn answer(
             const items = try Completion.offer(allocator, document.source, params.position, names);
             try server.respond(allocator, id, items);
         },
+        // the values of `stc` variables, as the `#=` checks of tests read
+        .@"textDocument/inlayHint" => try server.respond(allocator, id, result.hints),
+        .@"mond/expansions" => try server.respond(allocator, id, result.passes),
         .@"textDocument/references" => {
             const include_declaration = params.context.includeDeclaration;
             const found = try references(allocator, result, link, uri, include_declaration);
@@ -279,6 +307,10 @@ fn link_range(link: Analysis.Link) Analysis.Range {
 
 fn definition(result: Analysis.Result, link: ?Analysis.Link, uri: []const u8) ?Location {
     const found = link orelse return null;
+    // a declaration of an included file is there
+    for (result.elsewhere) |elsewhere| {
+        if (elsewhere.decl == found[3]) return .{ .uri = elsewhere.uri, .range = elsewhere.range };
+    }
     const name_range = result.decls[found[3]].selectionRange orelse return null;
     return .{ .uri = uri, .range = name_range };
 }

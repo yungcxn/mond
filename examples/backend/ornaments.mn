@@ -1,0 +1,44 @@
+<include "lib/out.mn">;
+<include "../lib/ornaments.mn">;
+# ornaments at run time: a tree with a tag on every node, evaluated by the lifted evaluator, a
+# token stream with positions turned back into plain tokens
+mut i64 ONE = 0;
+variant Expr = +(Num(i64 value), Add(&Expr left, &Expr right), Neg(&Expr inner));
+fun eval = (Expr e) -> i64: ret match e {
+    Expr.Num(v) => v,
+    Expr.Add(l, r) => eval(l.*) + eval(r.*),
+    Expr.Neg(i) => -eval(i.*),
+};
+variant Tagged = <ornament(refl Expr, quote: Tagged, quote: *(u8 tag = 0))>;
+fun tagged_eval = <lift(refl eval, quote: Expr, quote: Tagged, quote: tagged_eval)>;
+fun tag_sum = (Tagged t) -> u64: ret match t {
+    Tagged.Num(tag = g) => g,
+    Tagged.Add(l, r, g) => g as u64 + tag_sum(l.*) + tag_sum(r.*),
+    Tagged.Neg(i, g) => g as u64 + tag_sum(i.*),
+};
+
+variant Token = +(Word([..]u8), Number(u64 n), End);
+variant Placed = <ornament(refl Token, quote: Placed, quote: *(u32 line = 0))>;
+fun plain = <forget(refl Token, quote: Placed)>;
+fun weight = (Token t) -> u64: ret match t { Token.Word(w) => lenof w, Token.Number(n) => n, Token.End => 100 };
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    Tagged two = Tagged.Num(2 * ONE, 1);
+    Tagged three = Tagged.Num(3 * ONE, 2);
+    Tagged minus = Tagged.Neg(three.&, 4);
+    Tagged sum = Tagged.Add(two.&, minus.&, 8);
+    line_i64(tagged_eval(sum));                    #> -1
+    line_u64(tag_sum(sum));                        #> 15
+    line_u64(sizeof Expr * 100 + sizeof Tagged);   #> 2432
+
+    [3]Placed placed = [Placed.Word("abc", 1), Placed.Number(ONE as u64 * 40, 2), Placed.End(3)];
+    mut u64 total = 0;
+    mut u64 lines = 0;
+    for p in placed {
+        total += weight(plain(p));
+        lines = lines * 10 + match p { Placed.Word(line = l) | Placed.Number(line = l) | Placed.End(l) => l as u64 };
+    }
+    line_u64(total);                               #> 143
+    line_u64(lines);                               #> 123
+}

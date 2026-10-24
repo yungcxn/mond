@@ -1,0 +1,12 @@
+# a runtime check stops the program: a range that starts after its end. the line before is printed, the one after isn't
+#+
+#? trap
+<include "lib/raw.mn">;
+mut i64 ONE = 0;
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i64;
+    say_u64(1);   #> 1
+    mut [4]u8 buf = [1, 2, 3, 4];
+    [..]u8 s = buf; [..]u8 t = s[(3 * ONE as u64)..<ONE as u64]; say_u64(lenof t);
+    say_u64(2);
+}

@@ -1,0 +1,49 @@
+<include "lib/out.mn">;
+<include "../lib/invertible.mn">;
+# an inverse made at compile time, run: a block cipher's rounds undone, a buffer shuffled and back
+mut u32 ONE = 0;
+fun mix = (*u32 a, *u32 b, u32 key, u64 rounds) {
+    u32 spread = key * 7;
+    for r in 0..<rounds {
+        a.* += b.* ^ key;
+        b.* = b.* ^ (a.* + spread);
+        if key > 10: a.* -= r as u32 else: b.* += 1;
+        a.* *= 5;
+    }
+}
+fun unmix = <invert(refl mix, quote: unmix, [])>;
+fun shuffle = (*[..]u8 bytes, u8 seed) {
+    for i in 0..<lenof bytes.* {
+        u8 mask = seed * (i as u8 + 1);
+        bytes.*[i] += mask;
+        bytes.*[i] *= 3;
+    }
+}
+fun unshuffle = <invert(refl shuffle, quote: unshuffle, [])>;
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc;
+    mut u32 a = 123456 * ONE;
+    mut u32 b = 987 * ONE;
+    mix(a.&, b.&, 42 * ONE, 6);
+    line_u64(a as u64 * 10000000000 + b as u64);   #> 5120749940826646401
+    unmix(a.&, b.&, 42 * ONE, 6);
+    line_u64(a as u64 * 10000 + b as u64);          #> 1234560987
+    mut u32 wrong = 0;
+    for i in 0..<1000 {
+        mut u32 x = i * 2654435761 * ONE;
+        mut u32 y = i ^ 0xdeadbeef;
+        mix(x.&, y.&, i, i as u64 % 7);
+        unmix(x.&, y.&, i, i as u64 % 7);
+        if x != i * 2654435761 or y != (i ^ 0xdeadbeef): wrong += 1;
+    }
+    line_u64(wrong as u64);                         #> 0
+
+    mut [5]u8 text = [104, 101, 108, 108, 111];
+    [..]u8 view = text;
+    mut [..]u8 all = view;
+    shuffle(all.&, 7 * ONE as u8);
+    line_u64(text[0] as u64 * 1000 + text[4] as u64); #> 77182
+    unshuffle(all.&, 7 * ONE as u8);
+    line_u64(text[0] as u64 * 1000 + text[4] as u64); #> 104111
+}

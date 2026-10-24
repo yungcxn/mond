@@ -1,0 +1,16 @@
+# examples/lib/autodiff.mn: an expression without a derivative rule is a `crash` where it is written
+<include "../lib/autodiff.mn">;
+fun matched = (f64 x) -> f64: ret match x { _ => x }; #! crash
+fun d_matched = <derive(refl matched, quote: x, [])>;
+fun square = (f64 v) -> f64: ret v * v;
+fun unpaired = (f64 x) -> f64: ret square(x) + 1; #! crash
+fun d_unpaired = <derive(refl unpaired, quote: x, [])>;
+fun hypot = (f64 a, f64 b) -> f64: ret a * a + b * b;
+fun two_arguments = (f64 x) -> f64: ret hypot(x, 1); #! crash
+fun d_two_arguments = <derive(refl two_arguments, quote: x, [quote: hypot, quote: hypot])>;
+fun by_name = (f64 x) -> f64: ret x;
+fun d_by_name = <derive(refl by_name, quote: y, [])>; #! crash
+fun integral = (u32 n) -> u32: ret n * n;
+fun d_integral = <derive(refl integral, quote: n, [])>; #! crash
+
+main = () {}

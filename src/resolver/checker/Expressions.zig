@@ -16,6 +16,8 @@ const Expressions = @This();
 // the dereference an index reads through: `p.*[i]` reads one element of what `p` points to
 indexed_dereference: NodeId = 0,
 open_lengths: std.ArrayList(struct { node: NodeId, array_type: StaticPool.Index }) = .empty,
+// locals that may hold an address in their frame (`p = x.&`), so they may not outlive it either
+frame_references: std.AutoHashMapUnmanaged(DeclPool.Index, void) = .empty,
 
 pub fn owning_resolver(self: *Expressions) *Resolver {
     return @alignCast(@fieldParentPtr("expressions", self));
@@ -51,8 +53,9 @@ pub fn infer(
         .logical_not => self.infer_logical_not(context, node, expected),
         .numeric_negation => self.infer_numeric_negation(context, node, expected),
         .call, .record_update => resolver.calls.check_call(context, node),
+        .join => self.infer_join(context, node, expected),
         .member_access => self.infer_member_access(context, node),
-        .index => self.infer_index(context, node),
+        .index => self.infer_index(context, node, expected),
         .dereference => self.infer_dereference(context, node),
         .address_of => self.infer_address_of(context, node, expected),
         .array_literal => self.infer_array_literal(context, node, expected),
@@ -60,6 +63,14 @@ pub fn infer(
         .bit_cast => self.infer_bit_cast(context, node),
         .type_test => self.infer_type_test(context, node),
         .type_of => self.infer_static_query(context, node, .type_type),
+        .static_test => {
+            // static in a realization for static `stc?` arguments, not in the function as written
+            const operand = tree.arg(node, 0);
+            _ = self.infer(context, operand, .none);
+            const known = resolver.static_values.try_evaluate(context, operand) != null;
+            resolver.node_static_values[node] = if (known) .bool_true else .bool_false;
+            return resolver.set_node_type(node, .bool_type);
+        },
         .size_of => self.infer_static_query(context, node, .u64_type),
         .length_or_tag => self.infer_length_or_tag(context, node),
         .branch => resolver.flow.check_if(context, node, expected),
@@ -142,6 +153,9 @@ fn infer_block(
         if (!declares) resolver.scopes.open();
         last_type = self.infer(context, statement, if (is_last) expected else .none);
         if (!declares) resolver.scopes.close();
+        // a realization for static `stc?` arguments checks only what runs: nothing after a
+        // branch it took that leaves
+        if (context.folds_static and last_type == .never_type) break;
     }
     return last_type;
 }
@@ -247,8 +261,20 @@ fn infer_comparison(self: *Expressions, context: *FunctionContext, node: NodeId)
 
     const operand_type = self.join_operands(context, node, left, right, .none);
     if (operand_type == .poison_type) return operand_type;
-    // arrays compare element by element, as far as a static length reaches
+    // arrays compare element by element, as far as a static length reaches, slices by their
+    // length and elements (equal or not, they have no order)
     const compared = resolver.static_pool.substitute_type_variables(operand_type);
+    const kind = resolver.tree.kind(node);
+    const orders = kind != .binary_eq and kind != .binary_neq;
+    if (orders and resolver.static_pool.tag(compared) == .slice_type) {
+        const operator = resolver.name_pool.intern(switch (kind) {
+            .binary_less => "<",
+            .binary_greater => ">",
+            .binary_less_eq => "<=",
+            else => ">=",
+        });
+        return resolver.report(.invalid_operand, node, operator, compared);
+    }
     if (resolver.static_pool.holds_untagged_variant(compared)) {
         return resolver.report(.untagged_variant, node, compared, 0);
     }
@@ -311,7 +337,12 @@ fn infer_numeric_negation(
     return self.numeric_result(node, operand_type, .none);
 }
 
-fn infer_index(self: *Expressions, context: *FunctionContext, node: NodeId) StaticPool.Index {
+fn infer_index(
+    self: *Expressions,
+    context: *FunctionContext,
+    node: NodeId,
+    expected: StaticPool.Index,
+) StaticPool.Index {
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
     const indexed = resolver.tree.arg(node, 0);
@@ -320,9 +351,7 @@ fn infer_index(self: *Expressions, context: *FunctionContext, node: NodeId) Stat
     if (resolver.tree.kind(indexed) == .dereference) self.indexed_dereference = indexed;
     const indexed_type = static_pool.substitute_type_variables(self.infer(context, indexed, .none));
     if (resolver.tree.props(index).range) {
-        // checked anyway, so the names in the bounds are resolved and their errors reported
-        _ = self.infer(context, index, .none);
-        return resolver.report(.genexpr_index, index, 0, 0);
+        return self.infer_range_index(context, node, indexed_type, expected);
     }
 
     const index_type = self.infer(context, index, .none);
@@ -331,9 +360,13 @@ fn infer_index(self: *Expressions, context: *FunctionContext, node: NodeId) Stat
     }
     if (indexed_type == .poison_type) return indexed_type;
 
-    // pointers index like arrays (`*u8 buf; buf[i]`), arrays auto-deref once
+    // pointers index like arrays (`*u8 buf; buf[i]`), arrays auto-deref once, a slice is checked
+    // against its length while the program runs
     const through_pointer = static_pool.is_pointer(indexed_type);
     const container_type = static_pool.pointee(indexed_type);
+    if (static_pool.tag(container_type) == .slice_type) {
+        return static_pool.get(container_type).slice_type.element;
+    }
     if (through_pointer and static_pool.is_unstorable(container_type) and !context.is_abstract) {
         return resolver.report(.unstorable_dereference, indexed, indexed_type, 0);
     }
@@ -366,6 +399,63 @@ fn infer_index(self: *Expressions, context: *FunctionContext, node: NodeId) Stat
         }
     }
     return element_type;
+}
+
+// `a[lo..<hi]`: of a slice a slice; of an array (or one behind a pointer) a copy of that part when
+// both bounds are static and no slice is expected, else a slice when one is expected. a pointer to
+// elements or to a runtime-length array is sliced unchecked, up to a bound it is given
+fn infer_range_index(
+    self: *Expressions,
+    context: *FunctionContext,
+    node: NodeId,
+    indexed_type: StaticPool.Index,
+    expected: StaticPool.Index,
+) StaticPool.Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const index = resolver.tree.arg(node, 1);
+    const range = ParseTree.Range.from_node(resolver.tree, index);
+    for ([_]NodeId{ range.lo, range.hi }) |bound| {
+        if (bound == 0) continue;
+        const bound_type = self.infer(context, bound, .u64_type);
+        if (!static_pool.properties(bound_type).is_integer and bound_type != .poison_type) {
+            _ = resolver.report_mismatch(bound, bound_type, .u64_type);
+        }
+    }
+    _ = resolver.set_node_type(index, .unit_type);
+    if (indexed_type == .poison_type) return indexed_type;
+
+    const container = static_pool.pointee(indexed_type);
+    if (static_pool.tag(container) == .slice_type) return container;
+    const wants_slice = expected != .none and
+        static_pool.tag(static_pool.substitute_type_variables(expected)) == .slice_type;
+    const element = switch (static_pool.get(container)) {
+        .array_type => |array| array.element,
+        else => if (static_pool.is_pointer(indexed_type)) container else {
+            return resolver.report(.type_mismatch, resolver.tree.arg(node, 0), indexed_type, .none);
+        },
+    };
+    const length = static_pool.static_length(container);
+    const static_values = &resolver.static_values;
+    // the bounds as far as they are static, the end of the array when there is none
+    const low: ?i128 = if (range.lo == 0) 0 else static_values.static_integer(context, range.lo);
+    const high: ?i128 = blk: {
+        if (range.hi == 0) break :blk if (length) |end| end else null;
+        const bound = static_values.static_integer(context, range.hi) orelse break :blk null;
+        break :blk bound + @intFromBool(range.incl);
+    };
+    if (low != null and high != null) {
+        const room: i128 = length orelse std.math.maxInt(i64);
+        if (low.? < 0 or low.? > high.? or high.? > room) {
+            return resolver.report(.static_eval_failed, index, 0, 0);
+        }
+        if (!wants_slice and length != null) {
+            return static_pool.array_of(@intCast(high.? - low.?), element);
+        }
+    }
+    // a slice reaches as far as its array, a pointer's needs the upper bound
+    if (wants_slice and (length != null or range.hi != 0)) return static_pool.slice_of(element);
+    return resolver.report(.genexpr_index, index, 0, 0);
 }
 
 fn infer_dereference(self: *Expressions, context: *FunctionContext, node: NodeId) StaticPool.Index {
@@ -409,13 +499,32 @@ fn infer_address_of(
         .none;
     const target_type = self.infer(context, target, pointee_hint);
 
-    // write access only to what could be written directly
-    const mutable = resolver.mutability.writable(target) == .ok;
+    // write access only to what could be written directly. through a slice only when it is
+    // wanted, which writes the elements of the slice (see `Slices`)
     const wants_mutable = expected_pointer != .none and
         static_pool.tag(expected_pointer) == .mutable_pointer_type;
+    const through_slice = resolver.tree.kind(target) == .array_index and static_pool.tag(
+        static_pool.pointee(resolver.node_types[resolver.tree.arg(target, 0)]),
+    ) == .slice_type;
+    const mutable = resolver.mutability.writable(target) == .ok and
+        (!through_slice or wants_mutable);
     if (mutable and wants_mutable) resolver.mutability.mark_written_through(target);
+    if (through_slice and wants_mutable) resolver.slices.writes_into(target);
 
     if (target_type == .poison_type) return target_type;
+    // a field sharing a byte with another has no address of its own
+    if (resolver.tree.kind(target) == .member) {
+        const parent = resolver.tree.arg(target, 0);
+        const owner = static_pool.through_pointer(resolver.node_types[parent]);
+        const name = resolver.name_pool.name_of_node(resolver.tree.arg(target, 1));
+        const field = switch (static_pool.lookup_member(owner, name)) {
+            .field => |field| field.index,
+            else => null,
+        };
+        const is_bit_field = field != null and static_pool.tag(owner) == .record_type and
+            static_pool.is_bit_field(static_pool.get(owner).record_type, field.?);
+        if (is_bit_field) return resolver.report(.bit_field_address, target, name, owner);
+    }
     return static_pool.pointer_to(target_type, mutable);
 }
 
@@ -487,9 +596,14 @@ fn infer_cast(self: *Expressions, context: *FunctionContext, node: NodeId) Stati
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
 
-    const operand_type = self.infer(context, resolver.tree.arg(node, 0), .none);
-    const source_type = static_pool.substitute_type_variables(operand_type);
+    // `a[lo..<n] as [..]T`: the part of `a` is wanted as a slice
     const target_node = resolver.tree.arg(node, 1);
+    const hint = if (resolver.tree.kind(target_node) == .type_slice)
+        resolver.types.type_from_node(context, target_node)
+    else
+        .none;
+    const operand_type = self.infer(context, resolver.tree.arg(node, 0), hint);
+    const source_type = static_pool.substitute_type_variables(operand_type);
     const target_type = resolver.types.cast_target(context, target_node, source_type);
 
     if (target_type == .poison_type or source_type == .poison_type) return .poison_type;
@@ -504,8 +618,11 @@ fn infer_cast(self: *Expressions, context: *FunctionContext, node: NodeId) Stati
     };
     if (has_poisoned_length) return .poison_type;
 
-    if (static_pool.cast_kind(source_type, target_type) == .invalid) {
-        return resolver.report(.invalid_cast, node, source_type, target_type);
+    const kind = static_pool.cast_kind(source_type, target_type);
+    if (kind == .invalid) return resolver.report(.invalid_cast, node, source_type, target_type);
+    // a slice seen as a `*` pointer may be written through (see `Slices`)
+    if (kind == .slice_to_pointer and static_pool.tag(target_type) == .mutable_pointer_type) {
+        resolver.slices.writes(resolver.tree.arg(node, 0));
     }
     // a case is cast to an int as its tag
     if (static_pool.is_untagged(source_type) and static_pool.properties(target_type).is_integer) {
@@ -573,7 +690,13 @@ fn infer_type_test(self: *Expressions, context: *FunctionContext, node: NodeId) 
             static_pool.implements(value_type, tested_type);
         if (matches) break :blk .bool_true;
         if (static_pool.tag(value_type) == .trait_type) break :blk .none;
-        break :blk .bool_false;
+        // a value is of the type its case or member is (`v oftype V.Some`, `x oftype u32` of a
+        // `u32 || f32`), which some values are and only the value tells
+        break :blk switch (static_pool.units_covered(value_type, tested_type)) {
+            .all => .bool_true,
+            .some => .none,
+            .none => .bool_false,
+        };
     };
     return .bool_type;
 }
@@ -610,6 +733,64 @@ fn infer_static_query(
 }
 
 // ranges are sequences of their bound type, so `for` and slicing treat them like arrays
+// `a ~ b`: arrays or slices of one element type (also behind pointers), the elements of both. of
+// the sum of the lengths when both are static, else of a length known only while compiling
+fn infer_join(
+    self: *Expressions,
+    context: *FunctionContext,
+    node: NodeId,
+    expected: StaticPool.Index,
+) StaticPool.Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const operands = [2]NodeId{ resolver.tree.arg(node, 0), resolver.tree.arg(node, 1) };
+
+    // the elements a literal operand takes: those of the expected result, else of the other side
+    const wanted = static_pool.substitute_type_variables(expected);
+    var element: StaticPool.Index = .none;
+    if (wanted != .none) switch (static_pool.get(wanted)) {
+        .array_type => |array| element = array.element,
+        .slice_type => |slice| element = slice.element,
+        else => {},
+    };
+    var sequences: [2]StaticPool.Index = undefined;
+    for (operands, &sequences) |operand, *sequence| {
+        const hint = if (element == .none) .none else static_pool.intern(.{ .array_type = .{
+            .length = static_pool.fresh_type_variable(operand),
+            .element = element,
+        } });
+        const operand_type = self.infer(context, operand, hint);
+        if (operand_type == .poison_type) return operand_type;
+        sequence.* = static_pool.pointee(static_pool.substitute_type_variables(operand_type));
+        const operand_element: StaticPool.Index = switch (static_pool.get(sequence.*)) {
+            .array_type => |array| array.element,
+            .slice_type => |slice| slice.element,
+            else => .none,
+        };
+        if (operand_element == .none) {
+            const operator = resolver.name_pool.intern("~");
+            return resolver.report(.invalid_operand, operand, operator, operand_type);
+        }
+        if (element == .none) element = operand_element;
+        if (operand_element != element) {
+            return resolver.report(.type_mismatch, operand, operand_element, element);
+        }
+    }
+
+    const left_length = static_pool.static_length(sequences[0]);
+    const right_length = static_pool.static_length(sequences[1]);
+    if (left_length != null and right_length != null) {
+        return static_pool.array_of(left_length.? + right_length.?, element);
+    }
+    const joined = static_pool.intern(.{
+        .array_type = .{ .length = StaticPool.dyn_len, .element = element },
+    });
+    if (!self.length_is_static(context, joined, node)) {
+        return resolver.report(.not_static, node, 0, 0);
+    }
+    return joined;
+}
+
 fn infer_range(
     self: *Expressions,
     context: *FunctionContext,
@@ -665,7 +846,10 @@ fn infer_return_value(
     } else {
         _ = self.check(context, value, context.return_type);
     }
-    self.reject_escape(context, value);
+    self.reject_escape(context, value, context.return_type);
+    // a slice returned is held in the function's result (see `Slices`)
+    const result = Resolver.Slices.slot(.result, @intFromEnum(context.declaration), 0);
+    if (context.declaration != .none) self.owning_resolver().slices.flows(value, result);
     return .never_type;
 }
 
@@ -783,9 +967,140 @@ fn infer_type_value(self: *Expressions, context: *FunctionContext, node: NodeId)
 // a closure's environment lives in the frame that made it, so a value that may hold one stays
 // below that frame: called and passed down, never returned, stored outside the frame or handed to
 // c. a stcfun runs at compile time, its closures may go anywhere
-pub fn reject_escape(self: *Expressions, context: *FunctionContext, node: NodeId) void {
-    if (context.is_interpreted or !self.may_capture(node)) return;
-    self.owning_resolver().doctor.report(.escaping_closure, node, 0, 0);
+// a value going where its frame doesn't end it: `target` holds it (a result, a global, what a
+// pointer reaches). a closure, or an address in the frame (`x.&`, a part of a local array, a local
+// array made a slice), would outlive what it refers to
+pub fn reject_escape(
+    self: *Expressions,
+    context: *FunctionContext,
+    node: NodeId,
+    target: StaticPool.Index,
+) void {
+    if (context.is_interpreted) return;
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    if (self.may_capture(node)) return resolver.doctor.report(.escaping_closure, node, 0, 0);
+    const wanted = static_pool.substitute_type_variables(target);
+    const node_type = static_pool.substitute_type_variables(resolver.node_types[node]);
+    const array_made_slice = wanted != .none and static_pool.tag(wanted) == .slice_type and
+        static_pool.tag(node_type) == .array_type and self.is_frame_place(node);
+    if (array_made_slice or self.may_reference_frame(node)) {
+        resolver.doctor.report(.escaping_reference, node, 0, 0);
+    }
+}
+
+// a place in the running frame: a local, or a part of one not reached through a pointer
+pub fn is_frame_place(self: *Expressions, node: NodeId) bool {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    const static_pool = &resolver.static_pool;
+    var place = node;
+    while (true) switch (tree.kind(place)) {
+        .member, .array_index => {
+            const base = tree.arg(place, 0);
+            if (static_pool.is_pointer(resolver.node_types[base])) return false;
+            if (static_pool.tag(resolver.node_types[base]) == .slice_type) return false;
+            place = base;
+        },
+        .capture => place = tree.arg(place, 0),
+        .identifier => {
+            const declaration = resolver.node_declarations[place];
+            if (declaration == .none) return false;
+            const flags = resolver.decl_pool.get(declaration, .flags);
+            const kind = resolver.decl_pool.get(declaration, .kind);
+            return !flags.is_global and kind != .static_parameter and
+                resolver.decl_pool.get(declaration, .static_value) == .none and
+                !kind.is_function();
+        },
+        else => return false,
+    };
+}
+
+// whether a value may hold an address in the running frame: `x.&` of a local, a range of a local
+// array, a local holding one, what is made of one, or a call given one (it may give it back)
+pub fn may_reference_frame(self: *Expressions, node: NodeId) bool {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    const static_pool = &resolver.static_pool;
+    if (node == 0) return false;
+    const value_type = static_pool.substitute_type_variables(resolver.node_types[node]);
+    const construct = constructs.construct_of(tree.kind(node));
+    // the `if_then` of a branch has no value type of its own
+    if (construct != .branch and !static_pool.holds_address(value_type)) return false;
+    return switch (construct) {
+        .address_of => self.is_frame_place(tree.arg(node, 0)),
+        // a range of a local array is in the frame, of a slice or pointer where that one is
+        .index => {
+            const base = tree.arg(node, 0);
+            const base_type = static_pool.substitute_type_variables(resolver.node_types[base]);
+            const is_array = static_pool.tag(base_type) == .array_type;
+            if (tree.props(tree.arg(node, 1)).range and is_array and self.is_frame_place(base)) {
+                return true;
+            }
+            return self.may_reference_frame(base);
+        },
+        .member_access => !static_pool.is_pointer(resolver.node_types[tree.arg(node, 0)]) and
+            self.may_reference_frame(tree.arg(node, 0)),
+        .name => self.frame_references.contains(resolver.node_declarations[node]),
+        .grouping, .branch, .array_literal, .record_update, .unwrap, .cast => {
+            for (tree.children(node)) |child| if (self.may_reference_frame(child)) return true;
+            return false;
+        },
+        .block => tree.manychildren(node).len > 0 and
+            self.may_reference_frame(tree.manychildren(node)[tree.manychildren(node).len - 1]),
+        .match => {
+            for (tree.manychildren(tree.arg(node, 1))) |arm| {
+                if (self.may_reference_frame(tree.arg(arm, 1))) return true;
+            }
+            return false;
+        },
+        // a local array given where a slice is taken is one into the frame
+        .call => {
+            const callee = tree.arg(node, 0);
+            const callee_type = static_pool.substitute_type_variables(resolver.node_types[callee]);
+            const made = if (static_pool.tag(callee_type) == .meta_type)
+                static_pool.substitute_type_variables(value_type)
+            else
+                .none;
+            for (tree.manychildren(tree.arg(node, 1)), 0..) |argument, i| {
+                const value = tree.arg_value(argument);
+                if (self.may_reference_frame(value)) return true;
+                const argument_type = resolver.node_types[value];
+                if (static_pool.tag(argument_type) != .array_type) continue;
+                if (!self.is_frame_place(value)) continue;
+                const target: StaticPool.Index = switch (static_pool.get(callee_type)) {
+                    .function_type => |function| if (i < function.parameters.len)
+                        function.parameters[i]
+                    else
+                        .none,
+                    else => if (made != .none and static_pool.tag(made) == .record_type and
+                        i < static_pool.get(made).record_type.field_types.len)
+                        static_pool.field_type(made, i)
+                    else
+                        .none,
+                };
+                if (target != .none and static_pool.tag(target) == .slice_type) return true;
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
+// a local given a value that may hold an address in its frame holds one too
+pub fn note_frame_reference(self: *Expressions, assignee: NodeId, value: NodeId) void {
+    const resolver = self.owning_resolver();
+    if (!self.may_reference_frame(value)) return;
+    var root = assignee;
+    while (resolver.tree.kind(root) == .member or resolver.tree.kind(root) == .array_index) {
+        const base = resolver.tree.arg(root, 0);
+        if (resolver.static_pool.is_pointer(resolver.node_types[base])) return;
+        root = resolver.tree.arg(root, 0);
+    }
+    if (resolver.tree.kind(root) != .identifier) return;
+    const declaration = resolver.node_declarations[root];
+    if (declaration == .none or resolver.decl_pool.get(declaration, .flags).is_global) return;
+    self.frame_references.put(resolver.allocator, declaration, {}) catch @panic("OOM");
 }
 
 // whether a value may hold a closure: a lambda or local function using locals of a running frame,
@@ -927,6 +1242,8 @@ fn infer_length_or_tag(
 
     const owner = static_pool.pointee(static_pool.substitute_type_variables(operand_type));
     const is_length = resolver.tree.kind(node) == .lenof;
+    // a slice's length is known while the program runs
+    if (is_length and static_pool.tag(owner) == .slice_type) return .u64_type;
     if (is_length and static_pool.tag(owner) == .array_type) {
         if (self.length_is_static(context, owner, node)) return .u64_type;
         return resolver.report(.not_static, node, 0, 0);
@@ -1006,7 +1323,21 @@ fn infer_member_access(
             static_pool.trait_method_declaration(trait_method),
         ),
         .case => |case_type| case_type,
-        .builtin_init, .builtin_deinit => self.builtin_lifecycle_type(base_type, name),
+        .builtin_init, .builtin_deinit => blk: {
+            // `T.init()` zeroes the fields without a default, which must not make a value a
+            // subset of a variant leaves out
+            const is_record = name == .init and static_pool.tag(base_type) == .record_type;
+            if (is_record) for (resolver.types.field_nodes_of(base_type), 0..) |field_node, i| {
+                if (ParseTree.Param.from_node(resolver.tree, field_node).default != 0) continue;
+                if (!static_pool.holds_unzeroable(static_pool.field_type(base_type, i))) continue;
+                // a static value checks its expression again while it is evaluated
+                if (!resolver.doctor.has_report_at(node)) {
+                    resolver.doctor.report(.use_before_initialization, node, name, 0);
+                }
+                break;
+            };
+            break :blk self.builtin_lifecycle_type(base_type, name);
+        },
         .none, .builtin_len => resolver.report(.unknown_member, node, name, base_type),
     };
 }

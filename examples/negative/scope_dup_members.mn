@@ -7,6 +7,7 @@ fun three = (u32 a, u32 b, u32 a) {} #! duplicate_declaration
 fun lam = () { fun f = (u32 x, u32 x): x; } #! duplicate_declaration
 fun local = () { fun inner = (u8 p, u8 p) {} } #! duplicate_declaration
 stcfun sf = (u32 n, u32 n) -> u32: ret n; #! duplicate_declaration
+fun mixed_local = () { fun f = () -> u32: ret 1; stcfun f = () -> u32: ret 2; } #! duplicate_declaration
 fun generic_uncalled = (&[]u8 a, u8 a) {} #! duplicate_declaration
 # one report, not one per realization
 fun generic_called = (&[]u16 b, u16 b) {} #! duplicate_declaration

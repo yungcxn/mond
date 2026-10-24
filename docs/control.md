@@ -33,7 +33,7 @@ fun mix = (bool c) {
 
 `brk` and `cont` act on the innermost loop, also from inside a `match` used as a value. They take no value and no label. The step of `while c, step` is one statement.
 
-A sequence is a range, an array, a string, a pointer to an array, or any value with `has_next() -> bool` and `next() -> T`.
+A sequence is a range, an array, a string, a pointer to an array, a slice, or any value with `has_next() -> bool` and `next() -> T`.
 
 ```mond
 stcfun demo = () -> u32 {
@@ -112,6 +112,8 @@ stc u8 Q = quadrant(Pt(3, 5));              #= Q 1
 | `1..=9` `..<0` `10..` | integer intervals |
 | `V.Case` · `V.Case(p, f = p)` · `Rec(p, f = p)` | a case or a record, fields by position or name; missing fields are `_` |
 | `p1 \| p2` | either one (only at the top of an arm); both must bind the same names |
+| `p where c` | `p`, when `c` holds for what it bound (only at the top of an arm, after `\|` alternatives) |
+| `bits(u7 0x13, u5 rd, ..rest)` | an integer's bits from the lowest up: each field a width and a pattern on those bits, seen as that width's type; `..rest` binds the bits left (unsigned), `..` ignores them (only at the top of an arm or of an alternative) |
 | `T x` | a value that is a `T` (a member of a unified variant, a trait implementer, a case), bound as `T` |
 | `p <- x` · `p <- a, b` | matches `p` and binds its payload: a single field directly, several fields as a record, or `a, b` in order |
 | `quote: ..` | tree shapes, see [metaprogramming.md](metaprogramming.md#quote-patterns) |
@@ -128,6 +130,47 @@ fun next = (S s, Ev e) -> u32: ret match Step(s, e) {
     Step(S.Moving(t), _) => t,
 };
 stc u32 NX = next(S.Idle, Ev.Call(3));   #= NX 3
+```
+
+- Without `..` the widths of a `bits(..)` pattern add up to the integer's own (`bits_width`). An arm of bits covers every value only when each of its parts does; otherwise it covers nothing, like a guarded arm:
+
+```mond
+fun decode = (u32 insn) -> u32: ret match insn {
+    bits(u7 0x33, u5 rd, u3 0, u5 rs1, u5 rs2, u7 0) => rd as u32 + rs1 as u32 + rs2 as u32,
+    bits(u7 0x13, u5 rd, u3 _, ..immediate) => rd as u32 + immediate,
+    _ => 0,
+};
+stc u32 DEC = decode(0x00A00093);                       #= DEC 321
+fun halves = (i8 x) -> i64: ret match x { bits(i4 low, i4 high) => low as i64 * 100 + high };
+stc i64 H = halves(-2);                                   #= H -201
+fun short = (u8 x) -> u8: ret match x { bits(u4 a) => a, _ => 0 };   #! bits_width
+```
+
+- A `where` guard runs after its pattern matched, with the pattern's names bound; when it doesn't hold, the arms below are tried. A guarded arm covers nothing: it never makes the match exhaustive or a later arm redundant.
+
+```mond
+variant Tok = +(Num(i64), Op(u8), End);
+fun kind = (Tok t) -> u32: ret match t {
+    Tok.Num(n) where n > 0 => 1,
+    Tok.Num(n) where n < 0 => 2,
+    Tok.Op(c) where c == '+' or c == '-' => 3,
+    _ => 4,
+};
+stc []u32 KINDS = [kind(Tok.Num(5)), kind(Tok.Num(-5)), kind(Tok.Op('-')), kind(Tok.Num(0))];   #= KINDS [1, 2, 3, 4]
+fun sign = (i8 x) -> i8: ret match x { y where y < 0 => -1, 0 => 0 };   #! non_exhaustive_match
+```
+
+- A bare name that takes what the arms above left is of the scrutinee without the cases they took whole (`V.A`, `V.A(x, _)`, `V.A <- v`, `T x`): a subset (see [types.md](types.md#subsets-v----vcase)), so it fits where those cases are not allowed.
+
+```mond
+variant IoErr = +(NotFound, Timeout, Denied);
+type Config = *(u32 port);
+fun load = (u32 x) -> Config || IoErr: ret if x == 0: IoErr.NotFound else: Config(x);
+fun load_or_default = (u32 x) -> Config || (IoErr -- IoErr.NotFound): ret match load(x) {
+    IoErr.NotFound => Config(80),
+    rest => rest,          # Config || IoErr -- IoErr.NotFound
+};
+stc u32 PORT = match load_or_default(0) { Config c => c.port, _ => 0 };   #= PORT 80
 ```
 
 - A match must be exhaustive (`non_exhaustive_match`). Integers need their whole range covered, variants every case, and floats, arrays and pointers need a catch-all.

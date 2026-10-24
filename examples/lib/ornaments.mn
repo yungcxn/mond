@@ -1,0 +1,108 @@
+# ornaments, a library for `include`: a variant with the cases of another one and fields added to
+# them, the functions over the first one lifted to it, and the way back. all made from the trees
+# of the declarations, the compiler knows nothing of it
+
+# whether two texts are equal
+stcfun same = ([]u8 a, []u8 b) -> bool {
+    if lenof a != lenof b: ret false;
+    for i in 0..<lenof a: if a[i] != b[i]: ret false;
+    ret true;
+}
+
+# a type naming the base, also behind pointers and in arrays and slices
+stcfun mentions = (ast t, []u8 base) -> bool: ret match t {
+    ast.Identifier => same(t.src, base),
+    ast.TypePointerMutable(inner) | ast.TypePointer(inner) => mentions(inner, base),
+    ast.TypeSlice(inner) | ast.TypeArrayUnlengthed(inner) | ast.TypeArray(_, inner) => mentions(inner, base),
+    _ => false,
+};
+
+# the type with the base renamed
+stcfun renamed = (ast t, []u8 base, ast name) -> ast: ret match t {
+    ast.Identifier where same(t.src, base) => name,
+    ast.TypePointerMutable(inner) => ast.TypePointerMutable(renamed(inner, base, name)),
+    ast.TypePointer(inner) => ast.TypePointer(renamed(inner, base, name)),
+    ast.TypeSlice(inner) => ast.TypeSlice(renamed(inner, base, name)),
+    ast.TypeArrayUnlengthed(inner) => ast.TypeArrayUnlengthed(renamed(inner, base, name)),
+    ast.TypeArray(n, inner) => ast.TypeArray(n, renamed(inner, base, name)),
+    _ => t,
+};
+
+# a field or a parameter with its type renamed, its name, default and guard kept
+stcfun retyped = (ast f, []u8 base, ast name) -> ast {
+    mut ast g = f;
+    g.type = renamed(f.type, base, name);
+    ret g;
+}
+
+# a case with its fields retyped and `extra` after them
+stcfun decorated = (ast c, []u8 base, ast name, []ast extra) -> ast {
+    if !(c oftype ast.VariantDefinitionParameterTyped) {
+        if lenof extra == 0: ret c;
+        ret ast.VariantDefinitionParameterTyped(c, (quote: *(@..extra)).param_tuple);
+    }
+    mut []ast fields = [];
+    for f in c.def_type.children: fields += retyped(f, base, name);
+    for f in extra: fields += f;
+    ret ast.VariantDefinitionParameterTyped(c.param, (quote: *(@..fields)).param_tuple);
+}
+
+# `variant New = <ornament(refl Base, quote: New, quote: *(fields))>`: every case of `Base` with
+# the fields after its own, `Base` in them is `New`. with defaults, the cases are built as before
+pub stcfun ornament = (&ast(variant) v, ast name, ast extra) -> ast {
+    mut []ast cases = [];
+    for c in v.cases: cases += decorated(c, v.name.src, name, extra.fields);
+    ret quote: +(@..cases);
+}
+
+# `ornament_cases(refl Base, quote: New, quote: +(Case(fields), ..))`: fields for the cases named,
+# the others are kept. a name `Base` doesn't have is a `crash`
+pub stcfun ornament_cases = (&ast(variant) v, ast name, ast extra) -> ast {
+    for e in extra.cases {
+        mut bool known = false;
+        for c in v.cases: if same(e.name.src, c.name.src): known = true;
+        if !known: crash "ornament_cases: a case the base doesn't have";
+    }
+    mut []ast cases = [];
+    for c in v.cases {
+        mut []ast extras = [];
+        for e in extra.cases: if same(e.name.src, c.name.src): extras = e.def_type.children;
+        cases += decorated(c, v.name.src, name, extras);
+    }
+    ret quote: +(@..cases);
+}
+
+# `fun g = <lift(refl f, quote: Base, quote: New, quote: g)>`: `f` over the ornament. its body is
+# unchanged, `Base` names `New` and `f` names `g` in it: patterns leave the new fields out (they are
+# `_`), constructions give them their defaults
+pub stcfun lift = (&ast(fun) f, ast base, ast new, ast name) -> ast {
+    mut []ast params = [];
+    for p in f.params: params += retyped(p, base.src, new);
+    ast rettype = renamed(f.rettype, base.src, new);
+    ast alias = (quote: type Base = New) with (def_var.identifier = base, assigned = new);
+    ast recursion = (quote: fun f = g) with (def_var.identifier = f.name, assigned = name);
+    ret quote: (@..params) -> @rettype {
+        @alias;
+        @recursion;
+        @(f.body);
+    };
+}
+
+# `fun back = <forget(refl Base, quote: New)>`: a `New` as the `Base` it decorates, its fields
+# dropped. a case holding the base itself would need room for its parts, so it is a `crash`
+pub stcfun forget = (&ast(variant) v, ast new) -> ast {
+    mut []ast arms = [];
+    for c in v.cases {
+        if !(c oftype ast.VariantDefinitionParameterTyped) {
+            arms += quote: @new.@(c.name) => @(v.name).@(c.name);
+            cont;
+        }
+        mut []ast names = [];
+        for f in c.def_type.children {
+            if mentions(f.type, v.name.src): crash "forget: a case holds the base itself";
+            names += fresh "v";
+        }
+        arms += quote: @new.@(c.name)(@..names) => @(v.name).@(c.name)(@..names);
+    }
+    ret quote: (@new x) -> @(v.name): ret match x { @..arms };
+}

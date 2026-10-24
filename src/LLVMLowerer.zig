@@ -970,7 +970,9 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
         .variant_tag => values.variant_tag(self, self.type_of_ref(a), self.operand(a)),
         .variant_payload => {
             const variant_type = self.type_of_ref(a);
-            return values.variant_payload(self, result_type, variant_type, self.operand(a));
+            const case_index: u32 = @intCast(instruction.b);
+            const value = self.operand(a);
+            return values.variant_payload(self, result_type, variant_type, value, case_index);
         },
         .call => self.call(result_type, a, self.ir.list(instruction.b)),
         .closure => self.closure(instruction.a, self.ir.list(instruction.b)),
@@ -1192,7 +1194,12 @@ fn call(self: *LLVMLowerer, result_type: Index, callee: Ref, arguments: []const 
 // calls an ir function with the arguments on `value_stack` from `mark` on: its captures, then its
 // parameters. a result in memory goes to `result_slot`. a c function gets its arguments as
 // c_abi.zig says, those of a variadic one past the fixed ones promoted as c promotes them
-fn call_function(self: *LLVMLowerer, function_index: u32, mark: usize, result_slot: Value) Value {
+pub fn call_function(
+    self: *LLVMLowerer,
+    function_index: u32,
+    mark: usize,
+    result_slot: Value,
+) Value {
     const function_type = self.function_types[function_index];
     const target = self.functions[function_index];
     if (self.externals.isSet(function_index)) {

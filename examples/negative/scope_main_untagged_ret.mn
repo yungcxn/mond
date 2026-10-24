@@ -1,3 +1,3 @@
 # a variant without tag tells no exit code
-variant Raw = +(Word(u32), Byte(u8)) tagtype _;
+variant Raw = +(Word(u32), Byte(u8)) notagtype;
 main = () -> Raw: ret Raw.Byte(1); #! invalid_main

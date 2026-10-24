@@ -1,0 +1,42 @@
+# `tagtype` of a strategy record: the program says how the cases are stored (examples/lib/tags.mn)
+<include "../lib/tags.mn">;
+
+# the cases as ranges of one integer: no tag bits, the payload is what is left
+variant Small = +(Low(u8), High(i8), Flag(bool), Zero) tagtype ranges(u16, 256);
+stc u64 SMALL_SIZE = sizeof Small; #= SMALL_SIZE 2
+fun value = (Small s) -> i64: ret match s {
+    Small.Low(x) => x,
+    Small.High(x) => 1000 + x as i64,
+    Small.Flag(b) => if b: 5000 else: 6000,
+    Small.Zero => 7,
+};
+stc []i64 VALUES = [value(Small.Low(5)), value(Small.High(-6)), value(Small.Flag(true)), value(Small.Zero)]; #= VALUES [5, 994, 5000, 7]
+stc []bool EQUAL = [Small.Low(5) == Small.Low(5), Small.Low(5) == Small.High(5), Small.Zero == Small.Zero]; #= EQUAL [true, false, true]
+
+# a strategy written in place: the tag in the top byte of a u32, unwrapped by `??` and `?<-`
+type Handle = *(type storage, (u32, u64) -> u64 wrap, (u64) -> u32 case_of, (u64, u32) -> u64 unwrap);
+stc Handle GENERATIONS = Handle(
+    storage = u32,
+    wrap = (u32 tag, u64 payload) -> u64: ret (tag as u64 << 24) | payload,
+    case_of = (u64 stored) -> u32: ret (stored >> 24) as u32,
+    unwrap = (u64 stored, u32 tag) -> u64: ret stored & 0xFFFFFF,
+);
+variant Slot = +(Live(u24 index), Dead(u24 index), Empty) tagtype GENERATIONS;
+stc u64 SLOT_SIZE = sizeof Slot; #= SLOT_SIZE 4
+fun live = (Slot s) -> u24: ret s ?? 0;
+fun dead = (Slot s) -> u24: ret if s ?<- i: 0 else: match s { Slot.Dead(i) => i, _ => 1 };
+stc []u24 UNWRAPPED = [live(Slot.Live(70000)), live(Slot.Empty), dead(Slot.Dead(3)), dead(Slot.Live(2))]; #= UNWRAPPED [70000, 0, 3, 0]
+stc u24 CAST = (Slot.Dead(9) as Slot.Dead).index; #= CAST 9
+
+# written tags: the tag given to the strategy is the case's own
+stc Handle SIGNS = Handle(
+    storage = u64,
+    wrap = (u32 tag, u64 payload) -> u64: ret if tag == 4: payload << 1 else: 1,
+    case_of = (u64 stored) -> u32: ret if (stored & 1) == 0: 4 else: 9,
+    unwrap = (u64 stored, u32 tag) -> u64: ret stored >> 1,
+);
+variant Even = +(Number(u32) = 4, Odd = 9) tagtype SIGNS;
+fun number = (Even e) -> u32: ret match e { Even.Number(n) => n, Even.Odd => 1 };
+stc []u32 NUMBERS = [number(Even.Number(40)), number(Even.Odd)]; #= NUMBERS [40, 1]
+
+main = () {}

@@ -1,0 +1,124 @@
+# examples/lib/ornaments.mn: a variant with the cases of another one and fields added to them, the
+# functions over the first one lifted to it, and the way back
+<include "../lib/ornaments.mn">;
+variant Expr = +(Num(i64 value), Add(*Expr left, *Expr right), Neg(&Expr inner), Hole);
+fun eval = (Expr e) -> i64: ret match e {
+    Expr.Num(v) => v,
+    Expr.Add(l, r) => eval(l.*) + eval(r.*),
+    Expr.Neg(i) => -eval(i.*),
+    Expr.Hole => 0,
+};
+
+# every case gets the fields, `Expr` in the old ones is the new variant, cases without payload too
+variant Tagged = <ornament(refl Expr, quote: Tagged, quote: *(u8 tag = 0))>;
+stc u64 SIZES = sizeof Expr * 100 + sizeof Tagged; #= SIZES 2432
+stc u8 TAG = (Tagged.Num(5, 3) as Tagged.Num).tag; #= TAG 3
+stc u8 DEFAULT_TAG = (Tagged.Hole() as Tagged.Hole).tag; #= DEFAULT_TAG 0
+stcfun left_tag = () -> u8 {
+    mut Tagged a = Tagged.Num(1, 9);
+    Tagged sum = Tagged.Add(a.&, a.&, 2);
+    ret ((sum as Tagged.Add).left.* as Tagged.Num).tag * 10 + (sum as Tagged.Add).tag;
+}
+fun tag_of = (Tagged t) -> u8: ret match t {
+    Tagged.Num(tag = g) | Tagged.Add(tag = g) | Tagged.Neg(tag = g) | Tagged.Hole(g) => g,
+};
+stc Tagged HOLE = Tagged.Hole(4);
+stc u8 TAGS = tag_of(Tagged.Neg(HOLE.&, 6)) * 10 + tag_of(HOLE); #= TAGS 64
+
+# functions over the base, lifted: the body is the same, its patterns skip the new fields
+fun tagged_eval = <lift(refl eval, quote: Expr, quote: Tagged, quote: tagged_eval)>;
+stcfun evaluated = () -> i64 {
+    mut Tagged two = Tagged.Num(2, 1);
+    Tagged three = Tagged.Num(3, 2);
+    Tagged minus = Tagged.Neg(three.&, 3);
+    mut Tagged neg = minus;
+    ret tagged_eval(Tagged.Add(two.&, neg.&, 4));
+}
+stc i64 EVALUATED = evaluated(); #= EVALUATED -1
+
+# constructions in the lifted body give the new fields their defaults, more parameters and the
+# result are retyped, a block body and a pointer parameter as well. a case still without payload
+# is still written bare
+variant Lined = <ornament_cases(refl Expr, quote: Lined, quote: +(Num(u32 line = 1)))>;
+fun simplify = (&Expr e, Expr fallback) -> Expr {
+    if match e.* { Expr.Neg => true, _ => false }: ret fallback;
+    ret match e.* { Expr.Num(0) => Expr.Hole, Expr.Num(v) => Expr.Num(v * 2), _ => e.* };
+}
+fun lined_simplify = <lift(refl simplify, quote: Expr, quote: Lined, quote: lined_simplify)>;
+stcfun simplified = () -> u64 {
+    Lined zero = Lined.Num(0, 7);
+    Lined one = Lined.Num(1, 7);
+    Lined negative = Lined.Neg(one.&);
+    Lined fallback = Lined.Num(9, 8);
+    Lined a = lined_simplify(zero.&, fallback);
+    Lined b = lined_simplify(one.&, fallback);
+    Lined c = lined_simplify(negative.&, fallback);
+    u64 lines = (b as Lined.Num).line as u64 * 10 + (c as Lined.Num).line as u64;
+    u64 hole = match a { Lined.Hole => 1000, _ => 0 };
+    ret hole + (b as Lined.Num).value as u64 * 100 + lines;
+}
+stc u64 SIMPLIFIED = simplified(); #= SIMPLIFIED 1218
+
+# fields for some cases only, with defaults, mutable and guarded fields kept as they are
+variant Located = <ornament_cases(refl Expr, quote: Located, quote: +(Num(u32 line = 1, u32 col = 1), Hole(u32 at)))>;
+stc u32 AT = (Located.Hole(7) as Located.Hole).at; #= AT 7
+stc u32 LINE = (Located.Num(4) as Located.Num).line + (Located.Num(4, 5) as Located.Num).line; #= LINE 6
+stc u64 LOCATED = sizeof Located; #= LOCATED 24
+type Box = *(mut u32 count = 1, u32 limit where limit > 0);
+variant Store = +(Single(Box b, u32 n where n < 10), Empty);
+variant TimedStore = <ornament(refl Store, quote: TimedStore, quote: *(mut u64 at = 0))>;
+stcfun store = () -> u64 {
+    TimedStore s = TimedStore.Single(Box(limit = 3), 4, 5);
+    ret match s { TimedStore.Single(b, n, at) => b.limit as u64 * 100 + n as u64 * 10 + at, _ => 0 };
+}
+stc u64 STORE = store(); #= STORE 345
+
+# the base renamed in pointers, arrays and slices of it
+variant Tree = +(Leaf(u32 v), Node([2]*Tree kids), Many([..]&Tree all), Up(&Tree parent));
+variant Weighted = <ornament(refl Tree, quote: Weighted, quote: *(u16 w = 1))>;
+fun weight = (&Tree t) -> u64 {
+    mut u64 sum = 0;
+    match t.* {
+        Tree.Leaf(v) => sum = v,
+        Tree.Node(k) => sum = weight(k[0]) + weight(k[1]),
+        Tree.Many(all) => for a in all: sum += weight(a),
+        Tree.Up(p) => sum = weight(p),
+    }
+    ret sum;
+}
+fun weighted = <lift(refl weight, quote: Tree, quote: Weighted, quote: weighted)>;
+stcfun weights = () -> u64 {
+    mut Weighted a = Weighted.Leaf(2);
+    mut Weighted b = Weighted.Leaf(3, 9);
+    Weighted n = Weighted.Node([a.&, b.&]);
+    [2]&Weighted parts = [n.&, a.&];
+    Weighted many = Weighted.Many(parts);
+    Weighted up = Weighted.Up(many.&);
+    ret weighted(up.&) * 10 + ((n as Weighted.Node).kids[1].* as Weighted.Leaf).w;
+}
+stc u64 WEIGHTS = weights(); #= WEIGHTS 79
+
+# an ornament of an ornament, and a lifted function lifted again: one pass later, when the first
+# ones are expanded
+variant Twice = <quote: <ornament(refl Tagged, quote: Twice, quote: *(bool seen = false))> >;
+fun twice_eval = <quote: <lift(refl tagged_eval, quote: Tagged, quote: Twice, quote: twice_eval)> >;
+stcfun twice = () -> i64 {
+    mut Twice a = Twice.Num(20, 1, true);
+    mut Twice b = Twice.Num(22);
+    ret twice_eval(Twice.Add(a.&, b.&));
+}
+stc i64 TWICE = twice(); #= TWICE 42
+
+# back to the base: the new fields dropped
+variant Token = +(Word([..]u8), Number(u64 n, bool hex), End);
+variant Placed = <ornament(refl Token, quote: Placed, quote: *(u32 line = 0, u32 col = 0))>;
+fun plain = <forget(refl Token, quote: Placed)>;
+fun shown = (Token t) -> u64: ret match t { Token.Word(w) => lenof w, Token.Number(n, h) => if h: n * 16 else: n, Token.End => 1000 };
+stc []u64 FORGOTTEN = [ #= FORGOTTEN [5, 48, 1000]
+    shown(plain(Placed.Word("hello", 3, 4))),
+    shown(plain(Placed.Number(3, true, 1, 1))),
+    shown(plain(Placed.End(9, 9))),
+];
+stc bool ROUND_TRIP = plain(Placed.Number(7, false)) == Token.Number(7, false); #= ROUND_TRIP true
+
+main = () {}

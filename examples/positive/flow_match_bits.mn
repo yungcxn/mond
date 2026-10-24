@@ -1,0 +1,39 @@
+# `bits(..)`: an integer's bits from the lowest up, each field a width and a pattern on its bits
+fun decode = (u32 insn) -> u64: ret match insn {
+    bits(u7 0x33, u5 rd, u3 0, u5 rs1, u5 rs2, u7 0) => 1000000 + rd as u64 * 10000 + rs1 as u64 * 100 + rs2,
+    bits(u7 0x13, u5 rd, u3 f3, ..immediate) => 2000000 + rd as u64 + f3 as u64 * 100 + immediate as u64 * 1000,
+    bits(u7 0x6F, ..) => 3,
+    _ => 0,
+};
+stc []u64 DECODED = [decode(0x003100B3), decode(0x00A02093), decode(0x0000006F), decode(7)]; #= DECODED [1010203, 2320201, 3, 0]
+
+# signed widths extend their sign, literals and ranges test a part, `_` skips one
+fun nibbles = (i8 x) -> i64: ret match x { bits(i4 low, i4 high) => low as i64 * 100 + high };
+stc []i64 NIBBLES = [nibbles(-2), nibbles(0x37)]; #= NIBBLES [-201, 703]
+fun classify = (u16 word) -> u8: ret match word {
+    bits(u4 0..=3, u12 _) => 1,
+    bits(u4 4..=5, ..) => 2,
+    bits(u4 _, u4 high, ..) where high > 8 => 3,
+    _ => 4,
+};
+stc []u8 CLASSES = [classify(0x0002), classify(0x0FF5), classify(0x00F7), classify(0x0017)]; #= CLASSES [1, 2, 3, 4]
+
+# only binders and `_`: every value, so no `_` arm is needed; a rest of the bits left
+fun swap_halves = (u16 x) -> u16: ret match x { bits(u8 low, u8 high) => (low as u16 << 8) + high };
+stc u16 SWAPPED = swap_halves(0x1234); #= SWAPPED 13330
+fun top = (u64 x) -> u64: ret match x { bits(u60 _, ..rest) => rest };
+stc u64 TOP = top(0xF000000000000000); #= TOP 15
+
+# the same at compile time, while compiling a stcfun, and over a bit-packed record's bits
+stcfun count_set = (u8 x) -> u8 {
+    mut u8 count = 0;
+    mut u8 rest = x;
+    while rest > 0 {
+        match rest { bits(u1 1, ..) => count += 1, _ => {} }
+        rest = rest >> 1;
+    }
+    ret count;
+}
+stc u8 SET = count_set(0b1011_0110); #= SET 5
+
+main = () {}

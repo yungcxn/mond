@@ -119,6 +119,25 @@ stcfun dispatcher = (&ast(variant) v) -> ast(fun) {
 fun op_len = <dispatcher(refl Op)>;
 stc u64 ol = op_len(Op.Mul); #= ol 3
 
+# a quote makes arms of every form: alternatives, a guard, a type pattern
+variant Shape = +(Dot, Line(u32), Box(u32 w, u32 h));
+stcfun shape_match = (ast shape) -> ast(u32) {
+    []ast arms = [
+        quote: Shape.Dot | Shape.Line(_) => 1,
+        quote: Shape.Box(w, h) where w == h => 2,
+        quote: Shape.Box(_, _) => 3,
+    ];
+    ret quote: match @shape { @..arms };
+}
+fun shape_kind = (Shape s) -> u32: ret <shape_match(quote: s)>;
+stc []u32 shapes = [shape_kind(Shape.Line(4)), shape_kind(Shape.Box(2, 2)), shape_kind(Shape.Box(2, 3))]; #= shapes [1, 2, 3]
+stcfun number_match = (ast number) -> ast(u32) {
+    []ast arms = [quote: u32 i => i * 2, quote: f32 f => f as u32];
+    ret quote: match @number { @..arms };
+}
+fun number_of = (u32 || f32 n) -> u32: ret <number_match(quote: n)>;
+stc []u32 numbers = [number_of(21), number_of(2.5)]; #= numbers [42, 2]
+
 main = () {
     u32 a = run_unrolled(2);
     i32 b = clamp_byte(-4);

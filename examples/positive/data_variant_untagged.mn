@@ -1,7 +1,7 @@
-# `tagtype _`: a variant without a tag, its cases share the room of the widest one; a value is read
+# `notagtype`: a variant without a tag, its cases share the room of the widest one; a value is read
 # through a cast to a case, at compile time too
-variant Word = +(Int(u32), Float(f32), Bytes([4]u8)) tagtype _;
-variant Wide = +(Small(u8), Big(u64), Nothing) tagtype _;
+variant Word = +(Int(u32), Float(f32), Bytes([4]u8)) notagtype;
+variant Wide = +(Small(u8), Big(u64), Nothing) notagtype;
 stc u64 word_size = sizeof Word; #= word_size 4
 stc u64 wide_size = sizeof Wide; #= wide_size 8
 stc u64 wide_align = alignof Wide; #= wide_align 8
@@ -17,11 +17,11 @@ stc u32 from_call = bits(Word.Float(2.0)); #= from_call 1073741824
 
 # templates, methods, traits, payload-free cases and asserted sizes as for any variant
 trait Bits = !{ fun bits = () -> u32; }
-variant Raw = (type T): +(Val(T), Bytes([4]u8)) tagtype _;
-variant Reg = +(Int(u32), Float(f32), Empty) tagtype _ assertsize 4 implof Bits !{
+variant Raw = (type T): +(Val(T), Bytes([4]u8)) notagtype;
+variant Reg = +(Int(u32), Float(f32), Empty) notagtype assertsize 4 implof Bits !{
     fun bits = () -> u32: ret (self.* as Reg.Int).$0;
 }
-variant Nothing = +(A, B) tagtype _;
+variant Nothing = +(A, B) notagtype;
 stc u64 raw_size = sizeof Raw(u16); #= raw_size 4
 stc u64 nothing_size = sizeof Nothing; #= nothing_size 0
 stc u32 method_bits = Reg.Float(1.0).bits(); #= method_bits 1065353216
@@ -39,10 +39,27 @@ stc u32 held = (HOLDER.rs[0] as Reg.Int).$0; #= held 2
 stc u32 case_to_case = (Reg.Float(2.0) as Reg.Int).$0; #= case_to_case 1073741824
 # while compiling a cast reads the bytes as at run time: arrays, records at their offsets, floats;
 # bytes past a smaller payload are zero
-variant Overlay = +(Half(u16), Bytes([4]u8), Pair(u8 a, u16 b), F(f32)) tagtype _;
+variant Overlay = +(Half(u16), Bytes([4]u8), Pair(u8 a, u16 b), F(f32)) notagtype;
 stc Overlay HALF = Overlay.Half(258);
 stc [4]u8 half_bytes = (HALF as Overlay.Bytes).$0; #= half_bytes [2, 1, 0, 0]
 stc u16 pair_b = (Overlay.Bytes([1, 0, 7, 1]) as Overlay.Pair).b; #= pair_b 263
 stc f32 from_bytes = (Overlay.Bytes([0, 0, 128, 63]) as Overlay.F).$0; #= from_bytes 1
+
+# its tree is `ast.VariantDefinitionUntagged` around the variant, views see through it, and a quote
+# builds one
+stcfun untagged = (ast d) -> bool: ret match d { ast.VariantDefinitionUntagged(_) => true, _ => false };
+stc bool word_untagged = untagged((refl Word).assigned); #= word_untagged true
+stc bool reg_untagged = untagged((refl Reg).assigned); #= reg_untagged false
+stc u64 word_cases = lenof (refl Word).cases; #= word_cases 3
+stc []u8 word_case = (refl Word).cases[1].name.src; #= word_case "Float"
+variant Spliced = <quote: +(A(u8), B(u16)) notagtype>;
+stc u64 spliced_size = sizeof Spliced; #= spliced_size 2
+stc u16 spliced_bits = (Spliced.A(7) as Spliced.B).$0; #= spliced_bits 7
+
+# packed: each case is its own payload, no tag byte in front
+variant Pk = ++(Small(u8), Big(u64)) notagtype;
+fun pk_size = (Pk p) -> u64: ret sizeof typeof p;
+stc u64 pk_small = pk_size(Pk.Small(1)); #= pk_small 1
+stc u64 pk_big = pk_size(Pk.Big(1)); #= pk_big 8
 
 main = () {}

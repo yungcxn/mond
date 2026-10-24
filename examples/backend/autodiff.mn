@@ -1,0 +1,28 @@
+<include "lib/out.mn">;
+<include "../lib/autodiff.mn">;
+# derivatives made at compile time, run: newton's method on a polynomial, a gradient step
+mut f64 ONE = 0;
+fun cubic = (f64 x) -> f64: ret x * x * x - 2 * x - 5;
+fun d_cubic = <derive(refl cubic, quote: x, [])>;
+fun energy = (f64 x, f64 y) -> f64 {
+    mut f64 e = 0;
+    for i in 0..<3 {
+        f64 w = i as f64 + 1;
+        e += w * (x - w) * (x - w);
+    }
+    ret e + y * y * x;
+}
+fun grad_energy = <gradient(refl energy, [])>;
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as f64;
+    mut f64 x = 2 * ONE;
+    for _ in 0..<30: x -= cubic(x) / d_cubic(x);
+    line_u64((x * 1000000) as u64);                  #> 2094551
+    [2]f64 g = grad_energy(ONE, 2 * ONE);
+    line_i64(g[0] as i64);                           #> -12
+    line_i64(g[1] as i64);                           #> 4
+    mut f64 at = 0;
+    for _ in 0..<100: at -= 0.05 * grad_energy(at, 0)[0];
+    line_u64((at * 1000) as u64);                    #> 2333
+}

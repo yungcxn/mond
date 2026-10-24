@@ -51,12 +51,17 @@ pub const RecordType = struct {
     // read from the tree on demand: field mutability, defaults and where-clauses
 };
 
-pub const VariantTagMode = enum(u8) { none, int, self };
+// `custom`: a strategy of the program stores the cases (`tagtype ranges(1000)`)
+pub const VariantTagMode = enum(u8) { none, int, self, custom };
 
 pub const VariantType = struct {
     declaration: DeclPool.Index,
     tag_mode: VariantTagMode,
     tag_type: Index,
+    // with `tagtype self` the fields from the payload down to the one holding the tag
+    tag_path: []const u32 = &.{},
+    // with a strategy, its record: `storage`, `wrap`, `case_of` and `unwrap` (see Types)
+    strategy: Index = .none,
     is_packed: bool,
     cases: []const Index,
     traits: []const Index,
@@ -64,6 +69,12 @@ pub const VariantType = struct {
 
 // `A || B`, packed `A ||| B`
 pub const UnifiedVariantType = struct { members: []const Index, is_packed: bool };
+// `[..]T`: the address of the first element and the length, a record of `*T` and `u64`
+// (`slice_of` makes one)
+pub const SliceType = struct { element: Index, pointer: Index };
+// `V -- V.A`: the variant or unified variant `whole` without the cases (or one-case members) in
+// `removed`, sorted. it keeps the whole's layout and tags, so a value of it is a value of the whole
+pub const VariantSubsetType = struct { whole: Index, removed: []const Index };
 
 pub const VariantCaseType = struct {
     variant: Index,
@@ -140,6 +151,8 @@ pub const CoercionKind = enum(u8) {
     string_to_ptr,
     array_ptr_to_elem_ptr,
     to_dyn,
+    // an array, or one behind a pointer, as a slice of its elements
+    to_slice,
     ptr_mut_to_ptr,
     case_to_variant,
     payload_to_self_tagged,
@@ -165,6 +178,10 @@ pub const CastKind = enum(u8) {
     pointer_relength,
     array_narrow,
     trait_narrow,
+    // `a as [..]T`: an array or a pointer to one seen whole as a slice
+    array_to_slice,
+    // `s as &[]T`, `s as &T`: the address of a slice's first element
+    slice_to_pointer,
     invalid,
 };
 
@@ -176,6 +193,11 @@ pub const JoinResult = struct {
 
 // `A || B`, `A ||| B`, or the side of no size that can be no member
 pub const UnifiedOf = union(enum) { unified: Index, sizeless_side: u1 };
+
+// `A -- B`, or the side that is wrong: no tagged variant left, no part of it right
+pub const DifferenceOf = union(enum) { difference: Index, wrong_side: u1 };
+// how many of what a value may be another type covers (see `units_covered`)
+pub const Covered = enum(u8) { none, some, all };
 
 // the first entries are fixed, so `u8`, `bool`, ... are known without any lookup
 pub const Index = enum(u32) {
@@ -208,7 +230,35 @@ pub const Index = enum(u32) {
     none = std.math.maxInt(u32),
     _,
 
-    pub const first_dynamic: u32 = @intFromEnum(Index.ast_type) + 1;
+    // the integers of a width without a keyword (`u7`, `i24`): unsigned, then signed, by width
+    pub const first_odd_int: u32 = @intFromEnum(Index.ast_type) + 1;
+    pub const first_dynamic: u32 = first_odd_int + 2 * odd_widths.len;
+    pub const odd_widths = blk: {
+        var widths: [60]u7 = undefined;
+        var count = 0;
+        for (1..65) |bits| {
+            if (bits == 8 or bits == 16 or bits == 32 or bits == 64) continue;
+            widths[count] = bits;
+            count += 1;
+        }
+        break :blk widths;
+    };
+
+    // the integer type of a width and signedness, `u8` to `i64` or a fixed odd one
+    pub fn int_of(signedness: IntType.Signedness, bits: u7) Index {
+        const signed: u32 = @intFromBool(signedness == .signed);
+        const standard: u32 = switch (bits) {
+            8 => 0,
+            16 => 1,
+            32 => 2,
+            64 => 3,
+            else => {
+                const rank = std.mem.indexOfScalar(u7, &odd_widths, bits).?;
+                return @enumFromInt(first_odd_int + signed * odd_widths.len + rank);
+            },
+        };
+        return @enumFromInt(signed * 4 + standard);
+    }
 };
 
 // the length of a runtime-length array, a fixed entry no static length can be
@@ -223,6 +273,8 @@ pub const Composition = enum(u8) {
     pointer,
     // `[n]T`: the length and the element
     array,
+    // `[..]T`: the element
+    slice,
     // the parameters and the return type
     function,
     // `A || B`: the member variants
@@ -279,6 +331,11 @@ const tag_table = .{
         .is_pointer = true,
         .has_layout = true,
     }, "pointer_type" },
+    .{ "slice_type", SliceType, .slice, TagProperties{
+        .is_type = true,
+        .is_aggregate = true,
+        .has_layout = true,
+    } },
     .{ "function_type", FunctionType, .function, TagProperties{
         .is_type = true,
         .is_callable = true,
@@ -302,6 +359,12 @@ const tag_table = .{
         .has_layout = true,
     } },
     .{ "unified_variant_type", UnifiedVariantType, .unified_variants, TagProperties{
+        .is_type = true,
+        .is_variant = true,
+        .has_layout = true,
+    } },
+    // made of concrete types only, a leaf of the walks
+    .{ "variant_subset_type", VariantSubsetType, .leaf, TagProperties{
         .is_type = true,
         .is_variant = true,
         .has_layout = true,
@@ -411,6 +474,7 @@ pub const tag_type_of = type_queries.tag_type_of;
 pub const stored_tag_type = type_queries.stored_tag_type;
 pub const lookup_member = type_queries.lookup_member;
 pub const first_payload_case = type_queries.first_payload_case;
+pub const is_field_tagged = type_queries.is_field_tagged;
 pub const fallback_case = type_queries.fallback_case;
 pub const niche_case = type_queries.niche_case;
 pub const single_payload = type_queries.single_payload;
@@ -419,16 +483,23 @@ pub const ast_type_of = type_queries.ast_type_of;
 pub const is_tree = type_queries.is_tree;
 pub const contains_trees = type_queries.contains_trees;
 pub const holds_function_value = type_queries.holds_function_value;
+pub const holds_address = type_queries.holds_address;
 pub const is_untagged = type_queries.is_untagged;
 pub const is_untagged_at_run_time = type_queries.is_untagged_at_run_time;
 pub const is_member = type_queries.is_member;
 pub const holds_untagged_variant = type_queries.holds_untagged_variant;
+pub const zero_unit = type_queries.zero_unit;
+pub const holds_unzeroable = type_queries.holds_unzeroable;
 pub const is_unstorable = type_queries.is_unstorable;
 pub const tag_range = type_layouts.tag_range;
 pub const unified_offset = type_layouts.unified_offset;
 pub const Room = type_layouts.Room;
 pub const payload_room = type_layouts.payload_room;
 pub const field_offset = type_layouts.field_offset;
+pub const is_bit_packed = type_layouts.is_bit_packed;
+pub const field_bits = type_layouts.field_bits;
+pub const field_bit_offset = type_layouts.field_bit_offset;
+pub const is_bit_field = type_layouts.is_bit_field;
 pub const brings_cases = type_layouts.brings_cases;
 pub const case_tag = type_layouts.case_tag;
 pub const tag_in = type_layouts.tag_in;
@@ -439,6 +510,13 @@ pub const unify = type_relations.unify;
 pub const coercion = type_relations.coercion;
 pub const join = type_relations.join;
 pub const unified_of = type_relations.unified_of;
+pub const difference_of = type_relations.difference_of;
+pub const difference_by_units = type_relations.difference_by_units;
+pub const whole_of = type_relations.whole_of;
+pub const push_units = type_relations.push_units;
+pub const units_covered = type_relations.units_covered;
+pub const covers_unit = type_relations.covers_unit;
+pub const is_removed = type_relations.is_removed;
 pub const cast_kind = type_relations.cast_kind;
 pub const substitute_type_variables = type_relations.substitute_type_variables;
 pub const occurs_in = type_relations.occurs_in;
@@ -698,6 +776,9 @@ pub fn init(allocator: std.mem.Allocator) StaticPool {
         _ = self.intern(.{ .simple_value = @enumFromInt(field.value) });
     }
     _ = self.intern(.{ .ast_type = .{ .produces = .none, .root_kind = 0 } });
+    for ([_]IntType.Signedness{ .unsigned, .signed }) |signedness| for (Index.odd_widths) |bits| {
+        _ = self.intern(.{ .int_type = .{ .signedness = signedness, .bits = bits } });
+    };
     std.debug.assert(self.items.len() == Index.first_dynamic);
     return self;
 }
@@ -842,7 +923,15 @@ pub fn fresh_type_variable(self: *StaticPool, origin: u32) Index {
 }
 
 pub fn field_type(self: *const StaticPool, record: Index, field: usize) Index {
+    if (self.tag(record) == .slice_type) {
+        return if (field == 0) self.get(record).slice_type.pointer else .u64_type;
+    }
     return self.get(record).record_type.field_types[field];
+}
+
+pub fn slice_of(self: *StaticPool, element: Index) Index {
+    const pointer = self.pointer_to(element, true);
+    return self.intern(.{ .slice_type = .{ .element = element, .pointer = pointer } });
 }
 
 pub fn trait_method_declaration(
@@ -864,9 +953,10 @@ pub fn type_of(self: *const StaticPool, value: Index) Index {
         .function_value => .fun_type,
         .static_function => .stcfun_type,
         .trait_type => .trait_type,
-        .variant_type, .unified_variant_type => .variant_type,
+        .variant_type, .unified_variant_type, .variant_subset_type => .variant_type,
         .int_type, .float_type, .simple_type, .meta_type, .array_type => .type_type,
         .pointer_type, .mutable_pointer_type, .function_type, .record_type => .type_type,
+        .slice_type => .type_type,
         .variant_case_type, .template_type, .type_variable, .ast_type => .type_type,
     };
 }

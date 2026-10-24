@@ -1,0 +1,15 @@
+# `a ~ b` takes arrays or slices of one element type; a slice's length is only known while the
+# program runs, so a join with one is made while compiling only
+fun mixed = () -> u64: ret lenof ("ab" ~ [1, 2, 3] as [3]u32); #! type_mismatch
+fun scalar = (u32 x) -> u64: ret lenof ([1, 2] ~ x); #! invalid_operand
+fun record = () -> u64 {
+    type Pair = *(u8 a, u8 b);
+    ret lenof (Pair(1, 2) ~ "ab"); #! invalid_operand
+}
+fun at_run_time = ([..]u8 text) -> u64: ret lenof (text ~ "!"); #! not_static
+fun both_slices = ([..]u32 a, [..]u32 b) {
+    [..]u32 c = a ~ b; #! not_static
+}
+stc [3]u8 WRONG_LENGTH = "ab" ~ "cd"; #! type_mismatch
+
+main = () {}

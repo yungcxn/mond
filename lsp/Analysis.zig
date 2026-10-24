@@ -66,6 +66,16 @@ pub const Link = [4]u32;
 // the declarations in the outline, each holding the ones within it
 pub const Outline = struct { decl: u32, children: []const Outline };
 
+// the static value of a `stc` variable, shown at the end of its line as a `#=` check would read
+pub const Hint = struct { position: Position, label: []const u8, paddingLeft: bool = true };
+
+// a declaration of `decls` made in another file (an included one), where it is there
+pub const Elsewhere = struct { decl: u32, uri: []const u8, range: Range };
+
+// the code a splice of the document put in its place in a macro pass, `range` from its `<` to its
+// `>`. one a splice made is at the splice it is in
+pub const Expansion = struct { range: Range, pass: u32, code: []const u8 };
+
 pub const Result = struct {
     data: []const u32 = &.{},
     diagnostics: []const Diagnostic = &.{},
@@ -73,6 +83,13 @@ pub const Result = struct {
     // sorted by position
     links: []const Link = &.{},
     outline: []const Outline = &.{},
+    hints: []const Hint = &.{},
+    elsewhere: []const Elsewhere = &.{},
+    // by pass, then position
+    expansions: []const Expansion = &.{},
+    // the program as code before the first macro pass and after each one: the steps of its
+    // expansion, empty when nothing expands
+    passes: []const []const u8 = &.{},
 };
 
 pub const before = positions.before;
@@ -102,6 +119,10 @@ token_data: DynamicBuffer(u32),
 diagnostics: DynamicBuffer(Diagnostic),
 declarations: DynamicBuffer(Symbol),
 links: DynamicBuffer(Link),
+hints: DynamicBuffer(Hint),
+elsewhere: DynamicBuffer(Elsewhere),
+expansions: DynamicBuffer(Expansion),
+passes: DynamicBuffer([]const u8),
 // per token: its declaration in `declarations`
 token_meaning: []u32 = &.{},
 // per declaration of the resolver: the token naming it
@@ -115,6 +136,9 @@ token_modifiers: []u32 = &.{},
 // per token: the token naming the declaration an earlier pass found it to mean
 // per such naming token: its declaration in `past_declarations`
 earlier_naming_token: []u32 = &.{},
+// per token: the name of a declaration without a naming token (an included one) an earlier pass
+// found it to mean, empty for none
+earlier_names: [][]const u8 = &.{},
 past_declaration_index: []u32 = &.{},
 past_declarations: DynamicBuffer(PastDeclaration),
 // per node: the block or match arm it is in and the declaration it makes
@@ -174,6 +198,10 @@ pub fn analyze_at(
         .diagnostics = .init(allocator, 16),
         .declarations = .init(allocator, 256),
         .links = .init(allocator, 1024),
+        .hints = .init(allocator, 64),
+        .elsewhere = .init(allocator, 8),
+        .expansions = .init(allocator, 16),
+        .passes = .init(allocator, 4),
         .declaration_sites = .init(allocator, 256),
         .past_declarations = .init(allocator, 64),
     };
@@ -187,6 +215,39 @@ pub fn analyze_at(
         highlighting.classify_resolved(resolver, self.token_class, self.token_modifiers);
         highlighting.classify_namespaces(&self, &lexer, resolver);
         linking.link(&self, &lexer, resolver);
+
+        // the value of every `stc` variable that has one, at the end of the line its name is on
+        const declarations = resolver.decl_pool.entries.columns();
+        const longest = 80;
+        for (0..declarations.name.len) |i| {
+            const value = declarations.static_value[i];
+            const is_variable = declarations.kind[i] == .variable and declarations.flags[i].is_stc;
+            if (!is_variable or value == .none or value == .poison_type) continue;
+            // the compiler's own constants (`__os`) are written nowhere
+            const node = declarations.node[i];
+            if (node == 0) continue;
+            const span = resolver.tree.extent(node) orelse
+                dbg.node_span(resolver.tree, source, node) orelse continue;
+            if (span[0] >= source.len) continue;
+
+            var text: std.Io.Writer.Allocating = .init(allocator);
+            text.writer.writeAll("= ") catch @panic("OOM");
+            const pool = &resolver.static_pool;
+            pool.format(&resolver.name_pool, value, &text.writer) catch @panic("OOM");
+            var label = text.written();
+            if (label.len > longest) {
+                const shortened = .{ label[0 .. longest - 3], "..." };
+                label = std.mem.concat(allocator, u8, &shortened) catch @panic("OOM");
+            }
+            const line_end = std.mem.indexOfScalarPos(u8, source, span[0], '\n') orelse source.len;
+            const position = positions.position(&self, @intCast(line_end));
+            self.hints.push(.{ .position = position, .label = label });
+        }
+        std.mem.sort(Hint, self.hints.items(), {}, struct {
+            fn earlier(_: void, left: Hint, right: Hint) bool {
+                return positions.before(left.position, right.position);
+            }
+        }.earlier);
     }
     highlighting.encode(&self, &lexer);
 
@@ -196,6 +257,11 @@ pub fn analyze_at(
         .decls = self.declarations.items(),
         .links = self.links.items(),
         .outline = outline.build(&self),
+        .hints = self.hints.items(),
+        .elsewhere = self.elsewhere.items(),
+        .expansions = self.expansions.items(),
+        // the source alone is no step
+        .passes = if (self.passes.len > 1) self.passes.items() else &.{},
     };
 }
 
@@ -205,6 +271,8 @@ fn resolve(self: *Analysis, lexer: *Lexer) ?*Resolver {
     highlighting.classify_lexically(self, lexer);
     const token_count = lexer.tokens.columns().tk.len;
     self.earlier_naming_token = self.allocate_unset(token_count);
+    self.earlier_names = self.allocator.alloc([]const u8, token_count) catch @panic("OOM");
+    @memset(self.earlier_names, "");
     self.past_declaration_index = self.allocate_unset(token_count);
     lexed catch |err| {
         self.report(lexer.cursor -| 1, lexer.cursor, .@"error", @errorName(err), "");
@@ -213,11 +281,17 @@ fn resolve(self: *Analysis, lexer: *Lexer) ?*Resolver {
 
     const parser = self.allocator.create(Parser) catch @panic("OOM");
     parser.* = Parser.init(self.allocator, lexer.tokens, self.source, lexer.tokens.column(.span));
+    // a statement that doesn't parse is a hole: the rest is analyzed, each error reported
+    parser.recover = true;
     parser.build_ast() catch |err| {
         const span = lexer.tokens.column(.span)[parser.tok_cursor -| 1];
         self.report(span[0], span[1], .@"error", @errorName(err), "");
         return null;
     };
+    for (parser.errors.items) |found| {
+        const span = lexer.tokens.column(.span)[found.token];
+        self.report(span[0], span[1], .@"error", @errorName(found.err), "");
+    }
 
     const resolver = self.allocator.create(Resolver) catch @panic("OOM");
     const globals = parser.global_store.items();
@@ -228,6 +302,8 @@ fn resolve(self: *Analysis, lexer: *Lexer) ?*Resolver {
         .path = self.path,
         .watch = .{ .observer = self, .pass = observe_pass },
     };
+    // a pass writes into the tree, the program it starts from is kept before
+    if (parser.tree.macros) self.passes.push(self.printed(resolver, resolver.roots, null));
     resolver.resolve() catch {};
     const found = resolver.doctor.diagnostics.columns();
     for (
@@ -282,6 +358,92 @@ fn observe_pass(context: *anyopaque, resolver: *Resolver) void {
     const self: *Analysis = @ptrCast(@alignCast(context));
     highlighting.classify_resolved(resolver, self.token_class, self.token_modifiers);
     linking.remember_pass(self, resolver);
+
+    // the program the pass leaves and the code of each splice of the document it evaluated
+    const tree = resolver.tree;
+    const file = resolver.macros.file;
+    const roots = if (file != 0) tree.manychildren(file) else resolver.roots;
+    self.passes.push(self.printed(resolver, roots, null));
+    const pass: u32 = @intCast(self.passes.len - 1);
+    const first = self.expansions.len;
+    const kinds = self.token_kinds;
+    for (0..tree.ast_nodes.len()) |i| {
+        const node: u32 = @intCast(i);
+        if (tree.kind(node) != .splice or tree.arg(node, 1) == 0) continue;
+        const range: Range = (found: {
+            // from the `<` a few tokens before its first one (`<quote: x>`) to its `>`
+            const token = tree.first_token(node);
+            if (tree.extent(node) == null or token == 0 or token >= kinds.len) break :found null;
+            var open = token - 1;
+            while (kinds[open] != .@"xpct_<") : (open -= 1) {
+                if (open == 0 or token - open >= 4) break :found null;
+            }
+            const spans = tree.span_store;
+            var depth: u32 = 0;
+            for (open + 1..kinds.len) |at| switch (kinds[at]) {
+                .@"pct_(", .@"pct_[", .@"pct_{", .@"xpct_!{" => depth += 1,
+                .@"xpct_*(", .@"xpct_**(", .@"xpct_+(", .@"xpct_++(" => depth += 1,
+                .@"pct_)", .@"pct_]", .@"pct_}" => {
+                    if (depth == 0) break :found null;
+                    depth -= 1;
+                },
+                .@"xpct_>" => if (depth == 0) {
+                    break :found positions.range(self, spans[open][0], spans[at][1]);
+                },
+                else => {},
+            };
+            break :found null;
+        }) orelse continue;
+
+        const expansion = tree.arg(node, 1) - 1;
+        var code = if (tree.kind(expansion) == .block)
+            self.printed(resolver, tree.manychildren(expansion), null)
+        else
+            self.printed(resolver, &.{}, expansion);
+        // a whole file included shows how it starts
+        const longest = 40;
+        var lines: u32 = 0;
+        for (code, 0..) |byte, at| {
+            if (byte != '\n') continue;
+            lines += 1;
+            if (lines < longest) continue;
+            const more = std.mem.count(u8, code[at + 1 ..], "\n");
+            if (more == 0) break;
+            const shown = .{ code[0..at], more };
+            code = std.fmt.allocPrint(self.allocator, "{s}\n# .. {d} more lines", shown) catch {
+                @panic("OOM");
+            };
+            break;
+        }
+        const trimmed = std.mem.trimEnd(u8, code, "\n");
+        self.expansions.push(.{ .range = range, .pass = pass, .code = trimmed });
+    }
+    std.mem.sort(Expansion, self.expansions.items()[first..], {}, struct {
+        fn earlier(_: void, left: Expansion, right: Expansion) bool {
+            return positions.before(left.range.start, right.range.start);
+        }
+    }.earlier);
+}
+
+// statements, or an expression, as code: a splice evaluated in this pass as what it expanded to
+fn printed(self: *Analysis, resolver: *Resolver, statements: []const u32, expression: ?u32) []u8 {
+    var written: std.ArrayList(u8) = .empty;
+    var printer: dbg.CodePrinter = .{
+        .out = &written,
+        .allocator = self.allocator,
+        .tree = resolver.tree,
+        .source = resolver.src_bytes,
+        .expand = true,
+    };
+    // names hygiene made are written as they were where that is unambiguous
+    if (expression) |node| {
+        printer.note_names(node) catch @panic("OOM");
+        printer.expression(node) catch @panic("OOM");
+    } else {
+        for (statements) |statement| printer.note_names(statement) catch @panic("OOM");
+        printer.statements(statements) catch @panic("OOM");
+    }
+    return written.items;
 }
 
 // `length` entries, all `none`
@@ -373,6 +535,36 @@ test "links and outline" {
     try tree.write(&writer, result, result.outline);
     const written = writer.buffered();
     try std.testing.expectEqualStrings("Point(x()y())Shape(Circle(r())Rect())f()main()", written);
+}
+
+test "guard binders, parts of `with` and narrowed binders link" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\type Pos = *(i32 x, i32 y);
+        \\type W = *(Pos pos, u8 hp);
+        \\variant E = +(A, B(u8 n), C);
+        \\fun f = (W w, E e) -> u8: ret match e {
+        \\    E.B(k) where k > (w with (pos.x = 1)).hp => k, E.A => 0, rest => tagof rest
+        \\};
+        \\main = () {}
+    );
+    const result = analyze(arena.allocator(), source);
+    try std.testing.expectEqual(0, result.diagnostics.len);
+    const expected = [_]struct { u32, u32, []const u8, u32, u32 }{
+        .{ 4, 17, "k", 4, 8 },     .{ 4, 48, "k", 4, 8 },  .{ 4, 22, "w", 3, 11 },
+        .{ 4, 30, "pos", 1, 15 },  .{ 4, 34, "x", 0, 17 }, .{ 4, 42, "hp", 1, 23 },
+        .{ 4, 75, "rest", 4, 61 },
+    };
+    for (expected) |name| {
+        const declaration = result.decls[(try link_at(result, name[0], name[1]))[3]];
+        try std.testing.expectEqualStrings(name[2], declaration.name);
+        const declared_at = Position{ .line = name[3], .character = name[4] };
+        try std.testing.expectEqual(declared_at, declaration.selectionRange.?.start);
+    }
+    // the binder after `E.A` is of `E` without it
+    const rest = result.decls[(try link_at(result, 4, 75))[3]];
+    try std.testing.expect(std.mem.indexOf(u8, rest.detail, " -- ") != null);
 }
 
 test "names the resolver never met" {
@@ -722,4 +914,217 @@ test "main and the protocol methods are keywords, a free function of the same na
         .{ 3, 24, .keyword }, .{ 3, 42, .keyword }, .{ 3, 51, .function }, .{ 3, 67, .keyword },
     };
     for (expected) |token| try std.testing.expectEqual(token[2], classes[token[0]][token[1]].?);
+}
+
+test "the values of `stc` variables, as `#=` reads them" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\stc u32 A = 2 + 3;
+        \\stc []u8 TEXT = "ab" ~ "c"; # a comment
+        \\fun f = () -> u32 {
+        \\    stc u32 LOCAL = A * 2;
+        \\    ret LOCAL;
+        \\}
+        \\u32 runtime = 4;
+        \\stc [40]u32 MANY = for 0..<40: 123456;
+        \\main = () {}
+    );
+    const result = analyze(arena.allocator(), source);
+    try std.testing.expectEqual(0, result.diagnostics.len);
+    // the line, the character after its end and the label, a long one shortened
+    const expected = [_]struct { u32, u32, []const u8 }{
+        .{ 0, 18, "= 5" },
+        .{ 1, 39, "= \"abc\"" },
+        .{ 3, 26, "= 10" },
+        .{ 7, 38, "= [123456, 123456, 123456, 123456, 123456, 123456, 123456, 123456, 1234" ++
+            "56, 12..." },
+    };
+    try std.testing.expectEqual(expected.len, result.hints.len);
+    for (expected, result.hints) |hint, found| {
+        const position = Position{ .line = hint[0], .character = hint[1] };
+        try std.testing.expectEqual(position, found.position);
+        try std.testing.expectEqualStrings(hint[2], found.label);
+    }
+}
+
+test "a statement that doesn't parse is a hole, the rest is analyzed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\fun f = (u32 x) -> u32 {
+        \\    u32 a = x +;
+        \\    u32 b = x * 2;
+        \\    ret b;
+        \\}
+        \\fun g = ( -> u32: ret 1;
+        \\fun h = () -> u32: ret f(1) + missing;
+        \\main = () { u32 c = (1 +; h(); }
+    );
+    const result = analyze(arena.allocator(), source);
+    // each error where it is, the declarations after them still known and linked
+    const expected = [_]struct { u32, u32, []const u8 }{
+        .{ 1, 15, "NoRuleFound" },
+        .{ 5, 10, "NoRuleFound" },
+        .{ 7, 24, "NoRuleFound" },
+        .{ 6, 30, "undefined_name  name `missing`" },
+    };
+    try std.testing.expectEqual(expected.len, result.diagnostics.len);
+    for (expected, result.diagnostics) |want, found| {
+        const start = Position{ .line = want[0], .character = want[1] };
+        try std.testing.expectEqual(start, found.range.start);
+        try std.testing.expectEqualStrings(want[2], found.message);
+    }
+    const names = [_]struct { u32, u32, []const u8 }{
+        .{ 3, 8, "b" }, .{ 6, 23, "f" }, .{ 7, 26, "h" },
+    };
+    for (names) |name| {
+        const declaration = result.decls[(try link_at(result, name[0], name[1]))[3]];
+        try std.testing.expectEqualStrings(name[2], declaration.name);
+    }
+}
+
+test "what each macro pass expanded a splice to, and the program after it" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\stcfun twice = (ast e) -> ast: ret quote: @e + @e;
+        \\stcfun make = () -> ast: ret quote: <twice(quote: 3)>;
+        \\stc u32 A = <twice(quote: 1 * 2)>;
+        \\stc u32 B = <make()>;
+        \\<quote { u32 c = 1; u32 d = 2; }>;
+        \\stcfun nothing = () {};
+        \\<nothing()>;
+        \\main = () {}
+    );
+    const result = analyze(arena.allocator(), source);
+    try std.testing.expectEqual(0, result.diagnostics.len);
+    // the top splices first, then the ones of declarations, then the one a splice made, which is
+    // at the splice that made it
+    const expected = [_]struct { u32, u32, u32, u32, []const u8 }{
+        .{ 1, 4, 0, 33, "u32 c = 1;\nu32 d = 2;" },
+        .{ 1, 6, 0, 11, "" },
+        .{ 2, 2, 12, 33, "1 * 2 + 1 * 2" },
+        .{ 2, 3, 12, 20, "<twice(quote: 3)>" },
+        .{ 3, 3, 12, 20, "3 + 3" },
+    };
+    try std.testing.expectEqual(expected.len, result.expansions.len);
+    for (expected, result.expansions) |expansion, found| {
+        const pass, const line, const start, const end, const code = expansion;
+        try std.testing.expectEqual(pass, found.pass);
+        const starts = Position{ .line = line, .character = start };
+        try std.testing.expectEqual(starts, found.range.start);
+        try std.testing.expectEqual(Position{ .line = line, .character = end }, found.range.end);
+        try std.testing.expectEqualStrings(code, found.code);
+    }
+    try std.testing.expectEqual(4, result.passes.len);
+    try std.testing.expectEqualStrings(
+        \\stcfun twice = (ast e) -> ast: ret quote: @e + @e;
+        \\stcfun make = () -> ast: ret quote: <twice(quote: 3)>;
+        \\stc u32 A = 1 * 2 + 1 * 2;
+        \\stc u32 B = 3 + 3;
+        \\u32 c = 1;
+        \\u32 d = 2;
+        \\stcfun nothing = () {};
+        \\main = () {};
+        \\
+    , result.passes[3]);
+
+    // a pass that only writes into a declaration
+    const written = try arena.allocator().dupe(u8,
+        \\fun early = () -> u32: ret 1;
+        \\stcfun rewrite = (*ast(fun) f) { f.body = quote: ret 2; };
+        \\<rewrite(refl early)>;
+        \\main = () {}
+    );
+    const rewritten = analyze(arena.allocator(), written);
+    try std.testing.expectEqual(0, rewritten.diagnostics.len);
+    try std.testing.expectEqual(2, rewritten.passes.len);
+    try std.testing.expectEqualStrings(
+        \\fun early = () -> u32: ret 2;
+        \\stcfun rewrite = (*ast(fun) f) {
+        \\    f.body = quote: ret 2;
+        \\};
+        \\main = () {};
+        \\
+    , rewritten.passes[1]);
+
+    // a name hygiene made is written as it was where no other name is written that way
+    const hygienic = try arena.allocator().dupe(u8,
+        \\stcfun body = () -> ast: ret quote { u32 t = 2; ret t * 3; };
+        \\fun f = () -> u32 { <body()>; }
+        \\stcfun two = () -> ast: ret quote { u32 t = 1; u32 u = t; };
+        \\fun g = () -> u32 { <two()>; <two()>; ret 0; }
+        \\main = () {}
+    );
+    const renamed = analyze(arena.allocator(), hygienic);
+    try std.testing.expectEqual(0, renamed.diagnostics.len);
+    try std.testing.expectEqual(3, renamed.expansions.len);
+    try std.testing.expectEqualStrings("u32 t = 2;\nret t * 3;", renamed.expansions[0].code);
+    try std.testing.expectEqualStrings("u32 t = 1;\nu32 u = t;", renamed.expansions[2].code);
+    // in the whole program the quotes write `t` too, and `g` has two of each
+    const program = renamed.passes[1];
+    const in_f = "    u32 t`0 = 2;\n    ret t`0 * 3;";
+    try std.testing.expect(std.mem.indexOf(u8, program, in_f) != null);
+    const in_g = "    u32 u`2 = t`1;\n    u32 t`3 = 1;";
+    try std.testing.expect(std.mem.indexOf(u8, program, in_g) != null);
+
+    // nothing to step through without macros
+    const plain = try arena.allocator().dupe(u8, "main = () {}");
+    const unexpanded = analyze(arena.allocator(), plain);
+    try std.testing.expectEqual(0, unexpanded.passes.len);
+    try std.testing.expectEqual(0, unexpanded.expansions.len);
+}
+
+test "names of an included file link to their declarations there" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var workspace = std.testing.tmpDir(.{});
+    defer workspace.cleanup();
+    try workspace.dir.createDirPath(io, "lib");
+    try workspace.dir.writeFile(io, .{ .sub_path = "lib/util.mn", .data =
+        \\# a library
+        \\pub stcfun twice = (ast e) -> ast: ret quote: @e + @e;
+        \\pub fun add = (u32 a, u32 b) -> u32: ret a + b;
+        \\pub stc u32 LIMIT = 9;
+        \\
+    });
+    var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const root = root_buffer[0..try workspace.dir.realPath(io, &root_buffer)];
+    const path = try std.fs.path.join(allocator, &.{ root, "main.mn" });
+    const source = try allocator.dupe(u8,
+        \\<include "lib/util.mn">;
+        \\stc u32 A = <twice(quote: 2)>;
+        \\fun f = () -> u32: ret add(LIMIT, 1);
+        \\main = () {}
+    );
+    const result = analyze_at(allocator, source, io, path);
+    try std.testing.expectEqual(0, result.diagnostics.len);
+    // the name in the document, then the declaration: its type and where it is in the library
+    const expected = [_]struct { u32, u32, []const u8, []const u8, u32, u32, u32 }{
+        // only an earlier pass met the name a splice calls
+        .{ 1, 13, "twice", "(ast) -> ast", 1, 11, 16 },
+        .{ 2, 23, "add", "(u32, u32) -> u32", 2, 8, 11 },
+        .{ 2, 27, "LIMIT", "u32", 3, 12, 17 },
+    };
+    for (expected) |name| {
+        const link = try link_at(result, name[0], name[1]);
+        const declaration = result.decls[link[3]];
+        try std.testing.expectEqualStrings(name[2], declaration.name);
+        try std.testing.expectEqualStrings(name[3], declaration.detail);
+        const elsewhere = for (result.elsewhere) |found| {
+            if (found.decl == link[3]) break found;
+        } else return error.TestUnexpectedResult;
+        try std.testing.expect(std.mem.endsWith(u8, elsewhere.uri, "/lib/util.mn"));
+        try std.testing.expect(std.mem.startsWith(u8, elsewhere.uri, "file:///"));
+        const starts = Position{ .line = name[4], .character = name[5] };
+        try std.testing.expectEqual(starts, elsewhere.range.start);
+        try std.testing.expectEqual(name[6], elsewhere.range.end.character);
+    }
+    // one declaration for every use of a name
+    var adds: u32 = 0;
+    for (result.decls) |declaration| adds += @intFromBool(std.mem.eql(u8, declaration.name, "add"));
+    try std.testing.expectEqual(1, adds);
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const Doctor = @import("../Doctor.zig");
 const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const StaticPool = @import("../StaticPool.zig");
@@ -33,6 +34,8 @@ at: u32 = 0,
 top: bool = false,
 // a quote's code is checked for its type only
 quoting: u32 = 0,
+// the quotes of `ast(T)` checked already, their errors reported once
+checked_quotes: std.AutoHashMapUnmanaged(NodeId, void) = .empty,
 // a splice is evaluated, the only time the program may be written
 splicing: u32 = 0,
 // the node a bare `refl` reads, made on demand
@@ -236,7 +239,28 @@ fn infer_quote(self: *Macros, context: *FunctionContext, node: NodeId, expected:
         const is_known = resolver.doctor.diagnostics.len() == mark and
             body_type != .poison_type and
             !static_pool.has_type_variables(body_type);
-        resolver.doctor.rewind(mark);
+        // a quote of `ast(T)`, `T` a type of values, is checked here, once: its holes are what
+        // they hold, its errors are its own and what it gives must be a `T`. unless it names what
+        // only the place it lands has, which is checked there
+        const codes = resolver.doctor.diagnostics.column(.code)[mark..];
+        const names_landing = std.mem.indexOfScalar(Doctor.Disorder, codes, .undefined_name) != null;
+        const is_checked = produces_hint != .none and !names_landing and
+            static_pool.is_concrete(produces_hint) and
+            static_pool.properties(produces_hint).has_layout;
+        if (!is_checked) {
+            resolver.doctor.rewind(mark);
+            break :blk if (is_known) body_type else .none;
+        }
+        // what it gives is reported here too, the quote then stands for a `T`
+        const misfits = is_known and static_pool.coercion(body_type, produces_hint) == .incompatible;
+        if (self.checked_quotes.contains(node)) {
+            resolver.doctor.rewind(mark);
+        } else {
+            if (misfits) _ = resolver.report(.type_mismatch, body, body_type, produces_hint);
+            resolver.doctor.settle(mark);
+            self.checked_quotes.put(resolver.allocator, node, {}) catch @panic("OOM");
+        }
+        if (misfits) break :blk produces_hint;
         break :blk if (is_known) body_type else .none;
     };
     return static_pool.ast_type_of(produced, 0);
@@ -658,6 +682,7 @@ pub fn report_duplicate_holes(self: *Macros, pattern: NodeId) void {
         .partial__match_case_pattern_or => for (tree.manychildren(pattern)) |alternative| {
             self.report_duplicate_holes(alternative);
         },
+        .partial__match_case_where => self.report_duplicate_holes(tree.arg(pattern, 0)),
         .quote => {
             var binders: std.ArrayList(NodeId) = .empty;
             defer binders.deinit(resolver.allocator);

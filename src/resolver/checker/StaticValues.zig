@@ -52,7 +52,9 @@ pub fn try_evaluate(
     const diagnostics_mark = resolver.doctor.diagnostics.len();
     const node_type_before = resolver.node_types[node];
 
+    resolver.interpreter.speculative += 1;
     const value = resolver.interpreter.evaluate_static(context, node);
+    resolver.interpreter.speculative -= 1;
     const is_clean = resolver.doctor.diagnostics.len() == diagnostics_mark;
     if (is_clean and value != .poison_type) return value;
 

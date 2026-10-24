@@ -9,7 +9,7 @@ zig build                           # builds ./mond (needs llvm and lld, see bel
 ./mond -b app.mn -o out -m default  # builds ./out, optimized
 ./mond -b app.mn io.c libz.a        # compiles io.c with the c compiler, links both in
 ./mond -b app.mn -lc -lm            # with the C library and libm
-./mond -b app.mn -p tree,ir,llvm    # also prints stages: tree, decls, ir, llvm
+./mond -b app.mn -p tree,ir,llvm    # also prints stages: code, tree, decls, ir, llvm
 ./mond -b app.mn -i add '#3' ':12'  # inspect declarations by name, index or line
 zig build test [-- filter]          # examples, docs, then the backend tests, a file per core
 zig build test-backend [-- filter]  # only the programs of examples/backend
@@ -26,7 +26,7 @@ zig build lsp                       # the language server, into lsp/vscode and l
 | `-l<name>` `-L<dir>` | a library, and where libraries are, as cc takes them |
 | `-lc` | the C library: the program starts through C's startup, which calls `main` |
 | `-w` `--with` | further linker inputs, comma separated: `-w -framework,Cocoa` |
-| `-p` `--print` | `tree` the resolved tree, `decls` the declarations, `ir` the SSA IR, `llvm` the optimized LLVM IR |
+| `-p` `--print` | `code` the program as code once its macros expanded, `tree` the resolved tree, `decls` the declarations, `ir` the SSA IR, `llvm` the optimized LLVM IR |
 | `-i` `--inspect` | declarations by name, `#index` or `:line`; nothing is built |
 | `-h` `--help` | the flags and modes; also shown when `mond` gets no arguments |
 
@@ -34,11 +34,11 @@ Diagnostics go to stderr as `file:line:column: code operands`, which editors and
 
 Records, arrays and variants live in memory: they are passed by address and returned through a pointer the caller gives. LLVM's passes promote small ones to registers in every mode but `none`.
 
-The runtime checks stop the program with a trap (a debugger shows the line) on a division or remainder by zero (and of the smallest integer by `-1`), a shift by the width or more, an index past the end of an array, and on reaching code that can't be reached. Without them these are undefined behavior. At compile time the same operations have no value (`static_eval_failed`). Debug symbols (`-d`) are independent of the mode: `-m none -d` is what other compilers call a debug build.
+The runtime checks stop the program with a trap (a debugger shows the line) on a division or remainder by zero (and of the smallest integer by `-1`), a shift by the width or more, an index past the end of an array or a slice, a range past it or starting after its end, and on reaching code that can't be reached. Without them these are undefined behavior. At compile time the same operations have no value (`static_eval_failed`). Debug symbols (`-d`) are independent of the mode: `-m none -d` is what other compilers call a debug build.
 
 ### C functions
 
-A function declared without a body is a C function, linked from the files listed after the source or from libraries (`-lc` for the C library). Its values cross as C passes them on this machine (aarch64 or x86-64): ints, floats, `bool` and pointers as themselves, records by value in registers or as a copy in memory, a runtime-length array (`&[]u8`) as the address of its first element, and a static function value as a C function pointer. A C function declared with several parameter lists is variadic (`printf`): the parameters all lists share are fixed, the others get C's promotions.
+A function declared without a body is a C function, linked from the files listed after the source or from libraries (`-lc` for the C library). Its values cross as C passes them on this machine (aarch64 or x86-64): ints, floats, `bool` and pointers as themselves, records by value in registers or as a copy in memory, a runtime-length array (`&[]u8`) as the address of its first element, a slice as a record of the address and the length (`struct { T *p; uint64_t n; }`), and a static function value as a C function pointer. A C function declared with several parameter lists is variadic (`printf`): the parameters all lists share are fixed, the others get C's promotions.
 
 ```mond
 fun printf = (&u8 format, i64 number) -> i32;
@@ -52,7 +52,7 @@ Without `-lc` nothing is linked that the program doesn't name. On Linux the exec
 
 ### Building mond
 
-`build.zig` asks `llvm-config` where LLVM is (LLVM 19 or newer). It takes the first one in `PATH`, or else where Homebrew, Debian and Fedora install it. `-Dllvm-config=/path/to/llvm-config` picks one. lld's headers and libraries are looked for next to LLVM and in Homebrew's `opt/lld`, or `-Dlld-prefix=..`. On Linux, `-Dcrt-dir=..` names where `Scrt1.o` and libc are if they aren't found. `-Doptimize=Debug` builds mond with stack traces for compiler bugs. The language server and the example tests don't need LLVM.
+`build.zig` asks `llvm-config` where LLVM is (LLVM 19 or newer). It takes the first one of LLVM 19 or newer in `PATH`, or else where Homebrew, Debian and Fedora install it, so an older default of a distribution is passed over. `-Dllvm-config=/path/to/llvm-config` picks one. lld's headers and libraries are looked for next to LLVM and in Homebrew's `opt/lld`, or `-Dlld-prefix=..`. On Linux, `-Dcrt-dir=..` names where `Scrt1.o` and libc are if they aren't found. `-Doptimize=Debug` builds mond with stack traces for compiler bugs. The language server and the example tests don't need LLVM.
 
 ## Tests
 
@@ -75,7 +75,7 @@ The programs in `examples/backend/` are built and run after that, in the modes `
 
 ## Editor
 
-`mond-lsp` provides highlighting, diagnostics, go to definition, references, outline, hover and completion (also for `ast.` kinds, views and the compiler's `__` names). Hovering the `??` of a bare `x??` shows what a failure returns (`ret Opt.None  # Opt`), per realization of a template. Setup is described in `lsp/vscode/README.md` and `lsp/vim/README.md`.
+`mond-lsp` provides highlighting, diagnostics, go to definition, references, outline, hover and completion (also for `ast.` kinds, views and the compiler's `__` names). Hovering the `??` of a bare `x??` shows what a failure returns (`ret Opt.None  # Opt`), per realization of a template. The values of `stc` variables show at the end of their lines, as `#=` checks read them (inlay hints). A statement that doesn't parse is left out as a hole and reported, the rest of the file is still analyzed. Names an included file declares show their type and go to their declaration in that file. Hovering a splice shows the code each macro pass put in its place, and the program before and after each pass can be compared side by side (vscode: `mond: Step Through Macro Expansions`, vim and neovim: `:MondExpansions [pass]`), as `-p code` prints the last one. Setup is described in `lsp/vscode/README.md` and `lsp/vim/README.md`.
 
 A file that another file includes isn't asked for a `main`.
 
@@ -103,16 +103,21 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `recursive_by_value_type` | a type contains itself without a pointer |
 | `assertsize_failed` | the size differs from `assertsize` |
 | `tag_overflow` | a tag doesn't fit the tag type |
-| `self_tag_without_niche` | `tagtype self` without exactly one payload case of one scalar field (integer, `bool`, float, pointer) |
-| `untagged_variant` | a case matched, `tagof`, `==`, `??` or a case `as` an int on a variant without a tag (`tagtype _`) |
+| `self_tag_without_niche` | `tagtype self` without exactly one payload case of one scalar field (integer, `bool`, float, pointer), or `tagtype self.field` naming a field that is no scalar |
+| `untagged_variant` | a case matched, `tagof`, `==`, `??` or a case `as` an int on a variant without a tag (`notagtype`) |
 | `trait_member_missing` / `trait_signature_mismatch` | an implementation lacks a member / differs from the trait |
 | `no_deinit` | `deinit` on a value without one |
 | `not_static` | a compile-time value depends on runtime |
+| `bit_field_address` | `.&` of a field of a bit-packed record that shares a byte with another (see [types.md](types.md)) |
+| `unaligned_field` | a field other than an integer or bool would start or end inside a byte of a bit-packed record |
+| `tag_strategy_failed` | a `tagtype` strategy doesn't give a case's tag or payload back, or stores more bits than its `storage` holds; also a case with more than one payload field (see [types.md](types.md)) |
+| `strategy_member` | a variant a strategy stores is a member of `\|\|` |
+| `bits_width` | the widths of a `bits(..)` pattern exceed the integer's, or don't add up to it without `..` |
 | `static_eval_failed` | compile-time evaluation failed (division by zero, bounds, budget, depth) |
 | `crash` | a `crash` was checked or evaluated, with its text; `crash (at, ..)` reports at the tree `at` |
 | `stcwhere_violated` | a `stcwhere` condition is false |
 | `redundant_stc` | a `stc..` form where everything is static already |
-| `genexpr_index` | a range used as an index |
+| `genexpr_index` | a range used as an index where neither a part of an array (static bounds) nor a slice (one expected) is made |
 | `generic_member` | a template-dependent member of an unopened template value |
 | `missing_ret` / `redundant_ret` | a path doesn't return / `ret` before a template's definition |
 | `redundant_fun` | `fun` on `main` or on a method the compiler calls by name (`init`, `deinit`, `has_next`, `next`) |
@@ -122,13 +127,14 @@ Lexing and parsing stop at the first error (a `LexingError` like `InvalidPunctua
 | `unstorable_dereference` | a pointer to a trait, a template, a packed variant or a runtime-length array is used as what it points to: dereferenced, called through, or indexed directly instead of through `.*` |
 | `impure_stcfun` | a `stcfun` writes state outside itself |
 | `escaping_closure` | a closure, or a value that may hold one, outlives its frame (returned, stored outside it, given to C) |
+| `escaping_reference` | an address in a function's frame outlives it: returned, stored in a global or through a pointer (see [basics.md](basics.md)) |
 | `brk_outside_loop` / `cont_outside_loop` | a jump outside a loop |
 | `ret_type_mismatch` | `ret` disagrees with the result type |
 | `no_fallback` | a bare `x??` in a function whose result has no fallback for it, the operand is the part without one (see [control.md](control.md#unwrapping)) |
 | `non_exhaustive_match` | some value matches no arm |
 | `redundant_match_arm` | (warning) an arm can never be reached first |
 | `assign_to_immutable` | a write to something not `mut` |
-| `write_through_immutable_pointer` | a write through `&T` |
+| `write_through_immutable_pointer` | a write through `&T`, or a read-only slice flowing where a slice is written |
 | `use_before_initialization` | a read before every path wrote it |
 | `destructure_type_conflict` | the names of a multi-assignment need different types |
 | `missing_main` | there is no `main` |

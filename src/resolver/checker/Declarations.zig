@@ -12,6 +12,11 @@ const NodeId = ParseTree.NodeId;
 // declarations: names and their scopes, signatures, bodies, statements that declare or assign
 const Declarations = @This();
 
+// the realizations for static `stc?` arguments asked for while bodies are checked: each is checked
+// once no body is, as it shares the nodes of the function it realizes (also with itself, recursing)
+deferred_bodies: std.ArrayList(DeclPool.Index) = .empty,
+checking_depth: u32 = 0,
+
 pub const Stmt = struct {
     // the statement below its modifiers, e.g. the assignment inside `pub mut x = ..`
     node: NodeId,
@@ -118,7 +123,24 @@ pub fn use_name(self: *Declarations, node: NodeId) DeclPool.Index {
     const resolver = self.owning_resolver();
 
     const name = resolver.name_pool.name_of_node(node);
-    const declaration = resolver.scopes.lookup(&resolver.decl_pool, name);
+    var declaration = resolver.scopes.lookup(&resolver.decl_pool, name);
+    // `u7`, `i24` where nothing declares the name: an integer of that width, declared once. 1 to
+    // 64 bits without a leading zero (`u8` and the like are keywords)
+    const text = resolver.name_pool.text_of(name);
+    const is_int_name = text.len >= 2 and text.len <= 3 and
+        (text[0] == 'u' or text[0] == 'i') and text[1] != '0';
+    const width = if (is_int_name) std.fmt.parseInt(u7, text[1..], 10) catch 0 else 0;
+    if (declaration == .none and width >= 1 and width <= 64) {
+        const signedness: StaticPool.IntType.Signedness =
+            if (text[0] == 'i') .signed else .unsigned;
+        const int_type = StaticPool.Index.int_of(signedness, width);
+        const decl_pool = &resolver.decl_pool;
+        const meta_type = resolver.static_pool.type_of(int_type);
+        declaration = decl_pool.push(name, 0, .type_alias, meta_type, .{});
+        decl_pool.set(declaration, .static_value, int_type);
+        decl_pool.set(declaration, .state, .done);
+        resolver.scopes.globals.put(resolver.allocator, name, declaration) catch @panic("OOM");
+    }
     if (declaration == .none) {
         if (resolver.doctor.has_report_at(node)) return declaration;
         _ = resolver.report(.undefined_name, node, name, 0);
@@ -203,7 +225,7 @@ pub fn ensure_signature(self: *Declarations, declaration: DeclPool.Index) void {
     const resolver = self.owning_resolver();
     const decl_pool = &resolver.decl_pool;
 
-    const diagnostics_mark = resolver.doctor.diagnostics.len();
+    var diagnostics_mark = resolver.doctor.diagnostics.len();
     defer resolver.doctor.settle(diagnostics_mark);
     const state = decl_pool.pointer(declaration, .state);
     switch (state.*) {
@@ -211,6 +233,11 @@ pub fn ensure_signature(self: *Declarations, declaration: DeclPool.Index) void {
         .resolving_signature => {
             const node = decl_pool.get(declaration, .node);
             _ = resolver.report(.declaration_cycle, node, decl_pool.get(declaration, .name), 0);
+            // a quote typed on the side may name what is being declared: its type is only unknown
+            if (resolver.macros.quoting > 0) {
+                diagnostics_mark = resolver.doctor.diagnostics.len();
+                return;
+            }
             state.* = .failed;
             return;
         },
@@ -416,6 +443,20 @@ fn resolve_type_alias(
 }
 
 pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
+    self.checking_depth += 1;
+    self.check_body_once(declaration);
+    self.checking_depth -= 1;
+    if (self.checking_depth > 0) return;
+    while (self.deferred_bodies.pop()) |deferred| self.check_body(deferred);
+}
+
+pub fn defer_body(self: *Declarations, declaration: DeclPool.Index) void {
+    const resolver = self.owning_resolver();
+    if (self.checking_depth == 0) return self.check_body(declaration);
+    self.deferred_bodies.append(resolver.allocator, declaration) catch @panic("OOM");
+}
+
+fn check_body_once(self: *Declarations, declaration: DeclPool.Index) void {
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
     const decl_pool = &resolver.decl_pool;
@@ -438,6 +479,9 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
         generic and !abstract;
     if (checked_elsewhere) {
         state.* = .done;
+        if (kind == .static_function and resolver.tree.kind(value) == .def_fun) {
+            self.check_typed_quotes(declaration, value, function_type);
+        }
         return;
     }
     state.* = .checking_body;
@@ -479,6 +523,16 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
         false;
 
     var generic_slot: usize = 0;
+    // a function with `stc?` parameters is checked as written and per realization: what one check
+    // found static on its nodes is no fact for the next
+    var maybe_static_slot: usize = 0;
+    const has_maybe_static = for (resolver.tree.params_of(value)) |parameter_node| {
+        if (ParseTree.Param.from_node(resolver.tree, parameter_node).maybe_static) break true;
+    } else false;
+    if (has_maybe_static) {
+        const subtree = resolver.tree.subtree(value);
+        @memset(resolver.node_static_values[subtree[0]..subtree[1]], .none);
+    }
     for (resolver.tree.params_of(value), 0..) |parameter_node, i| {
         const parameter = ParseTree.Param.from_node(resolver.tree, parameter_node);
         const parameter_types = static_pool.get(function_type).function_type.parameters;
@@ -497,6 +551,10 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
             parameter_type,
         );
         resolver.node_declarations[parameter_node] = parameter_declaration;
+        // a parameter holding slices is a slot of its function, which calls reach (see `Slices`)
+        if (Resolver.Slices.holds_slices(static_pool, parameter_type)) {
+            resolver.slices.register_parameter(declaration, i + self_count, parameter_declaration);
+        }
 
         const template_parameter_type = if (template) |template_declaration|
             resolver.types.signature(template_declaration).parameters[i + self_count]
@@ -513,12 +571,22 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
                 decl_pool.set(parameter_declaration, .static_value, elements[generic_slot]);
             }
             generic_slot += 1;
+        } else if (realized_arguments != null and parameter.maybe_static and template != null and
+            !static_pool.is_length_generic(decl_pool.get(template.?, .value_type)))
+        {
+            const elements = static_pool.get(realized_arguments.?).aggregate_value.elements;
+            const argument = elements[maybe_static_slot];
+            const static_value = resolver.static_values.retyped(argument, parameter_type);
+            decl_pool.set(parameter_declaration, .static_value, static_value);
+            maybe_static_slot += 1;
+            context.folds_static = true;
         }
 
         self.link_identifier(parameter.name, parameter_declaration, parameter_type);
         self.check_parameter_guards(&context, parameter, parameter_type);
     }
     self.check_function_result(&context, resolver.tree.arg(value, 1));
+    resolver.slices.register_function(declaration, function_type);
     resolver.flow.check_fallbacks(&context, unwraps_mark);
     resolver.scopes.close();
 
@@ -533,13 +601,59 @@ pub fn check_body(self: *Declarations, declaration: DeclPool.Index) void {
     if (!abstract) resolver.bodies.register(resolver.capture_body(declaration, value, first_row));
 }
 
+// a macro giving `ast(T)`, `T` a type of values, has its quotes checked where they are written,
+// without being called: its parameters are of their types, only what the quotes report is kept
+// (see `Macros.infer_quote`)
+fn check_typed_quotes(
+    self: *Declarations,
+    declaration: DeclPool.Index,
+    value: NodeId,
+    function_type: StaticPool.Index,
+) void {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const return_type = static_pool.get(function_type).function_type.return_type;
+    if (return_type == .none or static_pool.tag(return_type) != .ast_type) return;
+    const produces = static_pool.get(return_type).ast_type.produces;
+    if (produces == .none or !static_pool.properties(produces).has_layout) return;
+    // a macro over types or values of any type is checked per realization only
+    for (static_pool.get(function_type).function_type.parameters) |parameter_type| {
+        if (static_pool.tag(parameter_type) == .meta_type) return;
+        if (static_pool.has_type_variables(parameter_type)) return;
+    }
+
+    var context = FunctionContext{
+        .declaration = declaration,
+        .return_type = return_type,
+        .is_interpreted = true,
+    };
+    const mark = resolver.doctor.diagnostics.len();
+    self.open_declaration_scope(resolver.decl_pool.get(declaration, .flags).is_global, .none, value);
+    for (resolver.tree.params_of(value), 0..) |parameter_node, i| {
+        const parameter = ParseTree.Param.from_node(resolver.tree, parameter_node);
+        const parameter_type = static_pool.get(function_type).function_type.parameters[i];
+        const parameter_declaration = self.declare_local(
+            self.parameter_or_position_name(parameter, i),
+            parameter_node,
+            .parameter,
+            parameter_type,
+        );
+        self.link_identifier(parameter.name, parameter_declaration, parameter_type);
+    }
+    self.check_function_result(&context, resolver.tree.arg(value, 1));
+    resolver.scopes.close();
+    resolver.doctor.rewind(mark);
+}
+
 pub fn check_function_result(self: *Declarations, context: *FunctionContext, body: NodeId) void {
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
 
     if (resolver.tree.kind(body) != .block) {
         _ = resolver.expressions.check(context, body, context.return_type);
-        resolver.expressions.reject_escape(context, body);
+        resolver.expressions.reject_escape(context, body, context.return_type);
+        const result = Resolver.Slices.slot(.result, @intFromEnum(context.declaration), 0);
+        resolver.slices.flows(body, result);
         const open_result = static_pool.substitute_type_variables(context.return_type);
         const is_endless = resolver.tree.kind(body) == .loop or
             resolver.tree.kind(body) == .loop_with_repeat_stmt;
@@ -677,7 +791,13 @@ pub fn check_statement(
         const outside_frame = resolver.expressions.is_outside_frame(place);
         for (statement.values) |value| {
             _ = resolver.expressions.check(context, value, expected);
-            if (outside_frame) resolver.expressions.reject_escape(context, value);
+            if (outside_frame) resolver.expressions.reject_escape(context, value, expected);
+            resolver.expressions.note_frame_reference(place, value);
+            // a slice written into a place is held in the place's slot (see `Slices`)
+            switch (resolver.slices.root(place)) {
+                .slot => |into| resolver.slices.flows(value, into),
+                else => {},
+            }
         }
         return .unit_type;
     }
@@ -818,22 +938,37 @@ pub fn check_statement(
             );
         const assigns_existing = existing[i] != .none;
         const values = statement.values;
-        if (decl_pool.get(declaration, .flags).is_global and values.len > 0) {
-            resolver.expressions.reject_escape(context, values[if (values.len > 1) i else 0]);
+        if (values.len > 0) {
+            const value = values[if (values.len > 1) i else 0];
+            if (decl_pool.get(declaration, .flags).is_global) {
+                const global_type = decl_pool.get(declaration, .value_type);
+                resolver.expressions.reject_escape(context, value, global_type);
+            }
+            resolver.expressions.note_frame_reference(assignee, value);
         }
 
         const value_type = decl_pool.get(declaration, .value_type);
+        // a slice a name takes is held in its slot (see `Slices`)
+        if (values.len > 0) switch (resolver.slices.root(assignee)) {
+            .slot => |into| resolver.slices.flows(values[@min(i, values.len - 1)], into),
+            else => {},
+        };
 
-        // scalars declared without a value must be written before they are read
+        // scalars declared without a value must be written before they are read, records and
+        // arrays are zeroed unless that makes a value a subset of a variant leaves out
         const flags = decl_pool.get(declaration, .flags);
-        const scalar = value_type != .none and
-            value_type != .poison_type and
-            static_pool.tag(value_type) != .record_type and
-            static_pool.tag(value_type) != .array_type;
+        const is_zeroed = static_pool.tag(value_type) == .record_type or
+            static_pool.tag(value_type) == .array_type;
+        const scalar = value_type != .none and value_type != .poison_type and
+            (!is_zeroed or static_pool.holds_unzeroable(value_type));
         if (assigns_existing) {
             resolver.initialization.mark_written(declaration);
         } else if (values.len == 0 and !flags.is_global and scalar) {
             resolver.initialization.track(declaration);
+        } else if (values.len == 0 and flags.is_global and scalar and
+            static_pool.holds_unzeroable(value_type))
+        {
+            resolver.doctor.report(.use_before_initialization, statement.node, 0, 0);
         }
 
         if (values.len == 0) continue;
@@ -1109,10 +1244,15 @@ pub fn collect_globals(self: *Declarations) void {
 
             const globals = &resolver.scopes.globals;
             const entry = globals.getOrPut(resolver.allocator, name) catch @panic("OOM");
-            // functions overload each other, any other repeated global name is a duplicate
+            // functions overload each other, any other repeated global name is a duplicate. a
+            // stcfun overloads only stcfuns
+            const earlier_kind = if (entry.found_existing)
+                resolver.decl_pool.get(entry.value_ptr.*, .kind)
+            else
+                statement.kind;
             const overloads = entry.found_existing and
-                statement.kind.is_function() and
-                resolver.decl_pool.get(entry.value_ptr.*, .kind).is_function();
+                statement.kind.is_function() and earlier_kind.is_function() and
+                (statement.kind == .static_function) == (earlier_kind == .static_function);
             if (entry.found_existing and !overloads) {
                 if (declares) {
                     _ = resolver.report(.duplicate_declaration, assignee, name, entry.value_ptr.*);

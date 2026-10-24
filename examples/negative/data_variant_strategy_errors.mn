@@ -1,0 +1,24 @@
+# a `tagtype` strategy must give every case and payload back and fit its storage
+<include "../lib/tags.mn">;
+variant Overlapping = +(Low(u16), High(u16)) tagtype ranges(u32, 1000); #! tag_strategy_failed
+variant TooSmall = +(A(u8), B(u8), C(u8)) tagtype ranges(u8, 256); #! tag_strategy_failed
+variant TwoFields = +(Pair(u8 a, u8 b), None) tagtype ranges(u32, 65536); #! tag_strategy_failed
+stc Tagging FORGETS = Tagging(
+    storage = u64,
+    wrap = (u32 tag, u64 payload) -> u64: ret tag as u64,
+    case_of = (u64 stored) -> u32: ret stored as u32,
+    unwrap = (u64 stored, u32 tag) -> u64: ret 0,
+);
+variant Forgetful = +(Some(u32), None) tagtype FORGETS; #! tag_strategy_failed
+stc Tagging NOT_A_STORAGE = Tagging(
+    storage = f64,
+    wrap = (u32 tag, u64 payload) -> u64: ret 0,
+    case_of = (u64 stored) -> u32: ret 0,
+    unwrap = (u64 stored, u32 tag) -> u64: ret 0,
+);
+variant FloatStored = +(A, B) tagtype NOT_A_STORAGE; #! type_mismatch
+variant Fine = +(A(u8), B) tagtype ranges(u16, 256);
+variant Extra = +(X(u64), Y);
+type Joined = Fine || Extra; #! strategy_member
+
+main = () {}

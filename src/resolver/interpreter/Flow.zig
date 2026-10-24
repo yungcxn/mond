@@ -351,7 +351,12 @@ pub fn unwrap(self: *Flow, node: NodeId) Value {
             break :blk interpreter.patterns.payload_of(value);
         }
 
-        const variant = static_pool.get(case).variant_case_type.variant;
+        // a subset unwraps the first payload case it keeps
+        const kept_type = static_pool.through_pointer(operand_type);
+        const variant = if (static_pool.tag(kept_type) == .variant_subset_type)
+            kept_type
+        else
+            static_pool.get(case).variant_case_type.variant;
         if (static_pool.first_payload_case(variant) == case) {
             break :blk interpreter.patterns.payload_of(value);
         }

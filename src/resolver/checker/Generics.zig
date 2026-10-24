@@ -144,7 +144,15 @@ pub fn realize(
         };
         const specialized_type = static_pool.intern(.{ .function_type = specialized });
         resolver.decl_pool.set(realization, .value_type, specialized_type);
-        resolver.declarations.check_body(realization);
+        // a realization for static `stc?` arguments may be asked for inside its own function
+        const realizes_static_arguments = for (tree.params_of(value_node)) |parameter_node| {
+            if (ParseTree.Param.from_node(tree, parameter_node).maybe_static) break true;
+        } else false;
+        if (realizes_static_arguments) {
+            resolver.declarations.defer_body(realization);
+        } else {
+            resolver.declarations.check_body(realization);
+        }
         return function_value;
     }
 
@@ -246,6 +254,7 @@ pub fn realize(
 
     // a body that gives nothing failed on the way (it called a function with errors)
     const body = resolver.capture_body(generic, value_node, first_local);
+    const system_calls = resolver.interpreter.system_calls;
     const ran = resolver.interpreter.run_body(&context, unit, body);
     const result = if (ran == .none) .poison_type else ran;
 
@@ -259,7 +268,7 @@ pub fn realize(
         self.template_of.put(resolver.allocator, made, generic) catch @panic("OOM");
     }
 
-    self.memo(key, result);
+    if (resolver.interpreter.system_calls == system_calls) self.memo(key, result);
     return result;
 }
 

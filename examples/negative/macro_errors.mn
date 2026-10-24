@@ -14,6 +14,8 @@ stc ast no_name = fresh (); #! wrong_arity
 # views a tree has not, values that are no code
 stcfun bad_view = (ast e) -> ast: ret e.nope; #! unknown_member
 stc ast viewed = bad_view(quote: x);
+fun no_type = () {}
+stc u64 function_traits = lenof (refl no_type).traits; #! unknown_member
 type Pair = *(u32 a, u32 b);
 stc Pair lifted = <quote: @(Pair(a = 1, b = 2))>; #! not_static
 

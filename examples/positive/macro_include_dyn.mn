@@ -1,0 +1,54 @@
+# examples/lib/dyn.mn: the variant of every type implementing a trait, and the match calling a
+# method on each, made from the declarations of the program
+<include "../lib/dyn.mn">;
+trait Named = !{
+    fun id = () -> u32;
+    fun scaled = (u32 by) -> u32;
+}
+trait Shown = !{ fun shown = () -> u8; }
+type Cat = *(u32 v) implof Named, Shown !{
+    fun id = () -> u32: ret self.v;
+    fun scaled = (u32 by) -> u32: ret self.v * by;
+    fun shown = () -> u8: ret 'c';
+}
+type Dog = *(u32 v, u64 x) implof Named !{
+    fun id = () -> u32: ret self.v * 10;
+    fun scaled = (u32 by) -> u32: ret by;
+}
+# a variant implements too, a type without `implof` or with methods only does not
+variant Bird = +(Small, Big(u16 wings)) implof Named !{
+    fun id = () -> u32: ret match self.* { Bird.Small => 1, Bird.Big(w) => w as u32 };
+    fun scaled = (u32 by) -> u32: ret self.id() + by;
+}
+type Rock = *(u8 w);
+type Pebble = *(u8 w) !{ fun id = () -> u32: ret 0; }
+type Alias = Cat;
+
+variant AnyNamed = <implementers("Named")>;
+stc u64 SIZE = sizeof AnyNamed; #= SIZE 24
+stc u64 NAMES = lenof implementer_names("Named"); #= NAMES 3
+stc u64 SHOWN = lenof implementer_names("Shown"); #= SHOWN 1
+stc u64 NOBODY = lenof implementer_names("Nothing"); #= NOBODY 0
+
+# a switch on the tag and direct calls, with arguments
+fun id_of = (AnyNamed a) -> u32: ret <dispatch(quote: a, "Named", quote: id, [])>;
+fun scaled_of = (AnyNamed a, u32 k) -> u32: ret <dispatch(quote: a, "Named", quote: scaled, [quote: k + 1])>;
+stc [4]AnyNamed ZOO = [Cat(1), Dog(2, 3), Bird.Big(7), Bird.Small];
+stc []u32 IDS = for z in ZOO: id_of(z); #= IDS [1, 20, 7, 1]
+stc []u32 SCALED = for z in ZOO: scaled_of(z, 2); #= SCALED [3, 3, 10, 4]
+fun total = (&[4]AnyNamed zoo) -> u32 {
+    mut u32 sum = 0;
+    for z in zoo: sum += id_of(z);
+    ret sum;
+}
+stc u32 TOTAL = total(ZOO.&); #= TOTAL 29
+
+# texts compare by their bytes
+stc []bool SAME = [same_text("ab", "ab"), same_text("ab", "abc"), same_text("", ""), same_text("a", "b")]; #= SAME [true, false, true, false]
+
+# a generic trait is found as written after `implof`
+trait Cmp = (type T): !{ fun cmp = (T o) -> i32; }
+type Money = *(i64 cents) implof Cmp(Money) !{ fun cmp = (Money o) -> i32: ret if self.cents < o.cents: -1 else: 1; }
+stc u64 GENERIC = lenof implementer_names("Cmp(Money)"); #= GENERIC 1
+
+main = () {}

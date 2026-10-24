@@ -1,0 +1,12 @@
+# `stc?` parameters: a realization checks what it takes, `isstc` lets static values be checked
+fun small = (stc? u32 n) -> u32 {
+    stcif isstc n and n > 5: crash "too big"; #! crash
+    ret n;
+}
+stc u32 FINE = small(3);
+fun runtime = (u32 n) -> u32: ret small(n);
+stc u32 TOO_BIG = small(9);
+stc bool UNKNOWN = isstc missing; #! undefined_name
+fun wrong = (stc? u32 n) -> u32: ret n + true; #! type_mismatch
+
+main = () {}

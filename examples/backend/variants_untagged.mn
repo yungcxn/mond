@@ -4,10 +4,10 @@
 # read while compiling (`st`)
 mut u32 ONE = 0;
 stcfun st = (u64 v) -> u64: ret v;
-variant Word = +(Int(u32), Float(f32), Bytes([4]u8)) tagtype _ !{
+variant Word = +(Int(u32), Float(f32), Bytes([4]u8)) notagtype !{
     fun bits = () -> u32: ret (self.* as Word.Int).$0;
 }
-variant Raw = (type T): +(Val(T), Bytes([8]u8)) tagtype _;
+variant Raw = (type T): +(Val(T), Bytes([8]u8)) notagtype;
 type Holder = *(u8 kind, Word word);
 
 fun set_float = (*Word w, f32 f) { w.* = Word.Float(f); }

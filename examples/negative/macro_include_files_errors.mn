@@ -1,0 +1,5 @@
+# examples/lib/files.mn: a file that can't be read is a `crash` of the library, where it is included
+<include "../lib/files.mn">; #! crash
+stc []u8 TEXT = read_file("examples/lib/data/missing.txt");
+
+main = () {}

@@ -106,4 +106,26 @@ fun chosen = () -> u32 {
 }
 stc u32 ch = chosen(); #= ch 22
 
+# a field's name, a whole parameter, the parameters of another function and a member by a hole
+stcfun field_named = (ast t, ast name) -> ast: ret quote: *(@t @name = 4);
+type Made = <field_named(quote: u16, ast.Identifier("size"))>;
+stc u16 made = Made().size; #= made 4
+fun added = (u32 a, u32 b) -> u32: ret a + b;
+stcfun reordered = (&ast(fun) f) -> ast(fun) {
+    []ast params = f.params;
+    ret quote: (@(params[1]), @(params[0])) -> u32: ret a - b;
+}
+fun subtracted = <reordered(refl added)>;
+stc u32 difference = subtracted(2, 9); #= difference 7
+stcfun same_params = (&ast(fun) f) -> ast(fun) {
+    []ast params = f.params;
+    ret quote: (@..params) -> u32: ret a * b;
+}
+fun times = <same_params(refl added)>;
+stc u32 product = times(6, 7); #= product 42
+type Pair = *(u32 left, u32 right);
+stcfun picked_field = (ast v, ast name) -> ast: ret quote: @v.@name;
+stc Pair PAIR = Pair(3, 9);
+stc u32 right = <picked_field(quote: PAIR, quote: right)>; #= right 9
+
 main = () {}

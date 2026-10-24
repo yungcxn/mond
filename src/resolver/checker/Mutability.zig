@@ -33,6 +33,7 @@ pub fn check_assignable(
     if (failed) return assignable_type;
 
     self.record_write_access(node, self.writable(node));
+    resolver.slices.writes_into(node);
     return assignable_type;
 }
 
@@ -139,6 +140,9 @@ fn access_through_parent(self: *Mutability, parent: NodeId, or_assignable: bool)
     if (parent_type == .none or parent_type == .poison_type) return .ok;
 
     const resolved_type = static_pool.substitute_type_variables(parent_type);
+    // a slice refers to elements it does not hold, whether they may be written is a question of
+    // where it came from (see `Slices`)
+    if (static_pool.tag(resolved_type) == .slice_type) return .ok;
     if (static_pool.get(resolved_type) == .pointer_type) {
         const is_mutable = static_pool.get(resolved_type).pointer_type.is_mutable;
         return if (is_mutable) .ok else .through_ptr;

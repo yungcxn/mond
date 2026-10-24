@@ -1,0 +1,126 @@
+# examples/lib/invertible.mn: the inverse of a function made from its tree. what its `*T`
+# parameters point to is updated, the other parameters are fixed, so the inverse takes them too
+<include "../lib/invertible.mn">;
+
+# a cipher: rounds of adding, xoring and multiplying by an odd number, a test on the fixed key
+fun mix = (*u32 a, *u32 b, u32 key, u64 rounds) {
+    u32 spread = key * 7;
+    for r in 0..<rounds {
+        a.* += b.* ^ key;
+        b.* = b.* ^ (a.* + spread);
+        if key > 10: a.* -= r as u32 else: b.* += 1;
+        a.* *= 5;
+    }
+}
+fun unmix = <invert(refl mix, quote: unmix, [])>;
+stcfun mixed = (u32 a0, u32 b0, u32 key) -> [3]u64 {
+    mut u32 a = a0;
+    mut u32 b = b0;
+    mix(a.&, b.&, key, 6);
+    u64 scrambled = a as u64 * 10000000000 + b as u64;
+    unmix(a.&, b.&, key, 6);
+    ret [scrambled, a as u64, b as u64];
+}
+stc [3]u64 MIXED = mixed(123456, 987, 42); #= MIXED [5120749940826646401, 123456, 987]
+stc [3]u64 SMALL_KEY = mixed(4000000000, 7, 3); #= SMALL_KEY [18341469604071709271, 4000000000, 7]
+stcfun all_back = () -> u32 {
+    mut u32 wrong = 0;
+    for i in 0..<50 {
+        mut u32 a = i * 2654435761;
+        mut u32 b = i ^ 0xdeadbeef;
+        mix(a.&, b.&, i, i as u64 % 4);
+        unmix(a.&, b.&, i, i as u64 % 4);
+        if a != i * 2654435761 or b != (i ^ 0xdeadbeef): wrong += 1;
+    }
+    ret wrong;
+}
+stc u32 ALL_BACK = all_back(); #= ALL_BACK 0
+
+# multiplying by an odd number is undone by its inverse modulo 2^64, in the width of the place
+fun scale = (*u8 small, *i32 signed, *u64 wide) {
+    small.* *= 3;
+    signed.* *= 7;
+    wide.* *= 1000001;
+}
+fun unscale = <invert(refl scale, quote: unscale, [])>;
+stcfun scaled = () -> [6]i64 {
+    mut u8 small = 200;
+    mut i32 signed = -1234567;
+    mut u64 wide = 99;
+    scale(small.&, signed.&, wide.&);
+    [3]i64 forward = [small as i64, signed as i64, wide as i64];
+    unscale(small.&, signed.&, wide.&);
+    ret [forward[0], forward[1], forward[2], small as i64, signed as i64, wide as i64];
+}
+stc [6]i64 SCALED = scaled(); #= SCALED [88, -8641969, 99000099, 200, -1234567, 99]
+
+# negation and bitwise not undo themselves, a record field and array elements are places too
+type Pair = *(mut i16 x, mut u16 y);
+fun flip = (*Pair p, *[4]u8 bytes, u8 k) {
+    p.*.x = -p.*.x;
+    p.*.y = !p.*.y;
+    for i in 0..<lenof bytes.*: bytes.*[i] += k * i as u8;
+    bytes.*[0] = bytes.*[0] ^ k;
+}
+fun unflip = <invert(refl flip, quote: unflip, [])>;
+stcfun flipped = () -> [4]u64 {
+    mut Pair p = Pair(5, 1);
+    mut [4]u8 bytes = [1, 2, 3, 4];
+    flip(p.&, bytes.&, 10);
+    u64 forward = (p.x + 100) as u64 * 100000 + p.y as u64;
+    u64 forward_bytes = bytes[0] as u64 * 1000000 + bytes[1] as u64 * 10000 + bytes[3] as u64;
+    unflip(p.&, bytes.&, 10);
+    ret [forward, forward_bytes, (p.x * 10) as u64 + p.y as u64, bytes[0] as u64 * 1000 + bytes[3] as u64];
+}
+stc [4]u64 FLIPPED = flipped(); #= FLIPPED [9565534, 11120034, 51, 1004]
+
+# a recursive function is undone by its inverse calling itself, others by the inverses paired
+fun climb = (*u64 x, u64 n) {
+    if n > 0 {
+        x.* += n * n;
+        climb(x, n - 1);
+    }
+}
+fun unclimb = <invert(refl climb, quote: unclimb, [])>;
+fun step = (*u64 x, u64 by) { x.* += by; }
+fun unstep = (*u64 x, u64 by) { x.* -= by; }
+fun walk = (*u64 x, *u64 y, u64 n) {
+    for i in 1..=n {
+        step(x, i);
+        climb(y, i);
+        x.* = x.* ^ y.*;
+    }
+}
+fun unwalk = <invert(refl walk, quote: unwalk, [quote: step, quote: unstep, quote: climb, quote: unclimb])>;
+stcfun walked = () -> [4]u64 {
+    mut u64 x = 3;
+    mut u64 y = 4;
+    climb(x.&, 10);
+    u64 climbed = x;
+    unclimb(x.&, 10);
+    walk(x.&, y.&, 5);
+    u64 forward = x * 1000 + y;
+    unwalk(x.&, y.&, 5);
+    ret [climbed, forward, x, y];
+}
+stc [4]u64 WALKED = walked(); #= WALKED [388, 94109, 3, 4]
+
+# a fixed local inside a block reads nothing the block writes, so the inverse computes it alike
+fun shuffle = (*[3]u32 v, u32 seed) {
+    for i in 0..<3 {
+        u32 mask = seed * (i as u32 + 1);
+        v.*[i] += mask;
+        if mask % 2 == 0 { v.*[i] *= 9; } else { v.*[i] = v.*[i] ^ 255; }
+    }
+}
+fun unshuffle = <invert(refl shuffle, quote: unshuffle, [])>;
+stcfun shuffled = () -> [6]u32 {
+    mut [3]u32 v = [10, 20, 30];
+    shuffle(v.&, 3);
+    [3]u32 forward = v;
+    unshuffle(v.&, 3);
+    ret [forward[0], forward[1], forward[2], v[0], v[1], v[2]];
+}
+stc [6]u32 SHUFFLED = shuffled(); #= SHUFFLED [242, 234, 216, 10, 20, 30]
+
+main = () {}

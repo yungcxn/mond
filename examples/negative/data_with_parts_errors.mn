@@ -1,0 +1,30 @@
+# a part of `x with (..)` is a field, then fields of records and elements of arrays it holds
+type Pos = *(i32 x, i32 y);
+type Player = *(Pos pos, u8 hp, [3]Pos trail);
+stc Player P = Player(Pos(1, 2), 50, [Pos(0, 0), Pos(1, 1), Pos(2, 2)]);
+
+fun unknown_field = (Player p) -> Player: ret p with (pos.z = 1); #! unknown_member
+fun unknown_root = (Player p) -> Player: ret p with (nothing.x = 1); #! unknown_named_argument
+fun through_scalar = (Player p) -> Player: ret p with (hp.x = 1); #! unknown_member
+fun index_scalar = (Player p) -> Player: ret p with (hp[0] = 1); #! type_mismatch
+fun index_record = (Player p) -> Player: ret p with (pos[0] = 1); #! type_mismatch
+fun bool_index = (Player p) -> Player: ret p with (trail[true].x = 1); #! type_mismatch
+fun wrong_value = (Player p) -> Player: ret p with (pos.x = true); #! type_mismatch
+fun wrong_element = (Player p) -> Player: ret p with (trail[0] = 5); #! type_mismatch
+
+# a pointer's target is no part of the copy
+type Aimed = *(*Pos target);
+fun through_pointer = (Aimed a) -> Aimed: ret a with (target.x = 1); #! unknown_member
+
+# a part is no name a constructor takes
+stc Player MADE = Player(pos.x = 1); #! unknown_named_argument
+
+# while compiling, an element past the end
+stc Player PAST = P with (trail[3].x = 1); #! static_eval_failed
+
+# a tree takes paths of its children's names
+stc ast SUM = quote: a + b * c;
+stc ast NO_CHILD = SUM with (rhs.rhs.lhs = quote: d); #! unknown_named_argument
+stc ast NOT_A_NAME = SUM with (1 = quote: d); #! unknown_named_argument
+
+main = () {}

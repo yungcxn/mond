@@ -1,1 +1,2 @@
-i32 x = ~1; #! InvalidPunctuator
+# `~` joins arrays, it is no prefix operator (bitwise not is `!`)
+i32 x = ~1; #! NoRuleFound

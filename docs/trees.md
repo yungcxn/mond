@@ -60,12 +60,16 @@ The last column is the name `mond -b` prints in its tree dump.
 | `Array` | `[a, b]` | list | array |
 | `ArrayEmpty` | `[]` | – | array_empty |
 | `TypeOf` | `typeof e` | subnode | typeof |
+| `IsStatic` | `isstc e` | subnode | isstc |
+| `Hole` | a statement that doesn't parse, where the editor's analysis goes on after it | – | hole |
+| `ParameterStaticMaybe` | `stc? T` (a parameter's type) | subnode | stc_maybe |
 | `SizeOf` | `sizeof e` | subnode | sizeof |
 | `AlignOf` | `alignof e` | subnode | alignof |
 | `LengthOf` | `lenof e` | subnode | lenof |
 | `TagOf` | `tagof e` | subnode | tagof |
 | `TypeArray` | `[N]T` | length, type | type_array |
 | `TypeArrayUnlengthed` | `[]T` | type | type_array_unlengthed |
+| `TypeSlice` | `[..]T` | type | type_slice |
 | `NegateNumerical` | `-e` | subnode | neg_num |
 | `NegateLogical` | `!e` | subnode | neg_logic |
 | `IncrementPrefix` | `++e` | subnode | inc_prefix |
@@ -101,6 +105,10 @@ The last column is the name `mond -b` prints in its tree dump.
 | `MatchCase` | `p => body` | pattern, body | partial__match_case |
 | `MatchCasePatternOr` | `p1 | p2` | list | partial__match_case_pattern_or |
 | `MatchCasePatternTypeCast` | `T x` (pattern) | type, casted_var | partial__match_case_pattern_typecast |
+| `MatchCaseWhere` | `p where c =>` (arm) | pattern, where_predicate | partial__match_case_where |
+| `MatchCasePatternBits` | `bits(..)` (pattern) | list | partial__match_case_pattern_bits |
+| `BitsField` | `u4 x` in `bits(..)` | type, pattern | partial__bits_field |
+| `BitsRest` | `..rest` in `bits(..)` | subnode | partial__bits_rest |
 | `TypePointerMutable` | `*T` | subnode | type_ptrmut |
 | `TypePointer` | `&T` | subnode | type_ptr |
 | `TypeUnsignedInteger8` | `u8` | – | type_u8 |
@@ -130,6 +138,7 @@ The last column is the name `mond -b` prints in its tree dump.
 | `VariantDefinition` | `+(cases)` | param_tuple | def_variant |
 | `VariantDefinitionPacked` | `++(cases)` | param_tuple | def_variant_packed |
 | `VariantDefinitionWithTag` | `.. tagtype T` | def_variant, tagtype | def_variant_tagtype |
+| `VariantDefinitionUntagged` | `.. notagtype` | def_variant | def_variant_notagtype |
 | `VariantDefinitionWithAssertedSize` | `.. assertsize N` | def_variant, assertsize | def_variant_assertsize |
 | `VariantDefinitionWithTrait` | `+(..) implof T !{..}` | def_variant, def_trait | def_variant_implof |
 | `TraitDefinition` | `!{ members }` | body | def_trait |
@@ -149,6 +158,7 @@ The last column is the name `mond -b` prints in its tree dump.
 | `TraitDefinitionBody` | `!{ .. }` members | list | partial__trait_def_body |
 | `UnifyVariants` | `A || B` | left_type, right_type | unify_variants |
 | `UnifyVariantsPacked` | `A ||| B` | left_type, right_type | unify_variants_packed |
+| `VariantDifference` | `A -- B` | left_type, right_type | variant_difference |
 | `With` | `e with (f = v)` | value, fun_call_param_tuple | with |
 | `FunctionCall` | `f(args)` | callable, fun_param_tuple | fun_call |
 | `BuiltinCall` | `crash x`, `asm x`, `syscall (..)`, `fresh x` | callable, fun_param_tuple | builtin_call |
@@ -192,6 +202,7 @@ The last column is the name `mond -b` prints in its tree dump.
 | `BinaryModulus` | `%` | lhs, rhs | binary_mod |
 | `BinaryShiftLeft` | `<<` | lhs, rhs | binary_shift_left |
 | `BinaryShiftRight` | `>>` | lhs, rhs | binary_shift_right |
+| `BinaryJoin` | `~` | lhs, rhs | binary_join |
 | `IdentifierSelf` | `self` | – | identifier_self |
 | `Identifier` | `name` | text | identifier |
 | `StringValue` | `"text"` | text | string |

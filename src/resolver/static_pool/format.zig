@@ -62,6 +62,10 @@ fn write_entry(
             try writer.writeAll(if (pointer.is_mutable) "*" else "&");
             try write_entry(pool, names, pointer.pointee, writer, depth);
         },
+        .slice_type => |slice| {
+            try writer.writeAll("[..]");
+            try write_entry(pool, names, slice.element, writer, depth);
+        },
         .function_type => |function| {
             if (function.category == .inlined) try writer.writeAll("inlfun ");
             try writer.writeAll("(");
@@ -94,6 +98,13 @@ fn write_entry(
         .unified_variant_type => |unified| {
             const separator = if (unified.is_packed) " ||| " else " || ";
             try write_list(pool, names, unified.members, separator, writer, depth);
+        },
+        .variant_subset_type => |subset| {
+            try write_entry(pool, names, subset.whole, writer, depth);
+            for (subset.removed) |unit| {
+                try writer.writeAll(" -- ");
+                try write_entry(pool, names, unit, writer, depth);
+            }
         },
         .trait_type => |trait| {
             try writer.writeAll("!{");

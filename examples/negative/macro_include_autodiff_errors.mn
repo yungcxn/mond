@@ -1,0 +1,12 @@
+# examples/lib/autodiff.mn: a derivative given for a call must fit where the chain rule puts it;
+# a call that doesn't depend on the parameter needs none
+<include "../lib/autodiff.mn">;
+fun square = (f64 v) -> f64: ret v * v;
+fun constant_call = (f64 x, f64 k) -> f64: ret square(k) * x;
+fun d_constant_call = <derive(refl constant_call, quote: x, [])>;
+stc f64 C = d_constant_call(5, 3); #= C 9
+fun d_wrong = (f64 v) -> bool: ret true;
+fun mistyped = (f64 x) -> f64: ret square(x);
+fun d_mistyped = <derive(refl mistyped, quote: x, [quote: square, quote: d_wrong])>; #! type_mismatch
+
+main = () {}

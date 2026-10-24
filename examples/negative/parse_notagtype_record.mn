@@ -1,0 +1,4 @@
+# `notagtype` belongs to variants only
+type Record = *(u8 a) notagtype; #! ExpectedSemicolon
+
+main = () {}

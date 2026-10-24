@@ -16,6 +16,7 @@ const Mutability = @import("resolver/checker/Mutability.zig");
 const Calls = @import("resolver/checker/Calls.zig");
 const Flow = @import("resolver/checker/Flow.zig");
 const Patterns = @import("resolver/checker/Patterns.zig");
+pub const Slices = @import("resolver/checker/Slices.zig");
 const Types = @import("resolver/checker/Types.zig");
 const Generics = @import("resolver/checker/Generics.zig");
 const StaticValues = @import("resolver/checker/StaticValues.zig");
@@ -96,6 +97,8 @@ pub const FunctionContext = struct {
     is_static_context: bool = false,
     is_interpreted: bool = false,
     is_abstract: bool = false,
+    // a realization for static `stc?` arguments: a branch on a static condition takes one side
+    folds_static: bool = false,
 };
 
 allocator: std.mem.Allocator,
@@ -131,6 +134,7 @@ mutability: Mutability = .{},
 calls: Calls = .{},
 flow: Flow,
 patterns: Patterns = .{},
+slices: Slices,
 types: Types = .{},
 generics: Generics = .{},
 static_values: StaticValues = .{},
@@ -165,6 +169,7 @@ pub inline fn init(
         .scopes = .init(alloc),
         .initialization = .init(alloc),
         .flow = .init(alloc),
+        .slices = .init(alloc),
         .macros = .{ .pass_len = node_count },
         .doctor = .{ .diagnostics = .init(alloc, 16) },
         .interpreter = .init(alloc),
@@ -187,11 +192,15 @@ pub inline fn deinit(self: *Resolver) void {
     self.interpreter.deinit();
     self.doctor.diagnostics.deinit();
     self.flow.deinit();
+    self.slices.deinit();
     self.generics.deinit(self.allocator);
     self.expressions.open_lengths.deinit(self.allocator);
+    self.expressions.frame_references.deinit(self.allocator);
+    self.declarations.deferred_bodies.deinit(self.allocator);
     self.temporary_arena.deinit();
     if (self.rebuilt) |*rebuilt_roots| rebuilt_roots.deinit();
     self.allocator.free(self.macros.starts);
+    self.macros.checked_quotes.deinit(self.allocator);
 
     self.allocator.free(self.node_types);
     self.allocator.free(self.node_declarations);
@@ -283,6 +292,8 @@ pub fn resolve(self: *Resolver) !void {
         self.rebuilt = roots;
         self.session = session;
     }
+    // writes through read-only slices are reported with the other errors of the last pass
+    self.slices.finish();
     try self.fail_on_errors();
 
     self.types.finish_inference();

@@ -1,0 +1,25 @@
+# a macro giving `ast(T)` has its quotes checked where they are written, before any use: holes are
+# values of what their trees produce, what the quote gives is a `T`
+stcfun twice = (ast(u32) e) -> ast(u32): ret quote: @e * 2;
+stcfun mean = (ast(f64) a, ast(f64) b) -> ast(f64): ret quote: (@a + @b) / 2;
+stcfun is_small = (ast(u8) e) -> ast(bool): ret quote: @e < 10 and @e != 0;
+stcfun widened = (ast(u8) e) -> ast(u32): ret quote: @e as u32 << 8;
+stc []u32 TWICE = [<twice(quote: 21)>, <twice(quote: 1 + 1)>]; #= TWICE [42, 4]
+stc f64 MEAN = <mean(quote: 1.5, quote: 2.5)>; #= MEAN 2
+stc []bool SMALL = [<is_small(quote: 3)>, <is_small(quote: 0)>, <is_small(quote: 200)>]; #= SMALL [true, false, false]
+stc u32 WIDE = <widened(quote: 2)>; #= WIDE 512
+
+# a quote naming the caller's things is checked where it lands, as is any quote of plain `ast`
+stcfun plus_offset = (ast(u32) e) -> ast(u32): ret quote: @e + offset;
+fun shifted = (u32 offset) -> u32: ret <plus_offset(quote: 5)>;
+stc u32 SHIFTED = shifted(10); #= SHIFTED 15
+stcfun anything = (ast e) -> ast: ret quote: @e;
+stc bool ANY = <anything(quote: true)>; #= ANY true
+
+# a static value lifted into a checked quote, a hole used twice
+stcfun scaled = (ast(u32) e, u32 k) -> ast(u32): ret quote: @e * @k;
+stc u32 SCALED = <scaled(quote: 7, 6)>; #= SCALED 42
+stcfun squared = (ast(i64) e) -> ast(i64): ret quote: @e * @e;
+stc i64 SQUARED = <squared(quote: -9)>; #= SQUARED 81
+
+main = () {}

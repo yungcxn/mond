@@ -1,4 +1,9 @@
-# `..` binds to its lower bound only: `1 + 1..=4` adds a number to a range
-fun f = () {
-    x = 1 + 1..=4; #! type_mismatch
+# a range binds looser than arithmetic, shifts and comparisons, tighter than `|`: its bounds are
+# whole expressions (`n + 1..<n * 2`), a comparison is a bound and `|` takes the range itself
+fun f = (u64 n) {
+    whole = n + 1..<n * 2;
+    added = 1 + 1..=4;
+    or_range = 1..=4 | 2; #! type_mismatch
+    compared = 0..<n == 3; #! type_mismatch
 }
+main = () { f(2); }

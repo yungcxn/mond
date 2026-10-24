@@ -5,6 +5,7 @@ const NamePool = @import("../NamePool.zig");
 const StaticPool = @import("../StaticPool.zig");
 const DeclPool = @import("../DeclPool.zig");
 const Declarations = @import("Declarations.zig");
+const Value = @import("../interpreter/Value.zig");
 const FunctionContext = Resolver.FunctionContext;
 const NodeId = ParseTree.NodeId;
 
@@ -32,7 +33,8 @@ pub fn meta_type_of_node(self: *Types, node: NodeId) StaticPool.Index {
     const resolver = self.owning_resolver();
     const kind = resolver.declarations.declared_type_kind(node);
     const is_unified = resolver.tree.kind(node) == .unify_variants or
-        resolver.tree.kind(node) == .unify_variants_packed;
+        resolver.tree.kind(node) == .unify_variants_packed or
+        resolver.tree.kind(node) == .variant_difference;
     return kind.meta_type(if (is_unified) .variant_type else .type_type);
 }
 
@@ -54,6 +56,11 @@ pub fn type_from_node(self: *Types, context: *FunctionContext, node: NodeId) Sta
             return resolver.static_pool.pointer_to(pointee, kind == .type_ptrmut);
         },
         .type_array_unlengthed => self.unlengthed_array_type(context, node),
+        .type_slice => {
+            const element = self.type_from_node(context, resolver.tree.arg(node, 0));
+            if (element == .poison_type) return element;
+            return resolver.static_pool.slice_of(element);
+        },
         .type_array => self.lengthed_array_type(context, node),
         .def_fun_declaration => self.function_type_of(context, node, .default, .unit_type, .none),
         else => self.type_from_static_value(context, node),
@@ -145,6 +152,22 @@ pub fn define_static_type(
     const resolver = self.owning_resolver();
     return switch (resolver.tree.kind(node)) {
         .unify_variants, .unify_variants_packed => self.unified_variant_type(context, node),
+        .variant_difference => {
+            const sides = [_]NodeId{ resolver.tree.arg(node, 0), resolver.tree.arg(node, 1) };
+            const types = [_]StaticPool.Index{
+                self.type_from_node(context, sides[0]),
+                self.type_from_node(context, sides[1]),
+            };
+            if (types[0] == .poison_type or types[1] == .poison_type) return .poison_type;
+            // the left side needs a variant with tags, the right side parts of it
+            return switch (resolver.static_pool.difference_of(types[0], types[1])) {
+                .difference => |difference| difference,
+                .wrong_side => |i| {
+                    const expected = if (i == 0) StaticPool.Index.variant_type else types[0];
+                    return resolver.report(.type_mismatch, sides[i], types[i], expected);
+                },
+            };
+        },
         .def_type,
         .def_type_packed,
         .def_type_assertsize,
@@ -152,6 +175,7 @@ pub fn define_static_type(
         .def_variant,
         .def_variant_packed,
         .def_variant_tagtype,
+        .def_variant_notagtype,
         .def_variant_assertsize,
         .def_variant_implof,
         .def_trait,
@@ -182,6 +206,14 @@ fn unified_variant_type(self: *Types, context: *FunctionContext, node: NodeId) S
         self.type_from_node(context, sides[1]),
     };
     const is_packed = resolver.tree.kind(node) == .unify_variants_packed;
+    // a strategy stores its variant in all of its storage, no unified tag fits beside it
+    const static_pool = &resolver.static_pool;
+    for (sides, types) |side, side_type| {
+        const whole = static_pool.whole_of(side_type);
+        const is_custom = static_pool.tag(whole) == .variant_type and
+            static_pool.get(whole).variant_type.tag_mode == .custom;
+        if (is_custom) return resolver.report(.strategy_member, side, side_type, 0);
+    }
     return switch (resolver.static_pool.unified_of(types[0], types[1], is_packed)) {
         .unified => |unified| unified,
         .sizeless_side => |i| resolver.report(.unstorable_outside_parameter, sides[i], types[i], 0),
@@ -407,6 +439,7 @@ fn define_variant(
     const case_nodes = resolver.tree.manychildren(resolver.tree.arg(core, 0));
     const cases = resolver.temporary_slice(StaticPool.Index, case_nodes.len);
     var payloads = PayloadSummary{};
+    var payload_name: NodeId = 0;
     var next_tag: StaticPool.IntValue = .{ .value_type = .u64_type, .bits = 0 };
     for (case_nodes, 0..) |case_node, i| {
         var parts = VariantCaseParts{ .name = 0, .tag = 0, .payload = 0 };
@@ -468,20 +501,84 @@ fn define_variant(
         cases[i] = resolver.set_node_type(parts.name, case_type);
         if (static_pool.get(cases[i]).variant_case_type.payload == .none) continue;
         payloads.last_case = i;
+        payload_name = parts.name;
         payloads.count += 1;
     }
 
-    // without tagof by the smallest tag type holding their tags, `tagtype _` without any tag
-    const is_self_tagged = tagof != 0 and resolver.tree.kind(tagof) == .identifier_self;
-    const is_untagged = tagof != 0 and resolver.tree.kind(tagof) == .identifier and
-        resolver.name_pool.name_of_node(tagof) == .underscore;
-    const mode: StaticPool.VariantTagMode = if (is_self_tagged)
+    // without tagof by the smallest tag type holding their tags, `notagtype` without any tag.
+    // `tagtype self.f.g` keeps the tag in that field of the payload
+    const tree = resolver.tree;
+    var tag_names: std.ArrayList(NodeId) = .empty;
+    defer tag_names.deinit(resolver.allocator);
+    var tag_root = tagof;
+    while (tag_root != 0 and tree.kind(tag_root) == .member) : (tag_root = tree.arg(tag_root, 0)) {
+        tag_names.insert(resolver.allocator, 0, tree.arg(tag_root, 1)) catch @panic("OOM");
+    }
+    const is_self_tagged = tag_root != 0 and tree.kind(tag_root) == .identifier_self;
+    var tag_path: std.ArrayList(u32) = .empty;
+    defer tag_path.deinit(resolver.allocator);
+    // `tagtype <static expr>` of a record of `storage`, `wrap`, `case_of` and `unwrap`: a strategy,
+    // its parts as `[storage, wrap, case_of, unwrap]`
+    const strategy: StaticPool.Index = strategy: {
+        if (tagof == 0 or is_self_tagged) break :strategy .none;
+        const value = resolver.static_values.try_evaluate(context, tagof) orelse
+            break :strategy .none;
+        if (static_pool.tag(value) != .aggregate_value) break :strategy .none;
+        const record_type = static_pool.type_of(value);
+        if (static_pool.tag(record_type) != .record_type) break :strategy .none;
+        const names = [_][]const u8{ "storage", "wrap", "case_of", "unwrap" };
+        var parts: [names.len]StaticPool.Index = undefined;
+        for (names, &parts) |text, *part| {
+            const name = resolver.name_pool.intern(text);
+            const field_names = static_pool.get(record_type).record_type.field_names;
+            const index = std.mem.indexOfScalar(NamePool.Index, field_names, name) orelse
+                break :strategy .none;
+            part.* = static_pool.get(value).aggregate_value.elements[index];
+        }
+        const strategy_parts = StaticPool.AggregateValue{ .value_type = .none, .elements = &parts };
+        break :strategy static_pool.intern(.{ .aggregate_value = strategy_parts });
+    };
+    const mode: StaticPool.VariantTagMode = if (strategy != .none)
+        .custom
+    else if (is_self_tagged)
         .self
-    else if (is_untagged)
+    else if (definition.untagged)
         .none
     else
         .int;
+    // a self tag tells the payload case by its niche: its own tag is one no other case has
+    if (mode == .self and payloads.count == 1) {
+        const payload_index = payloads.last_case.?;
+        var case = static_pool.get(cases[payload_index]).variant_case_type;
+        // the smallest tag no other case has, and whether the payload case's own is taken
+        var free: u64 = 0;
+        var own_is_taken = false;
+        const own: ?u64 = if (static_pool.tag(case.tag) == .int_value)
+            static_pool.get(case.tag).int_value.bits
+        else
+            null;
+        var searching = true;
+        while (searching) {
+            searching = false;
+            for (cases, 0..) |other, i| {
+                const tag = static_pool.get(other).variant_case_type.tag;
+                if (i == payload_index or static_pool.tag(tag) != .int_value) continue;
+                const bits = static_pool.get(tag).int_value.bits;
+                own_is_taken = own_is_taken or bits == own;
+                if (bits != free) continue;
+                free += 1;
+                searching = true;
+            }
+        }
+        if (own_is_taken) {
+            const free_tag = StaticPool.IntValue{ .value_type = .u64_type, .bits = free };
+            case.tag = static_pool.intern(.{ .int_value = free_tag });
+            const retagged = static_pool.intern(.{ .variant_case_type = case });
+            cases[payload_index] = resolver.set_node_type(payload_name, retagged);
+        }
+    }
     const tag_type: StaticPool.Index = blk: {
+        if (mode == .none) break :blk .unit_type;
         if (tagof == 0) {
             var tag_count: u64 = cases.len;
             for (cases) |case| {
@@ -491,7 +588,8 @@ fn define_variant(
             }
             break :blk StaticPool.smallest_tag_type(tag_count);
         }
-        if (mode == .none) break :blk .unit_type;
+        // a strategy takes and gives the tags of the cases as `u32`s
+        if (mode == .custom) break :blk .u32_type;
         if (mode != .self) break :blk self.type_from_node(context, tagof);
 
         // the one payload type encodes the other cases in bit patterns it never uses
@@ -499,16 +597,42 @@ fn define_variant(
             break :blk resolver.report(.self_tag_without_niche, tagof, payloads.count, 0);
         }
         const payload = static_pool.get(cases[payloads.last_case.?]).variant_case_type.payload;
-        const fields = static_pool.get(payload).record_type.field_types;
-        if (fields.len != 1) break :blk resolver.report(.self_tag_without_niche, tagof, 0, 0);
-        const field = static_pool.properties(fields[0]);
-        if (field.is_integer) break :blk fields[0];
+        // each name a field of the record reached so far, or of the one record it holds
+        var field_type = payload;
+        for (tag_names.items) |name_node| {
+            const name = resolver.name_pool.name_of_node(name_node);
+            while (true) {
+                if (static_pool.tag(field_type) != .record_type) {
+                    break :blk resolver.report(.unknown_member, name_node, name, field_type);
+                }
+                const record = static_pool.get(field_type).record_type;
+                if (std.mem.indexOfScalar(NamePool.Index, record.field_names, name)) |index| {
+                    tag_path.append(resolver.allocator, @intCast(index)) catch @panic("OOM");
+                    field_type = record.field_types[index];
+                    break;
+                }
+                if (record.field_types.len != 1) {
+                    break :blk resolver.report(.unknown_member, name_node, name, field_type);
+                }
+                tag_path.append(resolver.allocator, 0) catch @panic("OOM");
+                field_type = record.field_types[0];
+            }
+        }
+        if (tag_names.items.len == 0) {
+            if (static_pool.get(payload).record_type.field_types.len != 1) {
+                break :blk resolver.report(.self_tag_without_niche, tagof, 0, 0);
+            }
+            tag_path.append(resolver.allocator, 0) catch @panic("OOM");
+            field_type = static_pool.get(payload).record_type.field_types[0];
+        }
+        const field = static_pool.properties(field_type);
+        if (field.is_integer) break :blk field_type;
         // the bits of any other scalar are an unsigned int of its size: the null address, the
         // byte values a bool never has
-        if (!field.is_float and !field.is_pointer and fields[0] != .bool_type) {
+        if (!field.is_float and !field.is_pointer and field_type != .bool_type) {
             break :blk resolver.report(.self_tag_without_niche, tagof, 0, 0);
         }
-        break :blk switch (static_pool.layout(fields[0]).size) {
+        break :blk switch (static_pool.layout(field_type).size) {
             1 => .u8_type,
             2 => .u16_type,
             4 => .u32_type,
@@ -529,14 +653,100 @@ fn define_variant(
         }
     }
 
+    if (mode == .custom and tag_type == .u32_type) {
+        self.verify_strategy(context, tagof, strategy, cases);
+    }
+
     static_pool.complete_nominal(nominal, .{ .variant_type = .{
         .declaration = declaration,
         .tag_mode = mode,
         .tag_type = tag_type,
+        .tag_path = tag_path.items,
+        .strategy = strategy,
         .is_packed = resolver.tree.kind(core) == .def_variant_packed,
         .cases = cases[0..case_nodes.len],
         .traits = traits,
     } });
+}
+
+// a strategy gives every case and payload back as they went in, its stored bits fit `storage`.
+// probed with payloads 0, 1, all ones, alternating bits and the top bit, every one up to 16 bits
+fn verify_strategy(
+    self: *Types,
+    context: *FunctionContext,
+    node: NodeId,
+    strategy: StaticPool.Index,
+    cases: []const StaticPool.Index,
+) void {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const interpreter = &resolver.interpreter;
+    var parts: [4]StaticPool.Index = undefined;
+    @memcpy(&parts, static_pool.get(strategy).aggregate_value.elements);
+    const storage, const wrap, const case_of, const unwrap = parts;
+    if (static_pool.tag(storage) != .int_type) {
+        _ = resolver.report(.type_mismatch, node, static_pool.type_of(storage), .u64_type);
+        return;
+    }
+    const storage_bits = static_pool.get(storage).int_type.bits;
+    for (cases) |case_index| {
+        const case = static_pool.get(case_index).variant_case_type;
+        const tag: u64 = if (static_pool.tag(case.tag) == .int_value)
+            static_pool.get(case.tag).int_value.bits
+        else
+            0;
+        var width: u64 = 0;
+        if (case.payload != .none) {
+            const fields = static_pool.get(case.payload).record_type.field_types;
+            const field: StaticPool.TagProperties = if (fields.len == 1)
+                static_pool.properties(fields[0])
+            else
+                .{};
+            const is_scalar = field.is_integer or field.is_float or field.is_pointer or
+                fields.len == 1 and fields[0] == .bool_type;
+            if (!is_scalar) {
+                const count = static_pool.intern(.{
+                    .int_value = .{ .value_type = .u64_type, .bits = fields.len },
+                });
+                _ = resolver.report(.tag_strategy_failed, node, case.name, count);
+                return;
+            }
+            width = static_pool.field_bits(fields[0]);
+        }
+        const mask: u64 = if (width == 64)
+            std.math.maxInt(u64)
+        else
+            (@as(u64, 1) << @intCast(width)) - 1;
+        const exhaustive = width <= 16;
+        const probes: u64 = if (exhaustive) mask + 1 else 6;
+        for (0..probes) |i| {
+            const payload: u64 = if (exhaustive) i else switch (i) {
+                0 => 0,
+                1 => 1,
+                2 => mask,
+                3 => 0x5555_5555_5555_5555 & mask,
+                4 => 0xAAAA_AAAA_AAAA_AAAA & mask,
+                else => @as(u64, 1) << @intCast(width - 1),
+            };
+            const wrapped = [_]Value{ .int(.u32_type, tag), .int(.u64_type, payload) };
+            const stored = interpreter.call_static(context, node, wrap, &wrapped);
+            if (!Value.is_int(stored.value_type)) return;
+            const fits = storage_bits == 64 or stored.bits >> @intCast(storage_bits) == 0;
+            const stored_value = [_]Value{.int(.u64_type, stored.bits)};
+            const tag_back = interpreter.call_static(context, node, case_of, &stored_value);
+            if (!Value.is_int(tag_back.value_type)) return;
+            const payload_back = if (case.payload == .none)
+                Value.int(.u64_type, payload)
+            else
+                interpreter.call_static(context, node, unwrap, &.{ stored_value[0], wrapped[0] });
+            if (!Value.is_int(payload_back.value_type)) return;
+            if (fits and tag_back.bits == tag and payload_back.bits & mask == payload) continue;
+            const shown_value = StaticPool.IntValue{ .value_type = .u64_type, .bits = payload };
+            const shown = static_pool.intern(.{ .int_value = shown_value });
+            _ = resolver.report(.tag_strategy_failed, node, case.name, shown);
+            return;
+        }
+    }
 }
 
 fn define_record(
@@ -567,6 +777,15 @@ fn define_record(
         .field_types = types[0..fields.len],
         .traits = traits,
     } });
+    // in a bit-packed record only integers and bools may share their bytes with other fields
+    const static_pool = &resolver.static_pool;
+    const record = static_pool.get(nominal).record_type;
+    for (fields, 0..) |field_node, i| {
+        if (!static_pool.is_bit_field(record, i)) continue;
+        const field_type = record.field_types[i];
+        if (static_pool.tag(field_type) == .int_type or field_type == .bool_type) continue;
+        resolver.doctor.report(.unaligned_field, field_node, record.field_names[i], field_type);
+    }
 }
 
 // a trait body: one row for the body (its value is the self type), then one row per function member
@@ -762,6 +981,11 @@ fn same_as(
             if (array.length != right_array.length) return false;
             return self.same_as(array.element, right_array.element, trait, implementer);
         },
+        .slice => {
+            const element = static_pool.get(left).slice_type.element;
+            const right_element = static_pool.get(right).slice_type.element;
+            return self.same_as(element, right_element, trait, implementer);
+        },
         .function => self.same_function_type(left, right, trait, implementer),
         // distinct leaves, unified variants and trees are distinct types
         .leaf, .unified_variants, .tree => false,
@@ -871,6 +1095,10 @@ pub fn with_runtime_lengths(self: *Types, value_type: StaticPool.Index) StaticPo
             const pointer = static_pool.get(value_type).pointer_type;
             const pointee = self.with_runtime_lengths(pointer.pointee);
             return static_pool.pointer_to(pointee, pointer.is_mutable);
+        },
+        .slice => {
+            const element = static_pool.get(value_type).slice_type.element;
+            return static_pool.slice_of(self.with_runtime_lengths(element));
         },
         // the parameters are read from the pool again each time, interning may move them
         .function => {

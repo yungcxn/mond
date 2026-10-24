@@ -143,6 +143,7 @@ pub fn keep(self: *Trees, value: Value) Value {
         .simple_type,
         .meta_type,
         .array_type,
+        .slice_type,
         .pointer_type,
         .mutable_pointer_type,
         .function_type,
@@ -150,6 +151,7 @@ pub fn keep(self: *Trees, value: Value) Value {
         .variant_type,
         .variant_case_type,
         .unified_variant_type,
+        .variant_subset_type,
         .trait_type,
         .static_function,
         .template_type,
@@ -454,6 +456,7 @@ fn mode_of(tree: *const ParseTree, node: NodeId, i: u32, mode: Mode) Mode {
         => mode,
         .fun_call => if (i == 1) mode else .plain,
         .partial__match_case => if (i == 0) .pattern else .plain,
+        .partial__match_case_where => if (i == 0) mode else .plain,
         else => .plain,
     };
 }
@@ -500,7 +503,7 @@ fn code_of(self: *Trees, token: u32, value: Value) ?NodeId {
     }
     if (Value.is_int(value.value_type)) {
         // a negative number is written as the negation of its magnitude
-        const signed = @intFromEnum(value.value_type) >= @intFromEnum(Index.i8_type);
+        const signed = static_pool.get(value.value_type).int_type.signedness == .signed;
         const negative = signed and @as(i64, @bitCast(value.bits)) < 0;
         const magnitude = if (negative) 0 -% value.bits else value.bits;
 
@@ -660,7 +663,36 @@ fn type_tree(self: *Trees, token: u32, named: Index) ?NodeId {
             return code;
         },
         .array_type => |array| return self.array_type_tree(token, array),
-        .int_type,
+        .slice_type => |slice| {
+            const element = self.type_tree(token, slice.element) orelse return null;
+            return tree.push_node_with(.type_slice, .{ .type = element });
+        },
+        // `V -- V.A -- ..`, a case as the member of its variant
+        .variant_subset_type => |subset| {
+            var code = self.type_tree(token, subset.whole) orelse return null;
+            for (0..subset.removed.len) |i| {
+                const unit = resolver.static_pool.get(named).variant_subset_type.removed[i];
+                const part = if (resolver.static_pool.tag(unit) == .variant_case_type) blk: {
+                    const removed_case = resolver.static_pool.get(unit).variant_case_type;
+                    const variant = self.type_tree(token, removed_case.variant) orelse return null;
+                    const case_text = resolver.name_pool.text_of(removed_case.name);
+                    const name = tree.push_word(.identifier, token, case_text, 0, false);
+                    break :blk tree.push_node_with(.member, .{ .parent = variant, .member = name });
+                } else self.type_tree(token, unit) orelse return null;
+                code = tree.push_node_with(.variant_difference, .{
+                    .left_type = code,
+                    .right_type = part,
+                });
+            }
+            return code;
+        },
+        // `u7`, `i24`: a width without a keyword
+        .int_type => |int| {
+            var buffer: [4]u8 = undefined;
+            const sign: u8 = if (int.signedness == .signed) 'i' else 'u';
+            const name = std.fmt.bufPrint(&buffer, "{c}{d}", .{ sign, int.bits }) catch unreachable;
+            return tree.push_word(.identifier, token, name, 0, false);
+        },
         .float_type,
         .simple_type,
         .meta_type,
@@ -1064,8 +1096,12 @@ fn trait_list(self: *Trees, subject_node: NodeId, name: NamePool.Index, grow: bo
     const is_trait = subject_kind == .def_trait or subject_kind == .def_trait_implof;
     var trait = if (is_trait) subject_node else ParseTree.Def.from_node(tree, subject_node).body;
     if (trait == 0) {
-        if (!grow) return null;
         if (resolver.declarations.declared_type_kind(subject_node) == .variable) return null;
+        // read, a type without `!{}` has no methods and implements nothing
+        if (!grow) {
+            if (name == .methods) return tree.push_node(.partial__trait_def_body);
+            return tree.push_node(.partial__trait_def_implof_tuple);
+        }
 
         // the type moves into one with an empty `!{}`
         const inner = tree.push_node(tree.kind(subject_node));
@@ -1083,7 +1119,7 @@ fn trait_list(self: *Trees, subject_node: NodeId, name: NamePool.Index, grow: bo
     const has_implof = tree.kind(trait) == .def_trait_implof;
     if (name == .methods) return tree.arg(trait, @intFromBool(has_implof));
     if (has_implof) return tree.arg(trait, 0);
-    if (!grow) return null;
+    if (!grow) return tree.push_node(.partial__trait_def_implof_tuple);
 
     // a trait without an `implof` list becomes a `def_trait_implof` with an empty one
     const tuple = tree.push_node(.partial__trait_def_implof_tuple);
@@ -1214,6 +1250,7 @@ const operator_tokens = std.EnumArray(Kind, [2]u8).initDefault(.{ 0, 0 }, .{
     .type_ptr = .{ 1, 0 },
     .type_ptrmut = .{ 1, 0 },
     .type_array_unlengthed = .{ 2, 0 },
+    .type_slice = .{ 3, 0 },
     .array = .{ 1, 0 },
     .refl = .{ 1, 0 },
     .unquote = .{ 1, 0 },
@@ -1477,52 +1514,73 @@ pub fn address(self: *Trees, node: NodeId) ?Value {
     return self.tree_value(pointer_type, root);
 }
 
-// `x with (lhs = y)`: a new root of x's kind, its children those of x but the ones named
+// `x with (lhs = y)`, `x with (rhs.lhs = y)`: a copy of x with the named child replaced, and of
+// each node on the way to it
 pub fn with(self: *Trees, node: NodeId, base: Value) Value {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
     const tree = resolver.tree;
 
-    const root = self.node_of(base).?;
-    const kind = tree.kind(root);
-    var children: [2]NodeId = tree.ast_nodes.column(.args)[root];
+    var updated = self.node_of(base).?;
     const arguments = tree.arg(node, 1);
     // by index: evaluating an argument may grow the tree and move its child lists
     for (0..tree.manychildren(arguments).len) |argument_index| {
         const argument = tree.manychildren(arguments)[argument_index];
-        const field = self.field_named(kind, argument) orelse {
-            const name = resolver.name_pool.name_of_node(tree.arg_name(argument));
-            const tree_kind = self.kind_of(interpreter.interned(base));
-            return interpreter.fail(argument, .unknown_named_argument, name, tree_kind);
-        };
         const value = interpreter.evaluate(tree.arg_value(argument));
-        children[field] = self.node_of(value) orelse {
+        var child = self.node_of(value) orelse {
             if (value.is(.poison_type)) return value;
             const value_type = interpreter.value_type(value);
             return interpreter.fail(argument, .type_mismatch, value_type, .ast_type);
         };
-    }
 
-    const updated = tree.push_node(kind);
-    tree.ast_nodes.column(.args)[updated] = children;
+        // the names of the path from the root on, the nodes it passes and the slots it takes
+        var names: [16]NodeId = undefined;
+        var depth: usize = 0;
+        var step = tree.arg_name(argument);
+        while (tree.kind(step) == .member and depth + 1 < names.len) : (step = tree.arg(step, 0)) {
+            names[depth] = tree.arg(step, 1);
+            depth += 1;
+        }
+        names[depth] = step;
+        depth += 1;
+        std.mem.reverse(NodeId, names[0..depth]);
+        var passed: [16]NodeId = undefined;
+        var slots: [16]u1 = undefined;
+        passed[0] = updated;
+        for (names[0..depth], 0..) |name, i| {
+            // the named children of a node: those in its two slots
+            const kind = tree.kind(passed[i]);
+            const fields = ParseTree.Node.nk_field_names[@intFromEnum(kind)];
+            const field_count: usize = switch (arity(kind)) {
+                .one => 1,
+                .two => 2,
+                .none, .data, .many => 0,
+            };
+            const is_name = tree.kind(name) == .identifier;
+            const names_pool = &resolver.name_pool;
+            const text = if (is_name) names_pool.text_of(names_pool.name_of_node(name)) else "";
+            slots[i] = for (fields[0..field_count], 0..) |field, slot| {
+                if (is_name and std.mem.eql(u8, field, text)) break @intCast(slot);
+            } else {
+                const tree_kind = self.kind_of(interpreter.interned(base));
+                const shown_name = resolver.name_pool.name_of_node(name);
+                return interpreter.fail(argument, .unknown_named_argument, shown_name, tree_kind);
+            };
+            if (i + 1 < depth) passed[i + 1] = tree.arg(passed[i], slots[i]);
+        }
+        // copies from the innermost node out, each holding the one below
+        var i = depth;
+        while (i > 0) {
+            i -= 1;
+            const copy = tree.push_node(tree.kind(passed[i]));
+            var children: [2]NodeId = tree.ast_nodes.column(.args)[passed[i]];
+            children[slots[i]] = child;
+            tree.ast_nodes.column(.args)[copy] = children;
+            child = copy;
+        }
+        updated = child;
+    }
     return self.tree_value(resolver.static_pool.pointee(interpreter.value_type(base)), updated);
-}
-
-fn field_named(self: *Trees, kind: Kind, argument: NodeId) ?usize {
-    const resolver = self.owning_interpreter().owning_resolver();
-    const name_index = resolver.name_pool.name_of_node(resolver.tree.arg_name(argument));
-    const name = resolver.name_pool.text_of(name_index);
-    const fields = ParseTree.Node.nk_field_names[@intFromEnum(kind)];
-    // the named children of a node: those in its two slots
-    const field_count: usize = switch (arity(kind)) {
-        .one => 1,
-        .two => 2,
-        .none, .data, .many => 0,
-    };
-    for (0..field_count) |i| {
-        if (std.mem.eql(u8, fields[i], name)) return i;
-    }
-    return null;
 }
 
 // `ast(T)`, `ast.Kind(..)` making a node from its children or a name or literal from its text
@@ -1731,6 +1789,11 @@ pub fn matches(self: *Trees, pattern: NodeId, value: Value) bool {
                 if (self.matches(alternative, value)) return true;
             }
             return false;
+        },
+        .partial__match_case_where => {
+            if (!self.matches(tree.arg(pattern, 0), value)) return false;
+            const holds = interpreter.evaluate(tree.arg(pattern, 1));
+            return holds.value_type == .bool_type and holds.bits != 0;
         },
         .quote => return self.shape(tree.arg(pattern, 0), root),
         .fun_call => return self.matches_children(pattern, root),

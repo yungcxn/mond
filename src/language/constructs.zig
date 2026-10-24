@@ -24,6 +24,8 @@ pub const Construct = enum {
     call,
     // `x with (field = ..)`: a copy of a record with some fields replaced
     record_update,
+    // `a ~ b`: the elements of two arrays or slices, one after the other
+    join,
     member_access,
     index,
     dereference,
@@ -33,6 +35,8 @@ pub const Construct = enum {
     bit_cast,
     type_test,
     type_of,
+    // `isstc x`: whether `x` is a static value here (a `stc?` parameter given one)
+    static_test,
     size_of,
     length_or_tag,
     branch,
@@ -82,6 +86,7 @@ const construct_table = .{
     .{ .logical_xor, .{.binary_logic_xor} },
     .{ .call, .{ .fun_call, .builtin_call } },
     .{ .record_update, .{.with} },
+    .{ .join, .{.binary_join} },
     .{ .member_access, .{.member} },
     .{ .index, .{.array_index} },
     .{ .dereference, .{.dereference} },
@@ -91,6 +96,7 @@ const construct_table = .{
     .{ .bit_cast, .{.asbits} },
     .{ .type_test, .{.oftype} },
     .{ .type_of, .{.typeof} },
+    .{ .static_test, .{.isstc} },
     .{ .size_of, .{ .sizeof, .alignof } },
     .{ .length_or_tag, .{ .lenof, .tagof } },
     .{ .branch, .{ .if_then, .if_else, .stcif_then, .stcif_else } },
@@ -125,12 +131,13 @@ const construct_table = .{
         .type_f16,            .type_f32,              .type_f64,       .type_bool,
         .type_ast,            .type_type,             .type_trait,     .type_variant,
         .type_unit,           .type_inlfun,           .type_fun,       .type_stcfun,
-        .def_fun_declaration, .unify_variants_packed, .unify_variants,
+        .def_fun_declaration, .unify_variants_packed, .unify_variants, .type_slice,
+        .variant_difference,
     } },
     .{ .type_definition, .{
         .def_type,           .def_type_packed,    .def_type_assertsize, .def_type_implof,
         .def_variant,        .def_variant_packed, .def_variant_tagtype, .def_variant_assertsize,
-        .def_variant_implof, .def_trait,          .def_trait_implof,
+        .def_variant_implof, .def_trait,          .def_trait_implof,    .def_variant_notagtype,
     } },
     .{ .part, .{
         .none,                               .partial__fun_def_header,
@@ -148,7 +155,10 @@ const construct_table = .{
         .partial__variant_def_param_tagged,  .partial__trait_def_implof_tuple,
         .partial__trait_def_body,            .partial__fun_call_param_tuple,
         .partial__fun_call_assigned_param,   .partial__destructure,
-        .partial__assign_multival,
+        .partial__assign_multival,           .partial__match_case_where,
+        .partial__match_case_pattern_bits,   .partial__bits_field,
+        .partial__bits_rest,                 .stc_maybe,
+        .hole,
     } },
 };
 

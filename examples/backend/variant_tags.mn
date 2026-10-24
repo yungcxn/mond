@@ -78,7 +78,7 @@ type Slot = *(&Msg any);
 fun slot_kind = (Slot s) -> i64: ret tagof s.any as i64;
 fun scaled = (u32 ||| f32 x) -> i64: ret match x { u32 i => i as i64 * 10, f32 f => (f * 10.0) as i64 };
 
-variant Word = +(Int(u32), Float(f32), Bytes([4]u8)) tagtype _;
+variant Word = +(Int(u32), Float(f32), Bytes([4]u8)) notagtype;
 fun word_bits = (Word w) -> i64: ret (w as Word.Int).$0 as i64;
 
 main = (u32 argc, &&u8 argv) {

@@ -1,0 +1,11 @@
+# `tagtype self.field` names a scalar field of the one payload case, its tags fit the field
+variant Missing = +(A(u8 x, u8 y), B) tagtype self.z; #! unknown_member
+variant NoScalar = +(A(u8 x, [2]u8 y), B) tagtype self.y; #! self_tag_without_niche
+variant TwoPayloads = +(A(u8 x, u8 y), C(u8 z), B) tagtype self.y; #! self_tag_without_niche
+variant NoPayload = +(A, B) tagtype self.y; #! self_tag_without_niche
+variant Overflows = +(A(u8 x, u8 y), B = 300) tagtype self.y; #! tag_overflow
+variant Fine = +(A(u8 x, u8 y), B = 7) tagtype self.y;
+stc u8 TAG = tagof Fine.B; #! invalid_operand
+fun not_all = (Fine f) -> u8: ret match f { Fine.A(x, y) => x }; #! non_exhaustive_match
+
+main = () {}

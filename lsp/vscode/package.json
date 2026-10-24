@@ -1,7 +1,7 @@
 {
 	"name": "mond",
 	"displayName": "mond",
-	"description": "mond language support: highlighting, diagnostics, go to definition, references, outline, hover and completion from the mond compiler",
+	"description": "mond language support: highlighting, diagnostics, go to definition, references, outline, hover, completion, stc values and macro expansions from the mond compiler",
 	"publisher": "mond",
 	"version": "0.0.1",
 	"engines": {
@@ -16,6 +16,13 @@
 		"onLanguage:mond"
 	],
 	"contributes": {
+		"commands": [
+			{
+				"command": "mond.expansions",
+				"title": "Step Through Macro Expansions",
+				"category": "mond"
+			}
+		],
 		"languages": [
 			{
 				"id": "mond",

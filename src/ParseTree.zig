@@ -29,12 +29,14 @@ pub const Node = struct {
         .{ "Array", "array", []const NodeId },
         .{ "ArrayEmpty", "array_empty", .leaf },
         .{ "TypeOf", "typeof", struct { subnode: NodeId } },
+        .{ "IsStatic", "isstc", struct { subnode: NodeId } },
         .{ "SizeOf", "sizeof", struct { subnode: NodeId } },
         .{ "AlignOf", "alignof", struct { subnode: NodeId } },
         .{ "LengthOf", "lenof", struct { subnode: NodeId } },
         .{ "TagOf", "tagof", struct { subnode: NodeId } },
         .{ "TypeArray", "type_array", struct { length: NodeId, type: NodeId } },
         .{ "TypeArrayUnlengthed", "type_array_unlengthed", struct { type: NodeId } },
+        .{ "TypeSlice", "type_slice", struct { type: NodeId } },
         .{ "NegateNumerical", "neg_num", struct { subnode: NodeId } },
         .{ "NegateLogical", "neg_logic", struct { subnode: NodeId } },
         .{ "IncrementPrefix", "inc_prefix", struct { subnode: NodeId } },
@@ -70,6 +72,10 @@ pub const Node = struct {
         .{ "PartialExpression_MatchCase", "partial__match_case", struct { pattern: NodeId, body: NodeId } },
         .{ "PartialExpression_MatchCasePatternOr", "partial__match_case_pattern_or", []const NodeId },
         .{ "PartialExpression_MatchCasePatternTypeCast", "partial__match_case_pattern_typecast", struct { type: NodeId, casted_var: NodeId } },
+        .{ "PartialExpression_MatchCaseWhere", "partial__match_case_where", struct { pattern: NodeId, where_predicate: NodeId } },
+        .{ "PartialExpression_MatchCasePatternBits", "partial__match_case_pattern_bits", []const NodeId },
+        .{ "PartialExpression_BitsField", "partial__bits_field", struct { type: NodeId, pattern: NodeId } },
+        .{ "PartialExpression_BitsRest", "partial__bits_rest", struct { subnode: NodeId } },
         .{ "TypePointerMutable", "type_ptrmut", struct { subnode: NodeId } },
         .{ "TypePointer", "type_ptr", struct { subnode: NodeId } },
         .{ "TypeUnsignedInteger8", "type_u8", .leaf },
@@ -99,6 +105,7 @@ pub const Node = struct {
         .{ "VariantDefinition", "def_variant", struct { param_tuple: NodeId } },
         .{ "VariantDefinitionPacked", "def_variant_packed", struct { param_tuple: NodeId } },
         .{ "VariantDefinitionWithTag", "def_variant_tagtype", struct { def_variant: NodeId, tagtype: NodeId } },
+        .{ "VariantDefinitionUntagged", "def_variant_notagtype", struct { def_variant: NodeId } },
         .{ "VariantDefinitionWithAssertedSize", "def_variant_assertsize", struct { def_variant: NodeId, assertsize: NodeId } },
         .{ "VariantDefinitionWithTrait", "def_variant_implof", struct { def_variant: NodeId, def_trait: NodeId } },
         .{ "TraitDefinition", "def_trait", struct { body: NodeId } },
@@ -118,6 +125,7 @@ pub const Node = struct {
         .{ "PartialExpression_TraitDefinitionBody", "partial__trait_def_body", []const NodeId },
         .{ "UnifyVariants", "unify_variants", struct { left_type: NodeId, right_type: NodeId } },
         .{ "UnifyVariantsPacked", "unify_variants_packed", struct { left_type: NodeId, right_type: NodeId } },
+        .{ "VariantDifference", "variant_difference", struct { left_type: NodeId, right_type: NodeId } },
         .{ "With", "with", struct { value: NodeId, fun_call_param_tuple: NodeId } },
         .{ "FunctionCall", "fun_call", struct { callable: NodeId, fun_param_tuple: NodeId } },
         .{ "BuiltinCall", "builtin_call", struct { callable: NodeId, fun_param_tuple: NodeId } },
@@ -161,6 +169,7 @@ pub const Node = struct {
         .{ "BinaryModulus", "binary_mod", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryShiftLeft", "binary_shift_left", struct { lhs: NodeId, rhs: NodeId } },
         .{ "BinaryShiftRight", "binary_shift_right", struct { lhs: NodeId, rhs: NodeId } },
+        .{ "BinaryJoin", "binary_join", struct { lhs: NodeId, rhs: NodeId } },
         .{ "IdentifierSelf", "identifier_self", .leaf },
         .{ "Identifier", "identifier", .references_token },
         .{ "StringValue", "string", .references_token },
@@ -184,6 +193,8 @@ pub const Node = struct {
         .{ "ModifierPublic", "mod_pub", struct { subnode: NodeId } },
         .{ "ModifierMutable", "mod_mut", struct { subnode: NodeId } },
         .{ "ModifierStatic", "mod_stc", struct { subnode: NodeId } },
+        .{ "ParameterStaticMaybe", "stc_maybe", struct { subnode: NodeId } },
+        .{ "Hole", "hole", .leaf },
         .{ "AssignmentAdd", "assign_add", struct { lhs: NodeId, rhs: NodeId } },
         .{ "AssignmentSubtract", "assign_sub", struct { lhs: NodeId, rhs: NodeId } },
         .{ "AssignmentMultiply", "assign_mul", struct { lhs: NodeId, rhs: NodeId } },
@@ -238,6 +249,7 @@ pub const Node = struct {
 
     // the names of the kinds in a program (`ast.BinaryAdd`), `PartialExpression_` left out
     pub const case_names = blk: {
+        @setEvalBranchQuota(10_000);
         var t: [DefTable.len][]const u8 = undefined;
         for (DefTable, 0..) |def, i| t[i] = if (std.mem.startsWith(u8, def[0], "PartialExpression_")) def[0]["PartialExpression_".len..] else def[0];
         break :blk t;
@@ -305,6 +317,7 @@ pub const Node = struct {
         for ([_]Kind{
             .type_array,
             .type_array_unlengthed,
+            .type_slice,
             .def_fun_declaration,
             .typeof,
             .unify_variants,
@@ -383,6 +396,8 @@ pub const Param = struct {
     @"else": NodeId = 0,
     is_mut: bool = false,
     stc: bool = false,
+    // `stc? T x`: static where the call gives a static value
+    maybe_static: bool = false,
 
     pub fn from_node(tree: *const ParseTree, n0: NodeId) Param {
         var p = Param{};
@@ -400,6 +415,10 @@ pub const Param = struct {
                 .partial__type_def_param_mut => p.is_mut = true,
                 .partial__fun_def_param, .partial__type_def_param => {
                     p.ty = tree.arg(n, 0);
+                    if (p.ty != 0 and tree.kind(p.ty) == .stc_maybe) {
+                        p.ty = tree.arg(p.ty, 0);
+                        p.maybe_static = true;
+                    }
                     return p;
                 },
                 else => {
@@ -417,6 +436,7 @@ pub const Def = struct {
     body: NodeId = 0,
     size: NodeId = 0,
     tagtype: NodeId = 0,
+    untagged: bool = false,
 
     pub fn from_node(tree: *const ParseTree, n: NodeId) Def {
         var d = Def{ .core = n };
@@ -424,6 +444,7 @@ pub const Def = struct {
             .def_type_implof, .def_variant_implof => d.body = tree.arg(d.core, 1),
             .def_type_assertsize, .def_variant_assertsize => d.size = tree.arg(d.core, 1),
             .def_variant_tagtype => d.tagtype = tree.arg(d.core, 1),
+            .def_variant_notagtype => d.untagged = true,
             else => return d,
         };
     }

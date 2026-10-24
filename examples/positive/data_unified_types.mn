@@ -2,7 +2,7 @@
 # one case; the smallest tag tells them apart and the room of the widest holds the value
 type Pt = *(i32 x, i32 y);
 variant Shape = +(Dot, Circle(u32 r));
-variant Word = +(Int(u32), Float(f32)) tagtype _;
+variant Word = +(Int(u32), Float(f32)) notagtype;
 variant Any = u32 || f32 || Pt || Shape || Word;
 variant Scalar = u8 || i64;
 variant Wider = Scalar || bool;    # a unified variant on a side brings its members

@@ -2,6 +2,7 @@ const std = @import("std");
 const DynamicBuffer = @import("containers.zig").DynamicBuffer;
 const ParseTree = @import("ParseTree.zig");
 const Resolver = @import("Resolver.zig");
+const Value = @import("resolver/interpreter/Value.zig");
 const StaticPool = @import("resolver/StaticPool.zig");
 const NamePool = @import("resolver/NamePool.zig");
 const BodyPool = @import("resolver/BodyPool.zig");
@@ -84,6 +85,9 @@ loops: DynamicBuffer(Loop),
 stack_slots: std.AutoHashMapUnmanaged(DeclPool.Index, Ref) = .empty,
 // variables of the current body whose address is taken, they must live in memory
 address_taken: std.AutoHashMapUnmanaged(DeclPool.Index, void) = .empty,
+// places of fields sharing a byte with another (`StaticPool.is_bit_field`), read and written
+// through their whole record: its address, its type and the field
+bit_places: std.AutoHashMapUnmanaged(Ref, struct { Ref, Index, u32 }) = .empty,
 return_type: Index = .unit_type,
 body: BodyPool.Body = .{},
 
@@ -110,6 +114,7 @@ pub fn deinit(self: *HighLowerer) void {
     self.next_overload_of.deinit(self.allocator);
     self.global_index_of.deinit(self.allocator);
     self.stack_slots.deinit(self.allocator);
+    self.bit_places.deinit(self.allocator);
     self.address_taken.deinit(self.allocator);
 
     self.ir.deinit();
@@ -162,7 +167,7 @@ pub fn lower(self: *HighLowerer) void {
         self.ir.globals.push(.{
             .decl = declaration,
             .ty = self.substituted(declarations.value_type[i]),
-            .init = if (flags.is_stc) declarations.static_value[i] else .none,
+            .init = if (flags.is_stc) self.stored(declarations.static_value[i]) else .none,
         });
     }
 
@@ -284,9 +289,10 @@ fn ensure_function(self: *HighLowerer, declaration: DeclPool.Index) u32 {
 
 // types and nodes
 
+// a subset of a variant is lowered as its whole
 fn substituted(self: *HighLowerer, value_type: Index) Index {
     if (value_type == .none) return value_type;
-    return self.static_pool.substitute_type_variables(value_type);
+    return self.static_pool.whole_of(self.static_pool.substitute_type_variables(value_type));
 }
 
 fn type_of(self: *HighLowerer, node: NodeId) Index {
@@ -312,7 +318,7 @@ fn is_pointer(self: *HighLowerer, value_type: Index) bool {
 }
 
 fn pointee_of(self: *HighLowerer, pointer_type: Index) Index {
-    return self.static_pool.get(pointer_type).pointer_type.pointee;
+    return self.static_pool.whole_of(self.static_pool.get(pointer_type).pointer_type.pointee);
 }
 
 fn dereferenced_type(self: *HighLowerer, value_type: Index) Index {
@@ -340,8 +346,10 @@ fn lives_in_memory(self: *HighLowerer, value_type: Index) bool {
     if (value_type == .none) return false;
     return switch (self.static_pool.get(value_type)) {
         .unified_variant_type => true,
-        .variant_type => |variant| variant.tag_mode != .self,
+        .variant_type => |variant| variant.tag_mode != .self or
+            self.static_pool.is_field_tagged(value_type),
         .variant_case_type => |case| self.lives_in_memory(case.variant),
+        .variant_subset_type => |subset| self.lives_in_memory(subset.whole),
         else => false,
     };
 }
@@ -411,11 +419,54 @@ fn alloca(self: *HighLowerer, value_type: Index) Ref {
 }
 
 fn store(self: *HighLowerer, pointer: Ref, value: Ref) void {
+    // a bit field: its record made anew with it and stored whole
+    if (self.bit_places.get(pointer)) |bit_place| {
+        const record_pointer, const record_type, const field = bit_place;
+        const record = self.load(record_type, record_pointer);
+        const mark = self.scratch.len;
+        const field_count = self.static_pool.get(record_type).record_type.field_types.len;
+        for (0..field_count) |i| {
+            const field_type = self.static_pool.field_type(record_type, i);
+            const part = if (i == field)
+                value
+            else
+                self.builder.emit(.extract, field_type, @intFromEnum(record), @intCast(i));
+            self.scratch.push(@intFromEnum(part));
+        }
+        const fields = self.builder.list(self.scratch.buffer[mark..self.scratch.len]);
+        self.scratch.len = mark;
+        const made = self.builder.emit(.aggregate, record_type, 0, fields);
+        _ = self.builder.emit_refs(.store, .unit_type, record_pointer, made);
+        return;
+    }
     _ = self.builder.emit_refs(.store, .unit_type, pointer, value);
 }
 
 fn load(self: *HighLowerer, value_type: Index, pointer: Ref) Ref {
+    if (self.bit_places.get(pointer)) |bit_place| {
+        const record_pointer, const record_type, const field = bit_place;
+        const record = self.builder.emit_refs(.load, record_type, record_pointer, .none);
+        return self.builder.emit(.extract, value_type, @intFromEnum(record), field);
+    }
     return self.builder.emit_refs(.load, value_type, pointer, .none);
+}
+
+// a field's place, remembered when it is a bit field
+fn field_pointer(
+    self: *HighLowerer,
+    field_type: Index,
+    record: Ref,
+    record_type: Index,
+    field: u32,
+) Ref {
+    const pointer_type = self.pointer_to(field_type);
+    const pointer = self.builder.emit(.field_ptr, pointer_type, @intFromEnum(record), field);
+    const is_bit_field = self.static_pool.tag(record_type) == .record_type and
+        self.static_pool.is_bit_field(self.static_pool.get(record_type).record_type, field);
+    if (is_bit_field) {
+        put_entry(self.allocator, &self.bit_places, pointer, .{ record, record_type, field });
+    }
+    return pointer;
 }
 
 fn unit() Ref {
@@ -518,6 +569,7 @@ fn reset_function_state(self: *HighLowerer) void {
         &self.loops,
     }) |buffer| buffer.len = 0;
     self.stack_slots.clearRetainingCapacity();
+    self.bit_places.clearRetainingCapacity();
     self.address_taken.clearRetainingCapacity();
 }
 
@@ -699,6 +751,12 @@ fn coerce(self: *HighLowerer, value: Ref, unsubstituted_from: Index, unsubstitut
             return self.builder.emit(.convert, to, @intFromEnum(value), @intFromEnum(into_unified));
         },
         .payload_to_self_tagged => self.wrap_in_payload_case(value, from, to),
+        // an array value is the address of its own copy
+        .to_slice => {
+            const array_type = self.static_pool.pointee(from);
+            const length = self.static_pool.static_length(array_type).?;
+            return self.slice_from(value, to, self.builder.constant_int(.u64_type, length));
+        },
         .int_widen,
         .float_widen,
         .string_to_ptr,
@@ -730,9 +788,63 @@ fn payload_case_index(self: *HighLowerer, variant: Index) u32 {
     return 0;
 }
 
-fn constant_of(self: *HighLowerer, value: Index, value_type: Index) Ref {
+// a static value with the bits a strategy stores for each value of a variant it stores (constants
+// are made without running code), the value itself when it holds none
+fn stored(self: *HighLowerer, value: Index) Index {
     const pool = self.static_pool;
+    if (value == .none) return value;
+    switch (pool.get(value)) {
+        // a case without payload is its own value
+        .variant_value, .variant_case_type => {
+            const variant_value: StaticPool.VariantValue = if (pool.tag(value) == .variant_value)
+                pool.get(value).variant_value
+            else
+                .{ .case = value, .payload = .none };
+            const case = pool.get(variant_value.case).variant_case_type;
+            if (pool.tag(case.variant) != .variant_type) return value;
+            const variant = pool.get(case.variant).variant_type;
+            if (variant.tag_mode != .custom) return value;
+            const bits = if (variant_value.payload == .none) 0 else blk: {
+                const field = pool.get(variant_value.payload).aggregate_value.elements[0];
+                break :blk Value.of(pool, field).raw_bits();
+            };
+            const parts = pool.get(variant.strategy).aggregate_value.elements;
+            const storage = parts[0];
+            var context = Resolver.FunctionContext{};
+            const tag = pool.case_tag(variant_value.case);
+            const arguments = [_]Value{ .int(.u32_type, tag), .int(.u64_type, bits) };
+            const made = self.resolver.interpreter.call_static(&context, 0, parts[1], &arguments);
+            return pool.intern(.{ .int_value = .{ .value_type = storage, .bits = made.bits } });
+        },
+        .aggregate_value => |aggregate| {
+            const elements = self.resolver.temporary_slice(Index, aggregate.elements.len);
+            @memcpy(elements, aggregate.elements);
+            var changed = false;
+            for (elements) |*element| {
+                const element_stored = self.stored(element.*);
+                changed = changed or element_stored != element.*;
+                element.* = element_stored;
+            }
+            if (!changed) return value;
+            const value_type = pool.get(value).aggregate_value.value_type;
+            return pool.intern(.{
+                .aggregate_value = .{ .value_type = value_type, .elements = elements },
+            });
+        },
+        else => return value,
+    }
+}
+
+fn constant_of(self: *HighLowerer, given: Index, value_type: Index) Ref {
+    const pool = self.static_pool;
+    const value = self.stored(given);
     if (value_type == .none) return Ref.of(value);
+    // a static slice is of a static array, read-only data: its address and its length
+    if (pool.tag(value_type) == .slice_type) {
+        const length = pool.static_length(pool.type_of(value)) orelse 0;
+        const length_ref = self.builder.constant_int(.u64_type, length);
+        return self.slice_from(Ref.of(value), value_type, length_ref);
+    }
     // a static value of a unified variant is the value of a member, made one like a run-time one
     if (pool.tag(value_type) == .unified_variant_type) {
         const own_type = if (pool.tag(value) == .variant_case_type) value else pool.type_of(value);
@@ -778,7 +890,108 @@ fn operation_of(operator: operators.BinaryOperator) Op {
 // expressions
 
 fn expression_as(self: *HighLowerer, node: NodeId, target_type: Index) Ref {
-    return self.coerce(self.expression(node), self.type_of(node), target_type);
+    // an array is sliced where it lives when it is a place, so writes through the slice reach it
+    const target = self.substituted(target_type);
+    const node_type = self.type_of(node);
+    const slices_place = target != .none and self.static_pool.tag(target) == .slice_type and
+        self.static_pool.tag(node_type) == .array_type and self.is_place(node);
+    if (slices_place) {
+        const length = self.static_pool.static_length(node_type).?;
+        const length_ref = self.builder.constant_int(.u64_type, length);
+        return self.slice_from(self.place(node), target, length_ref);
+    }
+    return self.coerce(self.expression(node), node_type, target_type);
+}
+
+// `[..]T` of the address of its first element and its length
+fn slice_from(self: *HighLowerer, first: Ref, slice_type: Index, length: Ref) Ref {
+    const parts = self.builder.list(&.{ @intFromEnum(first), @intFromEnum(length) });
+    return self.builder.emit(.aggregate, slice_type, 0, parts);
+}
+
+// a slice's address of its first element (`part` 0) or its length (1)
+fn slice_part(self: *HighLowerer, slice: Ref, slice_type: Index, part: u32) Ref {
+    const part_type = self.static_pool.field_type(slice_type, part);
+    return self.builder.emit(.extract, part_type, @intFromEnum(slice), part);
+}
+
+// the slice a node is, or the one a pointer to it reaches
+fn slice_value(self: *HighLowerer, node: NodeId) Ref {
+    const node_type = self.type_of(node);
+    const value = self.expression(node);
+    return if (self.is_pointer(node_type)) self.load(self.pointee_of(node_type), value) else value;
+}
+
+// an index or bound as a `u64`: a negative one wraps past any length
+fn as_length(self: *HighLowerer, value: Ref) Ref {
+    if (self.type_of_ref(value) == .u64_type) return value;
+    const resize = @intFromEnum(StaticPool.CastKind.int_resize);
+    return self.builder.emit(.cast, .u64_type, @intFromEnum(value), resize);
+}
+
+// continues where `holds` is true; the other side stops the program, a trap in the modes that
+// keep the runtime checks
+fn check(self: *HighLowerer, holds: Ref) void {
+    const passed = self.builder.new_block();
+    const failed = self.builder.new_block();
+    self.builder.branch_if(holds, passed, failed);
+    self.builder.go_to(failed);
+    self.emit_unreachable();
+    self.builder.go_to(passed);
+}
+
+// `a[lo..<hi]`: a slice of the elements of a slice, an array or a pointer, or a copy of that
+// part as an array; the bounds are checked against the length where there is one
+fn range_index(self: *HighLowerer, node: NodeId) Ref {
+    const tree = self.resolver.tree;
+    const base = tree.arg(node, 0);
+    const range = ParseTree.Range.from_node(tree, tree.arg(node, 1));
+    const result_type = self.type_of(node);
+    const base_type = self.type_of(base);
+    const container = self.dereferenced_type(base_type);
+    const element = switch (self.static_pool.get(container)) {
+        .slice_type => |slice| slice.element,
+        .array_type => |array| array.element,
+        else => container,
+    };
+    const element_pointer = self.pointer_to(element);
+    const first: Ref, const length: ?Ref = switch (self.static_pool.tag(container)) {
+        .slice_type => blk: {
+            const slice = self.slice_value(base);
+            const slice_first = self.slice_part(slice, container, 0);
+            break :blk .{ slice_first, self.slice_part(slice, container, 1) };
+        },
+        else => blk: {
+            const by_value = self.is_pointer(base_type) or !self.is_place(base);
+            const address = if (by_value) self.expression(base) else self.place(base);
+            const static_length = self.static_pool.static_length(container);
+            const as_elements = @intFromEnum(StaticPool.CoercionKind.array_ptr_to_elem_ptr);
+            const start = if (static_length != null)
+                self.builder.emit(.convert, element_pointer, @intFromEnum(address), as_elements)
+            else
+                address;
+            const known: ?Ref = if (static_length) |end|
+                self.builder.constant_int(.u64_type, end)
+            else
+                null;
+            break :blk .{ start, known };
+        },
+    };
+    const low = if (range.lo != 0)
+        self.as_length(self.expression(range.lo))
+    else
+        self.builder.constant_int(.u64_type, 0);
+    const high = if (range.hi == 0) length.? else blk: {
+        const bound = self.as_length(self.expression(range.hi));
+        if (!range.incl) break :blk bound;
+        const one = self.builder.constant_int(.u64_type, 1);
+        break :blk self.builder.emit_refs(.add, .u64_type, bound, one);
+    };
+    self.check(self.builder.emit_refs(.le, .bool_type, low, high));
+    if (length) |end| self.check(self.builder.emit_refs(.le, .bool_type, high, end));
+    const start = self.builder.emit_refs(.index_ptr, element_pointer, first, low);
+    if (self.static_pool.tag(result_type) != .slice_type) return self.load(result_type, start);
+    return self.slice_from(start, result_type, self.builder.emit_refs(.sub, .u64_type, high, low));
 }
 
 fn expression(self: *HighLowerer, node: NodeId) Ref {
@@ -830,14 +1043,25 @@ fn expression(self: *HighLowerer, node: NodeId) Ref {
         .length_or_tag => {
             const operand = self.resolver.tree.arg(node, 0);
             const operand_type = self.type_of(operand);
-            if (self.resolver.tree.kind(node) == .lenof) return self.array_length(operand_type);
+            const is_length = self.resolver.tree.kind(node) == .lenof;
+            const sliced = self.dereferenced_type(operand_type);
+            if (is_length and self.static_pool.tag(sliced) == .slice_type) {
+                return self.slice_part(self.slice_value(operand), sliced, 1);
+            }
+            if (is_length) return self.array_length(operand_type);
             const owner = self.static_pool.through_pointer(operand_type);
             return self.variant_tag_of(operand, operand_type, owner);
         },
-        .index => self.load(value_type, self.place(node)),
+        .index => if (self.resolver.tree.props(second).range)
+            self.range_index(node)
+        else
+            self.load(value_type, self.place(node)),
         .dereference => self.load(value_type, self.expression(first)),
         .address_of => self.place(first),
         .array_literal => self.array_literal(node, kind, value_type),
+        // the checker knew the answer
+        .static_test => Ref.of(self.static_value_of(node) orelse .bool_false),
+        .join => self.join(value_type, first, second),
         .cast => self.cast(node, value_type, first),
         .bit_cast => self.bit_cast(value_type, first),
         .branch => self.if_else(node),
@@ -868,8 +1092,33 @@ fn expression(self: *HighLowerer, node: NodeId) Ref {
         },
         .deferred_deinit => self.deferred_deinit(node, first),
         .unwrap => self.unwrap(node),
-        // a value's type is known once traits are realized per type, its test was taken above
-        .type_test => unreachable,
+        // a value of a type its case or member is (see `StaticPool.units_covered`), tested on its
+        // tag. any other answer was known and taken above
+        .type_test => {
+            const tested = self.static_value_of(second) orelse return Ref.of(.bool_false);
+            const operand_type = self.type_of(first);
+            const subject_type = self.static_pool.through_pointer(operand_type);
+            var value = self.expression(first);
+            if (self.static_pool.is_pointer(operand_type)) value = self.load(subject_type, value);
+            const mark = self.scratch.len;
+            defer self.scratch.len = mark;
+            const pool_mark = self.static_pool.scratch.len;
+            self.static_pool.push_units(subject_type);
+            const units = self.static_pool.scratch.buffer[pool_mark..self.static_pool.scratch.len];
+            for (units) |each| self.scratch.push(@intFromEnum(each));
+            self.static_pool.scratch.len = pool_mark;
+            var holds: Ref = .none;
+            for (self.scratch.buffer[mark..self.scratch.len]) |bits| {
+                const each: Index = @enumFromInt(bits);
+                if (!self.static_pool.covers_unit(tested, each)) continue;
+                const is_unit = self.tests_case(value, subject_type, each);
+                holds = if (holds == .none)
+                    is_unit
+                else
+                    self.builder.emit_refs(.bit_or, .bool_type, holds, is_unit);
+            }
+            return if (holds == .none) Ref.of(.bool_false) else holds;
+        },
         .lambda => self.function_value(self.declaration_of(node)),
         // compile-time only: their value, if any, is static and was taken above
         .range,
@@ -938,7 +1187,11 @@ fn numeric_negation(self: *HighLowerer, node: NodeId, value_type: Index, operand
 fn block(self: *HighLowerer, node: NodeId) Ref {
     const mark = self.defers.len;
     var last = unit();
-    for (self.resolver.tree.manychildren(node)) |statement| last = self.expression(statement);
+    // what follows a `ret`, `brk` or `cont` never runs (and a folding check may have skipped it)
+    for (self.resolver.tree.manychildren(node)) |statement| {
+        if (self.builder.is_unreachable) break;
+        last = self.expression(statement);
+    }
     self.run_defers(mark);
     self.defers.len = mark;
     return last;
@@ -959,6 +1212,30 @@ fn array_literal(self: *HighLowerer, node: NodeId, kind: NodeKind, array_type: I
     const values = self.builder.list(self.scratch.buffer[mark..self.scratch.len]);
     self.scratch.len = mark;
     return self.builder.emit(.aggregate, array_type, 0, values);
+}
+
+// `a ~ b` of arrays (behind pointers too): both stored one after the other in a new one
+fn join(self: *HighLowerer, joined_type: Index, left: NodeId, right: NodeId) Ref {
+    const element = self.static_pool.get(joined_type).array_type.element;
+    const element_pointer = self.pointer_to(element);
+    const slot = self.alloca(joined_type);
+    const as_elements = @intFromEnum(StaticPool.CoercionKind.array_ptr_to_elem_ptr);
+    const first = self.builder.emit(.convert, element_pointer, @intFromEnum(slot), as_elements);
+    var at = first;
+    for ([2]NodeId{ left, right }) |operand| {
+        const operand_type = self.substituted(self.type_of(operand));
+        const array_type = self.dereferenced_type(operand_type);
+        const value = if (self.is_pointer(operand_type))
+            self.load(array_type, self.expression(operand))
+        else
+            self.expression_as(operand, array_type);
+        self.store(at, value);
+        if (operand == right) break;
+        const length = self.static_pool.static_length(array_type).?;
+        const offset = self.builder.constant_int(.u64_type, length);
+        at = self.builder.emit_refs(.index_ptr, element_pointer, first, offset);
+    }
+    return self.load(joined_type, slot);
 }
 
 fn cast(self: *HighLowerer, node: NodeId, target_type: Index, operand: NodeId) Ref {
@@ -990,8 +1267,21 @@ fn cast(self: *HighLowerer, node: NodeId, target_type: Index, operand: NodeId) R
         if (self.is_pointer(target_type)) return pointer;
         return self.load(target_type, pointer);
     }
+    // an array seen whole as a slice, where it lives when it is a place
+    if (kind == .array_to_slice) {
+        const from_pointer = self.is_pointer(from);
+        const array_type = self.static_pool.pointee(from);
+        const by_value = from_pointer or !self.is_place(operand);
+        const first = if (by_value) self.expression(operand) else self.place(operand);
+        const length = self.static_pool.static_length(array_type).?;
+        return self.slice_from(first, target_type, self.builder.constant_int(.u64_type, length));
+    }
     const value = self.expression(operand);
     if (kind == .identity) return value;
+    // the address of a slice's first element
+    if (kind == .slice_to_pointer) {
+        return self.builder.emit(.extract, target_type, @intFromEnum(value), 0);
+    }
     return self.builder.emit(.cast, target_type, @intFromEnum(value), @intFromEnum(kind));
 }
 
@@ -1030,7 +1320,9 @@ fn name_value(self: *HighLowerer, node: NodeId) Ref {
     if (kind.is_function()) return self.function_value(declaration);
     const stands_for_static_value = self.resolver.decl_pool.get(declaration, .flags).is_stc or
         switch (kind) {
-            .static_parameter, .parameter, .type_alias, .record, .variant, .trait => true,
+            // a binder of a pattern matched while checking (`stcmatch`) has its value
+            .static_parameter, .parameter, .pattern_binder => true,
+            .type_alias, .record, .variant, .trait => true,
             else => false,
         };
     if (value != .none and stands_for_static_value) {
@@ -1118,8 +1410,10 @@ fn lower_assignment(self: *HighLowerer, statement_node: NodeId) void {
         return self.store(self.place(target), value);
     }
 
-    // every value is computed before the first is stored, so `a, b = b, a` swaps
-    const shared = if (values.len == 1) self.expression(values[0]) else Ref.none;
+    // every value is computed before the first is stored, so `a, b = b, a` swaps. one value for one
+    // name is lowered as it is taken, so an array becomes a slice where it lives
+    const is_shared = values.len == 1 and assignees.len > 1;
+    const shared = if (is_shared) self.expression(values[0]) else Ref.none;
     const mark = self.scratch.len;
     defer self.scratch.len = mark;
     for (assignees, 0..) |assignee, i| {
@@ -1143,6 +1437,7 @@ fn lower_assignment(self: *HighLowerer, statement_node: NodeId) void {
                 break :blk self.builder.emit(.zeroed, target_type, 0, 0);
             }
             if (values.len > 1) break :blk self.expression_as(values[i], target_type);
+            if (assignees.len == 1) break :blk self.expression_as(values[0], target_type);
             break :blk self.coerce(shared, self.type_of(values[0]), target_type);
         };
         self.scratch.push(@intFromEnum(value));
@@ -1281,7 +1576,9 @@ fn if_else(self: *HighLowerer, node: NodeId) Ref {
     const result_type = self.type_of(node);
     const parts = ParseTree.Branch.from_node(self.resolver.tree, node);
     const has_else = parts.@"else" != 0;
-    if (self.resolver.tree.props(node).stc) {
+    // a condition the checker knew (`stcif`, a static `stc?` argument) takes one side only
+    const known = self.static_value_of(parts.cond) orelse .none;
+    if (self.resolver.tree.props(node).stc or known == .bool_true or known == .bool_false) {
         const takes_then = (self.static_value_of(parts.cond) orelse .bool_false) == .bool_true;
         if (takes_then) return self.expression_as(parts.then, result_type);
         if (has_else) return self.expression_as(parts.@"else", result_type);
@@ -1330,11 +1627,11 @@ fn match_expression(self: *HighLowerer, node: NodeId) Ref {
     const tree = self.resolver.tree;
     const result_type = self.type_of(node);
     const arms = tree.manychildren(tree.arg(node, 1));
-    if (tree.kind(node) == .stcmatch) {
-        for (arms) |arm| {
-            if ((self.static_value_of(arm) orelse .none) != .bool_true) continue;
-            return self.expression_as(tree.arg(arm, 1), result_type);
-        }
+    // the arm the checker took for a static scrutinee (`stcmatch`, a static `stc?` argument), its
+    // names static values: no other arm is lowered
+    for (arms) |arm| {
+        if ((self.static_value_of(arm) orelse .none) != .bool_true) continue;
+        return self.expression_as(tree.arg(arm, 1), result_type);
     }
 
     var scrutinee_type = self.type_of(tree.arg(node, 0));
@@ -1348,12 +1645,15 @@ fn match_expression(self: *HighLowerer, node: NodeId) Ref {
 
     const result = if (has_value(result_type)) self.new_temporary(result_type) else none;
     const merge = self.builder.new_block();
-    if (self.lower_as_switch(arms, scrutinee, scrutinee_type, result_type, result, merge)) {
+    // the arms a switch took, the others are tested one after another from its default
+    const switched =
+        self.lower_as_switch(arms, scrutinee, scrutinee_type, result_type, result, merge);
+    if (switched == arms.len) {
         self.builder.go_to(merge);
         return self.merged_result(result);
     }
 
-    for (arms) |arm| {
+    for (arms[switched..]) |arm| {
         const arm_body = self.builder.new_block();
         const next_arm = self.builder.new_block();
         self.match_pattern(tree.arg(arm, 0), scrutinee, scrutinee_type, arm_body, next_arm);
@@ -1368,8 +1668,9 @@ fn match_expression(self: *HighLowerer, node: NodeId) Ref {
 
 // a unified variant flattens its members: a member's tags are moved into the member's own range,
 // a member that is one case (only of a unified variant) has one tag
-fn tag_constant(self: *HighLowerer, scrutinee_type: Index, case_or_member: Index) Ref {
+fn tag_constant(self: *HighLowerer, subset_or_scrutinee_type: Index, case_or_member: Index) Ref {
     const pool = self.static_pool;
+    const scrutinee_type = pool.whole_of(subset_or_scrutinee_type);
     const is_unified = scrutinee_type != .none and
         pool.tag(scrutinee_type) == .unified_variant_type;
     const container = if (is_unified)
@@ -1381,7 +1682,8 @@ fn tag_constant(self: *HighLowerer, scrutinee_type: Index, case_or_member: Index
 }
 
 // whether a value of `scrutinee_type` may be of `case`
-fn can_hold_case(self: *HighLowerer, scrutinee_type: Index, case: Index) bool {
+fn can_hold_case(self: *HighLowerer, subset_or_scrutinee_type: Index, case: Index) bool {
+    const scrutinee_type = self.static_pool.whole_of(subset_or_scrutinee_type);
     const variant = self.static_pool.get(case).variant_case_type.variant;
     if (scrutinee_type == .none or scrutinee_type == variant) return true;
     return switch (self.static_pool.get(scrutinee_type)) {
@@ -1400,14 +1702,16 @@ fn tests_case(self: *HighLowerer, value: Ref, scrutinee_type: Index, case: Index
 
 // a member of a unified variant is a variant of its own again once its tag is moved back into its
 // range
-fn narrow_to_variant(self: *HighLowerer, value: Ref, scrutinee_type: Index, variant: Index) Ref {
-    if (scrutinee_type == .none) return value;
+fn narrow_to_variant(self: *HighLowerer, value: Ref, value_type: Index, variant: Index) Ref {
+    if (value_type == .none) return value;
+    const scrutinee_type = self.static_pool.whole_of(value_type);
     if (self.static_pool.tag(scrutinee_type) != .unified_variant_type) return value;
     const retag = StaticPool.CastKind.variant_retag;
     return self.builder.emit(.cast, variant, @intFromEnum(value), @intFromEnum(retag));
 }
 
-// a `match` whose arms test constants, up to the first catch-all, becomes one `switch`
+// a `match` whose arms test constants, up to the first catch-all or guarded arm, becomes one
+// `switch`. how many arms it took, the arms after a guard continue from its default
 fn lower_as_switch(
     self: *HighLowerer,
     arms: []const NodeId,
@@ -1416,7 +1720,7 @@ fn lower_as_switch(
     result_type: Index,
     result: u32,
     merge: u32,
-) bool {
+) usize {
     // self-tagged variants keep their tag inside the payload, there is no tag to switch on
     const tagged = blk: {
         if (scrutinee_type == .none) break :blk false;
@@ -1427,20 +1731,26 @@ fn lower_as_switch(
     // the properties are read only for a real type, `.none` has no pool entry
     const switchable = tagged or scrutinee_type != .none and
         self.static_pool.properties(scrutinee_type).is_integer;
-    if (!switchable) return false;
+    if (!switchable) return 0;
 
     // how many leading arms go into the switch, none when it is not worth one
     var arm_count: u32 = 0;
     var keyed_count: u32 = 0;
+    var has_catch_all = false;
     for (arms) |arm| {
         const pattern = self.resolver.tree.arg(arm, 0);
-        const arm_kind = self.switch_arm_kind(pattern, scrutinee_type, tagged) orelse return false;
+        // a guard or bits are tested one after the other, below the switch
+        const kind = self.resolver.tree.kind(pattern);
+        if (kind == .partial__match_case_where or kind == .partial__match_case_pattern_bits) break;
+        const arm_kind = self.switch_arm_kind(pattern, scrutinee_type, tagged) orelse return 0;
         arm_count += 1;
         keyed_count += @intFromBool(arm_kind == .keyed);
-        if (arm_kind == .catch_all) break;
+        has_catch_all = arm_kind == .catch_all;
+        if (has_catch_all) break;
     }
-    if (keyed_count < 2) return false;
+    if (keyed_count < 2) return 0;
     const switched_arms = arms[0..arm_count];
+    const rest = if (has_catch_all) arms.len else arm_count;
 
     const mark = self.scratch.len;
     const first_arm_block = self.builder.block_count();
@@ -1487,12 +1797,13 @@ fn lower_as_switch(
         self.bind_pattern(self.resolver.tree.arg(arm, 0), scrutinee, scrutinee_type);
         self.arm_into(self.resolver.tree.arg(arm, 1), result_type, result, merge);
     }
-    // without a catch-all arm the default block is a fresh one nothing reaches
+    // without a catch-all arm the default block is a fresh one: the arms after a guard continue
+    // there, else nothing reaches it
     if (default_block == first_arm_block + arm_count) {
         self.builder.go_to(default_block);
-        self.emit_unreachable();
+        if (rest == arms.len) self.emit_unreachable();
     }
-    return true;
+    return rest;
 }
 
 // null when the pattern needs more than comparing the key, so no switch is possible
@@ -1661,6 +1972,13 @@ fn match_pattern(
         .partial__match_case_pattern_typecast => {
             self.match_type(pattern, value, value_type, matched, failed);
         },
+        // the guard runs once the pattern matched and bound its names
+        .partial__match_case_where => {
+            const pattern_matched = self.builder.new_block();
+            self.match_pattern(tree.arg(pattern, 0), value, value_type, pattern_matched, failed);
+            self.builder.go_to(pattern_matched);
+            self.builder.branch_if(self.expression(tree.arg(pattern, 1)), matched, failed);
+        },
         .labelarrow => {
             const labelled_matched = self.builder.new_block();
             const labelled = tree.arg(pattern, 0);
@@ -1672,11 +1990,52 @@ fn match_pattern(
         .fun_call => {
             self.match_destructuring(pattern, pattern_type, value, value_type, matched, failed);
         },
+        .partial__match_case_pattern_bits => {
+            self.match_bits(pattern, value, value_type, matched, failed);
+        },
         .gen_incl, .gen_excl, .gen_lowerbound, .gen_upperbound_incl, .gen_upperbound_excl => {
             self.match_range(pattern, value, value_type, matched, failed);
         },
         else => self.match_value(pattern, pattern_type, value, value_type, matched, failed),
     }
+}
+
+// `bits(..)`: each part tested on its bits from the lowest up, as its width's type
+fn match_bits(
+    self: *HighLowerer,
+    pattern: NodeId,
+    value: Ref,
+    value_type: Index,
+    matched: u32,
+    failed: u32,
+) void {
+    const tree = self.resolver.tree;
+    const resize = @intFromEnum(StaticPool.CastKind.int_resize);
+    var offset: u64 = 0;
+    for (tree.manychildren(pattern)) |part| {
+        const part_type = self.type_of(part);
+        const shift = self.builder.constant_int(value_type, offset);
+        const shifted = if (offset == 0)
+            value
+        else
+            self.builder.emit_refs(.shr, value_type, value, shift);
+        const part_value = if (part_type == value_type)
+            shifted
+        else
+            self.builder.emit(.cast, part_type, @intFromEnum(shifted), resize);
+        offset += self.static_pool.get(part_type).int_type.bits;
+        if (tree.kind(part) == .partial__bits_rest) {
+            const name = tree.arg(part, 0);
+            if (name != 0 and self.resolver.name_pool.name_of_node(name) != .underscore) {
+                self.declare_variable(self.declaration_of(name), part_value);
+            }
+            continue;
+        }
+        const part_matched = self.builder.new_block();
+        self.match_pattern(tree.arg(part, 1), part_value, part_type, part_matched, failed);
+        self.builder.go_to(part_matched);
+    }
+    self.builder.branch(matched);
 }
 
 // `x as T` in a pattern: binds the value seen as `T` when it is one
@@ -1877,7 +2236,17 @@ fn unwrap(self: *HighLowerer, node: NodeId) Ref {
 
     if (self.static_pool.tag(value_type) != .variant_type) return .none;
     const cases = self.static_pool.get(value_type).variant_type.cases;
-    const case = cases[self.payload_case_index(value_type)];
+    // a subset unwraps the first payload case it keeps: its own type, before it is lowered as the
+    // whole
+    const operand_node_type = self.resolver.node_info(self.body, .node_type, tree.arg(node, 0));
+    const kept_type = self.static_pool.through_pointer(
+        self.static_pool.substitute_type_variables(operand_node_type),
+    );
+    const kept_payload_case = self.static_pool.first_payload_case(kept_type);
+    const case = if (kept_payload_case != .none)
+        kept_payload_case
+    else
+        cases[self.payload_case_index(value_type)];
     const has_payload = self.tests_case(value, value_type, case);
     if (kind == .selftag_arrow) {
         self.bind_label(tree.arg(node, 1), self.case_payload(value, case));
@@ -1889,7 +2258,7 @@ fn unwrap(self: *HighLowerer, node: NodeId) Ref {
     self.builder.branch_if(has_payload, payload_block, empty_block);
     if (kind == .selftag_unwrap) {
         self.builder.go_to(empty_block);
-        self.return_fallback(value, value_type, case);
+        self.return_fallback(value, value_type, kept_type, case);
         self.builder.go_to(payload_block);
         return self.case_payload(value, case);
     }
@@ -1910,17 +2279,27 @@ fn unwrap(self: *HighLowerer, node: NodeId) Ref {
 
 // a failed bare `x??` returns the fallback of the result, which may be the case `value` holds:
 // each failing case that picks itself is tested in turn, the last failing one needs no test
-fn return_fallback(self: *HighLowerer, value: Ref, value_type: Index, unwrapped: Index) void {
-    const cases = self.static_pool.get(value_type).variant_type.cases;
+fn return_fallback(
+    self: *HighLowerer,
+    value: Ref,
+    value_type: Index,
+    kept_type: Index,
+    unwrapped: Index,
+) void {
+    const pool = self.static_pool;
+    const cases = pool.get(value_type).variant_type.cases;
+    // a value of a subset is none of the cases it leaves out
+    var kept_count: usize = 0;
+    for (cases) |case| kept_count += @intFromBool(!pool.is_removed(kept_type, case));
     // the unwrapped case alone never fails
-    if (cases.len == 1) return self.emit_unreachable();
+    if (kept_count == 1) return self.emit_unreachable();
     var tested: usize = 0;
     var last_failing: Index = .none;
     for (cases) |failing| {
-        if (failing == unwrapped) continue;
-        if (self.static_pool.fallback_case(self.return_type, failing) != failing) continue;
+        if (failing == unwrapped or pool.is_removed(kept_type, failing)) continue;
+        if (pool.fallback_case(self.return_type, failing) != failing) continue;
         tested += 1;
-        if (tested == cases.len - 1) {
+        if (tested == kept_count - 1) {
             last_failing = failing;
             break;
         }
@@ -1946,6 +2325,7 @@ fn fallback(self: *HighLowerer, fallback_type: Index, failing: Index) Ref {
             // numbers and `false` are zero bits, arrays of them one zeroed value
             const is_built = switch (pool.tag(innermost)) {
                 .record_type, .variant_type, .unified_variant_type, .variant_case_type => true,
+                .variant_subset_type => true,
                 else => false,
             };
             if (!is_built) return self.builder.emit(.zeroed, fallback_type, 0, 0);
@@ -1958,6 +2338,7 @@ fn fallback(self: *HighLowerer, fallback_type: Index, failing: Index) Ref {
             return self.builder.emit(.aggregate, fallback_type, 0, elements);
         },
         .record_type, .variant_type, .unified_variant_type, .variant_case_type => {},
+        .variant_subset_type => {},
         else => return self.builder.emit(.zeroed, fallback_type, 0, 0),
     }
 
@@ -2035,7 +2416,9 @@ fn loop(self: *HighLowerer, node: NodeId) Ref {
             const array_type = self.dereferenced_type(for_loop.sequence_type);
             if (self.resolver.tree.props(for_loop.sequence).range) {
                 self.enter_range_head(for_loop, &walk);
-            } else if (self.static_pool.get(array_type) == .array_type) {
+            } else if (self.static_pool.get(array_type) == .array_type or
+                self.static_pool.tag(array_type) == .slice_type)
+            {
                 self.enter_array_head(for_loop, &walk);
             } else {
                 self.enter_iterator_head(for_loop, &walk);
@@ -2165,16 +2548,27 @@ fn enter_range_head(self: *HighLowerer, for_loop: ForLoop, walk: *SequenceWalk) 
     if (range.incl) walk.last = end;
 }
 
+// arrays, and slices from the address of their first element up to their length
 fn enter_array_head(self: *HighLowerer, for_loop: ForLoop, walk: *SequenceWalk) void {
     const sequence_type = for_loop.sequence_type;
     const array_type = self.dereferenced_type(sequence_type);
-    const element_type = self.static_pool.get(array_type).array_type.element;
+    const is_slice = self.static_pool.tag(array_type) == .slice_type;
+    const slice = if (is_slice) self.slice_value(for_loop.sequence) else .none;
+    const element_type = if (is_slice)
+        self.static_pool.get(array_type).slice_type.element
+    else
+        self.static_pool.get(array_type).array_type.element;
     const by_value = self.is_pointer(sequence_type) or self.is_dynamic_array(sequence_type);
-    const array = if (by_value)
+    const array = if (is_slice)
+        self.slice_part(slice, array_type, 0)
+    else if (by_value)
         self.expression(for_loop.sequence)
     else
         self.place(for_loop.sequence);
-    const length = self.array_length(sequence_type);
+    const length = if (is_slice)
+        self.slice_part(slice, array_type, 1)
+    else
+        self.array_length(sequence_type);
     const counter = self.new_temporary(.u64_type);
     self.write_current(counter, self.builder.constant_int(.u64_type, 0));
     if (for_loop.collects_dynamic) {
@@ -2486,13 +2880,57 @@ fn constructed(self: *HighLowerer, target_type: Index, mark: u32) Ref {
     return self.builder.emit(.variant_make, variant, case_index, @intFromEnum(aggregate));
 }
 
-// `base with (field = ..)`: the fields of `base`, the named ones replaced
+// `base with (field = ..)`: the fields of `base`, the named ones replaced, completed by the guards
+// of the record
 fn record_update(self: *HighLowerer, node: NodeId) Ref {
     var base_type = self.type_of(self.resolver.tree.arg(node, 0));
     var base = self.expression(self.resolver.tree.arg(node, 0));
     if (self.is_pointer(base_type)) {
         base = self.load(self.pointee_of(base_type), base);
         base_type = self.pointee_of(base_type);
+    }
+
+    const tree = self.resolver.tree;
+    const arguments = tree.manychildren(tree.arg(node, 1));
+    // parts of fields (`pos.x = ..`) are written into a copy in memory, in order with the others
+    const copy: ?Ref = for (arguments) |argument| {
+        const name = tree.arg_name(argument);
+        if (name != 0 and tree.kind(name) != .identifier) {
+            const slot = self.alloca(base_type);
+            self.store(slot, base);
+            break slot;
+        }
+    } else null;
+    if (copy) |slot| {
+        // as in an assignment the value comes before the place. the records a part passes that
+        // have guards are completed again, innermost first, as in `x with (a = x.a with (b = ..))`
+        for (arguments) |argument| {
+            const part = tree.arg_name(argument);
+            const value = self.expression_as(tree.arg_value(argument), self.type_of(part));
+            const passed_mark = self.scratch.len;
+            self.store(self.with_part_place(slot, base_type, part), value);
+            var k = self.scratch.len;
+            while (k > passed_mark) {
+                k -= 2;
+                const record: Index = @enumFromInt(self.scratch.buffer[k]);
+                const record_pointer: Ref = @enumFromInt(self.scratch.buffer[k + 1]);
+                const record_value = self.load(record, record_pointer);
+                const mark = self.scratch.len;
+                const field_count = self.static_pool.get(record).record_type.field_types.len;
+                for (0..field_count) |i| {
+                    const field_type = self.static_pool.field_type(record, i);
+                    const whole = @intFromEnum(record_value);
+                    const field = self.builder.emit(.extract, field_type, whole, @intCast(i));
+                    self.scratch.push(@intFromEnum(field));
+                }
+                self.complete_fields(record, mark);
+                const fields = self.builder.list(self.scratch.buffer[mark..self.scratch.len]);
+                self.scratch.len = mark;
+                self.store(record_pointer, self.builder.emit(.aggregate, record, 0, fields));
+            }
+            self.scratch.len = passed_mark;
+        }
+        base = self.load(base_type, slot);
     }
 
     const field_count = self.static_pool.get(base_type).record_type.field_types.len;
@@ -2502,17 +2940,50 @@ fn record_update(self: *HighLowerer, node: NodeId) Ref {
         const field = self.builder.emit(.extract, field_type, @intFromEnum(base), @intCast(i));
         self.scratch.push(@intFromEnum(field));
     }
-    const arguments = self.resolver.tree.manychildren(self.resolver.tree.arg(node, 1));
-    for (arguments, 0..) |argument, i| {
+    if (copy == null) for (arguments, 0..) |argument, i| {
         const field = self.field_index(base_type, argument, i);
         const field_type = self.static_pool.field_type(base_type, field);
-        const value = self.expression_as(self.resolver.tree.arg_value(argument), field_type);
+        const value = self.expression_as(tree.arg_value(argument), field_type);
         self.scratch.buffer[mark + field] = @intFromEnum(value);
-    }
+    };
     self.complete_fields(base_type, mark);
     const fields = self.builder.list(self.scratch.buffer[mark..self.scratch.len]);
     self.scratch.len = mark;
     return self.builder.emit(.aggregate, base_type, 0, fields);
+}
+
+// the address of `a.b[i]` of `x with (a.b[i] = ..)` in the copy at `record`. pushes the type and
+// address of each record with guards it passes below the copy, the outermost first
+fn with_part_place(self: *HighLowerer, record: Ref, record_type: Index, node: NodeId) Ref {
+    const tree = self.resolver.tree;
+    const part_type = self.type_of(node);
+    const pointer_type = self.pointer_to(part_type);
+    switch (tree.kind(node)) {
+        .identifier => {
+            const name = self.resolver.name_pool.name_of_node(node);
+            const field = self.static_pool.lookup_member(record_type, name).field.index;
+            return self.field_pointer(part_type, record, record_type, field);
+        },
+        .member => {
+            const parent = tree.arg(node, 0);
+            const parent_type = self.type_of(parent);
+            const parent_pointer = self.with_part_place(record, record_type, parent);
+            for (self.resolver.types.field_nodes_of(parent_type)) |field_node| {
+                if (ParseTree.Param.from_node(tree, field_node).@"else" == 0) continue;
+                self.scratch.push(@intFromEnum(parent_type));
+                self.scratch.push(@intFromEnum(parent_pointer));
+                break;
+            }
+            const name = self.resolver.name_pool.name_of_node(tree.arg(node, 1));
+            const field = self.static_pool.lookup_member(parent_type, name).field.index;
+            return self.field_pointer(part_type, parent_pointer, parent_type, field);
+        },
+        else => {
+            const array_pointer = self.with_part_place(record, record_type, tree.arg(node, 0));
+            const index = self.expression(tree.arg(node, 1));
+            return self.builder.emit_refs(.index_ptr, pointer_type, array_pointer, index);
+        },
+    }
 }
 
 // defaults and `where .. else` guards are expressions of the type's body, its locals the fields
@@ -2710,8 +3181,7 @@ fn field_place(self: *HighLowerer, node: NodeId) ?Ref {
     const name = self.resolver.name_pool.name_of_node(self.resolver.tree.arg(node, 1));
     switch (self.static_pool.lookup_member(record_type, name)) {
         .field => |field| {
-            const pointer_type = self.pointer_to(field.field_type);
-            return self.builder.emit(.field_ptr, pointer_type, @intFromEnum(base), field.index);
+            return self.field_pointer(field.field_type, base, record_type, field.index);
         },
         else => return null,
     }
@@ -2720,6 +3190,16 @@ fn field_place(self: *HighLowerer, node: NodeId) ?Ref {
 fn element_place(self: *HighLowerer, node: NodeId, element_type: Index) Ref {
     const array = self.resolver.tree.arg(node, 0);
     const array_type = self.type_of(array);
+    // an element of a slice is checked against its length
+    const sliced = self.dereferenced_type(array_type);
+    if (self.static_pool.tag(sliced) == .slice_type) {
+        const slice = self.slice_value(array);
+        const index = self.as_length(self.expression(self.resolver.tree.arg(node, 1)));
+        const length = self.slice_part(slice, sliced, 1);
+        self.check(self.builder.emit_refs(.lt, .bool_type, index, length));
+        const first = self.slice_part(slice, sliced, 0);
+        return self.builder.emit_refs(.index_ptr, self.pointer_to(element_type), first, index);
+    }
     const by_value = self.is_pointer(array_type) or self.is_dynamic_array(array_type);
     const base = if (by_value) self.expression(array) else self.place(array);
     const element_pointer = self.pointer_to(element_type);

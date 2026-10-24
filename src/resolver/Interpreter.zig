@@ -39,6 +39,10 @@ depth: u32 = 0,
 // the node whose evaluation is running, an exhausted budget or depth is its failure
 evaluation_root: NodeId = 0,
 unwind: enum { none, ret, brk, cont } = .none,
+// the calls of the kernel so far: a stcfun that made one is run again for the same arguments.
+// none is made while the checker only tries whether a value is known
+system_calls: u32 = 0,
+speculative: u32 = 0,
 function_context: *Resolver.FunctionContext = undefined,
 frames: DynamicBuffer(Frame),
 memory: DynamicBuffer(Value),
@@ -96,6 +100,20 @@ pub fn evaluate_static(self: *Interpreter, context: *Resolver.FunctionContext, n
         self.owning_resolver().node_static_values[node] = static_value;
     }
     return static_value;
+}
+
+// a function value called with values while compiling (a tag strategy's), poison when it failed
+pub fn call_static(
+    self: *Interpreter,
+    context: *Resolver.FunctionContext,
+    node: NodeId,
+    function: Index,
+    values: []const Value,
+) Value {
+    if (self.depth == 0) self.evaluation_root = node;
+    const session = self.open(context, .{});
+    defer self.close(session);
+    return self.finish_unwind(self.calls.call_values(node, function, values));
 }
 
 pub fn matches_static(
@@ -273,8 +291,15 @@ pub fn value_type(self: *Interpreter, value: Value) Index {
     return static_pool.type_of(pool_index);
 }
 
+// a slice is a reference to its elements and an aggregate of them alike
+pub fn is_slice(self: *Interpreter, value: Value) bool {
+    if (!value.is_ref()) return false;
+    return self.owning_resolver().static_pool.tag(value.value_type) == .slice_type;
+}
+
 pub fn dereference(self: *Interpreter, value: Value) Value {
-    return if (value.is_ref()) self.memory.buffer[value.cell()] else value;
+    if (value.is_ref() and !self.is_slice(value)) return self.memory.buffer[value.cell()];
+    return value;
 }
 
 pub fn element_count(self: *Interpreter, value: Value) ?u32 {
@@ -289,6 +314,7 @@ pub fn element_count(self: *Interpreter, value: Value) ?u32 {
 
 pub fn aggregate_length(self: *Interpreter, value: Value) ?u32 {
     if (value.is_heap()) return value.len();
+    if (self.is_slice(value)) return value.slice_len();
     if (!value.is_pooled() or value.is(.none)) return null;
 
     const static_pool = &self.owning_resolver().static_pool;
@@ -300,7 +326,7 @@ pub fn aggregate_length(self: *Interpreter, value: Value) ?u32 {
 }
 
 pub fn element(self: *Interpreter, value: Value, position: u32) Value {
-    if (value.is_heap()) return self.memory.buffer[value.cell() + position];
+    if (value.is_heap() or self.is_slice(value)) return self.memory.buffer[value.cell() + position];
 
     const static_pool = &self.owning_resolver().static_pool;
     return switch (static_pool.get(value.index())) {
@@ -357,6 +383,29 @@ pub fn owned_copy(self: *Interpreter, value: Value) Value {
     return .block(value.value_type, first_cell, value.len());
 }
 
+// a slice of the elements `low..<high` of an array, of one behind a reference (the cells it
+// reaches, `high` needed then), or of a slice. the array's own cells when it has them
+pub fn sliced(self: *Interpreter, value: Value, slice_type: Index, low: u32, high: ?u32) Value {
+    if (self.is_slice(value)) {
+        return .slice(slice_type, value.cell() + low, (high orelse value.slice_len()) - low);
+    }
+    const source: Value = blk: {
+        if (!value.is_ref()) break :blk value;
+        const target = self.thaw_cell(value.cell());
+        // a reference to an element reaches the cells after it
+        const cells_after = self.memory.len - value.cell();
+        if (!target.is_heap()) break :blk .block(slice_type, value.cell(), cells_after);
+        break :blk target;
+    };
+    const block = if (source.is_heap()) source else blk: {
+        const length = self.aggregate_length(source) orelse return .poison;
+        const first_cell = self.allocate_cells(length);
+        for (0..length) |i| self.memory.buffer[first_cell + i] = self.element(source, @intCast(i));
+        break :blk Value.block(self.value_type(source), first_cell, length);
+    };
+    return .slice(slice_type, block.cell() + low, (high orelse block.len()) - low);
+}
+
 // a pooled aggregate in a cell becomes a heap block, so its elements can be written
 pub fn thaw_cell(self: *Interpreter, cell: u32) Value {
     const value = self.memory.buffer[cell];
@@ -372,12 +421,17 @@ pub fn thaw_cell(self: *Interpreter, cell: u32) Value {
 pub fn coerce(self: *Interpreter, value: Value, target_type: Index) Value {
     const static_pool = &self.owning_resolver().static_pool;
     const untyped_target = target_type == .none or target_type == .poison_type;
+    const to_slice = !untyped_target and static_pool.tag(target_type) == .slice_type and
+        !self.is_slice(value);
+    if (to_slice) return self.sliced(value, target_type, 0, null);
     if (untyped_target or value.is_pooled() or value.is_heap()) return .fit(value, target_type);
     if (value.is_ref()) {
         if (!static_pool.is_pointer(target_type)) return value;
 
         const cell = value.cell();
-        if (static_pool.tag(static_pool.pointee(target_type)) == .array_type) {
+        // a pointer to an array or a slice points at it, not at its elements
+        const pointee_tag = static_pool.tag(static_pool.pointee(target_type));
+        if (pointee_tag == .array_type or pointee_tag == .slice_type) {
             return .ref(target_type, cell);
         }
         if (self.element_count(self.memory.buffer[cell]) == null) return .ref(target_type, cell);
@@ -402,8 +456,9 @@ pub fn coerce(self: *Interpreter, value: Value, target_type: Index) Value {
     } }));
 }
 
-pub fn zero_value(self: *Interpreter, zeroed_type: Index) Value {
+pub fn zero_value(self: *Interpreter, subset_or_zeroed_type: Index) Value {
     const static_pool = &self.owning_resolver().static_pool;
+    const zeroed_type = static_pool.whole_of(subset_or_zeroed_type);
     if (Value.is_int(zeroed_type)) return .int(zeroed_type, 0);
     if (Value.is_float(zeroed_type)) return .float(zeroed_type, 0);
     if (zeroed_type == .bool_type) return .boolean(false);
@@ -460,6 +515,7 @@ pub fn fallback_value(self: *Interpreter, fallback_type: Index, failing: Index) 
             return .block(fallback_type, first_cell, length);
         },
         .record_type, .variant_type, .unified_variant_type, .variant_case_type => {},
+        .variant_subset_type => {},
         else => return self.zero_value(fallback_type),
     }
 
@@ -526,6 +582,7 @@ pub fn evaluate(self: *Interpreter, node: NodeId) Value {
         .loop => self.flow.loop(node),
         .unwrap => self.flow.unwrap(node),
         .array_literal => self.array(node),
+        .join => self.join(node, first_operand, second_operand),
         .index => self.index(node),
         .member_access => self.calls.member(node),
         .call => self.calls.call(node),
@@ -537,6 +594,11 @@ pub fn evaluate(self: *Interpreter, node: NodeId) Value {
         .cast => self.types.cast(node),
         .bit_cast => self.types.bit_cast(node),
         .type_test => self.types.type_test(node),
+        // a body knows what its check found, a check asks whether the operand is static now
+        .static_test => .boolean(if (self.has_body_frame())
+            self.node_info(.static_value, node) == .bool_true
+        else
+            resolver.static_values.try_evaluate(self.function_context, first_operand) != null),
         .size_of => self.types.size_of(node),
         .length_or_tag => self.calls.length_or_tag(node),
         .macro => self.trees.evaluate(node),
@@ -598,6 +660,24 @@ pub fn evaluate_binary(
 ) Value {
     if (left.is(.poison_type) or right.is(.poison_type)) return .poison;
 
+    // a slice is equal to a slice or array of the same length and equal elements
+    if (self.is_slice(left) or self.is_slice(right)) {
+        const equal = blk: {
+            const length = self.element_count(left) orelse
+                return self.fail(node, .not_static, 0, 0);
+            if (self.element_count(right) != length) break :blk false;
+            for (0..length) |i| {
+                const position: u32 = @intCast(i);
+                const pair = .{ self.element(left, position), self.element(right, position) };
+                const same = self.evaluate_binary(node, .equal, pair[0], pair[1]);
+                if (same.is(.poison_type)) return same;
+                if (same.bits == 0) break :blk false;
+            }
+            break :blk true;
+        };
+        return .boolean(equal == (operator == .equal));
+    }
+
     // pointer arithmetic: an integer plus a reference is the reference plus the integer
     if (right.is_ref() and Value.is_int(left.value_type) and operator == .add) {
         return self.evaluate_binary(node, operator, right, left);
@@ -658,6 +738,42 @@ pub fn evaluate_binary(
     );
 }
 
+// `a ~ b`: a new array of the elements of both, printable bytes as a text
+fn join(self: *Interpreter, node: NodeId, left_node: NodeId, right_node: NodeId) Value {
+    const static_pool = &self.owning_resolver().static_pool;
+    const left = self.evaluate(left_node);
+    if (left.is(.poison_type)) return left;
+    const right = self.evaluate(right_node);
+    if (right.is(.poison_type)) return right;
+
+    const parts = [2]Value{ self.dereference(left), self.dereference(right) };
+    var lengths: [2]u32 = undefined;
+    for (parts, &lengths) |part, *length| {
+        length.* = self.aggregate_length(part) orelse return self.fail(node, .not_static, 0, 0);
+    }
+    const element_type = static_pool.element_type(self.node_info(.node_type, node));
+    const total = lengths[0] + lengths[1];
+    if (element_type == .u8_type) text: {
+        const bytes = self.owning_resolver().temporary_slice(u8, total);
+        for (parts, lengths, [2]u32{ 0, lengths[0] }) |part, length, start| {
+            for (0..length) |i| bytes[start + i] = @truncate(self.element(part, @intCast(i)).bits);
+        }
+        for (bytes) |byte| {
+            if (!std.ascii.isPrint(byte) and !std.ascii.isWhitespace(byte)) break :text;
+        }
+        return .pooled(static_pool.intern(.{ .string_value = bytes }));
+    }
+    const first_cell = self.allocate_cells(total);
+    for (parts, lengths, [2]u32{ 0, lengths[0] }) |part, length, start| {
+        // by index: an element may be a block that grows the memory
+        for (0..length) |i| {
+            const element_value = self.owned_copy(self.element(part, @intCast(i)));
+            self.memory.buffer[first_cell + start + i] = element_value;
+        }
+    }
+    return .block(static_pool.array_of(total, element_type), first_cell, total);
+}
+
 fn array(self: *Interpreter, node: NodeId) Value {
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
@@ -693,6 +809,7 @@ fn index(self: *Interpreter, node: NodeId) Value {
     const resolver = self.owning_resolver();
     const base = self.evaluate(resolver.tree.arg(node, 0));
     if (base.is(.poison_type)) return base;
+    if (resolver.tree.props(resolver.tree.arg(node, 1)).range) return self.range_index(node, base);
     const aggregate = self.dereference(base);
     const position = self.evaluate(resolver.tree.arg(node, 1));
     if (position.is(.poison_type)) return position;
@@ -711,4 +828,43 @@ fn index(self: *Interpreter, node: NodeId) Value {
         return self.fail(node, .static_eval_failed, self.interned(position), length);
     }
     return self.element(aggregate, @intCast(position.bits));
+}
+
+// `a[lo..<hi]`: a slice of the cells of a slice or array, or a copy of that part as an array,
+// the bounds checked as at run time. a reference to an element reaches the cells after it
+fn range_index(self: *Interpreter, node: NodeId, base: Value) Value {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    const range = ParseTree.Range.from_node(tree, tree.arg(node, 1));
+    const aggregate = self.dereference(base);
+    const length = self.element_count(aggregate);
+    var bounds = [2]u64{ 0, length orelse 0 };
+    for ([_]NodeId{ range.lo, range.hi }, 0..) |bound_node, i| {
+        if (bound_node == 0) continue;
+        const bound = self.evaluate(bound_node);
+        if (bound.is(.poison_type)) return bound;
+        if (!Value.is_int(bound.value_type)) return self.fail(bound_node, .not_static, 0, 0);
+        bounds[i] = bound.bits + @intFromBool(i == 1 and range.incl);
+    }
+    const room: u64 = length orelse if (base.is_ref()) self.memory.len - base.cell() else 0;
+    if (bounds[0] > bounds[1] or bounds[1] > room) {
+        const shown = self.interned(.int(.u64_type, bounds[1]));
+        return self.fail(node, .static_eval_failed, shown, room);
+    }
+    const low: u32 = @intCast(bounds[0]);
+    const high: u32 = @intCast(bounds[1]);
+    const result_type = if (self.has_body_frame())
+        self.node_info(.node_type, node)
+    else
+        resolver.node_types[node];
+    if (resolver.static_pool.tag(result_type) == .slice_type) {
+        return self.sliced(if (length == null) base else aggregate, result_type, low, high);
+    }
+
+    const first_cell = self.allocate_cells(high - low);
+    for (low..high) |i| {
+        const copy = self.owned_copy(self.element(aggregate, @intCast(i)));
+        self.memory.buffer[first_cell + i - low] = copy;
+    }
+    return .block(result_type, first_cell, high - low);
 }

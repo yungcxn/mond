@@ -1,0 +1,9 @@
+# a quote of `ast(T)` is checked where it is written, also when the macro is never called
+stcfun mixed = (ast(u32) e) -> ast(u32): ret quote: @e and true; #! type_mismatch
+stcfun compares = (ast(u32) e) -> ast(u32): ret quote: @e == 2; #! type_mismatch
+stcfun float_hole = (ast(f32) e) -> ast(u32): ret quote: @e + 1; #! type_mismatch
+stcfun wrong_field = (ast(u32) e) -> ast(u32): ret quote: (@e).size; #! unknown_member
+stcfun loose = (ast e) -> ast: ret quote: @e and true;
+stcfun nearby = (ast(u32) e) -> ast(u32): ret quote: @e + somewhere;
+
+main = () {}

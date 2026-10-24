@@ -1,0 +1,18 @@
+<include "lib/out.mn">;
+<include "../lib/files.mn">;
+# a file read while compiling is static data of the program: printed (line breaks as `|`), its
+# lines counted at run time
+stc []u8 TEXT = read_file("examples/lib/data/lines.txt");
+
+fun lines_of = ([..]u8 text) -> u64 {
+    mut u64 count = 0;
+    for c in text: if c == '\n': count += 1;
+    ret count;
+}
+
+main = (u32 argc, &&u8 argv) {
+    for c in TEXT: putchar(if c == '\n': '|' else: c as i32);
+    putchar(10);                                   #> first line|second||last, no newline
+    line_u64(lines_of(TEXT));                      #> 3
+    line_u64(lenof TEXT * argc as u64);            #> 35
+}

@@ -6,6 +6,8 @@ type Rec = *(u8 a);
 
 fun f = (Res r, Dir d, Opt o) {
     Opt a = Opt.Some; #! type_mismatch
+    Res a2 = if d == Dir.N: Res.Err else: r; #! type_mismatch
+    Res a3 = match d { Dir.N => Res.Ok, _ => Res.Pending }; #! type_mismatch
     Res b = Res.Err(1); #! wrong_arity
     Res c = Res.Err(1, 2, 3); #! wrong_arity
     Res e = Res.Err(code = 1, row = 2); #! unknown_named_argument

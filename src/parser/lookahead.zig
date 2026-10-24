@@ -10,6 +10,7 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"pct_(")] = &eval.paren;
     t[@intFromEnum(Lexer.Token.Kind.@"pct_[")] = &eval.bracket;
     t[@intFromEnum(Lexer.Token.Kind.kw_typeof)] = &eval.templ_prefix(.typeof, prec_unary + 1);
+    t[@intFromEnum(Lexer.Token.Kind.kw_isstc)] = &eval.templ_prefix(.isstc, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.kw_sizeof)] = &eval.templ_prefix(.sizeof, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.kw_alignof)] = &eval.templ_prefix(.alignof, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.kw_lenof)] = &eval.templ_prefix(.lenof, prec_unary + 1);
@@ -22,8 +23,8 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_!")] = &eval.templ_prefix(.neg_logic, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_++")] = &eval.templ_prefix(.inc_prefix, prec_unary + 1);
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_--")] = &eval.templ_prefix(.dec_prefix, prec_unary + 1);
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_..=")] = &eval.templ_prefix(.gen_upperbound_incl, prec_above(.@"xpct_|"));
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_..<")] = &eval.templ_prefix(.gen_upperbound_excl, prec_above(.@"xpct_|"));
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_..=")] = &eval.templ_prefix(.gen_upperbound_incl, prec_above(.@"xpct_..<"));
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_..<")] = &eval.templ_prefix(.gen_upperbound_excl, prec_above(.@"xpct_..<"));
     t[@intFromEnum(Lexer.Token.Kind.kw_self)] = &eval.identifier_self;
     t[@intFromEnum(Lexer.Token.Kind.kw_true)] = &eval.true_;
     t[@intFromEnum(Lexer.Token.Kind.kw_false)] = &eval.false_;
@@ -54,6 +55,7 @@ pub const pre = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_i16)] = &eval.type_i16;
     t[@intFromEnum(Lexer.Token.Kind.kw_i32)] = &eval.type_i32;
     t[@intFromEnum(Lexer.Token.Kind.kw_i64)] = &eval.type_i64;
+    t[@intFromEnum(Lexer.Token.Kind.stc_maybe)] = &eval.stc_maybe;
     t[@intFromEnum(Lexer.Token.Kind.kw_f16)] = &eval.type_f16;
     t[@intFromEnum(Lexer.Token.Kind.kw_f32)] = &eval.type_f32;
     t[@intFromEnum(Lexer.Token.Kind.kw_f64)] = &eval.type_f64;
@@ -108,9 +110,6 @@ pub const post = blk: {
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_.&")] = &eval.address_of;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_++")] = &eval.inc_postfix;
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_--")] = &eval.dec_postfix;
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_..")] = &eval.gen_lowerbound;
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_..=")] = &eval.gen_incl;
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_..<")] = &eval.gen_excl;
     t[@intFromEnum(Lexer.Token.Kind.kw_oftype)] = &eval.oftype;
     t[@intFromEnum(Lexer.Token.Kind.kw_as)] = &eval.as;
     t[@intFromEnum(Lexer.Token.Kind.kw_asbits)] = &eval.asbits;
@@ -121,6 +120,12 @@ pub const post = blk: {
     t[@intFromEnum(Lexer.Token.Kind.kw_with)] = &eval.with;
     break :blk t;
 };
+
+// `@..xs` spreads trees a macro made into a list: arms, cases, fields
+pub inline fn spread_follows(p: *Parser) !bool {
+    const next = p.tokens.get_field(.tk, p.tok_cursor + 1) orelse .none;
+    return try p.peek_eq_tok(.@"xpct_@") and next == .@"xpct_..";
+}
 
 pub inline fn assign_follows(p: *Parser) bool {
     var cur = p.tok_cursor;
@@ -183,23 +188,29 @@ pub const binary_compute = blk: {
     // types unify looser than any prefix: `&u8 || [2]u8` is `(&u8) || ([2]u8)`
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_||")] = .{ .f = &eval.templ_unify_variants(.unify_variants, 4), .prec = 4 };
     t[@intFromEnum(Lexer.Token.Kind.@"xpct_|||")] = .{ .f = &eval.templ_unify_variants(.unify_variants_packed, 4), .prec = 4 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_^")] = .{ .f = &eval.templ_binary(.binary_num_xor, 5), .prec = 5 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = .{ .f = &eval.templ_binary(.binary_num_and, 6), .prec = 6 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_==")] = .{ .f = &eval.templ_binary(.binary_eq, 7), .prec = 7 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_!=")] = .{ .f = &eval.templ_binary(.binary_neq, 7), .prec = 7 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<")] = .{ .f = &eval.templ_binary(.binary_less, 8), .prec = 8 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>")] = .{ .f = &eval.templ_binary(.binary_greater, 8), .prec = 8 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<=")] = .{ .f = &eval.templ_binary(.binary_less_eq, 8), .prec = 8 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>=")] = .{ .f = &eval.templ_binary(.binary_greater_eq, 8), .prec = 8 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<<")] = .{ .f = &eval.templ_binary(.binary_shift_left, 9), .prec = 9 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>>")] = .{ .f = &eval.templ_binary(.binary_shift_right, 9), .prec = 9 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_+")] = .{ .f = &eval.templ_binary(.binary_add, 10), .prec = 10 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .{ .f = &eval.templ_binary(.binary_sub, 10), .prec = 10 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = .{ .f = &eval.templ_binary(.binary_mul, 11), .prec = 11 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_*(")] = .{ .f = &eval.templ_binary_group(.binary_mul, 11), .prec = 11 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_+(")] = .{ .f = &eval.templ_binary_group(.binary_add, 10), .prec = 10 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .f = &eval.templ_binary(.binary_div, 11), .prec = 11 };
-    t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .f = &eval.templ_binary(.binary_mod, 11), .prec = 11 };
+    // ranges bind looser than arithmetic, shifts and comparisons (`s[i + 1..<n]`), tighter than `|`
+    // which separates alternatives of an arm (`1..<3 | 7 =>`)
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_..")] = .{ .f = &eval.gen_lowerbound, .prec = 5 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_..=")] = .{ .f = &eval.gen_incl, .prec = 5 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_..<")] = .{ .f = &eval.gen_excl, .prec = 5 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_^")] = .{ .f = &eval.templ_binary(.binary_num_xor, 6), .prec = 6 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_&")] = .{ .f = &eval.templ_binary(.binary_num_and, 7), .prec = 7 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_==")] = .{ .f = &eval.templ_binary(.binary_eq, 8), .prec = 8 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_!=")] = .{ .f = &eval.templ_binary(.binary_neq, 8), .prec = 8 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<")] = .{ .f = &eval.templ_binary(.binary_less, 9), .prec = 9 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>")] = .{ .f = &eval.templ_binary(.binary_greater, 9), .prec = 9 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<=")] = .{ .f = &eval.templ_binary(.binary_less_eq, 9), .prec = 9 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>=")] = .{ .f = &eval.templ_binary(.binary_greater_eq, 9), .prec = 9 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_<<")] = .{ .f = &eval.templ_binary(.binary_shift_left, 10), .prec = 10 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_>>")] = .{ .f = &eval.templ_binary(.binary_shift_right, 10), .prec = 10 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_+")] = .{ .f = &eval.templ_binary(.binary_add, 11), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_~")] = .{ .f = &eval.templ_binary(.binary_join, 11), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_-")] = .{ .f = &eval.templ_binary(.binary_sub, 11), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_*")] = .{ .f = &eval.templ_binary(.binary_mul, 12), .prec = 12 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_*(")] = .{ .f = &eval.templ_binary_group(.binary_mul, 12), .prec = 12 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_+(")] = .{ .f = &eval.templ_binary_group(.binary_add, 11), .prec = 11 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_/")] = .{ .f = &eval.templ_binary(.binary_div, 12), .prec = 12 };
+    t[@intFromEnum(Lexer.Token.Kind.@"xpct_%")] = .{ .f = &eval.templ_binary(.binary_mod, 12), .prec = 12 };
 
     break :blk t;
 };

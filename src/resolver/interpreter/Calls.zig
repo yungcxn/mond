@@ -101,8 +101,9 @@ pub fn call(self: *Calls, node: NodeId) Value {
     const arguments = resolver.tree.manychildren(resolver.tree.arg(node, 1));
     if (resolver.tree.kind(node) == .builtin_call) {
         const name = resolver.name_pool.name_of_node(callee);
-        // machine code and the kernel run only at run time
-        if (name == .@"asm" or name == .syscall) return interpreter.fail(node, .not_static, 0, 0);
+        // machine code runs only at run time, the kernel while compiling too
+        if (name == .@"asm") return interpreter.fail(node, .not_static, 0, 0);
+        if (name == .syscall) return interpreter.types.system_call(node, arguments);
         // `fresh` and `crash` at a tree are builtins of macro bodies
         if (name == .fresh or arguments.len == 2) {
             return interpreter.trees.builtin(node, name, arguments);
@@ -197,9 +198,10 @@ pub fn call(self: *Calls, node: NodeId) Value {
             return self.invoke(node, function, arguments, .empty, .empty);
         },
         .static_function => return self.call_static_function(node, callee_index, arguments),
-        .int_type, .float_type, .simple_type, .meta_type, .array_type => {},
+        .int_type, .float_type, .simple_type, .meta_type, .array_type, .slice_type => {},
         .pointer_type, .mutable_pointer_type, .function_type, .variant_type => {},
-        .unified_variant_type, .trait_type, .template_type, .type_variable => {},
+        .unified_variant_type, .variant_subset_type, .trait_type, .template_type => {},
+        .type_variable => {},
         .int_value, .float_value, .simple_value, .string_value => {},
         .aggregate_value, .variant_value, .tree_value => {},
     }
@@ -447,6 +449,22 @@ fn realize(
     return static_pool.get(realized).function_value;
 }
 
+// a function value run on values rather than argument nodes, by position
+pub fn call_values(self: *Calls, node: NodeId, function: Index, values: []const Value) Value {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (resolver.static_pool.tag(function) != .function_value) return .poison;
+    const declaration = resolver.static_pool.get(function).function_value;
+    const mark = interpreter.argument_values.len;
+    defer interpreter.argument_values.len = mark;
+    for (values) |value| interpreter.argument_values.push(value);
+    // each argument stands at the node calling, positional
+    const arguments = resolver.temporary_slice(NodeId, values.len);
+    @memset(arguments, node);
+    const realized = resolver.declarations.realized(declaration);
+    return self.attempt(node, realized, arguments, mark, .empty, .empty) orelse .poison;
+}
+
 // one overload run on the argument values, null when a `where` without `else` rejects them
 fn attempt(
     self: *Calls,
@@ -613,6 +631,33 @@ fn fill_arguments(self: *Calls, record: Index, first_cell: u32, arguments: []con
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
     for (arguments, 0..) |argument, i| {
+        const name_node = resolver.tree.arg_name(argument);
+        const is_part = name_node != 0 and (resolver.tree.kind(name_node) == .member or
+            resolver.tree.kind(name_node) == .array_index);
+        // as in an assignment the value comes before the place. the records the part passes get
+        // their fields completed again, innermost first, as in `x with (a = x.a with (b = ..))`
+        if (is_part) {
+            const value = interpreter.evaluate(resolver.tree.arg_value(argument));
+            if (value.is(.poison_type)) return value;
+            var steps: usize = 0;
+            var step = name_node;
+            while (resolver.tree.kind(step) != .identifier) : (step = resolver.tree.arg(step, 0)) {
+                steps += 1;
+            }
+            var walk: PartWalk = .{
+                .part_type = record,
+                .passed = resolver.temporary_slice(PartWalk.Passed, steps),
+            };
+            const cell = self.cell_of_part(first_cell, name_node, &walk) orelse return .poison;
+            interpreter.store_converted(cell, value, walk.part_type);
+            var k = walk.count;
+            while (k > 0) {
+                k -= 1;
+                const passed = walk.passed[k];
+                if (!self.complete(passed.record, passed.first_cell)) return .poison;
+            }
+            continue;
+        }
         const field_index = resolver.calls.field_index_of(record, argument, i) orelse {
             const argument_name = resolver.name_pool.name_of_node(resolver.tree.arg_name(argument));
             return interpreter.fail(argument, .unknown_named_argument, argument_name, record);
@@ -623,6 +668,52 @@ fn fill_arguments(self: *Calls, record: Index, first_cell: u32, arguments: []con
         interpreter.store_converted(first_cell + field_index, value, field_type);
     }
     return null;
+}
+
+// the way of `a.b[i]` in `x with (a.b[i] = ..)`: the type it reached, and the records it passed
+// below the outermost one with the cells of their fields
+const PartWalk = struct {
+    part_type: Index,
+    passed: []Passed,
+    count: usize = 0,
+
+    const Passed = struct { record: Index, first_cell: u32 };
+};
+
+// the cell of `a.b[i]` of `x with (a.b[i] = ..)` among the fields at `first_cell`
+fn cell_of_part(self: *Calls, first_cell: u32, node: NodeId, walk: *PartWalk) ?u32 {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const kind = resolver.tree.kind(node);
+    if (kind == .identifier) {
+        const name = resolver.name_pool.name_of_node(node);
+        const field = switch (static_pool.lookup_member(walk.part_type, name)) {
+            .field => |field| field,
+            else => return null,
+        };
+        walk.part_type = field.field_type;
+        return first_cell + field.index;
+    }
+    const parent_cell = self.cell_of_part(first_cell, resolver.tree.arg(node, 0), walk) orelse
+        return null;
+    const parent_type = walk.part_type;
+    const variables = &interpreter.variables;
+    const cell = variables.cell_of_component(parent_cell, node, kind) orelse return null;
+    if (kind == .array_index) {
+        walk.part_type = static_pool.get(parent_type).array_type.element;
+        return cell;
+    }
+    const name = resolver.name_pool.name_of_node(resolver.tree.arg(node, 1));
+    walk.part_type = switch (static_pool.lookup_member(parent_type, name)) {
+        .field => |field| field.field_type,
+        else => return null,
+    };
+    // the component made the record a block of cells
+    const record_cell = interpreter.memory.buffer[parent_cell].cell();
+    walk.passed[walk.count] = .{ .record = parent_type, .first_cell = record_cell };
+    walk.count += 1;
+    return cell;
 }
 
 // defaults and `where .. else` of fields run in the frame of the record, whose locals are fields

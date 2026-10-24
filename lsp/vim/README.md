@@ -13,8 +13,10 @@ mkdir -p ~/.vim/pack/mond/start && ln -s "$PWD/lsp/vim" ~/.vim/pack/mond/start/m
 Vim also needs semantic highlighting turned on in yegappan/lsp (it is off by default):
 
 ```vim
-autocmd User LspSetup call LspOptionsSet(#{semanticHighlight: v:true})
+autocmd User LspSetup call LspOptionsSet(#{semanticHighlight: v:true, showInlayHints: v:true})
 ```
+
+The values of `stc` variables show at the end of their lines (inlay hints), in neovim always, in vim with `showInlayHints` as above. Hovering a splice shows what each macro pass expanded it to. `:MondExpansions [pass]` opens the program before and after a pass (the last one by default) as a diff in a new tab, in vim and neovim.
 
 Neovim: `:checkhealth vim.lsp` shows the server, `:LspRestart` after changing `lsp/` itself.
 Its defaults do the rest: `<C-]>` and ctrl-click go to the definition, `grr` lists references, `gO` the outline, `K` hovers, `<C-x><C-o>` completes.

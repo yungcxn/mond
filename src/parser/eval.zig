@@ -71,8 +71,10 @@ fn rest(p: *Parser, first: NodeId, prec: u8) anyerror!NodeId {
 
     while (p.tok_cursor < p.tokens.len()) {
         const tok = try p.peek_tok();
-        if (prec > lookahead.prec_unary and (tok == .kw_as or tok == .kw_asbits)) break;
-        if (prec > lookahead.prec_unary and (tok == .@"xpct_.." or tok == .@"xpct_..=" or tok == .@"xpct_..<")) break;
+        // `x as u8 as u16` and `x as u32 oftype Num` apply one after the other
+        const is_cast = tok == .kw_as or tok == .kw_asbits or tok == .kw_oftype;
+        if (prec > lookahead.prec_unary and is_cast) break;
+        if (prec > lookahead.prec_unary and p.difference and tok == .@"xpct_--") break;
         const post_f = lookahead.post[@intFromEnum(tok)] orelse break;
 
         p.tok_cursor += 1;
@@ -98,10 +100,7 @@ pub fn block(p: *Parser) anyerror!NodeId {
     defer p.head, p.list, p.angle = outer;
     const parent = p.tree.push_node(.block);
     const children = p.scratch.len;
-    while (!try p.peek_eq_tok(.@"pct_}")) {
-        p.scratch.push(try any(p, .allow_assign, 0));
-        try p.eat_stmt_end();
-    }
+    while (!try p.peek_eq_tok(.@"pct_}")) p.scratch.push(try p.statement(true));
     p.tok_cursor += 1;
     p.close(parent, children);
     return parent;
@@ -171,6 +170,14 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
     p.angle = false;
     defer p.angle = outer;
     var parent: NodeId = undefined;
+    // `[..]T`: a slice, the address of its first element and its length
+    const is_slice = try p.peek_eq_tok(.@"xpct_..") and
+        (p.tokens.get_field(.tk, p.tok_cursor + 1) orelse .none) == .@"pct_]";
+    if (is_slice) {
+        p.tok_cursor += 2;
+        const element = try any(p, .forbid_assign, lookahead.prec_unary + 1);
+        return p.tree.push_node_with(.type_slice, .{ .type = element });
+    }
     if (!try p.peek_eq_tok(.@"pct_]")) {
         parent = try any(p, .forbid_assign, 0);
         switch (try p.peek_tok()) {
@@ -404,6 +411,11 @@ pub fn type_ptr_ptr(p: *Parser) anyerror!NodeId {
     return p.tree.push_node_with(.type_ptr, .{ .subnode = inner });
 }
 
+// `stc? T` in a parameter list: the type of a parameter that is static where its argument is
+pub fn stc_maybe(p: *Parser) anyerror!NodeId {
+    return p.tree.push_node_with(.stc_maybe, .{ .subnode = try expr(p, lookahead.prec_unary + 1) });
+}
+
 pub fn type_u8(p: *Parser) anyerror!NodeId {
     return p.tree.push_node(.type_u8);
 }
@@ -517,7 +529,9 @@ pub fn variant(p: *Parser) anyerror!NodeId {
 
     const params = p.scratch.len;
     while (!try p.peek_eq_tok(.@"pct_)")) {
-        p.scratch.push(try partial.variant_param(p));
+        const spread = try lookahead.spread_follows(p);
+        if (spread) p.tok_cursor += 1;
+        p.scratch.push(if (spread) try unquote(p) else try partial.variant_param(p));
         if (!try p.peek_eq_tok(.@"pct_,")) break;
         p.tok_cursor += 1;
     }
@@ -530,12 +544,19 @@ pub fn variant(p: *Parser) anyerror!NodeId {
     var node = p.tree.push_node(parent);
     p.tree.set_children(node, Node.LayoutStruct(.def_variant){ .param_tuple = param_tuple });
 
-    if (try p.peek_eq_tok(.kw_tagtype)) {
-        p.tok_cursor += 1;
-        node = p.tree.push_node_with(.def_variant_tagtype, .{
-            .def_variant = node,
-            .tagtype = try any(p, .forbid_assign, 0),
-        });
+    switch (try p.peek_tok()) {
+        .kw_tagtype => {
+            p.tok_cursor += 1;
+            node = p.tree.push_node_with(.def_variant_tagtype, .{
+                .def_variant = node,
+                .tagtype = try any(p, .forbid_assign, 0),
+            });
+        },
+        .kw_notagtype => {
+            p.tok_cursor += 1;
+            node = p.tree.push_node_with(.def_variant_notagtype, .{ .def_variant = node });
+        },
+        else => {},
     }
 
     if (try p.peek_eq_tok(.kw_assertsize)) {
@@ -676,7 +697,24 @@ pub fn inc_postfix(p: *Parser, lhs: NodeId) anyerror!NodeId {
     });
 }
 
+// `x--`, or between types `A -- A.Case` when a type follows: binds tighter than `||`, its right
+// side is one operand (`A -- (B || C)`), and `A -- B -- C` is `(A -- B) -- C`
 pub fn dec_postfix(p: *Parser, lhs: NodeId) anyerror!NodeId {
+    const starts_type = switch (p.tokens.get_field(.tk, p.tok_cursor) orelse .none) {
+        .identifier, .@"pct_(", .kw_bool => true,
+        .kw_u8, .kw_u16, .kw_u32, .kw_u64, .kw_i8, .kw_i16, .kw_i32, .kw_i64 => true,
+        .kw_f16, .kw_f32, .kw_f64 => true,
+        else => false,
+    };
+    if (starts_type) {
+        const outer = p.difference;
+        p.difference = true;
+        defer p.difference = outer;
+        return p.tree.push_node_with(.variant_difference, .{
+            .left_type = lhs,
+            .right_type = try any(p, .forbid_assign, lookahead.prec_unary + 1),
+        });
+    }
     return p.tree.push_node_with(.dec_postfix, .{
         .subnode = lhs,
     });
@@ -691,30 +729,30 @@ pub fn gen_lowerbound(p: *Parser, lhs: NodeId) anyerror!NodeId {
 pub fn gen_incl(p: *Parser, lhs: NodeId) anyerror!NodeId {
     return p.tree.push_node_with(.gen_incl, .{
         .lower = lhs,
-        .upper = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")),
+        .upper = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_..=")),
     });
 }
 
 pub fn gen_excl(p: *Parser, lhs: NodeId) anyerror!NodeId {
     return p.tree.push_node_with(.gen_excl, .{
         .lower = lhs,
-        .upper = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_|")),
+        .upper = try any(p, .forbid_assign, lookahead.prec_above(.@"xpct_..<")),
     });
 }
 
 pub fn oftype(p: *Parser, lhs: NodeId) anyerror!NodeId {
     return p.tree.push_node_with(.oftype, .{
         .value = lhs,
-        .type = try any(p, .forbid_assign, lookahead.prec_unary),
+        .type = try any(p, .forbid_assign, lookahead.prec_unary + 1),
     });
 }
 
 pub fn as(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    return p.tree.push_node_with(.as, .{ .value = lhs, .type = try any(p, .forbid_assign, lookahead.prec_unary) });
+    return p.tree.push_node_with(.as, .{ .value = lhs, .type = try any(p, .forbid_assign, lookahead.prec_unary + 1) });
 }
 
 pub fn asbits(p: *Parser, lhs: NodeId) anyerror!NodeId {
-    return p.tree.push_node_with(.asbits, .{ .value = lhs, .type = try any(p, .forbid_assign, lookahead.prec_unary) });
+    return p.tree.push_node_with(.asbits, .{ .value = lhs, .type = try any(p, .forbid_assign, lookahead.prec_unary + 1) });
 }
 
 pub fn labelarrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
@@ -837,10 +875,17 @@ pub fn quote(p: *Parser) anyerror!NodeId {
         break :blk try block(p);
     } else blk: {
         try p.eat_assert_tok(.@"pct_:");
+        const start = p.tok_cursor;
         const e = try any(p, .allow_assign, 0);
-        if (p.pattern or p.tok_cursor >= p.tokens.len() or !try p.peek_eq_tok(.@"xpct_=>")) break :blk e;
-        p.tok_cursor += 1;
-        break :blk p.tree.push_node_with(.partial__match_case, .{ .pattern = e, .body = try any(p, .allow_assign, 0) });
+        if (p.pattern or p.tok_cursor >= p.tokens.len()) break :blk e;
+        // an arm (`T x =>`, `A | B =>`, `p where c =>`) is parsed again as the arms of a match are
+        const is_arm = switch (try p.peek_tok()) {
+            .@"xpct_=>", .kw_where, .identifier => true,
+            else => false,
+        };
+        if (!is_arm) break :blk e;
+        p.tok_cursor = start;
+        break :blk try partial.match_case(p);
     };
     return p.tree.push_node_with(.quote, .{ .body = body });
 }
@@ -865,6 +910,8 @@ pub fn unquote(p: *Parser) anyerror!NodeId {
         var x = try identifier(p);
         while (p.tok_cursor < p.tokens.len()) switch (try p.peek_tok()) {
             .@"xpct_." => {
+                // `@v.@(name)`: a member named by another hole of the quote
+                if (p.tokens.get_field(.tk, p.tok_cursor + 1) == .@"xpct_@") break;
                 p.tok_cursor += 1;
                 x = try member(p, x);
             },

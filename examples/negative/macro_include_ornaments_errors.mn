@@ -1,0 +1,21 @@
+# examples/lib/ornaments.mn: what an ornament changes shows where the base's code no longer fits
+<include "../lib/ornaments.mn">;
+variant Expr = +(Num(i64 value), Neg(&Expr inner), Hole);
+variant Tagged = <ornament(refl Expr, quote: Tagged, quote: *(u8 tag = 0))>;
+# `Hole` has a field now, so the bare `Expr.Hole` the lifted body builds is its constructor
+fun simplify = (&Expr e) -> Expr: ret match e.* {
+    Expr.Num(0) => Expr.Hole,
+    _ => e.*,
+};
+fun tagged_simplify = <lift(refl simplify, quote: Expr, quote: Tagged, quote: tagged_simplify)>; #! type_mismatch
+
+# a field without a default must be given, a function over the base takes no ornament
+variant Placed = <ornament(refl Expr, quote: Placed, quote: *(u32 line))>;
+stc Placed P = Placed.Num(1); #! wrong_arity
+fun eval = (Expr e) -> i64: ret match e { Expr.Num(v) => v, Expr.Neg(i) => -eval(i.*), Expr.Hole => 0 };
+stc i64 E = eval(Tagged.Num(1)); #! type_mismatch
+
+# the ornament's cases are its own: a match missing one is not exhaustive
+fun partial_tag = (Tagged t) -> u8: ret match t { Tagged.Num(tag = g) => g, Tagged.Hole(g) => g }; #! non_exhaustive_match
+
+main = () {}

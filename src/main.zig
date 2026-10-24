@@ -78,7 +78,7 @@ const Args = struct {
         },
         .print = Help{
             .takes = " <stages>",
-            .does = &.{"also print the stages tree, decls, ir or llvm, comma separated"},
+            .does = &.{"also print the stages code, tree, decls, ir or llvm, comma separated"},
             .opens = "Look inside",
         },
         .inspect = Help{
@@ -207,8 +207,10 @@ const Args = struct {
     }
 };
 
-// what `--print` shows: the resolved tree, the declarations, `HighIr`, the optimized llvm ir
+// what `--print` shows: the program as code once its macros expanded, the resolved tree, the
+// declarations, `HighIr`, the optimized llvm ir
 const Stages = struct {
+    code: bool = false,
     tree: bool = false,
     decls: bool = false,
     ir: bool = false,
@@ -344,6 +346,7 @@ pub fn main(init: std.process.Init) void {
         };
     };
 
+    if (stages.code) dbg.Resolver.print_code(io, &resolver) catch |err| @panic(@errorName(err));
     if (stages.tree) dbg.Resolver.print_tree(io, &resolver) catch |err| @panic(@errorName(err));
     if (stages.decls) dbg.Resolver.print(io, &resolver) catch |err| @panic(@errorName(err));
     dbg.Resolver.print_diagnostics(io, &resolver, source_path) catch |err| {

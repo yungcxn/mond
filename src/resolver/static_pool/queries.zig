@@ -18,6 +18,7 @@ fn any_component(pool: *const StaticPool, type_index: Index, comptime decide: Co
     return switch (pool.composition(type_index)) {
         .pointer => any_component(pool, pool.pointee(type_index), decide),
         .array => any_component(pool, pool.get(type_index).array_type.element, decide),
+        .slice => any_component(pool, pool.get(type_index).slice_type.element, decide),
         .function => {
             const function = pool.get(type_index).function_type;
             for (function.parameters) |parameter| {
@@ -156,6 +157,7 @@ fn any_part(pool: *const StaticPool, type_index: Index, comptime decide: PartTes
         .unified_variant_type => |unified| for (unified.members) |member| {
             if (any_part(pool, member, decide)) break true;
         } else false,
+        .variant_subset_type => |subset| any_part(pool, subset.whole, decide),
         else => false,
     };
 }
@@ -170,6 +172,19 @@ pub fn holds_function_value(pool: *const StaticPool, type_index: Index) bool {
     }.decide);
 }
 
+// whether a value of the type may hold an address: a pointer, a slice, a runtime-length array
+pub fn holds_address(pool: *const StaticPool, type_index: Index) bool {
+    return any_part(pool, type_index, struct {
+        fn decide(p: *const StaticPool, t: Index) bool {
+            return switch (p.get(t)) {
+                .pointer_type, .slice_type => true,
+                .array_type => |array| array.length == StaticPool.dyn_len,
+                else => false,
+            };
+        }
+    }.decide);
+}
+
 // whether a type is a member of a unified variant, of any other type it is not
 pub fn is_member(pool: *const StaticPool, unified: Index, member: Index) bool {
     if (unified == .none or pool.tag(unified) != .unified_variant_type) return false;
@@ -177,7 +192,7 @@ pub fn is_member(pool: *const StaticPool, unified: Index, member: Index) bool {
     return std.mem.indexOfScalar(Index, members, member) != null;
 }
 
-// a variant or case of one without a tag (`tagtype _`): nothing tells its cases apart at run time
+// a variant or case of one without a tag (`notagtype`): nothing tells its cases apart at run time
 pub fn is_untagged(pool: *const StaticPool, type_index: Index) bool {
     return switch (pool.get(type_index)) {
         .variant_type => |variant| variant.tag_mode == .none,
@@ -198,6 +213,46 @@ pub fn is_untagged_at_run_time(pool: *const StaticPool, type_index: Index) bool 
 
 pub fn holds_untagged_variant(pool: *const StaticPool, type_index: Index) bool {
     return any_part(pool, type_index, is_untagged);
+}
+
+// the case (or one-case member) all zero bytes are: the one tagged 0, of a self-tagged variant
+// the payload case unless a case has the tag 0 itself; none when no case is
+pub fn zero_unit(pool: *const StaticPool, variant_or_unified: Index) Index {
+    switch (pool.get(variant_or_unified)) {
+        .variant_type => |variant| {
+            var payload_case: Index = .none;
+            for (variant.cases) |case| {
+                const case_type = pool.get(case).variant_case_type;
+                if (variant.tag_mode == .self and case_type.payload != .none) {
+                    payload_case = case;
+                    continue;
+                }
+                const tag_is_zero = pool.tag(case_type.tag) == .int_value and
+                    pool.get(case_type.tag).int_value.bits == 0;
+                if (tag_is_zero) return case;
+            }
+            return payload_case;
+        },
+        // the first member starts the tags at 0
+        .unified_variant_type => |unified| {
+            const first = unified.members[0];
+            return if (pool.brings_cases(first)) pool.zero_unit(first) else first;
+        },
+        else => return .none,
+    }
+}
+
+// whether zeroing the type makes a value a subset leaves out: zeroed records and arrays holding
+// one are written first like scalars. a type that contains itself (an error) is not walked
+pub fn holds_unzeroable(pool: *StaticPool, type_index: Index) bool {
+    if (pool.layout(type_index).state != .done) return false;
+    return any_part(pool, type_index, struct {
+        fn decide(p: *const StaticPool, t: Index) bool {
+            if (p.tag(t) != .variant_subset_type) return false;
+            const zero = p.zero_unit(p.whole_of(t));
+            return zero == .none or p.is_removed(t, zero);
+        }
+    }.decide);
 }
 
 // a type only static code can have: trees and what holds them
@@ -260,7 +315,7 @@ pub fn unwrapped(pool: *StaticPool, type_index: Index) Index {
 
 // the declaration of a nominal type, also through a pointer or a case
 pub fn nominal_declaration(pool: *StaticPool, type_index: Index) DeclPool.Index {
-    return switch (pool.get(pool.unwrapped(type_index))) {
+    return switch (pool.get(pool.whole_of(pool.unwrapped(type_index)))) {
         .record_type => |record| record.declaration,
         .variant_type => |variant| variant.declaration,
         .trait_type => |trait| trait.declaration,
@@ -292,7 +347,7 @@ pub fn payload_of(pool: *StaticPool, type_index: Index) Index {
     const resolved = pool.substitute_type_variables(type_index);
     const case = switch (pool.tag(resolved)) {
         .variant_case_type => resolved,
-        .variant_type => pool.first_payload_case(resolved),
+        .variant_type, .variant_subset_type => pool.first_payload_case(resolved),
         else => .none,
     };
     if (case == .none) return .none;
@@ -325,6 +380,7 @@ pub fn implements(pool: *const StaticPool, type_index: Index, trait: Index) bool
         .variant_type => |variant| variant.traits,
         .trait_type => |own_trait| own_trait.super_traits,
         .variant_case_type => |case| return pool.implements(case.variant, trait),
+        .variant_subset_type => |subset| return pool.implements(subset.whole, trait),
         .pointer_type => |pointer| return pool.implements(pointer.pointee, trait),
         else => return false,
     };
@@ -364,6 +420,7 @@ pub fn tag_type_of(pool: *const StaticPool, type_index: Index) Index {
             .none,
         .variant_case_type => |case| pool.tag_type_of(case.variant),
         .unified_variant_type => pool.stored_tag_type(type_index),
+        .variant_subset_type => |subset| pool.tag_type_of(subset.whole),
         .pointer_type => |pointer| pool.tag_type_of(pointer.pointee),
         else => .none,
     };
@@ -379,6 +436,7 @@ pub fn stored_tag_type(pool: *const StaticPool, type_index: Index) Index {
         },
         .variant_case_type => |case| pool.stored_tag_type(case.variant),
         .unified_variant_type => pool.unified_tag_type(type_index),
+        .variant_subset_type => |subset| pool.stored_tag_type(subset.whole),
         else => .none,
     };
 }
@@ -411,11 +469,17 @@ pub fn lookup_member(pool: *StaticPool, type_index: Index, name: NamePool.Index)
             const of_member = pool.lookup_member(member, name);
             if (of_member != .none) break of_member;
         } else .none,
+        // the whole's members, without the cases it leaves out
+        .variant_subset_type => |subset| switch (pool.lookup_member(subset.whole, name)) {
+            .case => |case| if (pool.is_removed(owner, case)) .none else .{ .case = case },
+            else => |member| member,
+        },
         .trait_type => trait_member(pool, &.{owner}, name, true),
         else => .none,
     };
     if (found != .none) return found;
-    const nominal = pool.tag(owner) == .record_type or pool.tag(owner) == .variant_type;
+    const nominal = pool.tag(owner) == .record_type or pool.tag(owner) == .variant_type or
+        pool.tag(owner) == .variant_subset_type;
     if (nominal and name == .init) return .builtin_init;
     if (nominal and name == .deinit) return .builtin_deinit;
     return .none;
@@ -447,8 +511,13 @@ pub fn niche_case(pool: *const StaticPool, case: Index, payload: Index) Index {
     const variant = pool.get(case).variant_case_type.variant;
     if (pool.tag(variant) != .variant_type) return .none;
     if (pool.get(variant).variant_type.tag_mode != .self) return .none;
-    // the bits of the payload's one field, as its tag type sees them
-    const field_bits: u64 = switch (pool.get(pool.get(payload).aggregate_value.elements[0])) {
+    // the bits of the payload's field holding the tag, as its tag type sees them
+    var field = payload;
+    for (pool.get(variant).variant_type.tag_path) |index| {
+        if (pool.tag(field) != .aggregate_value) return .none;
+        field = pool.get(field).aggregate_value.elements[index];
+    }
+    const field_bits: u64 = switch (pool.get(field)) {
         .int_value => |int| int.bits,
         .simple_value => |simple| @intFromBool(simple == .bool_true),
         .float_value => |float| switch (pool.get(float.value_type).float_type.bits) {
@@ -466,8 +535,22 @@ pub fn niche_case(pool: *const StaticPool, case: Index, payload: Index) Index {
     return .none;
 }
 
-pub fn first_payload_case(pool: *const StaticPool, variant: Index) Index {
+// of a subset the first one it keeps
+// a self-tagged variant (`tagtype self.f`) whose payload has more fields than the one holding the
+// tag: it is laid out as that payload, the other cases are values of the field
+pub fn is_field_tagged(pool: *const StaticPool, variant: Index) bool {
+    if (pool.tag(variant) != .variant_type) return false;
+    if (pool.get(variant).variant_type.tag_mode != .self) return false;
+    const payload = pool.get(pool.first_payload_case(variant)).variant_case_type.payload;
+    const path = pool.get(variant).variant_type.tag_path;
+    return path.len > 1 or pool.get(payload).record_type.field_types.len > 1;
+}
+
+pub fn first_payload_case(pool: *const StaticPool, variant_or_subset: Index) Index {
+    const variant = pool.whole_of(variant_or_subset);
+    if (pool.tag(variant) != .variant_type) return .none;
     for (pool.get(variant).variant_type.cases) |case| {
+        if (pool.is_removed(variant_or_subset, case)) continue;
         if (pool.get(case).variant_case_type.payload != .none) return case;
     }
     return .none;
@@ -478,7 +561,7 @@ pub fn first_payload_case(pool: *const StaticPool, variant: Index) Index {
 // unified variant that is one case is itself, a result without tag has none
 pub fn fallback_case(pool: *const StaticPool, result: Index, failing: Index) Index {
     var search: FallbackSearch = .{ .pool = pool, .result = result, .failing = failing };
-    switch (pool.get(result)) {
+    switch (pool.get(pool.whole_of(result))) {
         .variant_case_type => return result,
         .variant_type => |variant| {
             if (variant.tag_mode == .none) return .none;
@@ -509,8 +592,10 @@ const FallbackSearch = struct {
 
     fn consider(search: *FallbackSearch, entry: Index) void {
         const pool = search.pool;
-        const tag = if (pool.tag(search.result) == .unified_variant_type)
-            pool.tag_in(search.result, entry)
+        // a subset's result keeps the tags of its whole, without the cases it leaves out
+        if (pool.is_removed(search.result, entry)) return;
+        const tag = if (pool.tag(pool.whole_of(search.result)) == .unified_variant_type)
+            pool.tag_in(pool.whole_of(search.result), entry)
         else
             signed_tag(pool, pool.get(entry).variant_case_type.tag);
         if (entry == search.failing) search.holds_failing = true;

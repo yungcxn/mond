@@ -1,0 +1,45 @@
+# `stc?` parameters: a call with static values realizes the function for them, where they are
+# static and branches on them take one side; a call with runtime values runs it as written
+fun power = (u64 x, stc? u64 n) -> u64 {
+    if n == 0: ret 1;
+    if n % 2 == 0 { u64 half = power(x, n / 2); ret half * half; }
+    ret x * power(x, n - 1);
+}
+fun cube = (u64 x) -> u64: ret power(x, 3);
+fun any = (u64 x, u64 n) -> u64: ret power(x, n);
+stc []u64 POWERS = [cube(4), any(2, 10), power(3, 0), any(3, 0)]; #= POWERS [64, 1024, 1, 1]
+
+# `match` on a static value takes its arm, its names static too
+variant Op = +(Add(u32), Scale(u32), Halt);
+fun apply = (stc? Op op, u32 x) -> u32: ret match op { Op.Add(n) => x + n, Op.Scale(k) => x * k, Op.Halt => x };
+fun apply_any = (Op op, u32 x) -> u32: ret apply(op, x);
+stc []u32 APPLIED = [apply(Op.Add(5), 1), apply(Op.Scale(3), 2), apply_any(Op.Halt, 9), apply_any(Op.Add(2), 2)]; #= APPLIED [6, 6, 9, 4]
+
+# `isstc x`: whether `x` is static here, several `stc?` parameters each realized per tuple
+fun label = (stc? u32 code) -> u32: ret if isstc code: 1000 + code else: code;
+fun label_any = (u32 code) -> u32: ret label(code);
+stc []u32 LABELS = [label(7), label_any(7)]; #= LABELS [1007, 7]
+fun both = (stc? u32 a, stc? u32 b) -> u32: ret if isstc a and isstc b: a * 100 + b else: 0;
+fun half_static = (u32 a) -> u32: ret both(a, 2);
+stc []u32 BOTH = [both(3, 4), both(5, 6), half_static(1)]; #= BOTH [304, 506, 0]
+stc bool LITERAL = isstc 3; #= LITERAL true
+
+# a static program interpreted by a loop: the realization runs over a constant program
+type Machine = *(mut [4]u32 cells, mut u64 at);
+fun run = (stc? [..]u8 prog, *Machine m) {
+    for op in prog: match op {
+        '+' => m.cells[m.at] += 1,
+        '-' => m.cells[m.at] -= 1,
+        '>' => m.at += 1,
+        '<' => m.at -= 1,
+        _ => {},
+    };
+}
+stcfun machine = () -> [2]u32 {
+    mut Machine m = Machine([0, 0, 0, 0], 0);
+    run("++>+++<-", m.&);
+    ret [m.cells[0], m.cells[1]];
+}
+stc [2]u32 MACHINE = machine(); #= MACHINE [1, 3]
+
+main = () {}

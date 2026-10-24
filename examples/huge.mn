@@ -689,7 +689,7 @@ variant CommonCode = +(
 ) tagtype self;
 
 # G) untagged variant: the cases share the room of the widest, read through a cast to a case
-variant Raw32 = +(AsInt(i32), AsFloat(f32)) tagtype _;
+variant Raw32 = +(AsInt(i32), AsFloat(f32)) notagtype;
 stc i32 RAW_BITS = (Raw32.AsFloat(1.0) as Raw32.AsInt).$0;
 
 # H) packed variant: a case is only as large as its own payload, so the variant is a parameter

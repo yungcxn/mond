@@ -56,6 +56,7 @@ pub fn unify(pool: *StaticPool, left_type: Index, right_type: Index) UnifyResult
             return pool.unify(left_array.element, right_array.element);
         },
         .pointer => pool.unify(pool.pointee(left), pool.pointee(right)),
+        .slice => pool.unify(pool.get(left).slice_type.element, pool.get(right).slice_type.element),
         .function => {
             const left_function = pool.get(left).function_type;
             const right_function = pool.get(right).function_type;
@@ -154,6 +155,12 @@ pub fn coercion(pool: *StaticPool, from_type: Index, to_type: Index) CoercionKin
         const drops_writability = from_pointer.is_mutable and !to_pointer.is_mutable;
         const same_pointee = from_pointer.pointee == to_pointer.pointee;
         if (drops_writability and same_pointee) return .ptr_mut_to_ptr;
+        // a subset is read as its whole or a wider subset, never written as one: that could store
+        // a case it leaves out
+        const reads_subset = !to_pointer.is_mutable and
+            pool.tag(from_pointer.pointee) == .variant_subset_type and
+            pool.coercion(from_pointer.pointee, to_pointer.pointee) == .identity;
+        if (reads_subset) return if (from_pointer.is_mutable) .ptr_mut_to_ptr else .identity;
         if (from_pointer.is_mutable or !to_pointer.is_mutable) {
             const from_pointee = pool.get(from_pointer.pointee);
             const to_pointee = pool.get(to_pointer.pointee);
@@ -172,6 +179,32 @@ pub fn coercion(pool: *StaticPool, from_type: Index, to_type: Index) CoercionKin
         to_key.array_type.length == dyn_len and
         from_key.array_type.element == to_key.array_type.element;
     if (array_to_runtime_length) return .to_dyn;
+    // an array of a static length, or a pointer to one, is a slice of its elements
+    if (to_key == .slice_type) {
+        const pointee = if (from_key == .pointer_type) from_key.pointer_type.pointee else from;
+        const source = pool.get(pointee);
+        const fits = source == .array_type and
+            source.array_type.element == to_key.slice_type.element and
+            pool.tag(source.array_type.length) == .int_value;
+        return if (fits) .to_slice else .incompatible;
+    }
+
+    // a subset is a value of its whole, a value goes into a subset when each case it may be is one
+    // the subset keeps
+    if (to_key == .variant_subset_type) {
+        const into_whole = pool.coercion(from, to_key.variant_subset_type.whole);
+        if (into_whole == .incompatible) return .incompatible;
+        const mark = pool.scratch.len;
+        defer pool.scratch.len = mark;
+        pool.push_units(from);
+        for (pool.scratch.buffer[mark..pool.scratch.len]) |unit| {
+            if (pool.is_removed(to, unit)) return .incompatible;
+        }
+        return into_whole;
+    }
+    if (from_key == .variant_subset_type) {
+        return pool.coercion(from_key.variant_subset_type.whole, to);
+    }
 
     // variants, unified variants, traits and single-payload variants (`Opt8 x = 42`)
     if (from_key == .variant_case_type) {
@@ -217,6 +250,19 @@ pub fn unified_of(
 ) StaticPool.UnifiedOf {
     const mark = pool.scratch.len;
     defer pool.scratch.len = mark;
+    // a subset unifies its whole and keeps its cases out: `A || (B -- B.x)` is `(A || B) -- B.x`,
+    // with the layout and tags of `A || B`
+    const has_subset = pool.tag(left) == .variant_subset_type or
+        pool.tag(right) == .variant_subset_type;
+    if (has_subset and !is_packed) {
+        const wholes = pool.unified_of(pool.whole_of(left), pool.whole_of(right), false);
+        if (wholes == .sizeless_side) return wholes;
+        for ([_]Index{ left, right }) |side| {
+            if (pool.tag(side) != .variant_subset_type) continue;
+            pool.scratch.append(pool.get(side).variant_subset_type.removed);
+        }
+        return .{ .unified = without(pool, wholes.unified, mark) };
+    }
     for ([_]Index{ left, right }, 0..) |side, i| {
         if (side == .poison_type) continue;
         const is_same_kind = pool.tag(side) == .unified_variant_type and
@@ -236,6 +282,135 @@ pub fn unified_of(
     return .{ .unified = pool.intern(.{
         .unified_variant_type = .{ .members = members, .is_packed = is_packed },
     }) };
+}
+
+// `A -- B`: the cases of A without those of B (a case, a member, a unified variant of them or a
+// subset), in the layout and tags of A's whole
+pub fn difference_of(pool: *StaticPool, left: Index, right: Index) StaticPool.DifferenceOf {
+    const mark = pool.scratch.len;
+    defer pool.scratch.len = mark;
+    pool.push_units(right);
+    return pool.difference_by_units(left, mark);
+}
+
+// `left` without the cases (or one-case members) on the scratch from `removing` on, each one of
+// its whole, which must have tags to tell its cases apart
+pub fn difference_by_units(
+    pool: *StaticPool,
+    left: Index,
+    removing: usize,
+) StaticPool.DifferenceOf {
+    const whole = pool.whole_of(left);
+    const is_tagged = switch (pool.get(whole)) {
+        .variant_type => |variant| variant.tag_mode != .none and !variant.is_packed,
+        .unified_variant_type => |unified| !unified.is_packed,
+        else => false,
+    };
+    if (!is_tagged) return .{ .wrong_side = 0 };
+
+    const end = pool.scratch.len;
+    pool.push_units(whole);
+    for (removing..end) |i| {
+        const known = pool.scratch.buffer[end..pool.scratch.len];
+        if (std.mem.indexOfScalar(Index, known, pool.scratch.buffer[i]) == null) {
+            pool.scratch.len = end;
+            return .{ .wrong_side = 1 };
+        }
+    }
+    pool.scratch.len = end;
+    if (left != whole) pool.scratch.append(pool.get(left).variant_subset_type.removed);
+    return .{ .difference = without(pool, whole, removing) };
+}
+
+// `whole` without the units on the scratch from `removing` on: a subset with them sorted, the whole
+// itself without any, `never` without all
+fn without(pool: *StaticPool, whole: Index, removing: usize) Index {
+    const end = pool.scratch.len;
+    pool.push_units(whole);
+    const unit_count = pool.scratch.len - end;
+    pool.scratch.len = end;
+
+    const removed = pool.scratch.buffer[removing..end];
+    std.mem.sort(Index, removed, {}, struct {
+        fn less(_: void, a: Index, b: Index) bool {
+            return @intFromEnum(a) < @intFromEnum(b);
+        }
+    }.less);
+    var kept: usize = 0;
+    for (removed) |unit| {
+        if (kept > 0 and removed[kept - 1] == unit) continue;
+        removed[kept] = unit;
+        kept += 1;
+    }
+    if (kept == 0) return whole;
+    if (kept == unit_count) return .never_type;
+    const subset = StaticPool.VariantSubsetType{ .whole = whole, .removed = removed[0..kept] };
+    return pool.intern(.{ .variant_subset_type = subset });
+}
+
+// the variant or unified variant a value of a subset is a value of, any other type itself
+pub fn whole_of(pool: *const StaticPool, type_index: Index) Index {
+    if (type_index == .none or pool.tag(type_index) != .variant_subset_type) return type_index;
+    return pool.get(type_index).variant_subset_type.whole;
+}
+
+// whether a subset leaves out a case or a member that is one case
+pub fn is_removed(pool: *const StaticPool, subset: Index, unit: Index) bool {
+    if (subset == .none or pool.tag(subset) != .variant_subset_type) return false;
+    return std.mem.indexOfScalar(Index, pool.get(subset).variant_subset_type.removed, unit) != null;
+}
+
+// pushes what a value of the type may be onto the scratch: the cases of a variant, of a unified
+// variant its members' cases or the members that are one case, of a subset those it keeps; a
+// case or any other type is one
+pub fn push_units(pool: *StaticPool, type_index: Index) void {
+    switch (pool.get(type_index)) {
+        .variant_type => |variant| pool.scratch.append(variant.cases),
+        .unified_variant_type => |unified| for (unified.members) |member| {
+            if (pool.brings_cases(member)) {
+                pool.scratch.append(pool.get(member).variant_type.cases);
+            } else {
+                pool.scratch.push(member);
+            }
+        },
+        .variant_subset_type => |subset| {
+            const mark = pool.scratch.len;
+            pool.push_units(subset.whole);
+            var kept = mark;
+            for (mark..pool.scratch.len) |i| {
+                const unit = pool.scratch.buffer[i];
+                if (std.mem.indexOfScalar(Index, subset.removed, unit) != null) continue;
+                pool.scratch.buffer[kept] = unit;
+                kept += 1;
+            }
+            pool.scratch.len = kept;
+        },
+        else => pool.scratch.push(type_index),
+    }
+}
+
+// of what a value of `value_type` may be (see `push_units`), how much `tested` may be too: a value
+// is of a type when its case or member is. `some` is known only from the value
+pub fn units_covered(pool: *StaticPool, value_type: Index, tested: Index) StaticPool.Covered {
+    const mark = pool.scratch.len;
+    defer pool.scratch.len = mark;
+    pool.push_units(value_type);
+    const units_end = pool.scratch.len;
+    var covered: usize = 0;
+    for (mark..units_end) |i| {
+        if (pool.covers_unit(tested, pool.scratch.buffer[i])) covered += 1;
+    }
+    if (covered == 0) return .none;
+    return if (covered == units_end - mark) .all else .some;
+}
+
+// whether `unit` (a case, or a member of a unified variant that is one case) is one of what a
+// value of `tested` may be
+pub fn covers_unit(pool: *StaticPool, tested: Index, unit: Index) bool {
+    const mark = pool.scratch.len;
+    defer pool.scratch.len = mark;
+    pool.push_units(tested);
+    return std.mem.indexOfScalar(Index, pool.scratch.buffer[mark..pool.scratch.len], unit) != null;
 }
 
 // the type both branches of a choice become, and how each side gets there
@@ -258,6 +433,42 @@ pub fn join(pool: *StaticPool, left: Index, right: Index) JoinResult {
             return .{ .joined_type = variant, .left = .case_to_variant, .right = .case_to_variant };
         }
     }
+    // values of one variant without some of its cases: the variant without the cases neither
+    // side may be
+    const has_subset = pool.tag(left) == .variant_subset_type or
+        pool.tag(right) == .variant_subset_type;
+    if (has_subset) {
+        // a case is of its variant
+        var wholes: [2]Index = undefined;
+        for ([2]Index{ left, right }, &wholes) |side, *whole| {
+            const is_case = pool.tag(side) == .variant_case_type;
+            const variant = if (is_case) pool.get(side).variant_case_type.variant else side;
+            whole.* = pool.whole_of(variant);
+        }
+        const whole = wholes[0];
+        if (whole == wholes[1]) {
+            const mark = pool.scratch.len;
+            defer pool.scratch.len = mark;
+            pool.push_units(left);
+            pool.push_units(right);
+            const removing = pool.scratch.len;
+            pool.push_units(whole);
+            // the whole's units neither side may be move down to `mark`
+            var kept = mark;
+            for (removing..pool.scratch.len) |i| {
+                const unit = pool.scratch.buffer[i];
+                const known = pool.scratch.buffer[mark..removing];
+                if (std.mem.indexOfScalar(Index, known, unit) != null) continue;
+                pool.scratch.buffer[kept] = unit;
+                kept += 1;
+            }
+            pool.scratch.len = kept;
+            const joined = without(pool, whole, mark);
+            const left_kind = pool.coercion(left, joined);
+            const right_kind = pool.coercion(right, joined);
+            return .{ .joined_type = joined, .left = left_kind, .right = right_kind };
+        }
+    }
     const right_to_left = pool.coercion(right, left);
     if (right_to_left != .incompatible) {
         return .{ .joined_type = left, .left = .identity, .right = right_to_left };
@@ -272,6 +483,8 @@ pub fn join(pool: *StaticPool, left: Index, right: Index) JoinResult {
 // what an explicit `as` does to a value of `from` to make it a `to`
 pub fn cast_kind(pool: *StaticPool, from: Index, to: Index) CastKind {
     if (from == to or from == .poison_type or to == .poison_type) return .identity;
+    // a value of a subset is one of its whole, a value of the whole only becomes one by `match`
+    if (pool.tag(from) == .variant_subset_type) return pool.cast_kind(pool.whole_of(from), to);
     const from_key = pool.get(from);
     const from_int = from_key == .int_type or from == .bool_type;
     return switch (pool.get(to)) {
@@ -292,8 +505,9 @@ pub fn cast_kind(pool: *StaticPool, from: Index, to: Index) CastKind {
         .variant_case_type => |case| case_cast(pool, from, case),
         .pointer_type => |to_pointer| pointer_cast(pool, from, to_pointer),
         .array_type => |to_array| array_cast(pool, from, to_array),
+        .slice_type => |to_slice| slice_cast(pool, from, to_slice),
         .simple_type, .meta_type, .function_type, .record_type => .invalid,
-        .variant_type, .unified_variant_type => .invalid,
+        .variant_type, .unified_variant_type, .variant_subset_type => .invalid,
         .trait_type, .static_function, .template_type, .type_variable, .ast_type => .invalid,
         .int_value, .float_value, .simple_value, .string_value, .aggregate_value => .invalid,
         .variant_value, .function_value, .tree_value => .invalid,
@@ -314,8 +528,23 @@ fn case_cast(pool: *StaticPool, from: Index, case: StaticPool.VariantCaseType) C
     return .invalid;
 }
 
+// an array, or one behind a pointer, seen whole as a slice of its elements
+fn slice_cast(pool: *StaticPool, from: Index, to_slice: StaticPool.SliceType) CastKind {
+    const array = pool.get(pool.pointee(from));
+    if (array != .array_type or array.array_type.element != to_slice.element) return .invalid;
+    return if (pool.tag(array.array_type.length) == .int_value) .array_to_slice else .invalid;
+}
+
 fn pointer_cast(pool: *StaticPool, from: Index, to_pointer: StaticPool.PointerType) CastKind {
     const from_key = pool.get(from);
+    // a slice's address of its first element, of the array it reaches into
+    if (from_key == .slice_type) {
+        const to_pointee = pool.get(to_pointer.pointee);
+        const element = from_key.slice_type.element;
+        const is_element = to_pointer.pointee == element;
+        const is_array = to_pointee == .array_type and to_pointee.array_type.element == element;
+        return if (is_element or is_array) .slice_to_pointer else .invalid;
+    }
     if (from_key != .pointer_type) return .invalid;
     const from_pointer = from_key.pointer_type;
     if (to_pointer.is_mutable and !from_pointer.is_mutable) return .invalid;
@@ -381,6 +610,10 @@ pub fn substitute_type_variables(pool: *StaticPool, index: Index) Index {
             const pointer = pool.get(index).pointer_type;
             const pointee = pool.substitute_type_variables(pointer.pointee);
             return pool.pointer_to(pointee, pointer.is_mutable);
+        },
+        .slice => {
+            const element = pool.substitute_type_variables(pool.get(index).slice_type.element);
+            return pool.slice_of(element);
         },
         .function => {
             const function = pool.get(index).function_type;
@@ -448,6 +681,7 @@ pub fn occurs_in(pool: *StaticPool, variable: TypeVariables.Index, index: Index)
             return pool.occurs_in(variable, array.element);
         },
         .pointer => pool.occurs_in(variable, pool.pointee(resolved)),
+        .slice => pool.occurs_in(variable, pool.get(resolved).slice_type.element),
         .function => {
             const function = pool.get(resolved).function_type;
             for (function.parameters) |parameter| {

@@ -1,0 +1,35 @@
+<include "lib/out.mn">;
+# `stc?` parameters at run time: realizations for static arguments with their branches folded, the
+# function as written for runtime ones, a static program run by an interpreter loop
+mut u32 ONE = 0;
+type Machine = *(mut [8]u32 cells, mut u64 at);
+fun run = (stc? [..]u8 prog, *Machine m) {
+    for op in prog: match op {
+        '+' => m.cells[m.at] += 1,
+        '-' => m.cells[m.at] -= 1,
+        '>' => m.at += 1,
+        '<' => m.at -= 1,
+        _ => {},
+    };
+}
+fun power = (u64 x, stc? u64 n) -> u64 {
+    if n == 0: ret 1;
+    if n % 2 == 0 { u64 half = power(x, n / 2); ret half * half; }
+    ret x * power(x, n - 1);
+}
+variant Op = +(Add(u32), Scale(u32), Halt);
+fun apply = (stc? Op op, u32 x) -> u32: ret match op { Op.Add(n) => x + n, Op.Scale(k) => x * k, Op.Halt => x };
+fun label = (stc? u32 code) -> u32: ret if isstc code: 1000 + code else: code;
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc;
+    mut Machine m = Machine([0, 0, 0, 0, 0, 0, 0, 0], 0);
+    run("++>+++<-", m.&);
+    line_u64(m.cells[0] as u64 * 10 + m.cells[1] as u64);              #> 13
+    [3]u8 dynamic = [43, 43 * ONE as u8, 62];
+    run(dynamic, m.&);
+    line_u64(m.cells[0] as u64 * 10 + m.cells[1] as u64 + m.at * 100);  #> 133
+    line_u64(power(3, 5) + power(ONE as u64 + 1, 3 * ONE as u64) * 1000);  #> 8243
+    line_u64(apply(Op.Add(5), ONE) as u64 + apply(Op.Scale(3 * ONE), 2) as u64 * 100);  #> 606
+    line_u64(label(7) as u64 * 10000 + label(ONE + 1) as u64);         #> 10070002
+}

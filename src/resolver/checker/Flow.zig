@@ -51,7 +51,8 @@ pub fn check_if(
 
     // the condition known while checking: a stc one always, one in interpreted code if it can be
     const is_stc = resolver.tree.props(node).stc;
-    const condition_value = if (context.is_interpreted or is_stc and context.is_abstract)
+    const condition_value = if (context.is_interpreted or context.folds_static or
+        is_stc and context.is_abstract)
         resolver.static_values.try_evaluate(context, branch.cond) orelse .none
     else if (is_stc) blk: {
         _ = resolver.expressions.infer(context, branch.cond, .bool_type);
@@ -213,14 +214,18 @@ pub fn check_loop(
         const inferred = resolver.expressions.infer(context, loop.seq, sequence_hint);
         const sequence_type = static_pool.pointee(static_pool.substitute_type_variables(inferred));
 
-        // arrays are stepped through by their length, anything else by its `next` method
+        // arrays are stepped through by their length, slices by the one they have while the
+        // program runs, anything else by its `next` method
         const is_array = static_pool.get(sequence_type) == .array_type;
+        const is_slice = static_pool.tag(sequence_type) == .slice_type;
         const expressions = &resolver.expressions;
         if (is_array and !expressions.length_is_static(context, sequence_type, loop.seq)) {
             _ = resolver.report(.not_static, loop.seq, 0, 0);
         }
         const stepper: NamePool.Index = if (is_array) .len else .next;
-        const element_type = switch (static_pool.lookup_member(sequence_type, stepper)) {
+        const element_type = if (is_slice)
+            static_pool.get(sequence_type).slice_type.element
+        else switch (static_pool.lookup_member(sequence_type, stepper)) {
             .builtin_len => static_pool.get(sequence_type).array_type.element,
             .method => |method| self.return_type_of(method),
             .trait_method => |method| self.return_type_of(
@@ -243,6 +248,8 @@ pub fn check_loop(
         const declaration =
             resolver.declarations.declare_local(name, declared_at, kind, element_type);
         resolver.node_declarations[loop.head] = declaration;
+        // the variable holds slices the sequence holds (see `Slices`)
+        resolver.slices.flows(loop.seq, Resolver.Slices.declaration_slot(declaration));
         if (has_variable) {
             resolver.node_declarations[variable] = declaration;
             _ = resolver.set_node_type(variable, element_type);
@@ -362,6 +369,7 @@ pub fn check_unwrap(
     );
     if (kind == .labelarrow) {
         self.bind_label(resolver.tree.arg(node, 1), operand_type);
+        self.flow_into_label(operand, null, resolver.tree.arg(node, 1));
         return operand_type;
     }
 
@@ -394,6 +402,8 @@ pub fn check_unwrap(
         },
         .selftag_arrow => {
             self.bind_label(resolver.tree.arg(node, 1), payload_type);
+            const payload = resolver.slices.payload_slot(operand_type);
+            if (payload != null) self.flow_into_label(0, payload, resolver.tree.arg(node, 1));
             return .bool_type;
         },
         // the construct table sends only unwrap kinds here, `<-` is bound above
@@ -450,13 +460,16 @@ pub fn missing_fallback(
             }
             return .none;
         },
-        .variant_type, .unified_variant_type, .variant_case_type => {
+        .variant_type, .unified_variant_type, .variant_case_type, .variant_subset_type => {
             if (failing_variant == .none) {
                 return self.missing_case_fallback(fallback_type, .none);
             }
+            // a subset fails as one of the cases it keeps
             const unwrapped = static_pool.first_payload_case(failing_variant);
-            for (static_pool.get(failing_variant).variant_type.cases) |failing| {
-                if (failing == unwrapped) continue;
+            const whole = static_pool.whole_of(failing_variant);
+            for (static_pool.get(whole).variant_type.cases) |failing| {
+                const kept = !static_pool.is_removed(failing_variant, failing);
+                if (failing == unwrapped or !kept) continue;
                 const missing = self.missing_case_fallback(fallback_type, failing);
                 if (missing != .none) return missing;
             }
@@ -507,6 +520,13 @@ pub fn settle(
     const fits_any = settled_type == .never_type or settled_type == .runit_type or
         settled_type == .poison_type;
     if (fits_any) return settled_type;
+    // a branch that is a case with a payload is its constructor, not a value (as in `check`)
+    const is_payload_constructor = resolver.tree.kind(node) == .member and
+        resolver.static_pool.tag(settled_type) == .variant_case_type and
+        resolver.static_pool.get(settled_type).variant_case_type.payload != .none;
+    if (is_payload_constructor) {
+        return resolver.report(.type_mismatch, node, settled_type, expected);
+    }
     if (settled_type == .unit_type and expected != .unit_type) {
         return resolver.report(.runit_mixing, node, settled_type, expected);
     }
@@ -537,6 +557,22 @@ pub fn merge_branch_types(
 }
 
 // `<- name` binds the value, `<- a, b` destructures a record in field order
+// a label holds the slices of what it binds: the value `from`, or the slot of a payload field
+// (see `Slices`)
+pub fn flow_into_label(
+    self: *Flow,
+    from: NodeId,
+    from_slot: ?Resolver.Slices.Slot,
+    label: NodeId,
+) void {
+    const resolver = self.owning_resolver();
+    const declaration = resolver.node_declarations[label];
+    if (declaration == .none) return;
+    const into = Resolver.Slices.declaration_slot(declaration);
+    if (from_slot) |payload| return resolver.slices.connects(payload, into);
+    resolver.slices.flows(from, into);
+}
+
 pub fn bind_label(self: *Flow, label: NodeId, value_type: StaticPool.Index) void {
     const resolver = self.owning_resolver();
     if (resolver.tree.kind(label) != .partial__destructure) {

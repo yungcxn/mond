@@ -1,0 +1,42 @@
+# `A -- B` needs a variant with tags on the left and parts of it on the right
+variant IoErr = +(NotFound, Timeout, Denied, Busy(u8 retries));
+variant Word = +(Int(u32), Float(f32)) notagtype;
+variant Packet = ++(Small(u8), Large(u64));
+type Config = *(u32 port);
+type NotVariant = u32 -- u32; #! type_mismatch
+type Untagged = Word -- Word.Int; #! type_mismatch
+type Packed = Packet -- Packet.Small; #! type_mismatch
+type Foreign = IoErr -- Config; #! type_mismatch
+type OtherCase = IoErr -- Word.Int; #! type_mismatch
+
+type Narrow = IoErr -- IoErr.NotFound;
+# a case it leaves out, or the whole, goes in only through a match
+fun removed_case = () -> Narrow: ret IoErr.NotFound; #! type_mismatch
+fun whole_in = (IoErr e) -> Narrow: ret e; #! type_mismatch
+fun wider_in = (IoErr -- IoErr.Busy e) -> Narrow: ret e; #! type_mismatch
+stc Narrow STATIC_REMOVED = IoErr.NotFound; #! type_mismatch
+
+# its patterns are its own cases, it needs all of them and no more
+fun removed_arm = (Narrow n) -> u8: ret match n { IoErr.NotFound => 0, _ => 1 }; #! type_mismatch
+fun missing_arm = (Narrow n) -> u8: ret match n { IoErr.Timeout => 0, IoErr.Denied => 1 }; #! non_exhaustive_match
+fun after_all = (Narrow n) -> u8: ret match n { IoErr.Timeout | IoErr.Denied | IoErr.Busy(_) => 0, rest => 1 }; #! redundant_match_arm
+
+# narrowing takes only whole cases: a payload pattern or a guard leaves the case in
+fun partly = (IoErr e) -> Narrow: ret match e { IoErr.NotFound where true => IoErr.Timeout, rest => rest }; #! type_mismatch
+variant Res = +(Ok(i32), Err(u8));
+fun payload_only = (Res r) -> Res -- Res.Ok: ret match r { Res.Ok(0) => Res.Err(0), rest => rest }; #! type_mismatch
+
+# a pointer reads a subset as its whole, never writes through one
+fun write_through = (*Narrow p) -> *IoErr: ret p; #! type_mismatch
+fun read_through = (*Narrow p) -> &IoErr: ret p;
+variant Light = +(Red, Green) !{ fun flip = () { self.* = Light.Red; } }
+fun flip_subset = () { mut Light -- Light.Red g = Light.Green; g.flip(); } #! type_mismatch
+
+# zeroing that makes a case the subset leaves out: written first, or no `init`
+type Holder = *(Narrow err, u8 n);
+fun unwritten = () -> u8 { mut Holder h; ret tagof h.err; } #! use_before_initialization
+stc u8 INIT = tagof Holder.init().err; #! use_before_initialization
+Holder GLOBAL; #! use_before_initialization
+fun array_unwritten = () -> u8 { mut [2]Narrow errs; ret tagof errs[0]; } #! use_before_initialization
+
+main = () {}

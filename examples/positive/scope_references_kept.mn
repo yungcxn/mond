@@ -1,0 +1,47 @@
+# addresses that stay valid: what a function was given, static data, and locals used while their
+# frame runs (passed down, kept in locals, copied out by value)
+fun given = (&u32 p) -> &u32: ret p;
+fun first_half = ([..]u8 text) -> [..]u8: ret text[0..<lenof text / 2];
+fun element = (&[4]u32 values) -> &u32: ret values[2].&;
+type Node = *(u32 value, &Node next);
+fun last = (&Node start, u32 steps) -> &Node {
+    mut &Node at = start;
+    for _ in 0..<steps: at = at.next;
+    ret at;
+}
+stc u32 ANSWER = 42;
+fun static_address = () -> &u32: ret ANSWER.&;
+
+fun sum = ([..]u32 values) -> u32 {
+    mut u32 total = 0;
+    for v in values: total += v;
+    ret total;
+}
+stcfun used_locally = () -> [4]u32 {
+    mut [4]u32 local = [1, 2, 3, 4];
+    *u32 p = local[1].&;
+    p.* = 20;
+    [..]u32 view = local;
+    u32 total = sum(view) + sum(local[2..]);
+    &u32 kept = given(local[0].&);
+    ret [total, kept.*, first_half("abcd")[1], element(local.&).*];
+}
+stc [4]u32 USED = used_locally(); #= USED [35, 1, 98, 3]
+
+# copies of locals go anywhere: arrays and records are values
+type Bag = *([3]u8 items, u8 count);
+fun bag = () -> Bag {
+    [3]u8 items = [7, 8, 9];
+    ret Bag(items, 3);
+}
+fun copy = () -> [3]u8 { [3]u8 b = [4, 5, 6]; ret b; }
+stc u64 COPIED = bag().items[2] as u64 * 100 + copy()[0]; #= COPIED 904
+# checked only: a chain of locals walked while the frame runs
+fun walked = () -> u32 {
+    Node c = Node(3, 8 asbits &Node);
+    Node b = Node(2, c.&);
+    Node a = Node(1, b.&);
+    ret last(a.&, 2).value + static_address().*;
+}
+
+main = () {}

@@ -94,7 +94,11 @@ pub fn flush(self: *Variables, mark: u32) void {
 fn declaration_of(self: *Variables, node: NodeId) DeclPool.Index {
     const interpreter = self.owning_interpreter();
     if (interpreter.has_body_frame()) return interpreter.node_info(.declaration, node);
-    return interpreter.owning_resolver().declarations.use_name(node);
+    // of overloaded stcfuns the one the checker picked for the arguments, the name means the first
+    const resolver = interpreter.owning_resolver();
+    const picked = resolver.node_declarations[node];
+    if (picked != .none and resolver.decl_pool.get(picked, .kind) == .static_function) return picked;
+    return resolver.declarations.use_name(node);
 }
 
 pub fn peek(self: *Variables, declaration: DeclPool.Index) Value {
@@ -124,6 +128,13 @@ pub fn load(self: *Variables, node: NodeId) Value {
     if (is_local_function) return interpreter.calls.closure(declaration);
 
     const value = self.peek(declaration);
+    // an array a slice may be taken of keeps its own cells, so writes through the slice reach it
+    const is_mutable_array = value.is_pooled() and !value.is(.none) and
+        resolver.decl_pool.get(declaration, .flags).is_mut and
+        resolver.static_pool.tag(interpreter.value_type(value)) == .array_type;
+    if (is_mutable_array) {
+        if (self.cell_of_declaration(declaration)) |cell| return interpreter.thaw_cell(cell);
+    }
     if (value.is(.none)) {
         const static_value = resolver.decl_pool.get(declaration, .static_value);
         if (static_value != .none) return .of(&resolver.static_pool, static_value);
@@ -215,11 +226,18 @@ pub fn cell_of_place(self: *Variables, node: NodeId) ?u32 {
         if (!pointer.is(.poison_type)) _ = interpreter.report(.not_static, node, 0, 0);
         return null;
     }
-    if (kind == .array_index) return self.cell_of_component(node, kind);
+    if (kind == .array_index) {
+        const aggregate_cell = self.cell_of_place(resolver.tree.arg(node, 0)) orelse return null;
+        return self.cell_of_component(aggregate_cell, node, kind);
+    }
     if (kind == .member) {
         const parent_type = interpreter.checked_type(resolver.tree.arg(node, 0));
         const is_member_of_type = resolver.static_pool.tag(parent_type) == .meta_type;
-        if (!is_member_of_type) return self.cell_of_component(node, kind);
+        if (!is_member_of_type) {
+            const parent = resolver.tree.arg(node, 0);
+            const aggregate_cell = self.cell_of_place(parent) orelse return null;
+            return self.cell_of_component(aggregate_cell, node, kind);
+        }
     }
 
     // a constant of a type (`Light.Green`) is a value like any other
@@ -228,11 +246,26 @@ pub fn cell_of_place(self: *Variables, node: NodeId) ?u32 {
     return interpreter.push_cell(interpreter.owned_copy(value));
 }
 
-// an element or field of a place, a pooled aggregate is thawed so it can be written
-fn cell_of_component(self: *Variables, node: NodeId, kind: Kind) ?u32 {
+// an element or field of the aggregate in a cell, a pooled aggregate is thawed so it can be written
+pub fn cell_of_component(self: *Variables, place_cell: u32, node: NodeId, kind: Kind) ?u32 {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
-    var aggregate_cell = self.cell_of_place(resolver.tree.arg(node, 0)) orelse return null;
+    // an element of a slice is one of the cells it refers to, as far as its length goes
+    const held = interpreter.memory.buffer[place_cell];
+    if (kind == .array_index and interpreter.is_slice(held)) {
+        const position = interpreter.evaluate(resolver.tree.arg(node, 1));
+        if (!Value.is_int(position.value_type)) {
+            if (!position.is(.poison_type)) _ = interpreter.report(.not_static, node, 0, 0);
+            return null;
+        }
+        if (position.bits >= held.slice_len()) {
+            const shown_position: u32 = @truncate(position.bits);
+            _ = interpreter.report(.static_eval_failed, node, shown_position, held.slice_len());
+            return null;
+        }
+        return held.cell() + @as(u32, @intCast(position.bits));
+    }
+    var aggregate_cell = place_cell;
     const through_reference = interpreter.memory.buffer[aggregate_cell].is_ref();
     if (through_reference) aggregate_cell = interpreter.memory.buffer[aggregate_cell].cell();
     const aggregate = interpreter.thaw_cell(aggregate_cell);

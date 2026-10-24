@@ -422,7 +422,16 @@ fn run(allocator: Allocator, io: std.Io, path: []const u8, source: []u8) !Result
     const resolver = try allocator.create(Resolver);
     resolver.* = Resolver.init(allocator, &parser.tree, source, parser.global_store.items());
     resolver.session.io, resolver.session.path = .{ io, path };
+    // the source printed as code, then the program each macro pass leaves
+    var passes: Passes = .{ .allocator = allocator };
+    if (resolver.roots.len > 0) Passes.check(&passes, resolver);
+    if (passes.failure) |mismatch| try findings.append(allocator, mismatch);
+    passes.failure = null;
+    if (parser.tree.macros) resolver.session.watch = .{ .observer = &passes, .pass = Passes.check };
     const resolved = if (resolver.resolve()) |_| true else |_| false;
+    // a pass may write code wrong (`+(A, 1 + 2)`), the next one reports it
+    const malformed = resolver.doctor.diagnostics.len() > 0;
+    if (passes.failure) |mismatch| if (!malformed) try findings.append(allocator, mismatch);
 
     if (resolved) {
         const lowerer = try allocator.create(HighLowerer);
@@ -464,6 +473,133 @@ fn run(allocator: Allocator, io: std.Io, path: []const u8, source: []u8) !Result
     }
     return sorted(findings, resolver);
 }
+
+// the code printer: the program printed and parsed again is the same trees, grouping aside. a
+// splice evaluated in the pass is what it expanded to, a block of statements spread into the list
+// it is in as the rebuilt tree has it. a hygienic name (``x`1``) is printed as `x_1`
+const Passes = struct {
+    allocator: Allocator,
+    failure: ?Finding = null,
+
+    fn check(context: *anyopaque, resolver: *Resolver) void {
+        const self: *Passes = @ptrCast(@alignCast(context));
+        if (self.failure != null) return;
+        const allocator = self.allocator;
+        const tree, const source = .{ resolver.tree, resolver.src_bytes };
+        const file = resolver.macros.file;
+        const roots = if (file != 0) tree.manychildren(file) else resolver.roots;
+        var code: std.ArrayList(u8) = .empty;
+        var printer: debug.CodePrinter = .{
+            .out = &code,
+            .allocator = allocator,
+            .tree = tree,
+            .source = source,
+            .expand = true,
+        };
+        printer.statements(roots) catch @panic("OOM");
+        std.mem.replaceScalar(u8, code.items, '`', '_');
+
+        var lexer = Lexer{ .src_bytes = code.items, .tokens = .init(allocator, 1024) };
+        const failed: anyerror, const at: usize = blk: {
+            lexer.gen_tokens() catch |err| break :blk .{ err, lexer.cursor -| 1 };
+            const spans = lexer.tokens.column(.span);
+            var parser = Parser.init(allocator, lexer.tokens, code.items, spans);
+            parser.build_ast() catch |err| break :blk .{ err, spans[parser.tok_cursor -| 1][0] };
+            const comparison: Comparison = .{
+                .allocator = allocator,
+                .tree = tree,
+                .source = source,
+                .other_tree = &parser.tree,
+                .other_source = code.items,
+            };
+            const spread = comparison.items(roots) catch @panic("OOM");
+            const again = parser.global_store.items();
+            if (again.len != spread.len) break :blk .{ error.RootCount, 0 };
+            for (spread, again) |root, other| {
+                if (comparison.same(root, other) catch @panic("OOM")) continue;
+                code.clearRetainingCapacity();
+                printer.statements(&.{root}) catch @panic("OOM");
+                const span = debug.node_span(tree, source, root);
+                const written = span != null and span.?[0] < source.len;
+                const line = if (written) line_at(source, span.?[0]) else 1;
+                self.failure = .{ .line = line, .code = "code_printer", .message = code.items };
+                return;
+            }
+            return;
+        };
+        const line_break = std.mem.lastIndexOfScalar(u8, code.items[0..at], '\n');
+        const line_start = if (line_break) |i| i + 1 else 0;
+        const line_end = std.mem.indexOfScalarPos(u8, code.items, at, '\n') orelse code.items.len;
+        const shown = .{ @errorName(failed), code.items[line_start..line_end] };
+        const message = std.fmt.allocPrint(allocator, "{s}: {s}", shown) catch @panic("OOM");
+        self.failure = .{ .line = 1, .code = "code_printer", .message = message };
+    }
+};
+
+const Comparison = struct {
+    allocator: Allocator,
+    tree: *const ParseTree,
+    source: []const u8,
+    other_tree: *const ParseTree,
+    other_source: []const u8,
+
+    fn same(self: Comparison, node: ParseTree.NodeId, other_node: ParseTree.NodeId) !bool {
+        const tree, const other_tree = .{ self.tree, self.other_tree };
+        var n, var m = .{ node, other_node };
+        while (true) switch (tree.kind(n)) {
+            .capture => n = tree.arg(n, 0),
+            .splice => if (tree.arg(n, 1) != 0) {
+                n = tree.arg(n, 1) - 1;
+            } else break,
+            else => break,
+        };
+        while (other_tree.kind(m) == .capture) m = other_tree.arg(m, 0);
+        const kind = tree.kind(n);
+        var name: []const u8 = "";
+        if (ParseTree.Node.nk_childc[@intFromEnum(kind)] == .data) name = tree.text(n, self.source);
+        // a lifted float that has no literal (`inf`) is written as the division making it
+        if (kind == .float and std.mem.indexOfAny(u8, name, "0123456789") == null) return true;
+        // a lifted negative number (`-0.5`) reads back as the number negated
+        const negative = (kind == .int or kind == .float) and name.len > 1 and name[0] == '-';
+        if (negative and other_tree.kind(m) == .neg_num) {
+            m = other_tree.arg(m, 0);
+            name = name[1..];
+        }
+        if (kind != other_tree.kind(m)) return false;
+        if (ParseTree.Node.nk_childc[@intFromEnum(kind)] == .data) {
+            var other_name = other_tree.text(m, self.other_source);
+            // a lifted float without a fraction is printed with one
+            const fraction = other_name.len == name.len + 2 and
+                std.mem.endsWith(u8, other_name, ".0");
+            if (kind == .float and fraction) other_name = other_name[0..name.len];
+            if (name.len != other_name.len) return false;
+            for (name, other_name) |c, d| if ((if (c == '`') '_' else c) != d) return false;
+            return true;
+        }
+        const statements = kind == .block or kind == .partial__trait_def_body;
+        const children = if (statements) try self.items(tree.children(n)) else tree.children(n);
+        const other_children = other_tree.children(m);
+        if (children.len != other_children.len) return false;
+        for (children, other_children) |child, other_child| {
+            if ((child == 0) != (other_child == 0)) return false;
+            if (child != 0 and !try self.same(child, other_child)) return false;
+        }
+        return true;
+    }
+
+    // statements, an expanded splice's block spread into them
+    fn items(self: Comparison, list: []const ParseTree.NodeId) ![]const ParseTree.NodeId {
+        var spread: std.ArrayList(ParseTree.NodeId) = .empty;
+        for (list) |item| {
+            const tree = self.tree;
+            const expansion = if (tree.kind(item) == .splice) tree.arg(item, 1) else 0;
+            if (expansion != 0 and tree.kind(expansion - 1) == .block) {
+                try spread.appendSlice(self.allocator, tree.manychildren(expansion - 1));
+            } else try spread.append(self.allocator, item);
+        }
+        return spread.items;
+    }
+};
 
 fn sorted(findings: std.ArrayList(Finding), resolver: ?*Resolver) Result {
     std.mem.sort(Finding, findings.items, {}, Finding.less_than);

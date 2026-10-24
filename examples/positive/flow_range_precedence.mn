@@ -1,0 +1,24 @@
+# a range binds looser than arithmetic, shifts, `&`, `^` and comparisons: its bounds are whole
+# expressions. it binds tighter than `|`, which separates the alternatives of an arm
+stc u64 N = 5;
+stc []u64 SUM = for N - 3..<N + 1: $it; #= SUM [2, 3, 4, 5]
+stc []u64 SHIFTED = for 1 << 1..=1 << 2: $it; #= SHIFTED [2, 3, 4]
+stc []u64 BITS = for 1 ^ 0..<6 & 3: $it; #= BITS [1]
+
+# parts of an array from computed bounds, open ones too
+stc [6]u8 TEXT = "abcdef";
+stc bool PARTS = TEXT[N - 4..<N - 1] == "bcd" and TEXT[N - 2..] == "def" and TEXT[..<N - 3] == "ab"; #= PARTS true
+
+# an `as` is part of the bound it ends
+fun count = (u32 n) -> u64 {
+    mut u64 c = 0;
+    for _ in 0..<n as u64 + 1: c += 1;
+    ret c;
+}
+stc u64 C = count(3); #= C 4
+
+# alternatives of an arm are ranges with computed bounds
+stcfun class = (u32 x) -> u32: ret match x { 0..<2 | 8..=9 => 1, 2 + 1..<5 => 2, _ => 0 };
+stc []u32 CLASSES = [class(1), class(9), class(3), class(4), class(5)]; #= CLASSES [1, 1, 2, 2, 0]
+
+main = () {}

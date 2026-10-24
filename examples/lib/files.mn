@@ -1,0 +1,81 @@
+# files while compiling, a library for `include`: `stc []u8 TEXT = read_file("data.txt");` puts a
+# file's bytes into the program. it calls the kernel from `stcfun`s, as a program would at run
+# time, so a path is relative to where the compiler runs. a failure is a `crash` naming the call.
+# the numbers of the calls it makes are `pub`, for more of them
+
+pub stc i64 READ = stcmatch __os { "linux" => stcmatch __arch { "x86_64" => 0, _ => 63 }, _ => 3 };
+pub stc i64 WRITE = stcmatch __os { "linux" => stcmatch __arch { "x86_64" => 1, _ => 64 }, _ => 4 };
+pub stc i64 CLOSE = stcmatch __os { "linux" => stcmatch __arch { "x86_64" => 3, _ => 57 }, _ => 6 };
+pub stc i64 SEEK = stcmatch __os { "linux" => stcmatch __arch { "x86_64" => 8, _ => 62 }, _ => 199 };
+pub stc i64 OPEN_AT = stcmatch __os { "linux" => stcmatch __arch { "x86_64" => 257, _ => 56 }, _ => 463 };
+# the directory the compiler runs in, for `OPEN_AT`
+pub stc i64 HERE = stcmatch __os { "linux" => -100, _ => -2 };
+pub stc i64 READ_ONLY = 0;
+pub stc i64 WRITE_NEW = stcmatch __os { "linux" => 0x241, _ => 0x601 };
+pub stc i64 SEEK_END = 2;
+
+# the path as the kernel takes it, ended by a zero
+stcfun terminated = ([]u8 path) -> []u8: ret for 0..<lenof path + 1: if $it < lenof path: path[$it] else: 0;
+
+# an open file, -errno when it can't be
+stcfun open = ([]u8 path, i64 flags) -> i64 {
+    []u8 name = terminated(path);
+    ret syscall (OPEN_AT, HERE, name.&, flags, 420);
+}
+
+# how many bytes a file has, -errno when it can't be opened
+pub stcfun file_size = ([]u8 path) -> i64 {
+    i64 file = open(path, READ_ONLY);
+    if file < 0: ret file;
+    i64 size = syscall (SEEK, file, 0, SEEK_END);
+    syscall (CLOSE, file);
+    ret size;
+}
+
+pub stcfun file_exists = ([]u8 path) -> bool: ret file_size(path) >= 0;
+
+# all bytes of a file
+pub stcfun read_file = ([]u8 path) -> []u8 {
+    i64 size = file_size(path);
+    if size < 0: crash "read_file: the file can't be opened";
+    mut []u8 bytes = for 0..<size as u64: 0 as u8;
+    i64 file = open(path, READ_ONLY);
+    mut i64 done = 0;
+    while done < size {
+        i64 got = syscall (READ, file, bytes[done as u64].&, size - done);
+        if got <= 0: crash "read_file: reading failed";
+        done += got;
+    }
+    syscall (CLOSE, file);
+    ret bytes;
+}
+
+# a file made of the bytes, replacing what it had: how many were written
+pub stcfun write_file = ([]u8 path, []u8 bytes) -> i64 {
+    i64 file = open(path, WRITE_NEW);
+    if file < 0: crash "write_file: the file can't be created";
+    i64 written = syscall (WRITE, file, bytes.&, lenof bytes);
+    syscall (CLOSE, file);
+    ret written;
+}
+
+# the number of lines of a text, a last one without a line break counted too
+pub stcfun line_count = ([]u8 text) -> u64 {
+    mut u64 count = 0;
+    for c in text: if c == '\n': count += 1;
+    if lenof text > 0 and text[lenof text - 1] != '\n': count += 1;
+    ret count;
+}
+
+# line `n` of a text (from 0), without its line break
+pub stcfun line = ([]u8 text, u64 n) -> []u8 {
+    mut u64 start = 0;
+    mut u64 seen = 0;
+    while seen < n and start < lenof text {
+        if text[start] == '\n': seen += 1;
+        start += 1;
+    }
+    mut u64 end = start;
+    while end < lenof text and text[end] != '\n': end += 1;
+    ret for start..<end: text[$it];
+}

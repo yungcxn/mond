@@ -1,0 +1,25 @@
+# widths without a keyword: narrowing, literals out of range, `bits(..)` and bit-packed records
+fun narrow = (u8 x) -> u7: ret x; #! type_mismatch
+fun signed_from_same = (u7 x) -> i7: ret x; #! type_mismatch
+stc u3 EIGHT = 8; #! type_mismatch
+stc i3 BELOW = -5; #! type_mismatch
+stc u65 NO_SUCH = 1; #! undefined_name
+stc u0 NONE = 0; #! undefined_name
+
+# bits of a bit-packed record have no address, only integers and bools share bytes
+type Insn = **(mut u7 opcode, mut u5 rd, u20 rest);
+fun rd_address = (*Insn i) -> *u5: ret i.rd.&; #! bit_field_address
+type Arrays = **(u4 low, [2]u8 middle, u4 high); #! unaligned_field
+type Nested = **(u3 a, Insn inner, u5 b); #! unaligned_field
+type Pointer = **(u1 flag, &u8 to, u7 rest); #! unaligned_field
+
+# `bits(..)` takes integers, its widths add up to the integer's without `..`
+fun too_few = (u8 x) -> u8: ret match x { bits(u4 a) => a, _ => 0 }; #! bits_width
+fun too_many = (u8 x) -> u8: ret match x { bits(u4 a, u5 b) => a, _ => 0 }; #! bits_width
+fun nothing_left = (u8 x) -> u8: ret match x { bits(u4 a, u4 b, ..rest) => a, _ => 0 }; #! bits_width
+fun of_float = (f32 x) -> u8: ret match x { bits(u32 a) => 1, _ => 0 }; #! invalid_operand
+fun float_width = (u32 x) -> u8: ret match x { bits(f32 a) => 1, _ => 0 }; #! invalid_operand
+fun wide_literal = (u8 x) -> u8: ret match x { bits(u4 16, u4 _) => 1, _ => 0 }; #! type_mismatch
+fun not_exhaustive = (u8 x) -> u8: ret match x { bits(u4 0, u4 b) => b }; #! non_exhaustive_match
+
+main = () {}

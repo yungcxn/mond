@@ -1,0 +1,46 @@
+# a packed record holding a width without a keyword packs to the bit, from the lowest bit up
+type Insn = **(mut u7 opcode, mut u5 rd, mut u3 f3, mut u5 rs1, mut u12 imm);
+stc u64 INSN_SIZE = sizeof Insn * 10 + alignof Insn; #= INSN_SIZE 41
+stc Insn ADDI = Insn(0x13, 1, 0, 2, 300);
+stc []u64 FIELDS = [ADDI.opcode, ADDI.rd, ADDI.f3, ADDI.rs1, ADDI.imm]; #= FIELDS [19, 1, 0, 2, 300]
+
+# fields written: assigned, updated, through a pointer, by `with` and a deep `with`
+type Wrapped = *(u8 tag, mut Insn insn);
+fun bump = (*Insn i) { i.rs1 += 1; i.imm = 4095; }
+stcfun edited = () -> [6]u64 {
+    mut Insn i = ADDI;
+    i.rd = 31;
+    i.f3++;
+    bump(i.&);
+    Insn changed = i with (opcode = 0x33);
+    mut Wrapped w = Wrapped(9, i);
+    w.insn.rd -= 1;
+    Wrapped deep = w with (insn.imm = 1);
+    ret [i.rd, i.f3, i.rs1, i.imm, changed.opcode, deep.insn.imm + deep.insn.rd as u64 * 10000];
+}
+stc [6]u64 EDITED = edited(); #= EDITED [31, 1, 3, 4095, 51, 300001]
+
+# a byte-sized field at a byte boundary keeps its address, bools take a byte, sizes round up
+type Frame = **(mut u4 kind, mut u4 flags, mut u16 length, bool last, u7 crc);
+stc u64 FRAME_SIZE = sizeof Frame; #= FRAME_SIZE 5
+fun length_of = (*Frame f) -> *u16: ret f.length.&;
+stcfun through_address = () -> u64 {
+    mut Frame f = Frame(3, 9, 1000, true, 99);
+    *u16 l = length_of(f.&);
+    l.* = 2000;
+    ret f.length + f.kind as u64 * 10000 + (if f.last: 100000 else: 0) + f.crc;
+}
+stc u64 THROUGH = through_address(); #= THROUGH 132099
+
+# compared field by field, in arrays, equal to what was written
+stc bool SAME = ADDI == Insn(0x13, 1, 0, 2, 300); #= SAME true
+stc bool DIFFERENT = ADDI != ADDI with (imm = 301); #= DIFFERENT true
+stc [2]Insn TWO = [ADDI, ADDI with (rd = 7)];
+stc u64 SECOND = TWO[1].rd + sizeof [2]Insn; #= SECOND 15
+
+# a packed record without odd widths stays packed by the byte, a plain one is not packed at all
+type Bytes = **(u8 a, u32 b);
+type Plain = *(u3 a, u5 b);
+stc []u64 OTHERS = [sizeof Bytes, sizeof Plain]; #= OTHERS [5, 2]
+
+main = () {}

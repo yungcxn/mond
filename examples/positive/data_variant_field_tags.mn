@@ -1,0 +1,46 @@
+# `tagtype self.field`: the other cases live in the unused values of one field of the one payload,
+# the variant is laid out as that payload
+variant List = +(Cons(u64 head, &List tail), Nil) tagtype self.tail;
+variant Slot = +(Used(u32 value, u8 kind), Free = 255, Gone = 254) tagtype self.kind;
+variant Flag = +(On(u16 count, bool set), Unknown = 2) tagtype self.set;
+stc []u64 SIZES = [sizeof List, sizeof Slot, sizeof Flag]; #= SIZES [16, 8, 4]
+
+fun length = (&List l) -> u64: ret match l.* { List.Cons(_, rest) => 1 + length(rest), List.Nil => 0 };
+fun sum = (&List l) -> u64: ret match l.* { List.Cons(h, rest) => h + sum(rest), List.Nil => 0 };
+stcfun built = () -> [2]u64 {
+    List nil = List.Nil;
+    List one = List.Cons(4, nil.&);
+    List two = List.Cons(5, one.&);
+    ret [length(two.&), sum(two.&)];
+}
+stc [2]u64 BUILT = built(); #= BUILT [2, 9]
+
+# a payload holding another case's tag in its field is that case
+stc []bool CANONICAL = [Slot.Used(9, 255) == Slot.Free, Slot.Used(9, 254) == Slot.Gone, Slot.Used(9, 1) == Slot.Free]; #= CANONICAL [true, true, false]
+fun describe = (Slot s) -> u64: ret match s { Slot.Used(v, k) => v as u64 * 10 + k, Slot.Free => 1, Slot.Gone => 2 };
+stc []u64 DESCRIBED = [describe(Slot.Used(7, 3)), describe(Slot.Free), describe(Slot.Gone), describe(Slot.Used(7, 255))]; #= DESCRIBED [73, 1, 2, 1]
+
+# unwrapped by `??` and `?<-` as the payload record, retagged, in a unified variant
+fun used = (Slot s) -> u32: ret (s ?? ret 5).value;
+fun bound = (Slot s) -> u32: ret if s ?<- u: u.value else: 99;
+stc []u32 UNWRAPPED = [used(Slot.Used(42, 0)), used(Slot.Free), bound(Slot.Used(43, 0)), bound(Slot.Gone)]; #= UNWRAPPED [42, 5, 43, 99]
+fun counted = (Flag f) -> u16: ret match f { Flag.On(c, true) => c, Flag.On(c, false) => c + 1000, Flag.Unknown => 0 };
+stc []u16 FLAGS = [counted(Flag.On(3, true)), counted(Flag.On(3, false)), counted(Flag.Unknown)]; #= FLAGS [3, 1003, 0]
+variant Extra = +(Big(u64), Small);
+type Any = Slot || Extra;
+fun kind_of = (Any a) -> u64: ret match a { Slot.Used(v, k) => v as u64 * 10 + k, Slot.Free => 1, Slot.Gone => 2, Extra.Big(b) => b, Extra.Small => 3 };
+stc []u64 ANY = [kind_of(Slot.Used(4, 2)), kind_of(Slot.Gone), kind_of(Extra.Big(5)), kind_of(Extra.Small)]; #= ANY [42, 2, 5, 3]
+
+# the field may be deeper: `self.next` reaches into the one record the payload holds
+type Node = *(i32 v, *Node next);
+variant OptNode = +(Some(Node), None = 0) tagtype self.next;
+type Inner = *(u8 a, u16 code);
+type Outer = *(u32 id, Inner inner);
+variant Deep = +(Has(Outer o), Lost = 0xFFFF) tagtype self.o.inner.code;
+stc []u64 DEEP_SIZES = [sizeof OptNode, sizeof Deep]; #= DEEP_SIZES [16, 8]
+fun inner_a = (Deep d) -> u8: ret match d { Deep.Has(o) => o.inner.a, Deep.Lost => 99 };
+stc []u8 DEEP = [inner_a(Deep.Has(Outer(1, Inner(7, 3)))), inner_a(Deep.Lost), inner_a(Deep.Has(Outer(1, Inner(7, 0xFFFF))))]; #= DEEP [7, 99, 99]
+fun node_value = (OptNode o) -> i32: ret match o { OptNode.Some(n) => n.v, OptNode.None => -1 };
+stc i32 NONE_VALUE = node_value(OptNode.None); #= NONE_VALUE -1
+
+main = () {}

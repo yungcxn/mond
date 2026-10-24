@@ -1,0 +1,40 @@
+<include "lib/out.mn">;
+<include "../lib/tags.mn">;
+# `oftype` at run time: a variant value is of the type its case or member is, tested on its tag
+# however the variant keeps it (a tag, the payload itself, a field, a strategy)
+mut u8 ONE = 0;
+variant Opt = +(Some(u32 v), None);
+variant Err8 = +(Err = 0xFF, Fine(u8)) tagtype self;
+variant Slot = +(Used(u32 value, u8 kind), Free = 255, Gone = 254) tagtype self.kind;
+stc Tagging GENERATIONS = Tagging(
+    storage = u32,
+    wrap = (u32 tag, u64 payload) -> u64: ret (tag as u64 << 24) | payload,
+    case_of = (u64 stored) -> u32: ret (stored >> 24) as u32,
+    unwrap = (u64 stored, u32 tag) -> u64: ret stored & 0xFFFFFF,
+);
+variant Gen = +(Live(u24 index), Dead(u24 index), Empty) tagtype GENERATIONS;
+type Num = u32 || f32 || Opt;
+
+fun opt = (u8 pick) -> Opt: ret if pick == 1: Opt.Some(5) else: Opt.None;
+# one digit per test
+fun code = (Opt o, Err8 e, Slot s, Gen g, Num n) -> u64 {
+    mut u64 c = 0;
+    if o oftype Opt.Some: c += 1;
+    if e oftype Err8.Fine: c += 10;
+    if s oftype Slot -- Slot.Used: c += 100;
+    if g oftype Gen -- Gen.Empty: c += 1000;
+    if n oftype f32: c += 10000;
+    if n oftype Opt: c += 100000;
+    if n oftype Opt.None or n oftype u32: c += 1000000;
+    ret c;
+}
+fun none_behind = (&Opt p) -> u64: ret if p oftype Opt.None: 1 else: 0;
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as u8;
+    line_u64(code(opt(ONE), Err8.Fine(ONE), Slot.Used(3, ONE), Gen.Live(ONE as u24), 2.5 as f32)); #> 11011
+    line_u64(code(opt(ONE - 1), Err8.Err, Slot.Free, Gen.Empty, opt(ONE)));                        #> 100100
+    line_u64(code(opt(ONE), Err8.Fine(0), Slot.Gone, Gen.Dead(7), opt(ONE - 1)));                   #> 1101111
+    line_u64(code(opt(ONE), Err8.Fine(0), Slot.Gone, Gen.Dead(7), ONE as u32));                     #> 1001111
+    line_u64(none_behind(opt(ONE).&) * 10 + none_behind(opt(ONE - 1).&));                         #> 1
+}

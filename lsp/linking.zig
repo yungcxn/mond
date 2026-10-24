@@ -94,7 +94,8 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
             .partial__type_def_param_named => .{ tree.arg(node, 1), .property },
             else => continue,
         };
-        if (tree.kind(identifier) != .identifier) continue;
+        // landed code is written at the token of its splice, it names nothing there
+        if (tree.kind(identifier) != .identifier or tree.arg(identifier, 1) != 0) continue;
         const token = tree.arg(identifier, 0);
         if (analysis.token_meaning[token] != none) continue;
 
@@ -148,11 +149,30 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
         analysis.node_declaration[outer] = analysis.token_meaning[token];
     }
 
+    // the top-level names of the included files where they are written, read once one is needed,
+    // and the entries in `declarations` made for them
+    var included: ?std.StringHashMapUnmanaged(Analysis.Elsewhere) = null;
+    var declared_elsewhere: std.AutoHashMapUnmanaged(u32, u32) = .empty;
+    // the names of the tree, then those only an earlier pass met that mean a global without a
+    // naming token (`derive` of `<derive(..)>`, from an included file)
+    var usages: std.ArrayList(struct { u32, DeclPool.Index }) = .empty;
+    const in_tree = analysis.allocator.alloc(bool, spans.len) catch @panic("OOM");
+    @memset(in_tree, false);
     for (0..resolver.tree.ast_nodes.len()) |i| {
         const node: u32 = @intCast(i);
         const token = name_token(resolver, node) orelse continue;
         const declaration = resolver.node_declarations[node];
         if (declaration == .none) continue;
+        usages.append(analysis.allocator, .{ token, declaration }) catch @panic("OOM");
+        in_tree[token] = true;
+    }
+    for (analysis.earlier_names, in_tree, 0..) |name, is_in_tree, token| {
+        if (name.len == 0 or is_in_tree) continue;
+        const global = resolver.scopes.globals.get(resolver.name_pool.intern(name)) orelse continue;
+        usages.append(analysis.allocator, .{ @intCast(token), global }) catch @panic("OOM");
+    }
+    for (usages.items) |usage| {
+        const token, const declaration = usage;
         // a positional parameter has no name of its own (`(i32, i32)`), its function declares it
         analysis.token_meaning[token] = blk: {
             const declaration_token = analysis.declaration_token[@intFromEnum(declaration)];
@@ -161,7 +181,41 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
 
             const template_name =
                 resolver.name_pool.text_of(declarations.name[@intFromEnum(template)]);
-            if (!positional(template_name)) break :blk none;
+            if (!positional(template_name)) {
+                const index = @intFromEnum(template);
+                if (declared_elsewhere.get(index)) |made| break :blk made;
+                if (included == null) included = read_included(analysis, resolver);
+                // ``x`name`` landed from a namespace's file, ``name`1`` a private name made fresh
+                const tick = std.mem.indexOfScalar(u8, template_name, '`');
+                const name = if (tick) |at| name: {
+                    const after = template_name[at + 1 ..];
+                    const is_fresh = std.mem.indexOfNone(u8, after, "0123456789") == null;
+                    break :name if (is_fresh) template_name[0..at] else after;
+                } else template_name;
+                const where = included.?.get(name) orelse break :blk none;
+                const made: u32 = @intCast(analysis.declarations.items().len);
+                const class = symbol_classes.class_of_kind(declarations.kind[index]);
+                analysis.declaration_sites.push(.{
+                    .token = none,
+                    .global = true,
+                    .class = class,
+                    .modifiers = symbol_classes.declaration_modifiers(resolver, index),
+                });
+                const declared_type = if (declarations.kind[index].is_type_declaration())
+                    declarations.static_value[index]
+                else
+                    declarations.value_type[index];
+                analysis.declarations.push(.{
+                    .name = name,
+                    .detail = type_text(analysis, resolver, declared_type),
+                    .kind = 0,
+                    .range = where.range,
+                    .selectionRange = null,
+                });
+                analysis.elsewhere.push(.{ .decl = made, .uri = where.uri, .range = where.range });
+                declared_elsewhere.put(analysis.allocator, index, made) catch @panic("OOM");
+                break :blk made;
+            }
             // the declaration made by the template's node or by a node enclosing it
             var ancestor = declarations.node[@intFromEnum(template)];
             while (ancestor != none and analysis.node_declaration[ancestor] == none) {
@@ -210,7 +264,13 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
         const callee_token = if (kind == .fun_call) name_token(resolver, callee) else null;
         const called = if (callee_token) |token| analysis.token_meaning[token] else none;
         for (tree.laidout_children(.partial__fun_call_param_tuple, arguments)) |argument| {
-            const identifier = tree.arg_name(argument);
+            // a part of a field (`pos.x = ..`) names the field at its root, members after it
+            var identifier = tree.arg_name(argument);
+            while (kind == .with and identifier != 0 and
+                (tree.kind(identifier) == .member or tree.kind(identifier) == .array_index))
+            {
+                identifier = tree.arg(identifier, 0);
+            }
             if (identifier == 0 or tree.kind(identifier) != .identifier) continue;
             const name = resolver.name_pool.text_of(resolver.name_pool.name_of_node(identifier));
             // within `called` or within another overload of it (`mixed(1, b = 2)`)
@@ -405,7 +465,12 @@ pub fn remember_pass(analysis: *Analysis, resolver: *Resolver) void {
         const token = name_token(resolver, @intCast(i)) orelse continue;
         const declaration = resolver.node_declarations[i];
         if (declaration == .none) continue;
-        analysis.earlier_naming_token[token] = naming_tokens[@intFromEnum(declaration)];
+        const naming_token = naming_tokens[@intFromEnum(declaration)];
+        analysis.earlier_naming_token[token] = naming_token;
+        if (naming_token != none) continue;
+        // the names of this pass are gone with it
+        const name = resolver.name_pool.text_of(resolver.decl_pool.get(declaration, .name));
+        analysis.earlier_names[token] = analysis.allocator.dupe(u8, name) catch @panic("OOM");
     }
 }
 
@@ -460,6 +525,63 @@ fn declare(analysis: *Analysis, token: u32, declaring: Declaring) void {
         .range = positions.range(analysis, whole_start, whole_end),
         .selectionRange = positions.range(analysis, name_span[0], name_span[1]),
     });
+}
+
+// the top-level declarations of the files a program includes by name, in the first file declaring
+// each: its uri and the range of the name there
+fn read_included(
+    analysis: *Analysis,
+    resolver: *Resolver,
+) std.StringHashMapUnmanaged(Analysis.Elsewhere) {
+    const allocator = analysis.allocator;
+    var names: std.StringHashMapUnmanaged(Analysis.Elsewhere) = .empty;
+    for (resolver.session.files.items) |file| {
+        const text = resolver.tree.text_bytes.items()[file.at..][0..file.len];
+        var lexer = Lexer{ .src_bytes = text, .tokens = .init(allocator, 1024) };
+        lexer.gen_tokens() catch continue;
+        var parser = mond.Parser.init(allocator, lexer.tokens, text, lexer.tokens.column(.span));
+        parser.build_ast() catch continue;
+
+        var uri: std.ArrayList(u8) = .empty;
+        uri.appendSlice(allocator, "file://") catch @panic("OOM");
+        for (file.path) |byte| switch (byte) {
+            'a'...'z', 'A'...'Z', '0'...'9', '/', '-', '_', '.', '~' => {
+                uri.append(allocator, byte) catch @panic("OOM");
+            },
+            else => uri.print(allocator, "%{X:0>2}", .{byte}) catch @panic("OOM"),
+        };
+        const tree = &parser.tree;
+        for (parser.global_store.items()) |root| {
+            var declared = root;
+            while (true) switch (tree.kind(declared)) {
+                .mod_pub, .mod_mut, .mod_stc => declared = tree.arg(declared, 0),
+                else => break,
+            };
+            const name_node = switch (tree.kind(declared)) {
+                .assign_typed => tree.arg(tree.arg(declared, 0), 1),
+                .assign => tree.arg(declared, 0),
+                .def_var => tree.arg(declared, 1),
+                else => continue,
+            };
+            if (tree.kind(name_node) != .identifier) continue;
+            const entry = names.getOrPut(allocator, tree.text(name_node, text)) catch @panic("OOM");
+            if (entry.found_existing) continue;
+            // a line and a column in utf-16 code units, as `positions` counts the document
+            const span = tree.span(name_node);
+            const line_start = if (std.mem.lastIndexOfScalar(u8, text[0..span[0]], '\n')) |at|
+                at + 1
+            else
+                0;
+            const line: u32 = @intCast(std.mem.count(u8, text[0..span[0]], "\n"));
+            const start = positions.utf16_length(text[line_start..span[0]]);
+            const end = start + positions.utf16_length(text[span[0]..span[1]]);
+            entry.value_ptr.* = .{ .decl = none, .uri = uri.items, .range = .{
+                .start = .{ .line = line, .character = start },
+                .end = .{ .line = line, .character = end },
+            } };
+        }
+    }
+    return names;
 }
 
 // a positional name: `$0`, `$1`
@@ -585,11 +707,13 @@ fn type_owner(analysis: *Analysis, resolver: *Resolver, type_index: StaticIndex)
         .record_type => |record| record.declaration,
         .variant_type => |variant| variant.declaration,
         .variant_case_type => |case| return case_owner(analysis, resolver, case),
+        .variant_subset_type => |subset| return type_owner(analysis, resolver, subset.whole),
         .int_type,
         .float_type,
         .simple_type,
         .meta_type,
         .array_type,
+        .slice_type,
         .function_type,
         .unified_variant_type,
         .trait_type,

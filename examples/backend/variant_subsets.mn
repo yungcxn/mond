@@ -1,0 +1,69 @@
+<include "lib/out.mn">;
+# subsets of variants at run time: the layout and tags of the whole, matched, narrowed, unwrapped
+# and widened without any conversion
+mut u32 ONE = 0;
+variant IoErr = +(NotFound, Timeout, Denied, Busy(u32 retries));
+type Config = *(u32 port, u32 flags);
+type Narrow = IoErr -- IoErr.NotFound;
+type Loaded = Config || (IoErr -- IoErr.NotFound);
+
+fun pick = (u32 i) -> IoErr: ret match i {
+    0 => IoErr.NotFound,
+    1 => IoErr.Timeout,
+    2 => IoErr.Denied,
+    n => IoErr.Busy(n),
+};
+fun load = (u32 i) -> Config || IoErr: ret if i == 9: Config(8080, 1) else: pick(i);
+
+# a switch on the subset's own cases, directly and through a pointer
+fun describe = (Narrow n) -> u64: ret match n {
+    IoErr.Timeout => 1,
+    IoErr.Denied => 2,
+    IoErr.Busy(r) => 10 + r as u64,
+};
+fun describe_at = (&Narrow p) -> u64: ret match p { IoErr.Timeout => 1, IoErr.Denied => 2, _ => 3 };
+
+# narrowed by the arms above, then widened into the whole and into a unified variant
+fun or_default = (u32 i) -> Loaded: ret match load(i) {
+    IoErr.NotFound => Config(80, 0),
+    rest => rest,
+};
+fun port = (Loaded l) -> u64: ret match l {
+    Config c => c.port as u64,
+    IoErr.Timeout => 1,
+    IoErr.Denied => 2,
+    IoErr.Busy(r) => 100 + r as u64,
+};
+fun retag = (Narrow n) -> Config || IoErr: ret n;
+fun whole_tag_of = (IoErr e) -> u64: ret tagof e as u64;
+fun describe_narrow = (Narrow n) -> Narrow: ret n;
+
+# `??` unwraps the first payload case kept, a failed bare `x??` returns a case kept
+variant Res = +(Ok(u32), Err(u32), Empty);
+fun first_kept = (Res -- Res.Ok r) -> u32: ret r ?? 7;
+fun forward = (Res r) -> Res -- Res.Empty { u32 v = r??; ret Res.Ok(v * 2); }
+
+# in records and arrays
+type Holder = *(Narrow err, [3]Narrow history);
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc;
+    Narrow t = if ONE > 0: IoErr.Timeout else: IoErr.Denied;
+    line_u64(describe(IoErr.Timeout));                                     #> 1
+    line_u64(describe(IoErr.Busy(5 * ONE)));                               #> 15
+    Narrow denied = IoErr.Denied;
+    line_u64(describe_at(denied.&));                                       #> 2
+    line_u64(port(or_default(0 * ONE)));                                   #> 80
+    line_u64(port(or_default(2 * ONE)));                                   #> 2
+    line_u64(port(or_default(7 * ONE)));                                   #> 107
+    line_u64(port(or_default(9 * ONE)));                                   #> 8080
+    line_u64(tagof retag(IoErr.Denied) as u64);                            #> 3
+    line_u64(whole_tag_of(describe_narrow(IoErr.Busy(ONE))));              #> 3
+    line_u64(first_kept(Res.Err(3 * ONE)) as u64);                         #> 3
+    line_u64(first_kept(Res.Empty) as u64);                                #> 7
+    line_u64(tagof forward(Res.Empty) as u64);                             #> 0
+    line_u64((forward(Res.Ok(4 * ONE)) ?? 0) as u64);                      #> 8
+    Holder h = Holder(IoErr.Denied, [IoErr.Timeout, IoErr.Busy(ONE), IoErr.Denied]);
+    line_u64(describe(h.history[(ONE) as u64]) + describe(h.err) * 100);   #> 211
+    line_u64(describe(t));                                                 #> 1
+}

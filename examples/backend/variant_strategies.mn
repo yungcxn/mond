@@ -1,0 +1,45 @@
+<include "lib/out.mn">;
+<include "../lib/tags.mn">;
+# `tagtype` strategies at run time: values made, matched, compared, unwrapped and stored statically
+# as the strategy's functions say
+mut u32 ONE = 0;
+variant Small = +(Low(u8), High(i8), Flag(bool), Zero) tagtype ranges(u16, 256);
+fun value = (Small s) -> i64: ret match s {
+    Small.Low(x) => x,
+    Small.High(x) => 1000 + x as i64,
+    Small.Flag(b) => if b: 5000 else: 6000,
+    Small.Zero => 7,
+};
+stc Small STATIC = Small.High(-3);
+stc [2]Small BOTH = [Small.Low(9), Small.Zero];
+
+stc Tagging GENERATIONS = Tagging(
+    storage = u32,
+    wrap = (u32 tag, u64 payload) -> u64: ret (tag as u64 << 24) | payload,
+    case_of = (u64 stored) -> u32: ret (stored >> 24) as u32,
+    unwrap = (u64 stored, u32 tag) -> u64: ret stored & 0xFFFFFF,
+);
+variant Slot = +(Live(u24 index), Dead(u24 index), Empty) tagtype GENERATIONS;
+fun live = (Slot s) -> u24: ret s ?? 0;
+
+stc Tagging BOXED = Tagging(
+    storage = u64,
+    wrap = (u32 tag, u64 payload) -> u64: ret if tag == 0: payload else: 0x7FF8_0000_0000_0001 + tag as u64,
+    case_of = (u64 stored) -> u32: ret if stored > 0x7FF8_0000_0000_0000 and stored < 0x7FF8_0000_0000_0010: (stored - 0x7FF8_0000_0000_0001) as u32 else: 0,
+    unwrap = (u64 stored, u32 tag) -> u64: ret stored,
+);
+variant Number = +(Real(f32), Missing, Infinite) tagtype BOXED;
+fun real = (Number n) -> f32: ret match n { Number.Real(x) => x, Number.Missing => -1.0, Number.Infinite => -2.0 };
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc;
+    Small a = Small.Low((5 * ONE) as u8);
+    Small b = Small.High(-6);
+    line_i64(value(a) * 10000 + value(b));                                        #> 50994
+    line_i64(value(STATIC) + value(BOTH[0]) * 10000 + value(BOTH[1]) * 100000000);  #> 700090997
+    line_i64(value(Small.Flag(ONE == 1)) + sizeof Small as i64 * 100000);         #> 205000
+    line_u64((if a == Small.Low(5): 1 else: 0) + (if a == b: 10 else: 0) + (a asbits u16) as u64 * 100);  #> 501
+    [3]Slot slots = [Slot.Live(70000 * ONE as u24), Slot.Dead(3), Slot.Empty];
+    line_u64(live(slots[0]) as u64 + live(slots[2]) as u64 + (slots[1] asbits u32) as u64 / 1000000);  #> 70016
+    line_i64((real(Number.Real(2.5 * ONE as f32)) * 10) as i64 + (real(Number.Missing) * 100) as i64);  #> -75
+}

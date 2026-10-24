@@ -1,0 +1,36 @@
+<include "lib/out.mn">;
+<include "../lib/dyn.mn">;
+# closed-world dispatch at run time: the implementers stored inline in one array, a switch on the
+# tag calling each type's method directly
+mut u32 ONE = 0;
+trait Named = !{
+    fun id = () -> u32;
+    fun scaled = (u32 by) -> u32;
+}
+type Cat = *(u32 v) implof Named !{
+    fun id = () -> u32: ret self.v;
+    fun scaled = (u32 by) -> u32: ret self.v * by;
+}
+type Dog = *(u32 v, u64 x) implof Named !{
+    fun id = () -> u32: ret self.v * 10;
+    fun scaled = (u32 by) -> u32: ret by + self.x as u32;
+}
+variant Bird = +(Small, Big(u16 wings)) implof Named !{
+    fun id = () -> u32: ret match self.* { Bird.Small => 1, Bird.Big(w) => w as u32 };
+    fun scaled = (u32 by) -> u32: ret self.id() * by;
+}
+variant AnyNamed = <implementers("Named")>;
+fun id_of = (AnyNamed a) -> u32: ret <dispatch(quote: a, "Named", quote: id, [])>;
+fun scaled_of = (AnyNamed a, u32 k) -> u32: ret <dispatch(quote: a, "Named", quote: scaled, [quote: k])>;
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc;
+    [4]AnyNamed zoo = [Cat(ONE), Dog(2 * ONE, 3), Bird.Big((7 * ONE) as u16), Bird.Small];
+    mut u32 ids = 0;
+    for z in zoo: ids = ids * 100 + id_of(z);
+    line_u64(ids as u64);                          #> 1200701
+    mut u32 scaled = 0;
+    for z in zoo: scaled += scaled_of(z, 2 * ONE);
+    line_u64(scaled as u64);                       #> 23
+    line_u64(sizeof AnyNamed);                     #> 24
+}

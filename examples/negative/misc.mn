@@ -13,8 +13,9 @@ fun f = () {
     [2]u8 s = "long"; #! type_mismatch
     [3]i32 w = while false: "s"; #! type_mismatch
     V v = 1 as V; #! invalid_cast
-    []u8 sl = a[0..<2]; #! genexpr_index
-    u64 sn = span(a[1..<3].&); #! genexpr_index
+    u64 k = 2;
+    []u8 sl = a[0..<k]; #! genexpr_index
+    u64 sn = span(a[1..<k].&); #! genexpr_index
     u64 n = lenof a;
     u64 bad = a.size; #! unknown_member
 }

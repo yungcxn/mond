@@ -29,7 +29,13 @@ pub fn check_match(
     const is_stc = is_stcmatch and !context.is_interpreted and !context.is_abstract;
     for (arms) |arm| resolver.node_static_values[arm] = .none;
 
-    const known = if (context.is_interpreted or context.is_abstract and is_stcmatch)
+    // a guard may read the locals of the running stcfun, which only its frame holds
+    const has_guard = for (arms) |arm| {
+        if (resolver.tree.kind(resolver.tree.arg(arm, 0)) == .partial__match_case_where) break true;
+    } else false;
+    const may_be_known = (context.is_interpreted or context.folds_static) and
+        !(has_guard and !is_stcmatch) or context.is_abstract and is_stcmatch;
+    const known = if (may_be_known)
         resolver.static_values.try_evaluate(context, scrutinee)
     else
         null;
@@ -45,6 +51,10 @@ pub fn check_match(
             resolver.macros.report_duplicate_holes(arm_pattern);
             if (!resolver.interpreter.matches_static(context, arm_pattern, value)) continue;
             resolver.node_static_values[arm] = .bool_true;
+            if (resolver.tree.kind(arm_pattern) == .partial__match_case_where) {
+                const guard = resolver.tree.arg(arm_pattern, 1);
+                _ = resolver.expressions.check(context, guard, .bool_type);
+            }
             return resolver.flow.check_branch(context, resolver.tree.arg(arm, 1), expected);
         }
         return resolver.report(.non_exhaustive_match, node, value, .none);
@@ -61,11 +71,9 @@ pub fn check_match(
     const after = resolver.initialization.new_set();
     defer resolver.initialization.copy(0, after);
 
+    // the patterns of the arms without a guard: a guarded arm may let any value through
     var patterns: std.ArrayList(NodeId) = .empty;
     defer patterns.deinit(resolver.allocator);
-    for (arms) |arm| {
-        patterns.append(resolver.allocator, resolver.tree.arg(arm, 0)) catch @panic("OOM");
-    }
 
     // arms checked before `expected` became concrete are settled against it at the end
     var first_settled_arm = arms.len;
@@ -77,15 +85,38 @@ pub fn check_match(
         resolver.initialization.copy(0, before);
         resolver.scopes.open();
         const mark = resolver.doctor.diagnostics.len();
-        const takes_every_value = self.pattern(context, resolver.tree.arg(arm, 0), scrutinee_type);
+        const arm_pattern = resolver.tree.arg(arm, 0);
+        const is_guarded = resolver.tree.kind(arm_pattern) == .partial__match_case_where;
+        const inner = if (is_guarded) resolver.tree.arg(arm_pattern, 0) else arm_pattern;
+        // a binder after arms that took whole cases is of the scrutinee without them
+        const pattern_type = if (resolver.tree.kind(inner) == .identifier)
+            self.narrowed(scrutinee_type, patterns.items)
+        else
+            scrutinee_type;
+        const takes_every_value = self.pattern(context, inner, pattern_type) and !is_guarded;
+        // a binder of the whole scrutinee holds its slices (see `Slices`)
+        const binder = if (resolver.tree.kind(inner) == .identifier)
+            resolver.node_declarations[inner]
+        else
+            .none;
+        if (binder != .none) {
+            resolver.slices.flows(scrutinee, Resolver.Slices.declaration_slot(binder));
+        }
+        if (is_guarded) {
+            _ = resolver.expressions.check(context, resolver.tree.arg(arm_pattern, 1), .bool_type);
+        }
         quiet = quiet or resolver.doctor.errors_since(resolver.tree, mark, arm);
-        const may_be_redundant = !quiet and scrutinee_type != .poison_type;
+        const may_be_redundant = !quiet and scrutinee_type != .poison_type and
+            resolver.tree.kind(inner) != .partial__match_case_pattern_bits;
         // the arms above already cover every value the pattern of this one takes
-        const earlier_rows = patterns.items[0..i];
-        const this_row = patterns.items[i..][0..1];
         const is_redundant = may_be_redundant and
-            self.covers(context, &.{scrutinee_type}, earlier_rows, i, this_row);
+            self.covers(context, &.{scrutinee_type}, patterns.items, patterns.items.len, &.{inner});
         if (is_redundant) resolver.doctor.report(.redundant_match_arm, arm, 0, 0);
+        // a guarded arm or bits of an integer cover nothing a later arm could be told apart from
+        const is_bits = resolver.tree.kind(inner) == .partial__match_case_pattern_bits;
+        if (!is_guarded and !is_bits) {
+            patterns.append(resolver.allocator, inner) catch @panic("OOM");
+        }
         has_catch_all = has_catch_all or takes_every_value;
 
         const body = resolver.tree.arg(arm, 1);
@@ -136,6 +167,57 @@ pub fn check_match(
     return if (result == .none) .unit_type else result;
 }
 
+// a variant without the cases (or one-case members) the patterns take with every payload
+fn narrowed(
+    self: *Patterns,
+    scrutinee_type: StaticPool.Index,
+    patterns: []const NodeId,
+) StaticPool.Index {
+    const static_pool = &self.owning_resolver().static_pool;
+    if (scrutinee_type == .poison_type or !static_pool.properties(scrutinee_type).is_variant) {
+        return scrutinee_type;
+    }
+    const mark = static_pool.scratch.len;
+    defer static_pool.scratch.len = mark;
+    for (patterns) |pattern_node| self.push_taken_units(pattern_node);
+    if (static_pool.scratch.len == mark) return scrutinee_type;
+    return switch (static_pool.difference_by_units(scrutinee_type, mark)) {
+        .difference => |difference| difference,
+        .wrong_side => scrutinee_type,
+    };
+}
+
+// pushes the cases a pattern takes with any payload: `V.A`, `V.A(x, _)`, `V.A <- v`, `T x` and
+// alternatives of them
+fn push_taken_units(self: *Patterns, node: NodeId) void {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    const static_pool = &resolver.static_pool;
+    const node_type = resolver.node_types[node];
+    switch (tree.kind(node)) {
+        .partial__match_case_pattern_or => for (tree.manychildren(node)) |alternative| {
+            self.push_taken_units(alternative);
+        },
+        .labelarrow => self.push_taken_units(tree.arg(node, 0)),
+        .partial__match_case_pattern_typecast => {
+            const cast_type = resolver.node_types[tree.arg(node, 1)];
+            if (cast_type != .poison_type and cast_type != .none) static_pool.push_units(cast_type);
+        },
+        .fun_call => {
+            if (node_type == .none or static_pool.tag(node_type) != .variant_case_type) return;
+            for (tree.manychildren(tree.arg(node, 1))) |argument| {
+                if (tree.kind(tree.arg_value(argument)) != .identifier) return;
+            }
+            static_pool.push_units(node_type);
+        },
+        .member => {
+            if (node_type == .none or static_pool.tag(node_type) != .variant_case_type) return;
+            static_pool.push_units(node_type);
+        },
+        else => {},
+    }
+}
+
 // whether the pattern takes every value of its type
 fn pattern(
     self: *Patterns,
@@ -151,6 +233,7 @@ fn pattern(
             break :pattern self.typecast_pattern(context, node, scrutinee_type);
         },
         .labelarrow => self.labelled_pattern(context, node, scrutinee_type),
+        .partial__match_case_pattern_bits => self.bits_pattern(context, node, scrutinee_type),
         .fun_call => self.constructor_pattern(context, node, scrutinee_type),
         .quote => {
             resolver.macros.quote_pattern(resolver.tree.arg(node, 0));
@@ -166,6 +249,59 @@ fn pattern(
         static_pool.tag(pattern_type) == .variant_case_type and
         static_pool.is_untagged_at_run_time(pattern_type);
     if (tells_untagged_case) resolver.doctor.report(.untagged_variant, node, pattern_type, 0);
+    return takes_every_value;
+}
+
+// `bits(u4 v, u4 4, ..rest)` on an integer: patterns on its bits from the lowest up, each seen as
+// its width's type, `..` the bits left as an unsigned integer. without `..` the widths add up to
+// the integer's. every value when each part takes every value
+fn bits_pattern(
+    self: *Patterns,
+    context: *FunctionContext,
+    node: NodeId,
+    scrutinee_type: StaticPool.Index,
+) bool {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const tree = resolver.tree;
+    _ = resolver.set_node_type(node, scrutinee_type);
+    if (scrutinee_type == .poison_type) return false;
+    if (static_pool.tag(scrutinee_type) != .int_type) {
+        const operator = resolver.name_pool.intern("bits");
+        _ = resolver.report(.invalid_operand, node, operator, scrutinee_type);
+        return false;
+    }
+
+    const total = static_pool.get(scrutinee_type).int_type.bits;
+    var used: u64 = 0;
+    var takes_every_value = true;
+    var rest: NodeId = 0;
+    for (tree.manychildren(node)) |part| {
+        if (tree.kind(part) == .partial__bits_rest) {
+            rest = part;
+            continue;
+        }
+        const width_type = resolver.types.type_from_node(context, tree.arg(part, 0));
+        if (width_type == .poison_type) return false;
+        if (static_pool.tag(width_type) != .int_type) {
+            const operator = resolver.name_pool.intern("bits");
+            _ = resolver.report(.invalid_operand, tree.arg(part, 0), operator, width_type);
+            return false;
+        }
+        used += static_pool.get(width_type).int_type.bits;
+        _ = resolver.set_node_type(part, width_type);
+        const part_takes_all = self.pattern(context, tree.arg(part, 1), width_type);
+        takes_every_value = takes_every_value and part_takes_all;
+    }
+    if (used > total or rest == 0 and used != total or rest != 0 and used == total) {
+        _ = resolver.report(.bits_width, node, used, total);
+        return false;
+    }
+    if (rest != 0) {
+        const left = StaticPool.Index.int_of(.unsigned, @intCast(total - used));
+        _ = resolver.set_node_type(rest, left);
+        if (tree.arg(rest, 0) != 0) _ = self.binder_pattern(tree.arg(rest, 0), left);
+    }
     return takes_every_value;
 }
 
@@ -259,6 +395,7 @@ fn typecast_pattern(
     const narrows = switch (static_pool.tag(scrutinee_type)) {
         .variant_type,
         .unified_variant_type,
+        .variant_subset_type,
         .trait_type,
         => static_pool.coercion(cast_type, scrutinee_type) != .incompatible,
         else => false,
@@ -283,6 +420,9 @@ fn labelled_pattern(
     const payload_type = resolver.static_pool.payload_of(inner_type);
     const bound_type = if (payload_type == .none) inner_type else payload_type;
     resolver.flow.bind_label(resolver.tree.arg(node, 1), bound_type);
+    if (resolver.slices.payload_slot(inner_type)) |payload| {
+        resolver.flow.flow_into_label(0, payload, resolver.tree.arg(node, 1));
+    }
     return takes_every_value;
 }
 
@@ -347,6 +487,15 @@ fn constructor_pattern(
         const argument_pattern = resolver.tree.arg_value(argument);
         all_take_every_value =
             self.pattern(context, argument_pattern, argument_type) and all_take_every_value;
+        // a binder of a field holds the slices the field does (see `Slices`)
+        const binder = if (resolver.tree.kind(argument_pattern) == .identifier)
+            resolver.node_declarations[argument_pattern]
+        else
+            .none;
+        if (binder != .none) resolver.slices.connects(
+            Resolver.Slices.slot(.field, @intFromEnum(record_type), field_of_argument[i]),
+            Resolver.Slices.declaration_slot(binder),
+        );
     }
     // a case pattern leaves the other cases of the variant
     return !is_case and all_take_every_value;
@@ -433,6 +582,7 @@ fn covers(
         .variant_type,
         .variant_case_type,
         .unified_variant_type,
+        .variant_subset_type,
         .record_type,
         => self.covers_constructors(context, columns, spread_rows.items, queries.items),
         .int_type => self.covers_integers(context, columns, spread_rows.items, queries.items),
@@ -440,6 +590,7 @@ fn covers(
         .simple_type,
         .meta_type,
         .array_type,
+        .slice_type,
         .pointer_type,
         .mutable_pointer_type,
         .function_type,
@@ -499,37 +650,15 @@ fn covers_constructors(
     const resolver = self.owning_resolver();
     const static_pool = &resolver.static_pool;
     const width = columns.len;
-    // the cases of a variant or of every member of a unified variant that brings its cases, a
-    // record, a case and any other member are their own constructor
-    const column_type = columns[0];
-    const is_unified = static_pool.tag(column_type) == .unified_variant_type;
-    const members: []const StaticPool.Index = if (is_unified)
-        static_pool.get(column_type).unified_variant_type.members
-    else
-        &.{column_type};
-
-    var constructor_count: usize = 0;
-    for (members) |member| {
-        const splits = static_pool.tag(member) == .variant_type and
-            (!is_unified or static_pool.brings_cases(member));
-        constructor_count += if (splits) static_pool.get(member).variant_type.cases.len else 1;
-    }
-
-    const constructors = resolver.temporary_slice(StaticPool.Index, constructor_count);
-    var filled: usize = 0;
-    for (members) |member| {
-        const splits = static_pool.tag(member) == .variant_type and
-            (!is_unified or static_pool.brings_cases(member));
-        if (!splits) {
-            constructors[filled] = member;
-            filled += 1;
-            continue;
-        }
-        for (static_pool.get(member).variant_type.cases) |case| {
-            constructors[filled] = case;
-            filled += 1;
-        }
-    }
+    // the cases of a variant, of every member of a unified variant that brings its cases, those
+    // a subset keeps; a record, a case and any other member are their own constructor. copied out
+    // of the pool's scratch, which the walk below uses
+    const scratch = &static_pool.scratch;
+    const mark = scratch.len;
+    static_pool.push_units(columns[0]);
+    const constructors = resolver.temporary_slice(StaticPool.Index, scratch.len - mark);
+    @memcpy(constructors, scratch.buffer[mark..scratch.len]);
+    scratch.len = mark;
     var next_rows: std.ArrayList(NodeId) = .empty;
     defer next_rows.deinit(resolver.allocator);
     var next_query: std.ArrayList(NodeId) = .empty;

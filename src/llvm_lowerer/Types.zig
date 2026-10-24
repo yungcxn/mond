@@ -73,10 +73,15 @@ pub fn of(self: *Types, type_index: Index) Type {
 pub fn is_in_memory(self: *const Types, type_index: Index) bool {
     if (type_index == .none) return false;
     return switch (self.pool.get(type_index)) {
-        .record_type, .unified_variant_type => true,
+        .record_type, .unified_variant_type, .slice_type => true,
         .array_type => |array| array.length != StaticPool.dyn_len,
-        .variant_type => |variant| variant.tag_mode != .self,
+        .variant_type => |variant| switch (variant.tag_mode) {
+            .custom => false,
+            .self => self.pool.is_field_tagged(type_index),
+            .none, .int => true,
+        },
         .variant_case_type => |case| self.is_in_memory(case.variant),
+        .variant_subset_type => |subset| self.is_in_memory(subset.whole),
         else => false,
     };
 }
@@ -101,10 +106,17 @@ pub fn is_runtime_array(self: *const Types, type_index: Index) bool {
     };
 }
 
+// a self-tagged variant held as the one field of its payload
 pub fn is_self_tagged(self: *const Types, type_index: Index) bool {
     const variant = self.declaring_variant(type_index);
     return self.pool.tag(variant) == .variant_type and
-        self.pool.get(variant).variant_type.tag_mode == .self;
+        self.pool.get(variant).variant_type.tag_mode == .self and
+        !self.pool.is_field_tagged(variant);
+}
+
+// a self-tagged variant held as its payload record, the tag in one of its fields
+pub fn is_field_tagged(self: *const Types, type_index: Index) bool {
+    return self.pool.is_field_tagged(self.declaring_variant(type_index));
 }
 
 // the variant a case or variant type stands for, unified variants stay themselves and a case of a
@@ -146,6 +158,11 @@ fn lower(self: *Types, type_index: Index) Type {
         else
             self.unit,
         .pointer_type => self.pointer,
+        // a record of the address of the first element and the length
+        .slice_type => blk: {
+            var fields = [_]Type{ self.pointer, self.length };
+            break :blk llvm.LLVMStructTypeInContext(context, &fields, fields.len, 0);
+        },
         .array_type => |array| blk: {
             if (array.length == StaticPool.dyn_len) break :blk self.pointer;
             const length = pool.static_length(type_index) orelse 0;
@@ -153,6 +170,11 @@ fn lower(self: *Types, type_index: Index) Type {
         },
         .function_type => self.closure,
         .record_type => |record| blk: {
+            // a bit-packed record is its bytes, its fields are read and written bit by bit
+            if (pool.is_bit_packed(record)) {
+                const byte = llvm.LLVMInt8TypeInContext(context);
+                break :blk llvm.LLVMArrayType2(byte, pool.layout(type_index).size);
+            }
             const named = self.named_struct(type_index);
             self.memo[@intFromEnum(type_index)] = named;
             const fields = self.allocator.alloc(Type, record.field_types.len) catch @panic("OOM");
@@ -162,7 +184,11 @@ fn lower(self: *Types, type_index: Index) Type {
             llvm.LLVMStructSetBody(named, fields.ptr, @intCast(fields.len), is_packed);
             break :blk named;
         },
-        .variant_type => |variant| if (variant.tag_mode == .self)
+        .variant_type => |variant| if (variant.tag_mode == .custom)
+            self.of(pool.get(variant.strategy).aggregate_value.elements[0])
+        else if (pool.is_field_tagged(type_index))
+            self.of(pool.get(pool.first_payload_case(type_index)).variant_case_type.payload)
+        else if (variant.tag_mode == .self)
             self.of(variant.tag_type)
         else
             self.tagged(type_index),
@@ -173,6 +199,7 @@ fn lower(self: *Types, type_index: Index) Type {
         else
             self.tagged(type_index),
         .unified_variant_type => self.tagged(type_index),
+        .variant_subset_type => |subset| self.of(subset.whole),
         .meta_type, .trait_type, .static_function, .template_type, .type_variable => self.unit,
         .ast_type => self.unit,
         .int_value, .float_value, .simple_value, .string_value, .aggregate_value => self.unit,

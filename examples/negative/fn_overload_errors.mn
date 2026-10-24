@@ -35,3 +35,11 @@ main = () {}
 
 fun half = (f32 x where x > 0): ret 1;
 fun half = (f32 x): ret x / 2; #! ret_type_mismatch
+
+# stcfuns overload stcfuns, picked like funs by their arguments
+stcfun pick = (u8 a) -> u32: ret 1;
+stcfun pick = (i8 a) -> u32: ret 2;
+stcfun pick = (bool b) -> u32: ret 3;
+stc u32 NO_PICK = pick(1.5); #! no_matching_overload
+stc u32 BOTH = pick(1); #! ambiguous_overload
+stc u32 BY_TYPE = pick(true);

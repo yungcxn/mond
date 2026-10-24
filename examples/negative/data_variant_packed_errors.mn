@@ -1,7 +1,7 @@
 # a packed variant has no size: only a parameter or a pointer has its type, its cases differ in size
 # so they don't cast into each other, and through a pointer only the tag is read
 variant Msg = ++(Ping(u8 seq), Data(u64 a, u64 b), Quit);
-variant Bare = ++(Small(u8), Large(u64)) tagtype _;
+variant Bare = ++(Small(u8), Large(u64)) notagtype;
 type Holder = *(Msg m); #! unstorable_outside_parameter
 fun make = () -> Msg: ret Msg.Quit; #! unstorable_outside_parameter
 fun local = (Msg m) { Msg copy = m; } #! unstorable_outside_parameter

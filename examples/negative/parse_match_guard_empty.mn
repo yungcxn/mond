@@ -1,0 +1,4 @@
+# a guard needs a condition
+fun f = (u8 x) -> u8: ret match x { y where => 1, _ => 0 }; #! NoRuleFound
+
+main = () {}

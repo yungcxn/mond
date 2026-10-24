@@ -1,0 +1,78 @@
+# `x with (a.b = ..)`, `x with (a[i] = ..)`: a copy of x with a part of a field replaced, fields of
+# records and elements of arrays as deep as they go; the copies apply in order, left to right
+type Pos = *(i32 x, i32 y);
+type Player = *(Pos pos, u8 hp, [3]Pos trail);
+type World = *(Player player, u32 tick);
+stc World W = World(Player(Pos(1, 2), 50, [Pos(0, 0), Pos(1, 1), Pos(2, 2)]), 7);
+
+stc World DEEP = W with (player.pos.x = 3, player.hp = 10, tick = 8);
+stc i32 DEEP_X = DEEP.player.pos.x; #= DEEP_X 3
+stc i32 DEEP_Y = DEEP.player.pos.y; #= DEEP_Y 2
+stc u8 DEEP_HP = DEEP.player.hp; #= DEEP_HP 10
+stc u32 DEEP_TICK = DEEP.tick; #= DEEP_TICK 8
+stc Pos KEPT = W.player.pos; #= KEPT [1, 2]
+
+# elements, and a later part overwrites what an earlier whole field set
+stc World INDEXED = W with (player.trail[1].y = 9, player.pos = Pos(5, 5), player.pos.y = 6);
+stc []Pos TRAIL = INDEXED.player.trail; #= TRAIL [[0, 0], [1, 9], [2, 2]]
+stc Pos MOVED = INDEXED.player.pos; #= MOVED [5, 6]
+stc World REPLACED = W with (player.pos.x = 9, player.pos = Pos(0, 1));
+stc Pos LATER = REPLACED.player.pos; #= LATER [0, 1]
+
+# a runtime-ish index and value: function parameters, the value reads the original
+fun moved = (World w, u64 i, i32 by) -> World:
+    ret w with (player.trail[i].x = w.player.trail[i].x + by, tick = w.tick + 1);
+stc World STEPPED = moved(W, 2, 10);
+stc i32 STEPPED_X = STEPPED.player.trail[2].x; #= STEPPED_X 12
+stc u32 STEPPED_TICK = STEPPED.tick; #= STEPPED_TICK 8
+
+# arrays of arrays, a literal fitted to the element type, a case into a variant
+type Grid = *([2][3]u8 cells, Opt last);
+variant Opt = +(Some(u16), None);
+stc Grid G = Grid([[1, 2, 3], [4, 5, 6]], Opt.None);
+stc Grid G2 = G with (cells[1][2] = 60, cells[0][0] = 10, last = Opt.Some(7));
+stc [2][3]u8 CELLS = G2.cells; #= CELLS [[10, 2, 3], [4, 5, 60]]
+stc u16 LAST = G2.last ?? 0; #= LAST 7
+
+# through a pointer the record is copied, the pointer's target is not written
+fun bumped = (&World w) -> World: ret w with (player.hp = w.player.hp + 1);
+stc u8 BUMPED = bumped(W.&).player.hp; #= BUMPED 51
+
+# in a loop, and in a generic function: each realization has its own field types
+stcfun reset_x = (type T): (T value) -> T: ret value with (pos.x = 0);
+stc Player RESET = reset_x(Player)(W.player);
+stc Pos RESET_POS = RESET.pos; #= RESET_POS [0, 2]
+fun walk = (World w, u32 steps) -> World {
+    mut World current = w;
+    for i in 0..<steps: current = current with (player.pos.x = current.player.pos.x + 1, tick = current.tick + 1);
+    ret current;
+}
+stc World WALKED = walk(W, 4);
+stc i32 WALKED_X = WALKED.player.pos.x; #= WALKED_X 5
+stc u32 WALKED_TICK = WALKED.tick; #= WALKED_TICK 11
+
+# the `where .. else` of each record a part passes runs again, as for `x with (a = x.a with (b = ..))`
+type Clamped = *(u8 level where level < 10 else 9, u8 other = 1);
+type Holder = *(Clamped inner, u8 tag where tag < inner.level else 0);
+stc Holder H = Holder(Clamped(3), 2) with (inner.level = 50);
+stc u8 CLAMPED = H.inner.level; #= CLAMPED 9
+stc u8 TAG_KEPT = H.tag; #= TAG_KEPT 2
+stc Holder H2 = Holder(Clamped(8), 7) with (inner.level = 1);
+stc u8 TAG_REPAIRED = H2.tag; #= TAG_REPAIRED 0
+type Deeper = *(Holder holder);
+stc Deeper D = Deeper(Holder(Clamped(5), 1)) with (holder.inner.level = 200, holder.inner.other = 4);
+stc Clamped DEEPER = D.holder.inner; #= DEEPER [9, 4]
+
+# trees: a path of child names, a copy of each node on the way
+stcfun rhs_text = (ast e) -> u32: ret match e {
+    ast.BinaryAdd(_, ast.BinaryMultiply(ast.Identifier, ast.IntegerValue)) => 1,
+    ast.BinaryAdd(_, ast.BinaryMultiply) => 2,
+    _ => 0,
+};
+stc ast SUM = quote: a + b * c;
+stc u32 BEFORE = rhs_text(SUM); #= BEFORE 2
+stc u32 AFTER = rhs_text(SUM with (rhs.rhs = quote: 7)); #= AFTER 1
+stc u32 UNCHANGED = rhs_text(SUM); #= UNCHANGED 2
+stc i32 EVALUATED = <(quote: 10 - 4 * 2) with (rhs.lhs = quote: 1, lhs = quote: 20)>; #= EVALUATED 18
+
+main = () {}

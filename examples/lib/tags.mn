@@ -1,0 +1,14 @@
+# tag strategies, a library for `include`: `tagtype` takes a record with these fields, and the
+# compiler stores every value of the variant as its functions say. a case's tag and its payload's
+# bits go into `wrap`, `case_of` tells the tag of stored bits and `unwrap` gives the payload back.
+# the compiler checks the round trip when the variant is declared (`tag_strategy_failed`)
+pub type Tagging = *(type storage, (u32, u64) -> u64 wrap, (u64) -> u32 case_of, (u64, u32) -> u64 unwrap);
+
+# the cases as ranges of one integer: the case with tag `c` and payload `p` is `c * width + p`,
+# so payloads below `width` fit, and with tags counting from 0 the variant needs no tag bits
+pub stcfun ranges = (type storage, u64 width) -> Tagging: ret Tagging(
+    storage = storage,
+    wrap = (u32 tag, u64 payload) -> u64: ret tag as u64 * width + payload,
+    case_of = (u64 stored) -> u32: ret (stored / width) as u32,
+    unwrap = (u64 stored, u32 tag) -> u64: ret stored % width,
+);
