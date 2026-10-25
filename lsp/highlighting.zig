@@ -24,32 +24,32 @@ const undefined_name = Analysis.undefined_name;
 pub const class_of_token_kind = blk: {
     @setEvalBranchQuota(10_000);
     var table: [256]?Type = @splat(null);
-    for (@typeInfo(Kind).@"enum".fields) |field| {
-        if (std.mem.startsWith(u8, field.name, "kw_")) table[field.value] = .keyword;
-        if (std.mem.startsWith(u8, field.name, "xpct_")) table[field.value] = .operator;
+    for (@typeInfo(Kind).@"enum".field_names, @typeInfo(Kind).@"enum".field_values) |fname, fvalue| {
+        if (std.mem.startsWith(u8, fname, "kw_")) table[fvalue] = .keyword;
+        if (std.mem.startsWith(u8, fname, "xpct_")) table[fvalue] = .operator;
         // a token that also continues an expression (`<`) is macro syntax only where the tree says
-        const continues = lookahead.post[field.value] != null or
-            lookahead.binary_compute[field.value] != null;
-        if (lookahead.macro_syntax[field.value] and !continues) table[field.value] = .macro;
+        const continues = lookahead.post[fvalue] != null or
+            lookahead.binary_compute[fvalue] != null;
+        if (lookahead.macro_syntax[fvalue] and !continues) table[fvalue] = .macro;
     }
-    for (@typeInfo(StaticPool.Index).@"enum".fields) |field| {
-        if (!std.mem.endsWith(u8, field.name, "_type")) continue;
-        const name = field.name[0 .. field.name.len - "_type".len];
+    for (@typeInfo(StaticPool.Index).@"enum".field_names) |fname| {
+        if (!std.mem.endsWith(u8, fname, "_type")) continue;
+        const name = fname[0 .. fname.len - "_type".len];
         if (!@hasField(Node.Kind, "type_" ++ name) or !@hasField(Kind, "kw_" ++ name)) continue;
-        table[@intFromEnum(@field(Kind, "kw_" ++ name))] = .type;
+        table[@backingInt(@field(Kind, "kw_" ++ name))] = .type;
     }
-    table[@intFromEnum(Kind.identifier)] = .variable;
-    table[@intFromEnum(Kind.val_string)] = .string;
-    table[@intFromEnum(Kind.val_char)] = .string;
-    table[@intFromEnum(Kind.val_int)] = .number;
-    table[@intFromEnum(Kind.val_float)] = .number;
+    table[@backingInt(Kind.identifier)] = .variable;
+    table[@backingInt(Kind.val_string)] = .string;
+    table[@backingInt(Kind.val_char)] = .string;
+    table[@backingInt(Kind.val_int)] = .number;
+    table[@backingInt(Kind.val_float)] = .number;
     break :blk table;
 };
 
 const is_punctuation = blk: {
     var table: [256]bool = @splat(false);
-    for (@typeInfo(Kind).@"enum".fields) |field| {
-        table[field.value] = std.mem.startsWith(u8, field.name, "pct_");
+    for (@typeInfo(Kind).@"enum".field_names, @typeInfo(Kind).@"enum".field_values) |fname, fvalue| {
+        table[fvalue] = std.mem.startsWith(u8, fname, "pct_");
     }
     break :blk table;
 };
@@ -63,7 +63,7 @@ pub fn classify_lexically(analysis: *Analysis, lexer: *Lexer) void {
     @memset(analysis.token_modifiers, 0);
 
     for (tokens.tk, tokens.span, analysis.token_class, 0..) |kind, span, *class, i| {
-        class.* = class_of_token_kind[@intFromEnum(kind)];
+        class.* = class_of_token_kind[@backingInt(kind)];
         if (kind == .identifier) {
             const name = analysis.source[span[0]..span[1]];
             const after_dot = i > 0 and tokens.tk[i - 1] == .@"xpct_.";
@@ -104,7 +104,7 @@ pub fn classify_written(analysis: *Analysis, resolver: *Resolver) void {
         var token = bound(tree, children[0], opener, .first);
         while (token != none and token > 0) {
             token -= 1;
-            const kind = @intFromEnum(analysis.token_kinds[token]);
+            const kind = @backingInt(analysis.token_kinds[token]);
             if (lookahead.macro_syntax[kind] and class_of_token_kind[kind] != .type) {
                 analysis.token_class[token] = .macro;
                 opener[node] = token;
@@ -117,7 +117,7 @@ pub fn classify_written(analysis: *Analysis, resolver: *Resolver) void {
         if (tree.kind(node) != .splice) continue;
         var closing = bound(tree, node, closer, .last) +% 1;
         while (closing < analysis.token_kinds.len) : (closing += 1) {
-            if (!is_punctuation[@intFromEnum(analysis.token_kinds[closing])]) break;
+            if (!is_punctuation[@backingInt(analysis.token_kinds[closing])]) break;
         }
         if (closing >= analysis.token_kinds.len) continue;
         analysis.token_class[closing] = .macro;
@@ -188,7 +188,7 @@ pub fn classify_resolved(resolver: *Resolver, token_class: []?Type, token_modifi
             continue;
         }
 
-        const declaration_index = @intFromEnum(declaration);
+        const declaration_index = @backingInt(declaration);
         const kind = resolver.decl_pool.get(declaration, .kind);
         token_class[token] = symbol_classes.class_of_kind(kind);
         token_modifiers[token] = symbol_classes.declaration_modifiers(resolver, declaration_index);
@@ -249,7 +249,7 @@ pub fn classify_namespaces(analysis: *Analysis, lexer: *Lexer, resolver: *Resolv
         const kind = resolver.decl_pool.get(declaration, .kind);
         analysis.token_class[token] = symbol_classes.class_of_kind(kind);
         analysis.token_modifiers[token] =
-            symbol_classes.declaration_modifiers(resolver, @intFromEnum(declaration));
+            symbol_classes.declaration_modifiers(resolver, @backingInt(declaration));
     }
 }
 
@@ -332,7 +332,7 @@ fn push_token(analysis: *Analysis, start: u32, end: u32, class: Type, modifiers:
             piece_position.line - previous.line,
             character_delta,
             positions.utf16_length(piece),
-            @intFromEnum(class),
+            @backingInt(class),
             modifiers,
         });
         analysis.last_token_start = piece_position;

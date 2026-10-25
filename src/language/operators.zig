@@ -81,7 +81,7 @@ const assigning_table = .{
     .{ .dec_postfix, .subtract, true },
 };
 
-const kind_count = @typeInfo(Kind).@"enum".fields.len;
+const kind_count = @typeInfo(Kind).@"enum".field_names.len;
 
 const BinaryRow = struct { operator: BinaryOperator, operands: Operands };
 const AssigningRow = struct { operator: BinaryOperator, returns_old: bool };
@@ -89,17 +89,17 @@ const AssigningRow = struct { operator: BinaryOperator, returns_old: bool };
 const binary_of_kind: [kind_count]?BinaryRow = blk: {
     @setEvalBranchQuota(100_000);
     var table: [kind_count]?BinaryRow = @splat(null);
-    var seen: [@typeInfo(BinaryOperator).@"enum".fields.len]bool = @splat(false);
+    var seen: [@typeInfo(BinaryOperator).@"enum".field_names.len]bool = @splat(false);
     for (binary_table) |row| {
         const kind: Kind = row[0];
-        if (table[@intFromEnum(kind)] != null) {
+        if (table[@backingInt(kind)] != null) {
             @compileError("operator row listed twice: " ++ @tagName(kind));
         }
-        table[@intFromEnum(kind)] = .{ .operator = row[1], .operands = row[2] };
-        seen[@intFromEnum(@as(BinaryOperator, row[1]))] = true;
+        table[@backingInt(kind)] = .{ .operator = row[1], .operands = row[2] };
+        seen[@backingInt(@as(BinaryOperator, row[1]))] = true;
     }
     for (seen, 0..) |was_seen, i| {
-        const operator: BinaryOperator = @enumFromInt(i);
+        const operator: BinaryOperator = @fromBackingInt(@intCast(i));
         if (!was_seen) @compileError("operator without a node kind: " ++ @tagName(operator));
     }
     break :blk table;
@@ -109,10 +109,10 @@ const assigning_of_kind: [kind_count]?AssigningRow = blk: {
     var table: [kind_count]?AssigningRow = @splat(null);
     for (assigning_table) |row| {
         const kind: Kind = row[0];
-        if (table[@intFromEnum(kind)] != null) {
+        if (table[@backingInt(kind)] != null) {
             @compileError("assigning row listed twice: " ++ @tagName(kind));
         }
-        table[@intFromEnum(kind)] = .{ .operator = row[1], .returns_old = row[2] };
+        table[@backingInt(kind)] = .{ .operator = row[1], .returns_old = row[2] };
     }
     break :blk table;
 };
@@ -122,7 +122,7 @@ const assigning_of_kind: [kind_count]?AssigningRow = blk: {
 comptime {
     @setEvalBranchQuota(100_000);
     for (0..kind_count) |i| {
-        const kind: Kind = @enumFromInt(i);
+        const kind: Kind = @fromBackingInt(@intCast(i));
         const wants_binary_row = switch (constructs.construct_of(kind)) {
             .arithmetic, .comparison, .short_circuit_logic, .logical_xor => true,
             else => false,
@@ -142,29 +142,29 @@ comptime {
 
 // the operator of an `arithmetic`, `comparison`, `short_circuit_logic` or `logical_xor` node
 pub fn binary_operator_of(kind: Kind) BinaryOperator {
-    return (binary_of_kind[@intFromEnum(kind)] orelse unreachable).operator;
+    return (binary_of_kind[@backingInt(kind)] orelse unreachable).operator;
 }
 
 pub fn operands_of(kind: Kind) Operands {
-    return (binary_of_kind[@intFromEnum(kind)] orelse unreachable).operands;
+    return (binary_of_kind[@backingInt(kind)] orelse unreachable).operands;
 }
 
 // the operator a `compound_assignment` or `increment` node applies
 pub fn assigned_operator_of(kind: Kind) BinaryOperator {
-    return (assigning_of_kind[@intFromEnum(kind)] orelse unreachable).operator;
+    return (assigning_of_kind[@backingInt(kind)] orelse unreachable).operator;
 }
 
 // what that operator takes, as its binary form says (`%=` integers, as `%`)
 pub fn assigned_operands_of(kind: Kind) Operands {
-    return operands_of_operator[@intFromEnum(assigned_operator_of(kind))];
+    return operands_of_operator[@backingInt(assigned_operator_of(kind))];
 }
 
 const operands_of_operator = blk: {
-    var table: [@typeInfo(BinaryOperator).@"enum".fields.len]Operands = undefined;
-    for (binary_table) |row| table[@intFromEnum(@as(BinaryOperator, row[1]))] = row[2];
+    var table: [@typeInfo(BinaryOperator).@"enum".field_names.len]Operands = undefined;
+    for (binary_table) |row| table[@backingInt(@as(BinaryOperator, row[1]))] = row[2];
     break :blk table;
 };
 
 pub fn returns_old_value(kind: Kind) bool {
-    return (assigning_of_kind[@intFromEnum(kind)] orelse unreachable).returns_old;
+    return (assigning_of_kind[@backingInt(kind)] orelse unreachable).returns_old;
 }

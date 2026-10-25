@@ -123,11 +123,11 @@ const definitions = blk: {
 };
 
 pub fn severity_of(code: Disorder) Severity {
-    return definitions[@intFromEnum(code)].severity;
+    return definitions[@backingInt(code)].severity;
 }
 
 pub fn operands_of(code: Disorder) [2]Operand {
-    return definitions[@intFromEnum(code)].operands;
+    return definitions[@backingInt(code)].operands;
 }
 
 // the operands are pool indices, names, declarations or counts, as the code's row says
@@ -194,8 +194,8 @@ pub fn rewind(doctor: *Doctor, mark: u32) void {
     var kept = mark;
     for (mark..reports.code.len) |i| {
         if (!reports.is_settled[i]) continue;
-        inline for (@typeInfo(Diagnosis).@"struct".fields) |field| {
-            @field(reports, field.name)[kept] = @field(reports, field.name)[i];
+        inline for (@typeInfo(Diagnosis).@"struct".field_names) |fname| {
+            @field(reports, fname)[kept] = @field(reports, fname)[i];
         }
         kept += 1;
     }
@@ -209,8 +209,8 @@ pub fn settle(doctor: *Doctor, mark: u32) void {
 
 fn operand_word(value: anytype) u32 {
     return switch (@typeInfo(@TypeOf(value))) {
-        .@"enum" => @intFromEnum(value),
-        .enum_literal => @intFromEnum(@as(StaticPool.Index, value)),
+        .@"enum" => @backingInt(value),
+        .enum_literal => @backingInt(@as(StaticPool.Index, value)),
         else => @intCast(value),
     };
 }

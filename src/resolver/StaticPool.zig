@@ -231,7 +231,7 @@ pub const Index = enum(u32) {
     _,
 
     // the integers of a width without a keyword (`u7`, `i24`): unsigned, then signed, by width
-    pub const first_odd_int: u32 = @intFromEnum(Index.ast_type) + 1;
+    pub const first_odd_int: u32 = @backingInt(Index.ast_type) + 1;
     pub const first_dynamic: u32 = first_odd_int + 2 * odd_widths.len;
     pub const odd_widths = blk: {
         var widths: [60]u7 = undefined;
@@ -254,10 +254,10 @@ pub const Index = enum(u32) {
             64 => 3,
             else => {
                 const rank = std.mem.indexOfScalar(u7, &odd_widths, bits).?;
-                return @enumFromInt(first_odd_int + signed * odd_widths.len + rank);
+                return @fromBackingInt(@intCast(first_odd_int + signed * odd_widths.len + rank));
             },
         };
-        return @enumFromInt(signed * 4 + standard);
+        return @fromBackingInt(@intCast(signed * 4 + standard));
     }
 };
 
@@ -436,7 +436,7 @@ const composition_of_tag = blk: {
 };
 
 fn is_nominal_key(comptime key_tag: std.meta.Tag(Key)) bool {
-    return properties_of_tag[@intFromEnum(@field(Tag, @tagName(key_tag)))].is_nominal;
+    return properties_of_tag[@backingInt(@field(Tag, @tagName(key_tag)))].is_nominal;
 }
 
 // one stored entry is only 5 bytes: a tag and one u32. small payloads live directly in `data`
@@ -573,7 +573,7 @@ pub const KeyAdapter = struct {
 
     pub fn hash(adapter: KeyAdapter, key: Key) u64 {
         _ = adapter;
-        var hasher = std.hash.Wyhash.init(@intFromEnum(std.meta.activeTag(key)));
+        var hasher = std.hash.Wyhash.init(@backingInt(std.meta.activeTag(key)));
         switch (key) {
             inline else => |payload, key_tag| if (comptime is_nominal_key(key_tag))
                 feed(&hasher, payload.declaration)
@@ -594,8 +594,8 @@ pub const KeyAdapter = struct {
 
 fn feed(hasher: *std.hash.Wyhash, value: anytype) void {
     switch (@typeInfo(@TypeOf(value))) {
-        .@"struct" => |info| inline for (info.fields) |field| {
-            feed(hasher, @field(value, field.name));
+        .@"struct" => |info| inline for (info.field_names) |fname| {
+            feed(hasher, @field(value, fname));
         },
         .pointer => for (value) |item| feed(hasher, item),
         else => hasher.update(std.mem.asBytes(&word64(value))),
@@ -605,8 +605,8 @@ fn feed(hasher: *std.hash.Wyhash, value: anytype) void {
 fn deep_eql(a: anytype, b: @TypeOf(a)) bool {
     switch (@typeInfo(@TypeOf(a))) {
         .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                if (!deep_eql(@field(a, field.name), @field(b, field.name))) return false;
+            inline for (info.field_names) |fname| {
+                if (!deep_eql(@field(a, fname), @field(b, fname))) return false;
             }
             return true;
         },
@@ -617,7 +617,7 @@ fn deep_eql(a: anytype, b: @TypeOf(a)) bool {
 
 fn word64(value: anytype) u64 {
     return switch (@typeInfo(@TypeOf(value))) {
-        .@"enum" => @intCast(@intFromEnum(value)),
+        .@"enum" => @intCast(@backingInt(value)),
         .bool => @intFromBool(value),
         .float => @bitCast(value),
         else => @intCast(value),
@@ -634,22 +634,22 @@ fn put(self: *StaticPool, payload: anytype) u32 {
     const T = @TypeOf(payload);
     const at = self.payload_words.len;
     switch (@typeInfo(T)) {
-        .@"enum" => return @intCast(@intFromEnum(payload)),
+        .@"enum" => return @intCast(@backingInt(payload)),
         .pointer => {
             self.payload_words.push(@intCast(payload.len));
             for (payload) |item| self.payload_words.push(@intCast(word64(item)));
         },
-        .@"struct" => |info| {
-            inline for (info.fields) |field| if (!comptime is_list(field.type)) {
-                const word = word64(@field(payload, field.name));
+        .@"struct" => |i| {
+            inline for (i.field_names, i.field_types) |fname, ftype| if (!comptime is_list(ftype)) {
+                const word = word64(@field(payload, fname));
                 self.payload_words.push(@truncate(word));
-                if (@sizeOf(field.type) == 8) self.payload_words.push(@intCast(word >> 32));
+                if (@sizeOf(ftype) == 8) self.payload_words.push(@intCast(word >> 32));
             };
-            inline for (info.fields) |field| if (comptime is_list(field.type)) {
-                self.payload_words.push(@intCast(@field(payload, field.name).len));
+            inline for (i.field_names, i.field_types) |fname, ftype| if (comptime is_list(ftype)) {
+                self.payload_words.push(@intCast(@field(payload, fname).len));
             };
-            inline for (info.fields) |field| if (comptime is_list(field.type)) {
-                for (@field(payload, field.name)) |item| {
+            inline for (i.field_names, i.field_types) |fname, ftype| if (comptime is_list(ftype)) {
+                for (@field(payload, fname)) |item| {
                     self.payload_words.push(@intCast(word64(item)));
                 }
             };
@@ -662,32 +662,33 @@ fn put(self: *StaticPool, payload: anytype) u32 {
 fn take(self: *const StaticPool, comptime T: type, data: u32) T {
     const words = self.payload_words.buffer;
     switch (@typeInfo(T)) {
-        .@"enum" => return @enumFromInt(data),
+        .@"enum" => return @fromBackingInt(@intCast(data)),
         .pointer => return @ptrCast(words[data + 1 ..][0..words[data]]),
-        .@"struct" => |info| {
+        .@"struct" => |i| {
             var result: T = undefined;
             var at = data;
-            inline for (info.fields) |field| if (!comptime is_list(field.type)) {
+            inline for (i.field_names, i.field_types) |fname, ftype| if (!comptime is_list(ftype)) {
                 const low: u64 = words[at];
-                const wide = @sizeOf(field.type) == 8;
+                const wide = @sizeOf(ftype) == 8;
                 const word = if (wide) low | @as(u64, words[at + 1]) << 32 else low;
                 at += if (wide) 2 else 1;
-                @field(result, field.name) = switch (@typeInfo(field.type)) {
-                    .@"enum" => @enumFromInt(word),
+                @field(result, fname) = switch (@typeInfo(ftype)) {
+                    .@"enum" => @fromBackingInt(@intCast(word)),
                     .bool => word != 0,
                     .float => @bitCast(word),
                     else => @intCast(word),
                 };
             };
-            var list_lengths: [info.fields.len]u32 = undefined;
-            inline for (info.fields, 0..) |field, j| if (comptime is_list(field.type)) {
+            var list_lengths: [i.field_types.len]u32 = undefined;
+            inline for (i.field_types, 0..) |ftype, j| if (comptime is_list(ftype)) {
                 list_lengths[j] = words[at];
                 at += 1;
             };
-            inline for (info.fields, 0..) |field, j| if (comptime is_list(field.type)) {
-                @field(result, field.name) = @ptrCast(words[at..][0..list_lengths[j]]);
-                at += list_lengths[j];
-            };
+            inline for (i.field_names, i.field_types, 0..) |fname, ftype, j|
+                if (comptime is_list(ftype)) {
+                    @field(result, fname) = @ptrCast(words[at..][0..list_lengths[j]]);
+                    at += list_lengths[j];
+                };
             return result;
         },
         else => @compileError("no decoding for " ++ @typeName(T)),
@@ -706,7 +707,7 @@ fn push_item(self: *StaticPool, item: Item, holds_type_variables: bool) Index {
         .state = .unknown,
         .niche = std.mem.zeroes(Layout.Niche),
     });
-    return @enumFromInt(i);
+    return @fromBackingInt(@intCast(i));
 }
 
 fn any_type_variables(self: *const StaticPool, payload: anytype) bool {
@@ -717,8 +718,8 @@ fn any_type_variables(self: *const StaticPool, payload: anytype) bool {
         return false;
     }
     if (@typeInfo(T) != .@"struct") return false;
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (self.any_type_variables(@field(payload, field.name))) return true;
+    inline for (@typeInfo(T).@"struct".field_names) |fieldname| {
+        if (self.any_type_variables(@field(payload, fieldname))) return true;
     }
     return false;
 }
@@ -727,14 +728,14 @@ fn encode(self: *StaticPool, key: Key, string_type: Index) Item {
     return switch (key) {
         .pointer_type => |pointer| .{
             .tag = if (pointer.is_mutable) .mutable_pointer_type else .pointer_type,
-            .data = @intFromEnum(pointer.pointee),
+            .data = @backingInt(pointer.pointee),
         },
         .string_value => |bytes| blk: {
             const at = self.payload_words.len;
             const header = [_]u32{
                 self.string_bytes.len,
                 @intCast(bytes.len),
-                @intFromEnum(string_type),
+                @backingInt(string_type),
             };
             self.payload_words.append(&header);
             if (bytes.len > 0) self.string_bytes.append(bytes);
@@ -766,14 +767,14 @@ pub fn init(allocator: std.mem.Allocator) StaticPool {
         _ = self.intern(.{ .int_type = .{ .signedness = signedness, .bits = bits } });
     }
     for ([_]u16{ 16, 32, 64 }) |bits| _ = self.intern(.{ .float_type = .{ .bits = bits } });
-    inline for (@typeInfo(SimpleType).@"enum".fields) |field| {
-        _ = self.intern(.{ .simple_type = @enumFromInt(field.value) });
+    inline for (@typeInfo(SimpleType).@"enum".field_values) |fv| {
+        _ = self.intern(.{ .simple_type = @fromBackingInt(@intCast(fv)) });
     }
-    inline for (@typeInfo(MetaType).@"enum".fields) |field| {
-        _ = self.intern(.{ .meta_type = @enumFromInt(field.value) });
+    inline for (@typeInfo(MetaType).@"enum".field_values) |fv| {
+        _ = self.intern(.{ .meta_type = @fromBackingInt(@intCast(fv)) });
     }
-    inline for (@typeInfo(SimpleValue).@"enum".fields) |field| {
-        _ = self.intern(.{ .simple_value = @enumFromInt(field.value) });
+    inline for (@typeInfo(SimpleValue).@"enum".field_values) |fv| {
+        _ = self.intern(.{ .simple_value = @fromBackingInt(@intCast(fv)) });
     }
     _ = self.intern(.{ .ast_type = .{ .produces = .none, .root_kind = 0 } });
     for ([_]IntType.Signedness{ .unsigned, .signed }) |signedness| for (Index.odd_widths) |bits| {
@@ -827,23 +828,23 @@ pub fn intern(self: *StaticPool, key: Key) Index {
 // until `complete_nominal` writes it, the entry reads as poison
 pub fn reserve_nominal(self: *StaticPool, declaration: DeclPool.Index) Index {
     _ = declaration;
-    return self.push_item(.{ .tag = .simple_type, .data = @intFromEnum(SimpleType.poison) }, false);
+    return self.push_item(.{ .tag = .simple_type, .data = @backingInt(SimpleType.poison) }, false);
 }
 
 pub fn complete_nominal(self: *StaticPool, reserved: Index, key: Key) void {
     const item = self.encode(key, .none);
-    self.items.column(.tag)[@intFromEnum(reserved)] = item.tag;
-    self.items.column(.data)[@intFromEnum(reserved)] = item.data;
+    self.items.column(.tag)[@backingInt(reserved)] = item.tag;
+    self.items.column(.data)[@backingInt(reserved)] = item.data;
     const context = IndexContext{ .pool = self };
     self.deduplication.putContext(self.allocator, reserved, {}, context) catch @panic("OOM");
 }
 
 pub fn get(self: *const StaticPool, index: Index) Key {
     const entry_tag = self.tag(index);
-    const data = self.items.column(.data)[@intFromEnum(index)];
+    const data = self.items.column(.data)[@backingInt(index)];
     return switch (entry_tag) {
         .pointer_type, .mutable_pointer_type => .{ .pointer_type = .{
-            .pointee = @enumFromInt(data),
+            .pointee = @fromBackingInt(@intCast(data)),
             .is_mutable = entry_tag == .mutable_pointer_type,
         } },
         .string_value => {
@@ -853,7 +854,7 @@ pub fn get(self: *const StaticPool, index: Index) Key {
         },
         inline else => |tag_value| blk: {
             // the key field a tag decodes into
-            const row = tag_table[@intFromEnum(tag_value)];
+            const row = tag_table[@backingInt(tag_value)];
             const field_name = if (row.len > 4) row[4] else row[0];
             break :blk @unionInit(Key, field_name, self.take(@FieldType(Key, field_name), data));
         },
@@ -861,19 +862,19 @@ pub fn get(self: *const StaticPool, index: Index) Key {
 }
 
 pub fn tag(self: *const StaticPool, index: Index) Tag {
-    return self.items.column(.tag)[@intFromEnum(index)];
+    return self.items.column(.tag)[@backingInt(index)];
 }
 
 pub inline fn properties(self: *const StaticPool, index: Index) TagProperties {
-    return properties_of_tag[@intFromEnum(self.tag(index))];
+    return properties_of_tag[@backingInt(self.tag(index))];
 }
 
 pub inline fn composition(self: *const StaticPool, index: Index) Composition {
-    return composition_of_tag[@intFromEnum(self.tag(index))];
+    return composition_of_tag[@backingInt(self.tag(index))];
 }
 
 pub fn has_type_variables(self: *const StaticPool, index: Index) bool {
-    const i = @intFromEnum(index);
+    const i = @backingInt(index);
     return (self.type_variable_bits.buffer[i / 64] >> @intCast(i % 64)) & 1 != 0;
 }
 
@@ -885,7 +886,7 @@ pub fn is_pointer(self: *const StaticPool, type_index: Index) bool {
 // the pointee of a pointer type, any other type itself
 pub fn pointee(self: *const StaticPool, type_index: Index) Index {
     if (!self.is_pointer(type_index)) return type_index;
-    return @enumFromInt(self.items.column(.data)[@intFromEnum(type_index)]);
+    return @fromBackingInt(@intCast(self.items.column(.data)[@backingInt(type_index)]));
 }
 
 pub fn array_element(self: *const StaticPool, type_index: Index) Index {
@@ -943,13 +944,13 @@ pub fn trait_method_declaration(
 
 // the type of a static value, a type's type is its meta type
 pub fn type_of(self: *const StaticPool, value: Index) Index {
-    const data = self.items.column(.data)[@intFromEnum(value)];
+    const data = self.items.column(.data)[@backingInt(value)];
     return switch (self.tag(value)) {
         .int_value, .float_value, .aggregate_value, .variant_value, .tree_value => {
-            return @enumFromInt(self.payload_words.buffer[data]);
+            return @fromBackingInt(@intCast(self.payload_words.buffer[data]));
         },
-        .string_value => @enumFromInt(self.payload_words.buffer[data + 2]),
-        .simple_value => if (data == @intFromEnum(SimpleValue.unit)) .unit_type else .bool_type,
+        .string_value => @fromBackingInt(@intCast(self.payload_words.buffer[data + 2])),
+        .simple_value => if (data == @backingInt(SimpleValue.unit)) .unit_type else .bool_type,
         .function_value => .fun_type,
         .static_function => .stcfun_type,
         .trait_type => .trait_type,

@@ -48,7 +48,7 @@ fn evaluate_quote(self: *Trees, node: NodeId) Value {
     const quote_type = self.type_at(node);
     const owner = interpreter.node_info(.declaration, node);
     // the hygiene of a name is its function plus one, zero for none
-    const hygiene: u32 = if (owner == .none) 0 else @intFromEnum(owner) + 1;
+    const hygiene: u32 = if (owner == .none) 0 else @backingInt(owner) + 1;
 
     const code = resolver.tree.arg(node, 0);
     const root = self.fill(code, hygiene, .plain) orelse return .poison;
@@ -121,11 +121,11 @@ pub fn node_of(self: *Trees, value: Value) ?NodeId {
 
 // a root kind is stored plus one, zero stands for any kind
 fn root_kind_code(kind: Kind) u16 {
-    return @as(u16, @intFromEnum(kind)) + 1;
+    return @as(u16, @backingInt(kind)) + 1;
 }
 
 inline fn arity(kind: Kind) Arity {
-    return ParseTree.Node.nk_childc[@intFromEnum(kind)];
+    return ParseTree.Node.nk_childc[@backingInt(kind)];
 }
 
 // a value stored (in a variable, a parameter, an element) owns copies of its trees, `*ast`s share
@@ -639,10 +639,11 @@ pub fn text_of(self: *Trees, value: Value) ?[]const u8 {
 // the keyword kind (`type_u32`) of each builtin type index (`u32_type`) that has one
 const keyword_kinds = blk: {
     var kinds: [Index.first_dynamic]?Kind = @splat(null);
-    for (@typeInfo(Index).@"enum".fields) |field| {
-        if (!std.mem.endsWith(u8, field.name, "_type")) continue;
-        const keyword = "type_" ++ field.name[0 .. field.name.len - "_type".len];
-        if (@hasField(Kind, keyword)) kinds[field.value] = @field(Kind, keyword);
+    const ti = @typeInfo(Index).@"enum";
+    for (ti.field_names, ti.field_values) |fname, fval| {
+        if (!std.mem.endsWith(u8, fname, "_type")) continue;
+        const keyword = "type_" ++ fname[0 .. fname.len - "_type".len];
+        if (@hasField(Kind, keyword)) kinds[fval] = @field(Kind, keyword);
     }
     break :blk kinds;
 };
@@ -651,8 +652,8 @@ const keyword_kinds = blk: {
 fn type_tree(self: *Trees, token: u32, named: Index) ?NodeId {
     const resolver = self.owning_interpreter().owning_resolver();
     const tree = resolver.tree;
-    if (@intFromEnum(named) < keyword_kinds.len) {
-        if (keyword_kinds[@intFromEnum(named)]) |keyword| return tree.push_node(keyword);
+    if (@backingInt(named) < keyword_kinds.len) {
+        if (keyword_kinds[@backingInt(named)]) |keyword| return tree.push_node(keyword);
     }
 
     switch (resolver.static_pool.get(named)) {
@@ -973,11 +974,11 @@ fn def_var(tree: *const ParseTree, declaration: NodeId) NodeId {
 }
 
 fn is_parameter(kind: Kind) bool {
-    const value = @intFromEnum(kind);
-    const of_function = value >= @intFromEnum(Kind.partial__fun_def_param) and
-        value <= @intFromEnum(Kind.partial__fun_def_param_where_else);
-    const of_type = value >= @intFromEnum(Kind.partial__type_def_param) and
-        value <= @intFromEnum(Kind.partial__type_def_param_where_else);
+    const value = @backingInt(kind);
+    const of_function = value >= @backingInt(Kind.partial__fun_def_param) and
+        value <= @backingInt(Kind.partial__fun_def_param_where_else);
+    const of_type = value >= @backingInt(Kind.partial__type_def_param) and
+        value <= @backingInt(Kind.partial__type_def_param_where_else);
     return of_function or of_type;
 }
 
@@ -1038,7 +1039,7 @@ fn field_view(self: *Trees, node: NodeId, name: NamePool.Index) NodeId {
     const resolver = self.owning_interpreter().owning_resolver();
     const tree = resolver.tree;
     const kind = tree.kind(node);
-    const fields = ParseTree.Node.nk_field_names[@intFromEnum(kind)];
+    const fields = ParseTree.Node.nk_field_names[@backingInt(kind)];
     // the named children of a node: those in its two slots
     const field_count: usize = switch (arity(kind)) {
         .one => 1,
@@ -1191,9 +1192,9 @@ fn src_of(self: *Trees, root: NodeId) []const u8 {
             else => {},
         }
 
-        const value = @intFromEnum(kind);
-        const is_type_keyword = value >= @intFromEnum(Kind.type_u8) and
-            value <= @intFromEnum(Kind.type_stcfun);
+        const value = @backingInt(kind);
+        const is_type_keyword = value >= @backingInt(Kind.type_u8) and
+            value <= @backingInt(Kind.type_stcfun);
         if (!is_type_keyword) return "";
         return @tagName(kind)["type_".len..];
     }
@@ -1358,7 +1359,7 @@ fn member_target(self: *Trees, node: NodeId, base: NodeId) ?NodeId {
 fn grown_view(self: *Trees, at: NodeId, root: NodeId, name: NamePool.Index) ?NodeId {
     const tree = self.owning_interpreter().owning_resolver().tree;
     const kind = tree.kind(root);
-    const of_function = @intFromEnum(kind) <= @intFromEnum(Kind.partial__fun_def_param_where_else);
+    const of_function = @backingInt(kind) <= @backingInt(Kind.partial__fun_def_param_where_else);
     const slot: Kind = switch (name) {
         .defval => if (of_function)
             .partial__fun_def_param_default
@@ -1550,7 +1551,7 @@ pub fn with(self: *Trees, node: NodeId, base: Value) Value {
         for (names[0..depth], 0..) |name, i| {
             // the named children of a node: those in its two slots
             const kind = tree.kind(passed[i]);
-            const fields = ParseTree.Node.nk_field_names[@intFromEnum(kind)];
+            const fields = ParseTree.Node.nk_field_names[@backingInt(kind)];
             const field_count: usize = switch (arity(kind)) {
                 .one => 1,
                 .two => 2,
@@ -1601,7 +1602,7 @@ pub fn call(self: *Trees, node: NodeId, target: Index, arguments: []const NodeId
         return .pooled(resolver.static_pool.ast_type_of(produced, 0));
     }
 
-    const kind: Kind = @enumFromInt(ast_type.root_kind - 1);
+    const kind: Kind = @fromBackingInt(@intCast(ast_type.root_kind - 1));
     const mark = interpreter.pool_indices.len;
     defer interpreter.pool_indices.len = mark;
     // read anew per argument: `arguments` lists the call's children, and evaluating may grow the
@@ -1821,7 +1822,7 @@ inline fn matches_children(self: *Trees, pattern: NodeId, root: NodeId) bool {
             if (tree.arg_name(argument) == 0) break :blk i;
 
             const name_pool = &interpreter.owning_resolver().name_pool;
-            const fields = ParseTree.Node.nk_field_names[@intFromEnum(tree.kind(root))];
+            const fields = ParseTree.Node.nk_field_names[@backingInt(tree.kind(root))];
             for (fields, 0..) |field, j| {
                 const name_index = name_pool.name_of_node(tree.arg_name(argument));
                 const name = name_pool.text_of(name_index);

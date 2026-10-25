@@ -17,28 +17,28 @@ pub const Ref = enum(u32) {
     const global_bit: u32 = 1 << 30;
 
     pub fn of(constant: StaticPool.Index) Ref {
-        return @enumFromInt(@intFromEnum(constant) | const_bit);
+        return @fromBackingInt(@intCast(@backingInt(constant) | const_bit));
     }
 
     pub fn global(global_index: u32) Ref {
-        return @enumFromInt(global_index | const_bit | global_bit);
+        return @fromBackingInt(@intCast(global_index | const_bit | global_bit));
     }
 
     pub fn is_const(ref: Ref) bool {
-        return ref != .none and @intFromEnum(ref) & (const_bit | global_bit) == const_bit;
+        return ref != .none and @backingInt(ref) & (const_bit | global_bit) == const_bit;
     }
 
     pub fn is_global(ref: Ref) bool {
         const both_bits = const_bit | global_bit;
-        return ref != .none and @intFromEnum(ref) & both_bits == both_bits;
+        return ref != .none and @backingInt(ref) & both_bits == both_bits;
     }
 
     pub fn value(ref: Ref) StaticPool.Index {
-        return @enumFromInt(@intFromEnum(ref) & ~const_bit);
+        return @fromBackingInt(@intCast(@backingInt(ref) & ~const_bit));
     }
 
     pub fn index(ref: Ref) u32 {
-        return @intFromEnum(ref) & ~(const_bit | global_bit);
+        return @backingInt(ref) & ~(const_bit | global_bit);
     }
 };
 
@@ -111,24 +111,24 @@ pub const Op = enum(u8) {
     pub const Folding = enum { none, unary, arithmetic, comparison };
 
     pub fn shape(op: Op) [2]Operand {
-        return definitions[@intFromEnum(op)].operands;
+        return definitions[@backingInt(op)].operands;
     }
 
     pub fn is_pure(op: Op) bool {
-        const behaviour = definitions[@intFromEnum(op)].behaviour;
+        const behaviour = definitions[@backingInt(op)].behaviour;
         return behaviour == .pure or behaviour == .pure_commutative;
     }
 
     pub fn is_commutative(op: Op) bool {
-        return definitions[@intFromEnum(op)].behaviour == .pure_commutative;
+        return definitions[@backingInt(op)].behaviour == .pure_commutative;
     }
 
     pub fn is_terminator(op: Op) bool {
-        return definitions[@intFromEnum(op)].behaviour == .terminator;
+        return definitions[@backingInt(op)].behaviour == .terminator;
     }
 
     pub fn folding(op: Op) Folding {
-        return definitions[@intFromEnum(op)].folding;
+        return definitions[@backingInt(op)].folding;
     }
 };
 
@@ -189,12 +189,12 @@ const Definition = struct {
 };
 
 const definitions = blk: {
-    const op_count = @typeInfo(Op).@"enum".fields.len;
+    const op_count = @typeInfo(Op).@"enum".field_names.len;
     if (definition_table.len != op_count) @compileError("every op needs exactly one row");
     var table: [op_count]Definition = undefined;
     for (definition_table, 0..) |row, i| {
         const op: Op = row[0];
-        if (@intFromEnum(op) != i) @compileError("row out of `Op` order: " ++ @tagName(op));
+        if (@backingInt(op) != i) @compileError("row out of `Op` order: " ++ @tagName(op));
         table[i] = .{ .operands = .{ row[1], row[2] }, .behaviour = row[3], .folding = row[4] };
     }
     break :blk table;

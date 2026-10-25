@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     // `-Doptimize=Debug` gives a compiler bug a stack trace
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "how mond is built") orelse
-        .ReleaseFast;
+        .fast;
 
     // the front end, from lexing to `HighIr`: all that the language server and the example tests
     // need, so they build without llvm
@@ -39,7 +39,7 @@ pub fn build(b: *std.Build) void {
     const tests = b.addExecutable(.{ .name = "mond-test", .root_module = b.createModule(.{ .root_source_file = b.path("src/test.zig"), .target = b.graph.host }) });
     const run_tests = b.addRunArtifact(tests);
     run_tests.setCwd(b.path("."));
-    if (b.args) |args| run_tests.addArgs(args);
+    run_tests.addPassthruArgs();
     const test_step = b.step("test", "Run the example, lsp and backend tests.");
     test_step.dependOn(&run_tests.step);
 
@@ -55,8 +55,8 @@ pub fn build(b: *std.Build) void {
         for ([_]*std.Build.Step{ test_step, backend_step }) |step| {
             const run_backend_tests = b.addRunArtifact(backend_tests);
             run_backend_tests.setCwd(b.path("."));
+            run_backend_tests.addPassthruArgs();
             run_backend_tests.addArtifactArg(exe);
-            if (b.args) |args| run_backend_tests.addArgs(args);
             if (step == test_step) run_backend_tests.step.dependOn(&run_tests.step);
             step.dependOn(&run_backend_tests.step);
         }
@@ -133,7 +133,7 @@ fn add_backend(b: *std.Build, module: *std.Build.Module) void {
     const llvm_c = b.addTranslateC(.{
         .root_source_file = b.path("src/llvm_lowerer/llvm_c.h"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
         .link_libc = true,
     });
     llvm_c.addIncludePath(.{ .cwd_relative = llvm_include });
@@ -196,7 +196,7 @@ fn add_backend(b: *std.Build, module: *std.Build.Module) void {
 // passed over
 fn find_llvm_config(b: *std.Build) []const u8 {
     var candidates: [llvm_config_names.len + llvm_config_places.len]?[]const u8 = undefined;
-    for (llvm_config_names, 0..) |name, i| candidates[i] = b.findProgram(&.{name}, &.{}) catch null;
+    for (llvm_config_names, 0..) |name, i| candidates[i] = b.findProgram(.{ .names = &.{name} }) orelse null;
     for (llvm_config_places, llvm_config_names.len..) |place, i| {
         const found = exists(b, place, "llvm-config");
         candidates[i] = if (found) b.pathJoin(&.{ place, "llvm-config" }) else null;

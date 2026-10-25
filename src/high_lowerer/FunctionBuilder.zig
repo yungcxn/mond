@@ -46,7 +46,7 @@ const Placement = enum(u32) {
     other,
 };
 
-const placement_count: u32 = @typeInfo(Placement).@"enum".fields.len;
+const placement_count: u32 = @typeInfo(Placement).@"enum".field_names.len;
 
 allocator: std.mem.Allocator,
 pool: *StaticPool,
@@ -122,7 +122,7 @@ pub fn constant_int(self: *FunctionBuilder, int_type: Index, bits: u64) Ref {
 }
 
 pub fn result_type_of(self: *const FunctionBuilder, instruction: Ref) Index {
-    return self.instructions.column(.result_type)[@intFromEnum(instruction)];
+    return self.instructions.column(.result_type)[@backingInt(instruction)];
 }
 
 pub fn block_count(self: *const FunctionBuilder) u32 {
@@ -153,7 +153,7 @@ pub fn emit_raw(
         .block = block,
         .origin = self.current_origin,
     });
-    return @enumFromInt(self.instructions.len() - 1);
+    return @fromBackingInt(@intCast(self.instructions.len() - 1));
 }
 
 pub fn emit(self: *FunctionBuilder, op: Op, result_type: Index, a: u32, b: u32) Ref {
@@ -164,8 +164,8 @@ pub fn emit(self: *FunctionBuilder, op: Op, result_type: Index, a: u32, b: u32) 
         if (folding == .none) break :blk null;
         const unary = folding == .unary;
 
-        const left: Ref = @enumFromInt(a);
-        const right: Ref = if (unary) Ref.of(.unit_value) else @enumFromInt(b);
+        const left: Ref = @fromBackingInt(@intCast(a));
+        const right: Ref = if (unary) Ref.of(.unit_value) else @fromBackingInt(@intCast(b));
         if (!left.is_const() or !right.is_const()) break :blk null;
 
         const left_value = left.value();
@@ -240,7 +240,7 @@ pub fn emit(self: *FunctionBuilder, op: Op, result_type: Index, a: u32, b: u32) 
 }
 
 pub fn emit_refs(self: *FunctionBuilder, op: Op, result_type: Index, a: Ref, b: Ref) Ref {
-    return self.emit(op, result_type, @intFromEnum(a), @intFromEnum(b));
+    return self.emit(op, result_type, @backingInt(a), @backingInt(b));
 }
 
 // null when the result is not defined: division by zero, overflowing division, oversized shifts
@@ -321,7 +321,7 @@ pub fn branch_if(self: *FunctionBuilder, condition: Ref, then_block: u32, else_b
     self.add_edge(then_block);
     self.add_edge(else_block);
     const targets = self.list(&.{ then_block, else_block });
-    _ = self.emit(.cond_br, .unit_type, @intFromEnum(condition), targets);
+    _ = self.emit(.cond_br, .unit_type, @backingInt(condition), targets);
 }
 
 // continues in `block`, which may still get predecessors
@@ -378,7 +378,7 @@ pub fn read_variable(self: *FunctionBuilder, variable: u32, variable_type: Index
             const phi = self.emit_raw(.phi, variable_type, 0, 0, block);
             self.pending_phis.push(.{
                 .variable = variable,
-                .phi = @intFromEnum(phi),
+                .phi = @backingInt(phi),
                 .next_pending = state.pending_phis,
             });
             self.blocks.column(.pending_phis)[block] = self.pending_phis.len() - 1;
@@ -404,18 +404,18 @@ pub fn read_variable(self: *FunctionBuilder, variable: u32, variable_type: Index
 
 fn fill_phi_operands(self: *FunctionBuilder, variable: u32, phi: Ref) void {
     const phi_type = self.result_type_of(phi);
-    const phi_block = self.instructions.column(.block)[@intFromEnum(phi)];
+    const phi_block = self.instructions.column(.block)[@backingInt(phi)];
     const mark = self.scratch.len;
 
     var edge = self.blocks.column(.predecessors)[phi_block];
     while (edge != none) : (edge = self.edges.column(.next_edge)[edge]) {
         const predecessor = self.edges.column(.from_block)[edge];
         const operand = self.read_variable(variable, phi_type, predecessor);
-        self.scratch.push(@intFromEnum(operand));
+        self.scratch.push(@backingInt(operand));
     }
 
     const operands = self.list(self.scratch.buffer[mark..self.scratch.len]);
-    self.instructions.column(.b)[@intFromEnum(phi)] = operands;
+    self.instructions.column(.b)[@backingInt(phi)] = operands;
     self.scratch.len = mark;
 }
 
@@ -424,7 +424,7 @@ pub fn seal(self: *FunctionBuilder, block: u32) void {
     if (self.blocks.column(.sealed)[block]) return;
     var pending = self.blocks.column(.pending_phis)[block];
     while (pending != none) : (pending = self.pending_phis.column(.next_pending)[pending]) {
-        const phi: Ref = @enumFromInt(self.pending_phis.column(.phi)[pending]);
+        const phi: Ref = @fromBackingInt(@intCast(self.pending_phis.column(.phi)[pending]));
         self.fill_phi_operands(self.pending_phis.column(.variable)[pending], phi);
     }
     self.blocks.column(.sealed)[block] = true;
@@ -470,7 +470,7 @@ pub fn freeze(self: *FunctionBuilder, ir: *HighIr, function_index: u32) void {
             if (same == none) {
                 const result_type = instructions.result_type[i];
                 const undef = self.emit_raw(.undef, result_type, 0, 0, instructions.block[i]);
-                same = @intFromEnum(undef);
+                same = @backingInt(undef);
             }
             self.aliases.buffer[i] = same;
             changed = true;
@@ -567,7 +567,7 @@ pub fn freeze(self: *FunctionBuilder, ir: *HighIr, function_index: u32) void {
 }
 
 fn placement_slot(slots_at: u32, block: u32, placement: Placement) u32 {
-    return slots_at + block * placement_count + @intFromEnum(placement);
+    return slots_at + block * placement_count + @backingInt(placement);
 }
 
 // the lowerer marks the allocas of the entry block with no length (`none`)

@@ -162,19 +162,19 @@ const construct_table = .{
     } },
 };
 
-const kind_count = @typeInfo(Kind).@"enum".fields.len;
+const kind_count = @typeInfo(Kind).@"enum".field_names.len;
 
 const construct_of_kind: [kind_count]Construct = blk: {
     @setEvalBranchQuota(100_000);
     var table: [kind_count]?Construct = @splat(null);
     for (construct_table) |row| for (row[1]) |kind| {
-        const i = @intFromEnum(@as(Kind, kind));
+        const i = @backingInt(@as(Kind, kind));
         if (table[i] != null) @compileError("node kind listed twice: " ++ @tagName(kind));
         table[i] = row[0];
     };
     var complete: [kind_count]Construct = undefined;
     for (table, 0..) |construct, i| {
-        const kind: Kind = @enumFromInt(i);
+        const kind: Kind = @fromBackingInt(@intCast(i));
         complete[i] = construct orelse
             @compileError("node kind without a construct: " ++ @tagName(kind));
     }
@@ -182,5 +182,5 @@ const construct_of_kind: [kind_count]Construct = blk: {
 };
 
 pub inline fn construct_of(kind: Kind) Construct {
-    return construct_of_kind[@intFromEnum(kind)];
+    return construct_of_kind[@backingInt(kind)];
 }

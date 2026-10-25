@@ -172,9 +172,9 @@ pub const Token = struct {
             @setEvalBranchQuota(10000);
             return comptime blk: {
                 var list: []const struct { []const u8, Token.Kind } = &.{};
-                for (@typeInfo(@This()).@"enum".fields) |field| {
-                    if (!std.mem.startsWith(u8, field.name, "xpct_") or field.name.len != 5 + len) continue;
-                    list = list ++ .{.{ field.name[5 .. 5 + len], @field(@This(), field.name) }};
+                for (@typeInfo(@This()).@"enum".field_names) |fname| {
+                    if (!std.mem.startsWith(u8, fname, "xpct_") or fname.len != 5 + len) continue;
+                    list = list ++ .{.{ fname[5 .. 5 + len], @field(@This(), fname) }};
                 }
                 break :blk list;
             };
@@ -184,9 +184,9 @@ pub const Token = struct {
         fn keywords(comptime len: u32) []const struct { []const u8, Token.Kind } {
             return comptime blk: {
                 var list: []const struct { []const u8, Token.Kind } = &.{};
-                for (@typeInfo(@This()).@"enum".fields) |field| {
-                    if (!std.mem.startsWith(u8, field.name, "kw_") or field.name.len != 3 + len) continue;
-                    list = list ++ .{.{ field.name[3..field.name.len], @field(@This(), field.name) }};
+                for (@typeInfo(@This()).@"enum".field_names) |fname| {
+                    if (!std.mem.startsWith(u8, fname, "kw_") or fname.len != 3 + len) continue;
+                    list = list ++ .{.{ fname[3..fname.len], @field(@This(), fname) }};
                 }
                 break :blk list;
             };

@@ -216,7 +216,7 @@ pub const Node = struct {
     };
 
     pub fn LayoutStruct(comptime nk: Kind) type {
-        const t = DefTable[@intFromEnum(nk)][2];
+        const t = DefTable[@backingInt(nk)][2];
         if (@TypeOf(t) == @EnumLiteral() and t == .leaf) @compileError("leaf nodes have no layout struct");
         if (@TypeOf(t) == @EnumLiteral() and t == .references_token) @compileError("data nodes have no layout struct");
         return t;
@@ -227,7 +227,7 @@ pub const Node = struct {
         for (DefTable, 0..) |def, i| {
             const layout = def[2];
             if (@TypeOf(layout) == type and @typeInfo(layout) == .@"struct") {
-                const n = @typeInfo(layout).@"struct".fields.len;
+                const n = @typeInfo(layout).@"struct".field_names.len;
                 t[i] = switch (n) {
                     0 => .none,
                     1 => .one,
@@ -258,7 +258,7 @@ pub const Node = struct {
     pub const named = blk: {
         @setEvalBranchQuota(100_000);
         var list: [DefTable.len]struct { []const u8, Kind } = undefined;
-        for (case_names, 0..) |n, i| list[i] = .{ n, @enumFromInt(i) };
+        for (case_names, 0..) |n, i| list[i] = .{ n, @fromBackingInt(@intCast(i)) };
         break :blk std.StaticStringMap(Kind).initComptime(list);
     };
 
@@ -268,7 +268,7 @@ pub const Node = struct {
         for (DefTable, 0..) |def, i| {
             const layout = def[2];
             if (@TypeOf(layout) == type and @typeInfo(layout) == .@"struct") {
-                for (@typeInfo(layout).@"struct".fields, 0..) |field, j| t[i][j] = field.name;
+                for (@typeInfo(layout).@"struct".field_names, 0..) |fname, j| t[i][j] = fname;
             }
         }
         break :blk t;
@@ -287,7 +287,7 @@ pub const Node = struct {
             .stcloop,
             .stcloop_with_repeat_stmt,
             .stcmatch,
-        }) |k| t[@intFromEnum(k)].stc = true;
+        }) |k| t[@backingInt(k)].stc = true;
 
         for ([_]Kind{
             .@"while",
@@ -302,7 +302,7 @@ pub const Node = struct {
             .loop_with_repeat_stmt,
             .stcloop,
             .stcloop_with_repeat_stmt,
-        }) |k| t[@intFromEnum(k)].loop = true;
+        }) |k| t[@backingInt(k)].loop = true;
 
         for ([_]Kind{
             .gen_incl,
@@ -310,9 +310,9 @@ pub const Node = struct {
             .gen_lowerbound,
             .gen_upperbound_incl,
             .gen_upperbound_excl,
-        }) |k| t[@intFromEnum(k)].range = true;
+        }) |k| t[@backingInt(k)].range = true;
 
-        for (@intFromEnum(Kind.type_ptrmut)..@intFromEnum(Kind.type_stcfun) + 1) |i| t[i].type_expr = true;
+        for (@backingInt(Kind.type_ptrmut)..@backingInt(Kind.type_stcfun) + 1) |i| t[i].type_expr = true;
 
         for ([_]Kind{
             .type_array,
@@ -322,7 +322,7 @@ pub const Node = struct {
             .typeof,
             .unify_variants,
             .unify_variants_packed,
-        }) |k| t[@intFromEnum(k)].type_expr = true;
+        }) |k| t[@backingInt(k)].type_expr = true;
 
         for ([_]Kind{
             .def_var,
@@ -331,7 +331,7 @@ pub const Node = struct {
             .mod_pub,
             .mod_mut,
             .mod_stc,
-        }) |k| t[@intFromEnum(k)].declares = true;
+        }) |k| t[@backingInt(k)].declares = true;
 
         for ([_]Kind{
             .block,
@@ -341,17 +341,17 @@ pub const Node = struct {
             .stcif_else,
             .match,
             .stcmatch,
-        }) |k| t[@intFromEnum(k)].runit = true;
+        }) |k| t[@backingInt(k)].runit = true;
 
         for ([_]Kind{
             .int,
             .float,
             .char,
             .string,
-        }) |k| t[@intFromEnum(k)].literal = true;
+        }) |k| t[@backingInt(k)].literal = true;
 
-        t[@intFromEnum(Kind.identifier)].name = true;
-        t[@intFromEnum(Kind.identifier_self)].name = true;
+        t[@backingInt(Kind.identifier)].name = true;
+        t[@backingInt(Kind.identifier_self)].name = true;
 
         for ([_]Kind{
             .identifier,
@@ -360,12 +360,12 @@ pub const Node = struct {
             .array_index,
             .dereference,
             .capture,
-        }) |k| t[@intFromEnum(k)].assignable = true;
+        }) |k| t[@backingInt(k)].assignable = true;
 
-        t[@intFromEnum(Kind.def_fun)].function = true;
-        t[@intFromEnum(Kind.def_fun_declaration)].function = true;
-        t[@intFromEnum(Kind.type_ptr)].pointer = true;
-        t[@intFromEnum(Kind.type_ptrmut)].pointer = true;
+        t[@backingInt(Kind.def_fun)].function = true;
+        t[@backingInt(Kind.def_fun_declaration)].function = true;
+        t[@backingInt(Kind.type_ptr)].pointer = true;
+        t[@backingInt(Kind.type_ptrmut)].pointer = true;
 
         break :blk t;
     };
@@ -546,12 +546,12 @@ pub inline fn set_children(
     if (@TypeOf(childrefs) == NodeId or @TypeOf(childrefs) == comptime_int) {
         args_ptr.*[0] = childrefs;
     } else if (ti == .@"struct") {
-        comptime if (ti.@"struct".fields.len > 2) @compileError(
+        comptime if (ti.@"struct".field_names.len > 2) @compileError(
             "node layout holds more than 2 children, split it into wrapper kinds: " ++ @typeName(@TypeOf(childrefs)),
         );
 
-        inline for (ti.@"struct".fields, 0..) |field, i| {
-            args_ptr.*[i] = @field(childrefs, field.name);
+        inline for (ti.@"struct".field_names, 0..) |fname, i| {
+            args_ptr.*[i] = @field(childrefs, fname);
         }
     } else {
         args_ptr.*[0] = self.extra_childrefs.len;
@@ -608,7 +608,7 @@ pub inline fn manychildren(self: *const @This(), n: NodeId) []const NodeId {
 }
 
 pub inline fn laidout_children(self: *const @This(), comptime nk: Node.Kind, n: NodeId) Node.LayoutStruct(nk) {
-    const nk_childc = comptime Node.nk_childc[@intFromEnum(nk)];
+    const nk_childc = comptime Node.nk_childc[@backingInt(nk)];
 
     switch (comptime nk_childc) {
         .data => unreachable,
@@ -616,14 +616,14 @@ pub inline fn laidout_children(self: *const @This(), comptime nk: Node.Kind, n: 
         .one => return {
             const Type = Node.LayoutStruct(nk);
             var build: Type = undefined;
-            @field(build, @typeInfo(Type).@"struct".fields[0].name) = self.arg(n, 0);
+            @field(build, @typeInfo(Type).@"struct".field_names[0]) = self.arg(n, 0);
             return build;
         },
         .two => return {
             const Type = Node.LayoutStruct(nk);
             var build: Type = undefined;
-            @field(build, @typeInfo(Type).@"struct".fields[0].name) = self.arg(n, 0);
-            @field(build, @typeInfo(Type).@"struct".fields[1].name) = self.arg(n, 1);
+            @field(build, @typeInfo(Type).@"struct".field_names[0]) = self.arg(n, 0);
+            @field(build, @typeInfo(Type).@"struct".field_names[1]) = self.arg(n, 1);
             return build;
         },
         .many => return self.manychildren(n),
@@ -636,7 +636,7 @@ pub inline fn span(self: *const @This(), n: NodeId) Lexer.TextSpan {
 
 pub fn children(self: *const @This(), n: NodeId) []const NodeId {
     const slots: *const [2]NodeId = @ptrCast(&self.ast_nodes.column(.args)[n]);
-    return switch (Node.nk_childc[@intFromEnum(self.kind(n))]) {
+    return switch (Node.nk_childc[@backingInt(self.kind(n))]) {
         .one => slots[0..1],
         .two => slots,
         .many => self.manychildren(n),
@@ -655,7 +655,7 @@ pub fn subtree(self: *const @This(), n: NodeId) [2]NodeId {
 
 // the token of a leaf, null for the other nodes
 pub fn token(self: *const @This(), n: NodeId) ?u32 {
-    return if (Node.nk_childc[@intFromEnum(self.kind(n))] == .data) self.arg(n, 0) else null;
+    return if (Node.nk_childc[@backingInt(self.kind(n))] == .data) self.arg(n, 0) else null;
 }
 
 // the token of the first data node of a subtree, 0 when it holds none
@@ -706,7 +706,7 @@ pub fn copy(self: *@This(), src: *const ParseTree, n0: NodeId, src_bytes: []cons
     while (src.kind(n) == .capture) n = src.arg(n, 0);
     if (expand and src.kind(n) == .splice and src.arg(n, 1) != 0) return self.copy(src, src.arg(n, 1) - 1, src_bytes, expand, at);
     const nk = src.kind(n);
-    switch (Node.nk_childc[@intFromEnum(nk)]) {
+    switch (Node.nk_childc[@backingInt(nk)]) {
         .none => return self.push_node(nk),
         .data => {
             const w = src.arg(n, 1);
@@ -721,7 +721,7 @@ pub fn copy(self: *@This(), src: *const ParseTree, n0: NodeId, src_bytes: []cons
         },
         .one, .two => {
             const a = self.copy(src, src.arg(n, 0), src_bytes, expand, at);
-            const b = if (Node.nk_childc[@intFromEnum(nk)] == .two) self.copy(src, src.arg(n, 1), src_bytes, expand, at) else 0;
+            const b = if (Node.nk_childc[@backingInt(nk)] == .two) self.copy(src, src.arg(n, 1), src_bytes, expand, at) else 0;
             const c = self.push_node(nk);
             self.ast_nodes.column(.args)[c] = .{ a, b };
             return c;
@@ -749,7 +749,7 @@ pub fn copy(self: *@This(), src: *const ParseTree, n0: NodeId, src_bytes: []cons
 // `dst` becomes what `src` is, its children shared. a written data node keeps the position of the one it replaces
 pub fn overwrite(self: *@This(), dst: NodeId, src: NodeId) void {
     var a = self.ast_nodes.column(.args)[src];
-    if (Node.nk_childc[@intFromEnum(self.kind(src))] == .data and a[1] != 0 and Node.nk_childc[@intFromEnum(self.kind(dst))] == .data) a[0] = self.arg(dst, 0);
+    if (Node.nk_childc[@backingInt(self.kind(src))] == .data and a[1] != 0 and Node.nk_childc[@backingInt(self.kind(dst))] == .data) a[0] = self.arg(dst, 0);
     self.ast_nodes.column(.nk)[dst] = self.kind(src);
     self.ast_nodes.column(.args)[dst] = a;
 }
@@ -833,7 +833,7 @@ pub fn rebuild(self: *@This(), alloc: std.mem.Allocator, roots: *DynamicBuffer(N
 
 // the classes of the node's kind
 pub inline fn props(self: *const @This(), n: NodeId) Props {
-    return Node.nk_props[@intFromEnum(self.kind(n))];
+    return Node.nk_props[@backingInt(self.kind(n))];
 }
 
 pub fn literal_core(self: *const @This(), node: NodeId, neg: *bool) NodeId {

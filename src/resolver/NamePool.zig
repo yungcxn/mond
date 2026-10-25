@@ -45,7 +45,7 @@ pub const Index = enum(u32) {
     none = std.math.maxInt(u32),
     _,
 
-    pub const first_dynamic: u32 = @intFromEnum(Index.wall) + 1;
+    pub const first_dynamic: u32 = @backingInt(Index.wall) + 1;
 };
 
 allocator: std.mem.Allocator,
@@ -65,9 +65,9 @@ pub fn init(alloc: std.mem.Allocator, tree: *const ParseTree, src_bytes: []const
         .owned_texts = .init(alloc),
     };
     // the predefined names in `Index` order, so each lands at its own index. `none` names nothing
-    inline for (@typeInfo(Index).@"enum".fields) |field| {
-        if (comptime @field(Index, field.name) == .none) continue;
-        _ = self.intern(comptime predefined_text(@field(Index, field.name)));
+    inline for (@typeInfo(Index).@"enum".field_names) |fname| {
+        if (comptime @field(Index, fname) == .none) continue;
+        _ = self.intern(comptime predefined_text(@field(Index, fname)));
     }
     std.debug.assert(self.text_to_name.count() == Index.first_dynamic);
     return self;
@@ -113,11 +113,11 @@ pub inline fn name_of_node(self: *NamePool, node: ParseTree.NodeId) Index {
 pub inline fn intern(self: *NamePool, str: []const u8) Index {
     const entry = self.text_to_name.getOrPut(self.allocator, str) catch @panic("OOM");
     // the index is stable, entries are never removed
-    return @enumFromInt(entry.index);
+    return @fromBackingInt(@intCast(entry.index));
 }
 
 pub inline fn text_of(self: *const NamePool, name: Index) []const u8 {
-    return self.text_to_name.keys()[@intFromEnum(name)];
+    return self.text_to_name.keys()[@backingInt(name)];
 }
 
 // unnamed parameters and fields are `$0`, `$1`, ...
@@ -138,6 +138,6 @@ pub fn positional_name(self: *NamePool, i: usize) Index {
 
 // a name from a buffer that does not live as long as the pool, copied when it is new
 pub fn intern_copy(self: *NamePool, str: []const u8) Index {
-    if (self.text_to_name.getIndex(str)) |index| return @enumFromInt(index);
+    if (self.text_to_name.getIndex(str)) |index| return @fromBackingInt(@intCast(index));
     return self.intern(self.owned_texts.allocator().dupe(u8, str) catch @panic("OOM"));
 }

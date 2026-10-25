@@ -83,8 +83,8 @@ fn entry_of(comptime name: NamePool.Index) ?Entry {
 // the described names in the order the compiler predefines them
 const predefined_entries = blk: {
     var described_entries: []const Entry = &.{};
-    for (@typeInfo(NamePool.Index).@"enum".fields) |field| {
-        const entry = entry_of(@field(NamePool.Index, field.name)) orelse continue;
+    for (@typeInfo(NamePool.Index).@"enum".field_names) |fname| {
+        const entry = entry_of(@field(NamePool.Index, fname)) orelse continue;
         described_entries = described_entries ++ .{entry};
     }
     break :blk described_entries;
@@ -154,8 +154,8 @@ pub fn offer(
             .tree => {
                 for (view_entries) |entry| try items.append(allocator, item_of(entry, replaced));
                 const kind = shape.kind orelse return items.items;
-                const field_names = Node.nk_field_names[@intFromEnum(kind)];
-                const named_children: usize = switch (Node.nk_childc[@intFromEnum(kind)]) {
+                const field_names = Node.nk_field_names[@backingInt(kind)];
+                const named_children: usize = switch (Node.nk_childc[@backingInt(kind)]) {
                     .one => 1,
                     .two => 2,
                     .none, .data, .many => 0,
@@ -180,7 +180,7 @@ pub fn offer(
 fn item_of(entry: Entry, replaced: Analysis.Range) Item {
     return .{
         .label = entry.label,
-        .kind = @intFromEnum(entry.class),
+        .kind = @backingInt(entry.class),
         .detail = entry.ty,
         .documentation = entry.doc,
         .textEdit = .{ .range = replaced, .newText = entry.label },
@@ -277,7 +277,7 @@ fn shape_of_root(
     }
 
     // `quote: ..`, `(refl f)`, `include ".."`: macro syntax makes a tree
-    if (keyword) |kind| if (lookahead.macro_syntax[@intFromEnum(kind)]) return .{ .holds = .tree };
+    if (keyword) |kind| if (lookahead.macro_syntax[@backingInt(kind)]) return .{ .holds = .tree };
 
     // the type of the nearest `root` before the cursor, of an untyped one what is written before it
     const written = blk: {
@@ -311,7 +311,7 @@ fn shape_of_type(written: []const u8) Shape {
     // the modifiers before it: keywords that are no type
     while (std.mem.indexOfScalar(u8, text, ' ')) |space| {
         const modifier = Kind.kw_from_str(text[0..space]) orelse break;
-        if (highlighting.class_of_token_kind[@intFromEnum(modifier)] != .keyword) break;
+        if (highlighting.class_of_token_kind[@backingInt(modifier)] != .keyword) break;
         text = std.mem.trimStart(u8, text[space..], " ");
     }
     if (text.len > 0 and (text[0] == '*' or text[0] == '&')) text = text[1..];

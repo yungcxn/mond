@@ -16,11 +16,15 @@ const Types = @This();
 // a primitive type node `type_X` stands for the pool type `X_type`
 const primitive_types = blk: {
     var table: [256]StaticPool.Index = @splat(.none);
-    for (@typeInfo(StaticPool.Index).@"enum".fields) |field| {
-        if (!std.mem.endsWith(u8, field.name, "_type")) continue;
-        const kind_name = "type_" ++ field.name[0 .. field.name.len - 5];
+    for (
+        @typeInfo(StaticPool.Index).@"enum".field_names,
+        @typeInfo(StaticPool.Index).@"enum".field_values,
+    ) |fieldname, fieldvalue| {
+        if (!std.mem.endsWith(u8, fieldname, "_type")) continue;
+        const kind_name = "type_" ++ fieldname[0 .. fieldname.len - 5];
         if (!@hasField(ParseTree.Node.Kind, kind_name)) continue;
-        table[@intFromEnum(@field(ParseTree.Node.Kind, kind_name))] = @enumFromInt(field.value);
+        table[@backingInt(@field(ParseTree.Node.Kind, kind_name))] =
+            @fromBackingInt(@intCast(fieldvalue));
     }
     break :blk table;
 };
@@ -45,7 +49,7 @@ pub fn meta_type_of_node(self: *Types, node: NodeId) StaticPool.Index {
 pub fn type_from_node(self: *Types, context: *FunctionContext, node: NodeId) StaticPool.Index {
     const resolver = self.owning_resolver();
     const kind = resolver.tree.kind(node);
-    const primitive = primitive_types[@intFromEnum(kind)];
+    const primitive = primitive_types[@backingInt(kind)];
     if (primitive != .none) return primitive;
 
     return switch (kind) {
@@ -456,8 +460,8 @@ fn define_variant(
             resolver.tree.kind(resolver.tree.arg(inner, 0)) == .identifier;
         if (!is_case) {
             const Kind = ParseTree.Node.Kind;
-            const found_kind = @as(u16, @intFromEnum(resolver.tree.kind(inner))) + 1;
-            const case_kind = @as(u16, @intFromEnum(Kind.partial__variant_def_param)) + 1;
+            const found_kind = @as(u16, @backingInt(resolver.tree.kind(inner))) + 1;
+            const case_kind = @as(u16, @backingInt(Kind.partial__variant_def_param)) + 1;
             const found = static_pool.ast_type_of(.none, found_kind);
             const wanted = static_pool.ast_type_of(.none, case_kind);
             _ = resolver.report(.type_mismatch, case_node, found, wanted);
@@ -1199,7 +1203,7 @@ pub fn finish_inference(self: *Types) void {
         const resolved = static_pool.substitute_type_variables(value_type);
         if (!static_pool.has_open_type_variable(resolved)) continue;
         if (static_pool.is_length_generic(resolved)) continue;
-        const node = resolver.decl_pool.get(@enumFromInt(i), .node);
+        const node = resolver.decl_pool.get(@fromBackingInt(@intCast(i)), .node);
         _ = resolver.report(.uninferable_type, node, resolved, .none);
     }
 
@@ -1214,7 +1218,7 @@ pub fn finish_inference(self: *Types) void {
     @memset(group, ParseTree.none_node);
 
     for (0..columns.parent.len) |i| {
-        const root = @intFromEnum(type_variables.root_of(@enumFromInt(i)));
+        const root = @backingInt(type_variables.root_of(@fromBackingInt(@intCast(i))));
         if (columns.binding[root] != .none) continue;
         const origin = columns.origin[i];
         // whether the element count is known where the length's origin needs it
@@ -1253,7 +1257,7 @@ pub fn finish_inference(self: *Types) void {
             const origin_type = static_pool.substitute_type_variables(resolver.node_types[origin]);
             _ = resolver.report(.uninferable_type, origin, origin_type, .none);
         }
-        type_variables.bind(@enumFromInt(i), StaticPool.dyn_len);
+        type_variables.bind(@fromBackingInt(@intCast(i)), StaticPool.dyn_len);
     }
 
     const tables = [_][]StaticPool.Index{

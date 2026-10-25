@@ -88,7 +88,9 @@ const Args = struct {
         .help = Help{ .does = &.{"this text"} },
     };
 
-    const fields = @typeInfo(Args).@"struct".fields;
+    const fieldnames = @typeInfo(Args).@"struct".field_names;
+    const fieldtypes = @typeInfo(Args).@"struct".field_types;
+    const fieldattrs = @typeInfo(Args).@"struct".field_attrs;
     // the help, with its headings in bold or plain
     const help_text: [2][]const u8 = .{ write_help(false), write_help(true) };
 
@@ -97,24 +99,24 @@ const Args = struct {
         const heading_start = if (bold) "\x1b[1m" else "";
         const heading_end = if (bold) "\x1b[0m" else "";
         var column = 0;
-        for (fields) |field| {
-            const help: Help = @field(helps, field.name);
-            const left = "  " ++ short_arg(field.name) ++ ", " ++ arg(field.name);
+        for (fieldnames) |fieldname| {
+            const help: Help = @field(helps, fieldname);
+            const left = "  " ++ short_arg(fieldname) ++ ", " ++ arg(fieldname);
             column = @max(column, left.len + help.takes.len + 2);
             for (help.followed_by) |row| column = @max(column, row[0].len + 2);
         }
         var text: []const u8 = "mond, the compiler of the mond language\n\n" ++
             heading_start ++ "Usage" ++ heading_end ++ "\n" ++
             "  mond -b <source.mn> [files...] [options]\n";
-        for (fields, 0..) |field, i| {
-            for (fields[0..i]) |other| {
-                if (other.name[0] != field.name[0]) continue;
-                @compileError(short_arg(field.name) ++ " is taken by " ++ arg(other.name));
+        for (fieldnames, 0..) |fieldname, i| {
+            for (fieldnames[0..i]) |other_fieldname| {
+                if (other_fieldname[0] != fieldname[0]) continue;
+                @compileError(short_arg(fieldname) ++ " is taken by " ++ arg(other_fieldname));
             }
-            const help: Help = @field(helps, field.name);
+            const help: Help = @field(helps, fieldname);
             if (help.opens.len > 0) text = text ++ "\n" ++ heading_start ++ help.opens ++
                 heading_end ++ "\n";
-            const left = "  " ++ short_arg(field.name) ++ ", " ++ arg(field.name) ++ help.takes;
+            const left = "  " ++ short_arg(fieldname) ++ ", " ++ arg(fieldname) ++ help.takes;
             for (help.does, 0..) |line, k| {
                 const start = if (k == 0) left else "";
                 text = text ++ start ++ padding(column - start.len) ++ line ++ "\n";
@@ -164,29 +166,29 @@ const Args = struct {
         var flags = std.mem.zeroInit(Args, .{});
         var i: usize = 1;
         next: while (i < arguments.len) : (i += 1) {
-            inline for (fields) |field| {
-                const is_flag = std.mem.eql(u8, arguments[i], comptime arg(field.name)) or
-                    std.mem.eql(u8, arguments[i], comptime short_arg(field.name));
+            inline for (fieldnames, fieldtypes) |fieldname, fieldtype| {
+                const is_flag = std.mem.eql(u8, arguments[i], comptime arg(fieldname)) or
+                    std.mem.eql(u8, arguments[i], comptime short_arg(fieldname));
                 if (is_flag) {
-                    switch (field.type) {
-                        bool => @field(flags, field.name) = true,
+                    switch (fieldtype) {
+                        bool => @field(flags, fieldname) = true,
                         [:0]const u8, ?[:0]const u8 => {
                             i += 1;
                             if (i == arguments.len) {
-                                problem.* = .{ .needs_value = comptime arg(field.name) };
+                                problem.* = .{ .needs_value = comptime arg(fieldname) };
                                 return null;
                             }
-                            @field(flags, field.name) = arguments[i];
+                            @field(flags, fieldname) = arguments[i];
                         },
                         []const [:0]const u8, ?[]const [:0]const u8 => {
                             var end = i + 1;
                             while (end < arguments.len) : (end += 1) {
                                 if (std.mem.startsWith(u8, arguments[end], "-")) break;
                             }
-                            @field(flags, field.name) = arguments[i + 1 .. end];
+                            @field(flags, fieldname) = arguments[i + 1 .. end];
                             i = end - 1;
                         },
-                        else => @compileError("unsupported flag type " ++ @typeName(field.type)),
+                        else => @compileError("unsupported flag type " ++ @typeName(fieldtype)),
                     }
                     continue :next;
                 }
@@ -196,10 +198,10 @@ const Args = struct {
         }
         if (flags.help) return flags;
 
-        inline for (fields) |field| {
-            const is_required = field.default_value_ptr == null;
-            if (is_required and @field(flags, field.name).len == 0) {
-                problem.* = .{ .needs_flag = comptime arg(field.name) };
+        inline for (fieldnames, fieldattrs) |fname, fattr| {
+            const is_required = fattr.default_value_ptr == null;
+            if (is_required and @field(flags, fname).len == 0) {
+                problem.* = .{ .needs_flag = comptime arg(fname) };
                 return null;
             }
         }
@@ -221,9 +223,9 @@ const Stages = struct {
         var stages: Stages = .{};
         var names = std.mem.tokenizeScalar(u8, list orelse return stages, ',');
         next: while (names.next()) |name| {
-            inline for (@typeInfo(Stages).@"struct".fields) |field| {
-                if (std.mem.eql(u8, name, field.name)) {
-                    @field(stages, field.name) = true;
+            inline for (@typeInfo(Stages).@"struct".field_names) |fname| {
+                if (std.mem.eql(u8, name, fname)) {
+                    @field(stages, fname) = true;
                     continue :next;
                 }
             }
