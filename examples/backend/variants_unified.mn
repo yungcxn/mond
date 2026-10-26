@@ -31,6 +31,16 @@ fun either = (Either(u32, f32) e) -> i64: ret match e { u32 n => n as i64, f32 f
 fun kind = (Mixed m) -> i64: ret tagof m as i64;
 fun equal = (Either(u32, f32) a, Either(u32, f32) b) -> i64: ret (a == b) as i64;
 
+# `??`, `?<-` and `x??` of a unified variant: its first member or member's case with a payload
+type Config = *(u32 port);
+variant IoErr = +(NotFound, Timeout(u32 ms));
+variant Loaded = Config || IoErr;
+fun load = (u32 x) -> Loaded: ret if x == 0: IoErr.NotFound else: if x == 1: IoErr.Timeout(5) else: Config(x);
+fun port = (u32 x) -> u64: ret (load(x) ?? Config(80)).port as u64;
+fun bound = (u32 x) -> u64: ret if load(x) ?<- c: c.port as u64 else: 7;
+fun passed = (u32 x) -> u32 || IoErr { Config c = load(x)??; ret c.port + 1; }
+fun passed_value = (u32 x) -> u64: ret match passed(x) { u32 p => p as u64, IoErr.NotFound => 1000, IoErr.Timeout(ms) => 2000 + ms as u64 };
+
 main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
     line_u64(sizeof Mixed * 100 + sizeof Either(u32, f32));             #> 1608
@@ -48,4 +58,8 @@ main = (u32 argc, &&u8 argv) {
     Holder h = Holder(Pt(9, 9 * ONE as i32), 2.5);
     line_i64(show(h.m) + either(h.e));                                   #> 23
     line_i64(equal(3, 3) + equal(3, 1.5) * 10 + equal(1.5, 1.5) * 100);  #> 101
+    u32 one = ONE as u32;
+    line_u64(port(0 * one) * 10000 + port(one) * 100 + port(9 * one));  #> 808009
+    line_u64(bound(0 * one) * 100 + bound(9 * one));                     #> 709
+    line_u64(passed_value(0 * one) * 10000 + passed_value(9 * one));     #> 10000010
 }

@@ -13,6 +13,15 @@ type Holder = *(u8 kind, Word word);
 fun set_float = (*Word w, f32 f) { w.* = Word.Float(f); }
 fun byte_of = (Word w, u64 i) -> u64: ret (w as Word.Bytes).$0[i] as u64;
 
+# `??`, `?<-` and `x??` of a `|||` parameter, decided per realization
+type Endpoint = *(u32 port);
+variant Failure = +(Missing, Slow(u32 ms));
+fun port = (Endpoint ||| Failure e) -> u64: ret (e ?? Endpoint(80)).port as u64;
+fun bound = (Endpoint ||| Failure e) -> u64: ret if e ?<- p: p.port as u64 else: 7;
+fun slow = (Failure ||| Endpoint e) -> u64: ret e ?? 9;
+fun passed = (Endpoint ||| Failure e) -> u32 || Failure { Endpoint p = e??; ret p.port + 1; }
+fun passed_value = (Endpoint ||| Failure e) -> u64: ret match passed(e) { u32 p => p as u64, Failure.Missing => 1000, Failure.Slow(ms) => 2000 + ms as u64 };
+
 main = (u32 argc, &&u8 argv) {
     ONE = argc;
     line_u64(sizeof Word * 10 + sizeof Holder);                      #> 48
@@ -29,4 +38,8 @@ main = (u32 argc, &&u8 argv) {
     u64 folded = st(byte_of(Word.Int(0x01020304), 1) * 10 + byte_of(Word.Float(1.0), 3));
     u64 run = byte_of(Word.Int(0x01020304 * ONE), 1) * 10 + byte_of(Word.Float(ONE as f32), 3);
     line_u64(if folded == run: run else: 0);                         #> 93
+    line_u64(port(Endpoint(5 * ONE)) * 100 + port(Failure.Missing));                         #> 580
+    line_u64(bound(Endpoint(6 * ONE)) * 10 + bound(Failure.Slow(ONE)));                        #> 67
+    line_u64(slow(Failure.Slow(3 * ONE)) * 100 + slow(Failure.Missing) * 10 + slow(Endpoint(ONE))); #> 399
+    line_u64(passed_value(Endpoint(8 * ONE)) * 10000 + passed_value(Failure.Slow(2 * ONE)));  #> 91000
 }

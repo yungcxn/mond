@@ -31,6 +31,9 @@ stc Tagging BOXED = Tagging(
 variant Number = +(Real(f32), Missing, Infinite) tagtype BOXED;
 fun real = (Number n) -> f32: ret match n { Number.Real(x) => x, Number.Missing => -1.0, Number.Infinite => -2.0 };
 
+# a field of a case a strategy stores is read out of its value, `with` makes the case again
+variant Named = +(Low(u8 v), Zero) tagtype ranges(u16, 256);
+fun named = (u8 x) -> i64 { Named.Low l = Named.Low(x); Named.Low m = l with (v = x + 1); ret m.v as i64 * 10 + l.v as i64; }
 main = (u32 argc, &&u8 argv) {
     ONE = argc;
     Small a = Small.Low((5 * ONE) as u8);
@@ -42,4 +45,5 @@ main = (u32 argc, &&u8 argv) {
     [3]Slot slots = [Slot.Live(70000 * ONE as u24), Slot.Dead(3), Slot.Empty];
     line_u64(live(slots[0]) as u64 + live(slots[2]) as u64 + (slots[1] asbits u32) as u64 / 1000000);  #> 70016
     line_i64((real(Number.Real(2.5 * ONE as f32)) * 10) as i64 + (real(Number.Missing) * 100) as i64);  #> -75
+    line_i64(named(4 * ONE as u8));                                     #> 54
 }

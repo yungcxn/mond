@@ -371,6 +371,17 @@ pub fn unwrap(self: *Flow, node: NodeId) Value {
     return self.unwrap_variant(node, interpreter.dereference(value), null);
 }
 
+// the `A ||| B` the parameter named by `node` was declared as, in a realization for one member
+fn packed_operand(self: *Flow, node: NodeId) Index {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (!interpreter.has_body_frame() or resolver.tree.kind(node) != .identifier) return .none;
+    const function = interpreter.current_frame().body.declaration;
+    if (function == .none) return .none;
+    const parameter = interpreter.node_info(.declaration, node);
+    return resolver.generics.packed_parameter(function, parameter);
+}
+
 // `x ?<- v`, `x ?? f`, `x??` of the variant `value`, `?<-` naming its payload where `cell` holds it
 fn unwrap_variant(self: *Flow, node: NodeId, value: Value, cell: ?u32) Value {
     const interpreter = self.owning_interpreter();
@@ -379,10 +390,26 @@ fn unwrap_variant(self: *Flow, node: NodeId, value: Value, cell: ?u32) Value {
     const operand = tree.arg(node, 0);
 
     // a self-tagged variant unwraps to its first payload case, its other cases to nothing
+    const static_pool = &interpreter.owning_resolver().static_pool;
+    const unified = static_pool.through_pointer(interpreter.checked_type(operand));
+    const is_unified = static_pool.tag(static_pool.whole_of(unified)) == .unified_variant_type;
+    const packed_variant = self.packed_operand(operand);
     const payload: ?Value = blk: {
-        const static_pool = &interpreter.owning_resolver().static_pool;
-
+        // a parameter realized for a member of `A ||| B` holds its success as that member does
+        if (packed_variant != .none) switch (static_pool.packed_unwrap(packed_variant, unified)) {
+            .always => break :blk value,
+            .never => break :blk null,
+            .tested => {},
+        };
         const case = interpreter.patterns.case_of(value);
+        // of a unified variant the first member or member's case with a payload
+        if (is_unified) {
+            const success = static_pool.success_of(unified);
+            if (static_pool.tag(success) == .variant_case_type) {
+                break :blk if (case == success) interpreter.patterns.payload_of(value) else null;
+            }
+            break :blk if (interpreter.value_type(value) == success) value else null;
+        }
         if (case == .none) break :blk interpreter.patterns.payload_of(value);
 
         const operand_type = static_pool.through_pointer(interpreter.checked_type(operand));
@@ -403,7 +430,12 @@ fn unwrap_variant(self: *Flow, node: NodeId, value: Value, cell: ?u32) Value {
     };
     return switch (kind) {
         .selftag_arrow => blk: {
-            if (payload != null) interpreter.patterns.alias_payload(tree.arg(node, 1), cell.?);
+            // a unified variant's payload is a value of its own (see checker/Flow.check_unwrap)
+            if (payload) |unwrapped| if (is_unified or packed_variant != .none) {
+                interpreter.patterns.bind_label(tree.arg(node, 1), unwrapped);
+            } else {
+                interpreter.patterns.alias_payload(tree.arg(node, 1), cell.?);
+            };
             break :blk .boolean(payload != null);
         },
         .selftag_unwrap_fallback => payload orelse interpreter.evaluate(tree.arg(node, 1)),
@@ -417,7 +449,6 @@ fn unwrap_variant(self: *Flow, node: NodeId, value: Value, cell: ?u32) Value {
                 const failed = interpreter.interned(value);
                 break :blk interpreter.fail(node, .static_eval_failed, failed, 0);
             }
-            const static_pool = &resolver.static_pool;
             const declared = static_pool.substitute_type_variables(
                 resolver.types.signature(function).return_type,
             );

@@ -111,6 +111,10 @@ fn member_access(self: *Mutability, node: NodeId) Access {
     record_type = static_pool.pointee(record_type);
     if (resolver.tree.macros and static_pool.tag(record_type) == .ast_type) return .ok;
     if (static_pool.tag(record_type) == .variant_case_type) {
+        // a payload a strategy or bits make has no place to write
+        const variant = static_pool.get(record_type).variant_case_type.variant;
+        const declared = static_pool.get(variant).variant_type;
+        if (declared.tag_mode == .custom or declared.is_packed) return .immutable;
         record_type = static_pool.get(record_type).variant_case_type.payload;
     }
 

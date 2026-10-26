@@ -347,10 +347,12 @@ pub fn payload_of(pool: *StaticPool, type_index: Index) Index {
     const resolved = pool.substitute_type_variables(type_index);
     const case = switch (pool.tag(resolved)) {
         .variant_case_type => resolved,
-        .variant_type, .variant_subset_type => pool.first_payload_case(resolved),
+        .variant_type, .variant_subset_type, .unified_variant_type => pool.success_of(resolved),
         else => .none,
     };
     if (case == .none) return .none;
+    // a member that is one case is its own payload
+    if (pool.tag(case) != .variant_case_type) return case;
     const payload = pool.get(case).variant_case_type.payload;
     if (payload == .none) return .none;
     const fields = pool.get(payload).record_type.field_types;
@@ -544,6 +546,28 @@ pub fn is_field_tagged(pool: *const StaticPool, variant: Index) bool {
     const payload = pool.get(pool.first_payload_case(variant)).variant_case_type.payload;
     const path = pool.get(variant).variant_type.tag_path;
     return path.len > 1 or pool.get(payload).record_type.field_types.len > 1;
+}
+
+// what `??` and `?<-` unwrap: of the cases of a variant, or of the members of a unified variant in
+// order (a member's cases, a member that is one case), the first with a payload
+pub fn success_of(pool: *StaticPool, variant: Index) Index {
+    const mark = pool.scratch.len;
+    defer pool.scratch.len = mark;
+    pool.push_units(variant);
+    for (pool.scratch.buffer[mark..pool.scratch.len]) |unit| {
+        if (pool.tag(unit) != .variant_case_type) return unit;
+        if (pool.get(unit).variant_case_type.payload != .none) return unit;
+    }
+    return .none;
+}
+
+// a parameter of `unified` (`A ||| B`) realized for `member` holds its success always (the member
+// is it), never, or when the member variant is in the success case
+pub fn packed_unwrap(pool: *StaticPool, unified: Index, member: Index) StaticPool.PackedUnwrap {
+    const success = pool.success_of(unified);
+    if (pool.tag(success) != .variant_case_type) return if (success == member) .always else .never;
+    const holds_case = pool.get(success).variant_case_type.variant == pool.whole_of(member);
+    return if (holds_case) .tested else .never;
 }
 
 pub fn first_payload_case(pool: *const StaticPool, variant_or_subset: Index) Index {

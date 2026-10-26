@@ -96,4 +96,13 @@ stcfun matched_pointer = () -> i32 { mut Cell c = Cell.Some(1); *Cell q = c.&; m
 stcfun matched_niche = () -> i32 { mut Byte b = Byte.Some(1); match b { Byte.Some(_ <- v) => { v = 255; }, _ => {} } ret (b ?? 9) as i32; }
 stc []i32 MATCHED = [whole_case(), nested_field(), record_field(), matched_pointer(), matched_niche()]; #= MATCHED [-1, 13, 502, 77, 9]
 
+# a subset keeps its payloads where its variant does, a written variant is a value like any, a part
+# (`s[1..]`) is a value of its own
+variant Wait = +(Never, Ms(mut u32), Stop);
+stcfun subset_payload = () -> u32 { mut Wait -- Wait.Never w = Wait.Ms(3); if w ?<- v { v += 5; } ret w ?? 0; }
+stcfun written = () -> Cell { mut Cell c = Cell.Some(1); if c ?<- v { v = 2; } ret c; }
+stc Cell WRITTEN = written(); #= WRITTEN +(Some, None).Some[2]
+stcfun part_label = ([..]u8 s) -> u64: ret lenof (s[1..] <- rest) + lenof rest;
+stc []u64 KEPT = [subset_payload(), (WRITTEN ?? 0) as u64, part_label("abcd")]; #= KEPT [8, 2, 6]
+
 main = () {}

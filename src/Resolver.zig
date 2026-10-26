@@ -210,6 +210,7 @@ pub inline fn deinit(self: *Resolver) void {
 pub fn resolve(self: *Resolver) !void {
     // nodes made in the last pass (quotes, `refl`) need rows too, for whoever walks the tree
     defer self.grow_node_tables();
+    defer self.doctor.drop_repeats();
 
     var passes: u32 = 0;
     while (true) : (passes += 1) {
@@ -226,10 +227,9 @@ pub fn resolve(self: *Resolver) !void {
 
         // top-level splices run first, in order, before anything they could change is resolved
         const has_top_splices = self.tree.macros and self.macros.expand_roots();
-        // a pass in which a splice failed is the last, so everything is checked for its errors
-        const will_rebuild = has_top_splices and
-            self.macros.expanded != 0 and
-            !self.macros.failed;
+        // what expanded lands even when another splice failed, so its names are not missing below;
+        // a pass that only failed is the last, so everything is checked for its errors
+        const will_rebuild = has_top_splices and self.macros.expanded != 0;
         if (!will_rebuild) {
             const declaration_count = self.decl_pool.entries.len();
             for (0..declaration_count) |i| {
@@ -254,7 +254,8 @@ pub fn resolve(self: *Resolver) !void {
         }
 
         const nothing_changed = self.macros.expanded == 0 and !self.macros.edited;
-        if (self.macros.failed or nothing_changed) break;
+        const only_failed = self.macros.failed and self.macros.expanded == 0;
+        if (only_failed or nothing_changed) break;
 
         if (passes == Macros.max_passes) {
             _ = self.report(.endless_expansion, self.macros.last, 0, 0);

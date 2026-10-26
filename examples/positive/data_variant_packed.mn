@@ -82,4 +82,15 @@ stc i64 packs = pack(3) + pack(Shape.Circle(2)) + pack(Pt(1, 1)) + pack(Shape.Do
 fun size_of_member = (u32 ||| [3]u32 x) -> u64: ret sizeof typeof x;
 stc u64 member_sizes = size_of_member(1) * 10 + size_of_member([1, 2, 3]); #= member_sizes 52
 
+# `??`, `?<-` and `x??` of a `|||` parameter: each realization knows its member, so it holds the
+# success always (the member is it), never, or as its variant tests it
+type Endpoint = *(u32 port);
+variant Failure = +(Missing, Slow(u32 ms));
+stcfun port = (Endpoint ||| Failure e) -> u32: ret (e ?? Endpoint(80)).port;
+stcfun bound = (Endpoint ||| Failure e) -> u32: ret if e ?<- p: p.port else: 7;
+stcfun slow = (Failure ||| Endpoint e) -> u32: ret e ?? 9;
+stcfun passed = (Endpoint ||| Failure e) -> u32 || Failure { Endpoint p = e??; ret p.port + 1; }
+stc []u32 PACKED_PORTS = [port(Endpoint(5)), port(Failure.Missing), bound(Endpoint(6)), bound(Failure.Slow(1)), slow(Failure.Slow(3)), slow(Failure.Missing), slow(Endpoint(1))]; #= PACKED_PORTS [5, 80, 6, 7, 3, 9, 9]
+stc bool PACKED_PASSED = passed(Endpoint(8)) == 9 and passed(Failure.Slow(2)) == Failure.Missing; #= PACKED_PASSED true
+
 main = () {}

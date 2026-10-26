@@ -86,7 +86,7 @@ pub fn owning_resolver(self: *Interpreter) *Resolver {
 }
 
 pub fn export_value(self: *Interpreter, node: NodeId, value: Value) Index {
-    if (self.escapes(value)) return self.report(.not_static, node, 0, 0);
+    if (self.holds_address(value)) return self.report(.not_static, node, 0, 0);
     return self.interned(value);
 }
 
@@ -355,12 +355,62 @@ pub fn escapes(self: *Interpreter, value: Value) bool {
     return false;
 }
 
+// whether a value holds an address of the evaluation other than a slice's, whose elements count
+pub fn holds_address(self: *Interpreter, value: Value) bool {
+    const of_slice = self.is_slice(value);
+    if (value.is_ref() and !of_slice) return true;
+    if (!value.is_heap() and !of_slice) return false;
+    if (self.owning_resolver().static_pool.tag(value.value_type) == .function_type) return true;
+
+    const length = if (of_slice) value.slice_len() else value.len();
+    for (0..length) |i| {
+        const element_value = self.memory.buffer[value.cell() + i];
+        if (element_value.is(.none) or self.holds_address(element_value)) return true;
+    }
+    return false;
+}
+
 pub fn interned(self: *Interpreter, value: Value) Index {
     if (value.is_pooled()) return value.index();
+    const static_pool = &self.owning_resolver().static_pool;
+    // a slice is the array of the elements it refers to: a static slice is of a static array,
+    // printable bytes a string as a literal is
+    if (self.is_slice(value)) {
+        const element_type = static_pool.get(value.value_type).slice_type.element;
+        if (element_type == .u8_type) text: {
+            const bytes = self.owning_resolver().temporary_slice(u8, value.slice_len());
+            for (bytes, 0..) |*byte, i| {
+                const element_value = self.memory.buffer[value.cell() + i];
+                if (element_value.value_type != .u8_type) break :text;
+                byte.* = @truncate(element_value.bits);
+                if (!std.ascii.isPrint(byte.*) and !std.ascii.isWhitespace(byte.*)) break :text;
+            }
+            return static_pool.intern(.{ .string_value = bytes });
+        }
+        const mark = self.pool_indices.len;
+        defer self.pool_indices.len = mark;
+        for (0..value.slice_len()) |i| {
+            self.pool_indices.push(self.interned(self.memory.buffer[value.cell() + i]));
+        }
+        return static_pool.intern(.{ .aggregate_value = .{
+            .value_type = static_pool.array_of(value.slice_len(), element_type),
+            .elements = self.pool_indices.buffer[mark..self.pool_indices.len],
+        } });
+    }
     if (value.is_ref()) return .poison_type;
 
-    const static_pool = &self.owning_resolver().static_pool;
     if (!value.is_heap()) return Value.scalar(static_pool, value);
+    // a case in cells (its payload written in place) is the case of that payload, or the niche's
+    if (static_pool.tag(value.value_type) == .variant_case_type) {
+        const payload_type = static_pool.get(value.value_type).variant_case_type.payload;
+        const payload = self.interned(.block(payload_type, value.cell(), value.len()));
+        const niche = static_pool.niche_case(value.value_type, payload);
+        if (niche != .none) return niche;
+        return static_pool.intern(.{ .variant_value = .{
+            .case = value.value_type,
+            .payload = payload,
+        } });
+    }
 
     const mark = self.pool_indices.len;
     defer self.pool_indices.len = mark;

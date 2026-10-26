@@ -27,11 +27,8 @@ fun backwards = ([4]u8 a) -> [2]u8: ret a[3..<1]; #! static_eval_failed
 fun element_type = ([..]u16 s) {}
 fun wrong_element = () { [3]u8 bytes = [1, 2, 3]; element_type(bytes); } #! type_mismatch
 
-# slices are equal or not, they have no order; a static one is of a static array, one made while
-# compiling is gone with the evaluation that made it
+# slices are equal or not, they have no order
 fun ordered = ([..]u8 a, [..]u8 b) -> bool: ret a < b; #! invalid_operand
-stcfun made = () -> [..]u8 { [..]u8 s = "abc"; ret s[1..]; } #! not_static
-stc [..]u8 MADE = made();
 stcfun past_end = () -> u8 { [..]u8 s = "ab"; ret s[2]; } #! static_eval_failed
 stc u8 PAST = past_end();
 stcfun range_past = () -> u64 { [..]u8 s = "ab"; ret lenof s[1..<3]; } #! static_eval_failed

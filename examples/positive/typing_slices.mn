@@ -131,4 +131,24 @@ stc u64 NAME_LENGTH = lenof NAME; #= NAME_LENGTH 4
 stc u8 NAME_FIRST = NAME[0]; #= NAME_FIRST 109
 stc bool NAME_EQUAL = NAME == "mond"; #= NAME_EQUAL true
 
+# a static slice is a static copy of the elements it refers to, also one made while compiling or
+# held by a record, an array or a case; it is matched by its elements
+type Named = *([..]u8 name, u32 n);
+variant Text = +(Some([..]u8), None);
+stcfun made = () -> [..]u8 { [..]u8 s = "abc"; ret s[1..]; }
+stcfun word = ([..]u8 s) -> u32: ret match s { "ab" => 1, "abc" => 2, _ => 3 };
+fun kind = ([..]u8 s) -> u32: ret match s { "ab" => 1, "abc" => 2, _ => 3 };
+stc [..]u8 MADE = made(); #= MADE "bc"
+stc Named NAMED = Named("hi", 2); #= NAMED ["hi", 2]
+stc [3][..]u8 NAMES = ["ab", "cde", ""]; #= NAMES ["ab", "cde", ""]
+stc Text TEXT = Text.Some("abcd");
+stcfun text_length = (Text t) -> u64: ret if t ?<- s: lenof s else: 0;
+stc u64 TEXT_LENGTH = text_length(TEXT); #= TEXT_LENGTH 4
+stc []u64 STATIC_LENGTHS = [lenof NAMED.name, lenof NAMES[1], lenof NAMES[2], lenof (TEXT ?? "")]; #= STATIC_LENGTHS [2, 3, 0, 4]
+stc []u32 WORDS = [word("ab"), word("abc"), word(NAMES[0]), kind("abc"), kind(MADE), kind(NAMES[1][1..])]; #= WORDS [1, 2, 1, 2, 3, 3]
+# an array literal where a slice is wanted takes the slice's element type
+stcfun bytes = ([..]u8 s) -> u32: ret match s { [97, 98] => 1, _ => 0 };
+stc [..]u16 WIDE = [1, 2, 300]; #= WIDE [1, 2, 300]
+stc []bool LITERALS = [bytes("ab") == 1, bytes("ax") == 0, WIDE == [1, 2, 300]]; #= LITERALS [true, true, true]
+
 main = () {}

@@ -539,7 +539,12 @@ fn infer_array_literal(
     const static_pool = &resolver.static_pool;
 
     const expected_array = static_pool.substitute_type_variables(expected);
-    var element_type = static_pool.array_element(expected_array);
+    // an array where a slice is wanted is of the slice's elements
+    const is_slice = expected_array != .none and static_pool.tag(expected_array) == .slice_type;
+    var element_type = if (is_slice)
+        static_pool.get(expected_array).slice_type.element
+    else
+        static_pool.array_element(expected_array);
     const element_type_given = element_type != .none;
     const elements = if (resolver.tree.kind(node) == .array)
         resolver.tree.manychildren(node)
@@ -1090,7 +1095,12 @@ pub fn may_reference_frame(self: *Expressions, node: NodeId) bool {
 // a local given a value that may hold an address in its frame holds one too
 pub fn note_frame_reference(self: *Expressions, assignee: NodeId, value: NodeId) void {
     const resolver = self.owning_resolver();
-    if (!self.may_reference_frame(value)) return;
+    // a local array made a slice (`[..]u32 s = a`) is one into the frame
+    const static_pool = &resolver.static_pool;
+    const slice_target = static_pool.tag(resolver.node_types[assignee]) == .slice_type;
+    const makes_slice = slice_target and
+        static_pool.tag(resolver.node_types[value]) == .array_type and self.is_frame_place(value);
+    if (!makes_slice and !self.may_reference_frame(value)) return;
     var root = assignee;
     while (resolver.tree.kind(root) == .member or resolver.tree.kind(root) == .array_index) {
         const base = resolver.tree.arg(root, 0);

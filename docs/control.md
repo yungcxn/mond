@@ -183,7 +183,7 @@ fun again = (bool b) -> u8: ret match b { _ => 0, true => 1 };   #! redundant_ma
 
 ## Unwrapping
 
-`<-` names, `?` asks for the success payload: the payload of the first case that has one (so declare the success case first). Through a pointer (`&V`, `*V`) they read the variant it points to.
+`<-` names, `?` asks for the success payload: the payload of the first case that has one (so declare the success case first). Of a unified variant it is the first of its members, in the order written, with a payload: a member's case, or a member that is one case (a record, a number) as itself, so `Config || IoErr` succeeds as a `Config`. A `|||` parameter is realized per member, so there it is decided while compiling: the member that is the success always is, one holding the success case tests for it, any other never succeeds. Through a pointer (`&V`, `*V`) they read the variant it points to.
 
 | | |
 |---|---|

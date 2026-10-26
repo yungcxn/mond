@@ -22,6 +22,9 @@ stc Handle GENERATIONS = Handle(
     unwrap = (u64 stored, u32 tag) -> u64: ret stored & 0xFFFFFF,
 );
 variant Slot = +(Live(u24 index), Dead(u24 index), Empty) tagtype GENERATIONS;
+# a field of a case a strategy stores is read out of its value, `with` makes the case again
+stcfun live_next = (u24 i) -> u64 { Slot.Live s = Slot.Live(i); ret (s with (index = i + 1)).index as u64 * 10 + s.index; }
+stc u64 LIVE_NEXT = live_next(4); #= LIVE_NEXT 54
 stc u64 SLOT_SIZE = sizeof Slot; #= SLOT_SIZE 4
 fun live = (Slot s) -> u24: ret s ?? 0;
 fun dead = (Slot s) -> u24: ret if s ?<- i: 0 else: match s { Slot.Dead(i) => i, _ => 1 };

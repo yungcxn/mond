@@ -157,6 +157,27 @@ pub fn report(
     });
 }
 
+// a report made again, by a body checked once per static call, is shown once
+pub fn drop_repeats(doctor: *Doctor) void {
+    const reports = doctor.diagnostics.columns();
+    var kept: u32 = 0;
+    for (0..reports.code.len) |i| {
+        const repeated = for (0..kept) |j| {
+            const same = reports.code[j] == reports.code[i] and
+                reports.node[j] == reports.node[i] and
+                reports.first_operand[j] == reports.first_operand[i] and
+                reports.second_operand[j] == reports.second_operand[i];
+            if (same) break true;
+        } else false;
+        if (repeated) continue;
+        inline for (@typeInfo(Diagnosis).@"struct".field_names) |fname| {
+            @field(reports, fname)[kept] = @field(reports, fname)[i];
+        }
+        kept += 1;
+    }
+    doctor.diagnostics.truncate(kept);
+}
+
 // warnings are reported but do not stop the program from compiling
 pub fn has_errors(doctor: *const Doctor) bool {
     for (doctor.diagnostics.column(.code)) |code| if (severity_of(code) == .@"error") return true;

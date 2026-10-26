@@ -6,7 +6,7 @@ type A = Bad(i32);
 type B = Bad(u8);
 type C = Bad(i32);
 
-fun sum = (&[]u32 a) -> u32: ret lenof a; #! type_mismatch type_mismatch
+fun sum = (&[]u32 a) -> u32: ret lenof a; #! type_mismatch
 
 fun use = () {
     u32 x = sum([1, 2].&);

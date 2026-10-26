@@ -65,10 +65,45 @@ pub fn check_match(
 
         resolver.scopes.open();
         defer resolver.scopes.close();
+        // the binders of the arm taken are typed by their place in the pattern as at run time, a
+        // bare one narrowed by the arms above, and hold the values matched (a tree's are made by
+        // the match itself)
+        const types_binders = !resolver.static_pool.is_tree(scrutinee_type);
+        const interpreter = &resolver.interpreter;
+        var above: std.ArrayList(NodeId) = .empty;
+        defer above.deinit(resolver.allocator);
         for (arms) |arm| {
             const arm_pattern = resolver.tree.arg(arm, 0);
             resolver.macros.report_duplicate_holes(arm_pattern);
-            if (!resolver.interpreter.matches_static(context, arm_pattern, value)) continue;
+            const names_mark = resolver.scopes.local_names.len;
+            const taken = interpreter.matches_static(context, arm_pattern, value);
+            const guarded = resolver.tree.kind(arm_pattern) == .partial__match_case_where;
+            const inner = if (guarded) resolver.tree.arg(arm_pattern, 0) else arm_pattern;
+            if (types_binders) {
+                resolver.scopes.local_names.len = names_mark;
+                resolver.scopes.local_declarations.len = names_mark;
+                const diagnostics_mark = resolver.doctor.diagnostics.len();
+                const pattern_type = if (resolver.tree.kind(inner) == .identifier)
+                    self.narrowed(scrutinee_type, above.items)
+                else
+                    scrutinee_type;
+                _ = self.pattern(context, inner, pattern_type);
+                if (taken) {
+                    interpreter.patterns.binders_declared = true;
+                    _ = interpreter.matches_static(context, arm_pattern, value);
+                    interpreter.patterns.binders_declared = false;
+                } else {
+                    resolver.scopes.local_names.len = names_mark;
+                    resolver.scopes.local_declarations.len = names_mark;
+                    resolver.doctor.rewind(diagnostics_mark);
+                }
+            }
+            if (!taken) {
+                const is_bits = resolver.tree.kind(inner) == .partial__match_case_pattern_bits;
+                if (guarded or is_bits) continue;
+                above.append(resolver.allocator, inner) catch @panic("OOM");
+                continue;
+            }
             resolver.node_static_values[arm] = .bool_true;
             if (resolver.tree.kind(arm_pattern) == .partial__match_case_where) {
                 const guard = resolver.tree.arg(arm_pattern, 1);
@@ -87,11 +122,13 @@ pub fn check_match(
     const before = resolver.initialization.save(0);
     const outer_writable = self.writable_place;
     defer self.writable_place = outer_writable;
-    const access = if (resolver.static_pool.is_pointer(resolver.node_types[scrutinee]))
+    const through_pointer = resolver.static_pool.is_pointer(resolver.node_types[scrutinee]);
+    const access = if (through_pointer)
         resolver.mutability.pointee_access(scrutinee)
     else
         resolver.mutability.writable(scrutinee);
-    self.writable_place = access == .ok;
+    const is_place = through_pointer or resolver.tree.names_place(scrutinee);
+    self.writable_place = access == .ok and is_place;
     const after = resolver.initialization.new_set();
     defer resolver.initialization.copy(0, after);
 

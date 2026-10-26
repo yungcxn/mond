@@ -39,6 +39,27 @@ pub fn deinit(self: *Generics, alloc: std.mem.Allocator) void {
     self.realizations.deinit(alloc);
 }
 
+// the `A ||| B` a parameter of a realization was declared as, none for any other
+pub fn packed_parameter(
+    self: *Generics,
+    function: DeclPool.Index,
+    parameter: DeclPool.Index,
+) StaticPool.Index {
+    const resolver = self.owning_resolver();
+    if (parameter == .none or resolver.decl_pool.get(parameter, .kind) != .parameter) return .none;
+    const template = self.template_of.get(function) orelse return .none;
+    const parameter_nodes = resolver.tree.params_of(resolver.declarations.value_node(template));
+    const parameter_node = resolver.decl_pool.get(parameter, .node);
+    const index = std.mem.indexOfScalar(NodeId, parameter_nodes, parameter_node) orelse
+        return .none;
+    const declared = resolver.types.signature(template).parameters;
+    if (index >= declared.len) return .none;
+    const static_pool = &resolver.static_pool;
+    const is_packed = static_pool.tag(declared[index]) == .unified_variant_type and
+        static_pool.get(declared[index]).unified_variant_type.is_packed;
+    return if (is_packed) declared[index] else .none;
+}
+
 pub fn realize(
     self: *Generics,
     generic: DeclPool.Index,

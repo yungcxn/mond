@@ -75,4 +75,12 @@ stc u32 AFTER = rhs_text(SUM with (rhs.rhs = quote: 7)); #= AFTER 1
 stc u32 UNCHANGED = rhs_text(SUM); #= UNCHANGED 2
 stc i32 EVALUATED = <(quote: 10 - 4 * 2) with (rhs.lhs = quote: 1, lhs = quote: 20)>; #= EVALUATED 18
 
+# a case value is updated in its payload and stays that case, a niche's case where it lands there
+type At = *(i32 x, i32 y);
+variant Mark = +(Dot(At at), Empty);
+variant Small = +(Some(u8 v), None = 0xFF) tagtype self;
+stcfun case_moved = (i32 k) -> i32 { Mark.Dot d = Mark.Dot(At(1, 2)); Mark.Dot e = d with (at.x = k); ret e.at.x * 10 + d.at.x; }
+stcfun into_niche = () -> bool { Small.Some s = Small.Some(3); ret s with (v = 255) == Small.None; }
+stc []i32 CASES = [case_moved(7), into_niche() as i32]; #= CASES [71, 1]
+
 main = () {}

@@ -70,10 +70,10 @@ fn alias_of(self: *Variables, declaration: DeclPool.Index) ?usize {
 pub fn cell_of_operand(self: *Variables, node: NodeId) ?u32 {
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
-    const props = resolver.tree.props(node);
     // a static outside the running frames is a value here
-    const in_frame = !props.name or self.cell_of_declaration(self.declaration_of(node)) != null;
-    if (props.assignable and in_frame) return self.cell_of_place(node);
+    const in_frame = !resolver.tree.props(node).name or
+        self.cell_of_declaration(self.declaration_of(node)) != null;
+    if (resolver.tree.names_place(node) and in_frame) return self.cell_of_place(node);
     const value = interpreter.evaluate(node);
     if (value.is(.poison_type) or interpreter.unwind != .none) return null;
     return interpreter.push_cell(interpreter.owned_copy(value));

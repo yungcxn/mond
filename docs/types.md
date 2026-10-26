@@ -22,7 +22,7 @@ stc Cap C = Cap(9);                          #= C [5]
 stc i32 X = P.x;                             #= X 3
 ```
 
-- `x with (f = v)` is a copy with the named fields replaced. A part of a field is named by its path, fields of the records and elements of the arrays it holds (`pos.x = v`, `trail[i].y = v`, not through a pointer). The replacements apply in order, each value before its place, and the `where .. else` of every record on the way runs again, as in `x with (pos = x.pos with (x = v))`.
+- `x with (f = v)` is a copy with the named fields replaced, of a case value its payload's (it stays that case, or becomes the niche's it lands on). A part of a field is named by its path, fields of the records and elements of the arrays it holds (`pos.x = v`, `trail[i].y = v`, not through a pointer). The replacements apply in order, each value before its place, and the `where .. else` of every record on the way runs again, as in `x with (pos = x.pos with (x = v))`.
 - Unnamed fields are `$0`, `$1`, ...
 - `T(..)` needs every field that has no default, even an array (a missing one is `wrong_arity`). `T.init()` builds a value with every field defaulted or zeroed, so `T.init() with (f = v)` sets just some fields. An unknown name is `unknown_named_argument`.
 - Writing `p.x = ..` needs a `mut` field and a writable `p` (or a `*` pointer to it).

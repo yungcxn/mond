@@ -16,6 +16,8 @@ fun element = () -> &u8 { [3]u8 b = [1, 2, 3]; ret b[1].&; } #! escaping_referen
 fun range = () -> [..]u8 { [4]u8 b = [1, 2, 3, 4]; ret b[1..<3]; } #! escaping_reference
 fun made_slice = () -> [..]u8 { [4]u8 b = [1, 2, 3, 4]; ret b; } #! escaping_reference
 fun parameter = ([4]u8 b) -> [..]u8: ret b[0..<2]; #! escaping_reference
+fun held_slice = () -> [..]u8 { [4]u8 b = [1, 2, 3, 4]; [..]u8 s = b; ret s; } #! escaping_reference
+fun assigned_slice = () -> [..]u8 { mut [4]u8 b = [1, 2, 3, 4]; mut [..]u8 s = "x"; s = b; ret s; } #! escaping_reference
 fun branch = (bool c, &u32 p) -> &u32 { u32 x = 1; ret if c: x.& else: p; } #! escaping_reference
 type Holder = *(&u32 p);
 fun record = () -> Holder { u32 x = 1; ret Holder(x.&); } #! escaping_reference

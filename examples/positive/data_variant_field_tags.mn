@@ -43,4 +43,12 @@ stc []u8 DEEP = [inner_a(Deep.Has(Outer(1, Inner(7, 3)))), inner_a(Deep.Lost), i
 fun node_value = (OptNode o) -> i32: ret match o { OptNode.Some(n) => n.v, OptNode.None => -1 };
 stc i32 NONE_VALUE = node_value(OptNode.None); #= NONE_VALUE -1
 
+# writes through labels into the field holding the tag change the case
+variant Cell = +(Used(mut u32 value, mut u8 kind), Free = 255, Gone = 254) tagtype self.kind;
+fun cell = (Cell c) -> u64: ret match c { Cell.Used(v, k) => v as u64 * 10 + k, Cell.Free => 1, Cell.Gone => 2 };
+stcfun freed = (u32 x) -> u64 { mut Cell c = Cell.Used(x, 1); if c ?<- (v, k) { k = 255; } ret cell(c); }
+stcfun bumped = (u32 x) -> u64 { mut Cell c = Cell.Used(x, 1); if c ?<- (v, k) { v += 10; } ret cell(c); }
+stcfun gone = (u32 x) -> u64 { mut Cell c = Cell.Used(x, 1); match c { Cell.Used(_, _ <- k) => { k = 254; }, _ => {} } ret cell(c); }
+stc []u64 WRITTEN = [freed(9), bumped(9), gone(9)]; #= WRITTEN [1, 191, 2]
+
 main = () {}

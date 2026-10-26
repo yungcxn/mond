@@ -77,4 +77,18 @@ type Shelf = *(Holdable item, [2]Holdable more);
 stc Shelf SHELF = Shelf(Opt8.Some(3), [Pt(1, 1), Box(u32)(1)]);
 stc i64 shelved = hold(SHELF.item) + hold(SHELF.more[1]); #= shelved 1003
 
+# `??`, `?<-` and `x??` of a unified variant take its first member or member's case with a payload,
+# in the order written: a record member is its own payload
+type Config = *(u32 port);
+variant IoErr = +(NotFound, Timeout(u32 ms));
+variant Loaded = Config || IoErr;
+variant Flipped = IoErr || Config;
+stcfun load = (u32 x) -> Loaded: ret if x == 0: IoErr.NotFound else: if x == 1: IoErr.Timeout(5) else: Config(x);
+stcfun port = (u32 x) -> u32: ret (load(x) ?? Config(80)).port;
+stcfun bound = (u32 x) -> u32: ret if load(x) ?<- c: c.port else: 7;
+stcfun flipped = (Flipped f) -> u32: ret f ?? 9;
+stcfun passed = (u32 x) -> u32 || IoErr { Config c = load(x)??; ret c.port + 1; }
+stc []u32 PORTS = [port(0), port(1), port(9), bound(0), bound(9), flipped(IoErr.Timeout(5)), flipped(Config(3))]; #= PORTS [80, 80, 9, 7, 9, 5, 9]
+stc bool PASSED = passed(9) == 10 and passed(0) == IoErr.NotFound and passed(1) == IoErr.NotFound; #= PASSED true
+
 main = () {}

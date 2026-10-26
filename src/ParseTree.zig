@@ -838,10 +838,18 @@ pub fn labels_of(self: *const @This(), n: NodeId, out: *DynamicBuffer(NodeId)) v
     for (self.children(n)) |child| self.labels_of(child, out);
 }
 
-// whether `n` holds a `<-` outside the functions it defines
+// whether `n` names a place: a variable, field, element or pointee, not a part (`a[1..<3]`)
+pub fn names_place(self: *const @This(), n: NodeId) bool {
+    var m = n;
+    while (self.kind(m) == .capture) m = self.arg(m, 0);
+    if (!self.props(m).assignable) return false;
+    return self.kind(m) != .array_index or !self.props(self.arg(m, 1)).range;
+}
+
+// whether `n` holds a `<-` or `?<-` outside the functions it defines
 pub fn holds_label(self: *const @This(), n: NodeId) bool {
     if (self.props(n).function) return false;
-    if (self.kind(n) == .labelarrow) return true;
+    if (self.kind(n) == .labelarrow or self.kind(n) == .selftag_arrow) return true;
     for (self.children(n)) |child| if (self.holds_label(child)) return true;
     return false;
 }

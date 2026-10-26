@@ -24,6 +24,12 @@ stcfun at_compile = () -> [3]u64 {
     Any f = Slot.Free;
     ret [kind_of(a), kind_of(f), kind_of(Extra.Big(5))];
 }
+# writes through labels into the field holding the tag change the case
+variant Cell = +(Used(mut u32 value, mut u8 kind), Free = 255, Gone = 254) tagtype self.kind;
+fun cell = (Cell c) -> u64: ret match c { Cell.Used(v, k) => v as u64 * 10 + k, Cell.Free => 1, Cell.Gone => 2 };
+fun freed = (u32 x) -> u64 { mut Cell c = Cell.Used(x, 1); if c ?<- (v, k) { k = 255; } ret cell(c); }
+fun bumped = (u32 x) -> u64 { mut Cell c = Cell.Used(x, 1); if c ?<- (v, k) { v += 10; } ret cell(c); }
+fun gone = (u32 x) -> u64 { mut Cell c = Cell.Used(x, 1); match c { Cell.Used(_, _ <- k) => { k = 254; }, _ => {} } ret cell(c); }
 main = (u32 argc, &&u8 argv) {
     ONE = argc as u8;
     Slot u = Slot.Used(42, ONE);
@@ -47,4 +53,5 @@ main = (u32 argc, &&u8 argv) {
     line_i64(node_value(some) * 100 + node_value(OptNode.None) + sizeof OptNode as i64 * 10000);  #> 160499
     u8 nine = 9 * ONE;
     line_u64(deref(Ref.Some(nine.&)) * 10 + deref(Ref.None));        #> 97
+    line_u64(freed(9 * ONE as u32) * 1000 + bumped(9 * ONE as u32) * 10 + gone(9 * ONE as u32)); #> 2912
 }

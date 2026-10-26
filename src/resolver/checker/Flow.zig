@@ -48,23 +48,37 @@ pub fn check_if(
 ) StaticPool.Index {
     const resolver = self.owning_resolver();
     const branch = ParseTree.Branch.from_node(resolver.tree, node);
+    // the names the condition binds are seen by both branches, readable where it proves them
+    const initialization_mark = resolver.initialization.count;
+    defer resolver.initialization.release(initialization_mark);
+    resolver.scopes.open();
+    defer resolver.scopes.close();
 
     // the condition known while checking: a stc one always, one in interpreted code if it can be
     const is_stc = resolver.tree.props(node).stc;
     const condition_value = if (context.is_interpreted or context.folds_static or
         is_stc and context.is_abstract)
-        resolver.static_values.try_evaluate(context, branch.cond) orelse .none
-    else if (is_stc) blk: {
+    blk: {
+        // names a tried condition binds are its own, a taken one's are declared below
+        resolver.scopes.open();
+        defer resolver.scopes.close();
+        break :blk resolver.static_values.try_evaluate(context, branch.cond) orelse .none;
+    } else if (is_stc) blk: {
         _ = resolver.expressions.infer(context, branch.cond, .bool_type);
         break :blk resolver.interpreter.evaluate_static(context, branch.cond);
-    } else
-        .none;
+    } else .none;
     const is_decided = condition_value == .bool_true or condition_value == .bool_false or
         condition_value != .none and !context.is_interpreted;
-    // only the branch the condition takes is checked
+    // only the branch the condition takes is checked, with the names its outcome bound
     if (is_decided) {
+        const outcome = condition_value == .bool_true;
+        const tried = context.is_interpreted or context.folds_static or context.is_abstract;
+        if (tried and self.binds_names(branch.cond, outcome)) {
+            _ = resolver.expressions.infer(context, branch.cond, .bool_type);
+            _ = resolver.interpreter.evaluate_static(context, branch.cond);
+        }
         _ = resolver.set_node_type(branch.cond, .bool_type);
-        self.write_proven(branch.cond, condition_value == .bool_true);
+        self.write_proven(branch.cond, outcome);
         if (condition_value == .bool_true) return self.check_branch(context, branch.then, expected);
 
         if (condition_value != .bool_false) {
@@ -77,11 +91,6 @@ pub fn check_if(
         return self.check_branch(context, branch.@"else", expected);
     }
 
-    // the names the condition binds are seen by both branches, readable where it proves them
-    const initialization_mark = resolver.initialization.count;
-    defer resolver.initialization.release(initialization_mark);
-    resolver.scopes.open();
-    defer resolver.scopes.close();
     const unwritten = self.check_condition(context, branch.cond);
     resolver.initialization.copy(0, unwritten[when_true]);
 
@@ -166,6 +175,32 @@ pub fn is_condition(self: *Flow, node: NodeId) bool {
         .binary_logic_and, .binary_logic_or => true,
         .selftag_arrow => true,
         else => false,
+    };
+}
+
+// the `A ||| B` the parameter named by `node` was declared as, in a realization for one member
+fn packed_operand(self: *Flow, context: *FunctionContext, node: NodeId) StaticPool.Index {
+    const resolver = self.owning_resolver();
+    var named = node;
+    while (resolver.tree.kind(named) == .capture) named = resolver.tree.arg(named, 0);
+    if (resolver.tree.kind(named) != .identifier or context.declaration == .none) return .none;
+    const parameter = resolver.node_declarations[named];
+    return resolver.generics.packed_parameter(context.declaration, parameter);
+}
+
+// whether a condition that came out `outcome` bound names: any `<-`, a `?<-` it proves
+fn binds_names(self: *Flow, node: NodeId, outcome: bool) bool {
+    const tree = self.owning_resolver().tree;
+    return switch (tree.kind(node)) {
+        .capture => self.binds_names(tree.arg(node, 0), outcome),
+        .neg_logic => self.binds_names(tree.arg(node, 0), !outcome),
+        // an outcome both sides decide ran both, any other surely the left only
+        .binary_logic_and, .binary_logic_or => self.binds_names(tree.arg(node, 0), outcome) or
+            outcome == (tree.kind(node) == .binary_logic_and) and
+                self.binds_names(tree.arg(node, 1), outcome),
+        .selftag_arrow => outcome,
+        .labelarrow => true,
+        else => tree.holds_label(node),
     };
 }
 
@@ -452,15 +487,25 @@ pub fn check_unwrap(
     if (kind == .labelarrow) {
         self.bind_label(resolver.tree.arg(node, 1), operand_type);
         self.flow_into_label(operand, null, resolver.tree.arg(node, 1));
-        const writable = resolver.mutability.writable(operand) == .ok;
+        const writable = resolver.tree.names_place(operand) and
+            resolver.mutability.writable(operand) == .ok;
         if (writable) self.write_labels(resolver.tree.arg(node, 1), operand_type);
         return operand_type;
     }
 
-    // through a pointer the variant it points to
-    const variant_type = resolver.static_pool.through_pointer(operand_type);
+    // through a pointer the variant it points to, of a parameter realized for a member of
+    // `A ||| B` that one (see `StaticPool.packed_unwrap`)
+    const packed_variant = self.packed_operand(context, operand);
+    const variant_type = if (packed_variant != .none)
+        packed_variant
+    else
+        resolver.static_pool.through_pointer(operand_type);
     const payload_type = resolver.static_pool.payload_of(variant_type);
-    if (payload_type == .none) return resolver.report_mismatch(operand, operand_type, .none);
+    if (payload_type == .none) {
+        // its names still exist, as poison
+        if (kind == .selftag_arrow) self.bind_label(resolver.tree.arg(node, 1), .poison_type);
+        return resolver.report_mismatch(operand, operand_type, .none);
+    }
     // which case it is needs a tag
     if (resolver.static_pool.is_untagged_at_run_time(variant_type)) {
         return resolver.report(.untagged_variant, operand, variant_type, 0);
@@ -496,9 +541,10 @@ pub fn check_unwrap(
             else
                 mutability.pointee_access(operand);
             const static_pool = &resolver.static_pool;
-            const stored = static_pool.tag(variant_type) == .variant_type and
-                static_pool.get(variant_type).variant_type.tag_mode != .custom and
-                !static_pool.get(variant_type).variant_type.is_packed;
+            const whole = static_pool.whole_of(variant_type);
+            const stored = static_pool.tag(whole) == .variant_type and
+                static_pool.get(whole).variant_type.tag_mode != .custom and
+                !static_pool.get(whole).variant_type.is_packed;
             const label = resolver.tree.arg(node, 1);
             if (access == .ok and stored) self.write_labels(label, payload_type);
             const payload = resolver.slices.payload_slot(operand_type);
@@ -528,7 +574,7 @@ pub fn check_fallbacks(self: *Flow, context: *FunctionContext, mark: u32) void {
             static_pool.substitute_type_variables(resolver.node_types[operand]),
         );
         // a value typed as a case always holds its payload
-        if (static_pool.tag(operand_type) != .variant_type) continue;
+        if (static_pool.tag(operand_type) == .variant_case_type) continue;
         const missing = self.missing_fallback(result, operand_type);
         if (missing != .none) resolver.doctor.report(.no_fallback, node, missing, 0);
     }
@@ -565,12 +611,15 @@ pub fn missing_fallback(
             if (failing_variant == .none) {
                 return self.missing_case_fallback(fallback_type, .none);
             }
-            // a subset fails as one of the cases it keeps
-            const unwrapped = static_pool.first_payload_case(failing_variant);
-            const whole = static_pool.whole_of(failing_variant);
-            for (static_pool.get(whole).variant_type.cases) |failing| {
-                const kept = !static_pool.is_removed(failing_variant, failing);
-                if (failing == unwrapped or !kept) continue;
+            // a subset fails as one of the cases it keeps, a unified variant as a member's case or
+            // a member
+            const unwrapped = static_pool.success_of(failing_variant);
+            const mark = static_pool.scratch.len;
+            defer static_pool.scratch.len = mark;
+            static_pool.push_units(failing_variant);
+            for (mark..static_pool.scratch.len) |i| {
+                const failing = static_pool.scratch.buffer[i];
+                if (failing == unwrapped) continue;
                 const missing = self.missing_case_fallback(fallback_type, failing);
                 if (missing != .none) return missing;
             }

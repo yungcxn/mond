@@ -63,4 +63,9 @@ stc u32 RNG = stcmatch 42 { 0..<10 => 1, 10..<50 => 2, _ => 3 } #= RNG 2
 stc u32 ORP = stcmatch 'b' { 'a' | 'b' => 1, _ => 2 } #= ORP 1
 stc u32 BND = stcmatch 7 { 0 => 0, n => n * 3 } #= BND 21
 
+# a binder of a match decided while compiling is typed by its place, as at run time
+variant Maybe = +(Some(i32), None);
+stcfun or_minus = (Maybe m) -> i32: ret match m { x => x ?? -2 };
+stc []i32 PLACED = [or_minus(Maybe.None), or_minus(Maybe.Some(3))]; #= PLACED [-2, 3]
+
 main = () {}

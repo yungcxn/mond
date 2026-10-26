@@ -233,7 +233,9 @@ fn call_static_function(
         const value_node = resolver.tree.arg_value(argument);
         const value = interpreter.evaluate(value_node);
         if (value.is(.poison_type) or interpreter.unwind != .none) return value;
-        if (interpreter.escapes(value)) return interpreter.fail(value_node, .not_static, 0, 0);
+        if (interpreter.holds_address(value)) {
+            return interpreter.fail(value_node, .not_static, 0, 0);
+        }
 
         const argument_index = interpreter.interned(value);
         const admitted = blk: {
@@ -607,21 +609,34 @@ pub fn with(self: *Calls, node: NodeId) Value {
         return interpreter.trees.with(node, original);
     }
 
-    const record = interpreter.value_type(original);
-    const field_count = interpreter.aggregate_length(original) orelse {
+    // a case is updated in its payload, made again as that case
+    const static_pool = &resolver.static_pool;
+    const case = interpreter.patterns.case_of(original);
+    const record = if (case != .none)
+        static_pool.get(case).variant_case_type.payload
+    else
+        interpreter.value_type(original);
+    const fields: Value = if (case == .none)
+        original
+    else if (original.is_heap())
+        .block(record, original.cell(), original.len())
+    else
+        .of(static_pool, static_pool.get(original.index()).variant_value.payload);
+    const field_count = interpreter.aggregate_length(fields) orelse {
         return interpreter.fail(node, .not_static, 0, 0);
     };
-    if (resolver.static_pool.tag(record) != .record_type) {
+    if (static_pool.tag(record) != .record_type) {
         return interpreter.fail(node, .not_static, 0, 0);
     }
 
     const first_cell = interpreter.allocate_cells(field_count);
     for (0..field_count) |i| {
-        const field_copy = interpreter.owned_copy(interpreter.element(original, @intCast(i)));
+        const field_copy = interpreter.owned_copy(interpreter.element(fields, @intCast(i)));
         interpreter.memory.buffer[first_cell + i] = field_copy;
     }
     const arguments = resolver.tree.manychildren(resolver.tree.arg(node, 1));
     if (self.fill_arguments(record, first_cell, arguments)) |failure| return failure;
+    if (case != .none) return self.constructed(case, record, first_cell);
     if (!self.complete(record, first_cell)) return .poison;
     return .block(record, first_cell, field_count);
 }

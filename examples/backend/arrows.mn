@@ -48,6 +48,8 @@ fun payload_record = () -> i32 { mut Two t = Two.Pair(1, 2 * ONE as u8); if t ?<
 fun loop_place = () -> i32 { mut i32 n = 3 * ONE; mut i32 i = 0; while i < (n <- m) { i += 1; if i == 2: n = 5; } ret i * 10 + n; }
 fun nested_field = () -> i32 { mut Cell c = Cell.Some(3 * ONE); match c { Cell.Some(_ <- k) => { k += 10; }, _ => {} } ret c ?? -1; }
 fun matched_pointer = (*Cell q) { match q { Cell.Some(_ <- k) => { k = 77; }, _ => {} } }
+variant Wait = +(Never, Ms(mut u32), Stop);
+fun subset_payload = (Wait -- Wait.Never w) -> u32 { mut Wait -- Wait.Never m = w; if m ?<- v { v += 5; } ret m ?? 0; }
 fun matched_niche = () -> i32 { mut Byte b = Byte.Some(ONE as u8); match b { Byte.Some(_ <- v) => { v = 255; }, _ => {} } ret (b ?? 9) as i32; }
 
 main = (u32 argc, &&u8 argv) {
@@ -82,4 +84,5 @@ main = (u32 argc, &&u8 argv) {
     line_i64(nested_field());                                                 #> 13
     matched_pointer(c.&);
     line_i64(c ?? -1);                                                        #> 77
+    line_i64(subset_payload(Wait.Ms(3 * ONE as u32)));                        #> 8
 }

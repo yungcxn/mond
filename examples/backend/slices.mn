@@ -30,6 +30,17 @@ fun clib_slice_sum = ([..]u8 s) -> u64;
 fun clib_slice_tail = ([..]u8 s) -> [..]u8;
 fun clib_slice_fill = ([..]u8 s, u8 value);
 
+# static slices held by a record, an array or a case are static copies; a string pattern matches
+# a slice by its elements, not its address
+type Named = *([..]u8 name, u32 n);
+variant Text = +(Some([..]u8), None);
+stc Named NAMED = Named("hello", 2);
+stc [3][..]u8 NAMES = ["ab", "cde", ""];
+stc Text TEXT = Text.Some("abcd");
+fun kind = ([..]u8 s) -> u64: ret match s { "ab" => 1, "abc" => 2, [120] => 4, _ => 3 };
+fun wide = ([..]u16 w) -> bool: ret w == [1, 2, 300];
+fun names = () -> u64 { mut u64 t = 0; for s in NAMES: t = t * 10 + lenof s; ret t; }
+
 main = (u32 argc, &&u8 argv) {
     ONE = argc as u64;
     [6]u32 numbers = [1, 2, 3, 4, 5, 6];
@@ -57,4 +68,10 @@ main = (u32 argc, &&u8 argv) {
     line_u64(lenof clib_slice_tail(bytes));                       #> 4
     clib_slice_fill(bytes[(3 * ONE)..], 0);
     line_u64(clib_slice_sum(bytes));                              #> 6
+    line_u64(lenof NAMED.name * 10 + NAMED.n as u64 + names() * 100);          #> 23052
+    line_u64(if TEXT ?<- t: lenof t * 1000 + t[3 * ONE] else: 0);               #> 4100
+    [..]u8 abc = "abcd";
+    line_u64(kind(abc[0..<2 * ONE]) * 100 + kind(abc[0..<3 * ONE]) * 10 + kind(NAMES[ONE])); #> 123
+    [..]u16 w = [ONE as u16, 2, 300];
+    line_u64(kind("x"[0..<ONE]) * 10 + wide(w) as u64);                             #> 41
 }

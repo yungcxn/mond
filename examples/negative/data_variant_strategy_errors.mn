@@ -21,4 +21,8 @@ variant Fine = +(A(u8), B) tagtype ranges(u16, 256);
 variant Extra = +(X(u64), Y);
 type Joined = Fine || Extra; #! strategy_member
 
+# a payload a strategy stores has no place: its fields are read, not written
+variant Kept = +(Low(mut u8 v), Zero) tagtype ranges(u16, 256);
+fun write_kept = () { mut Kept.Low k = Kept.Low(1); k.v = 2; } #! assign_to_immutable
+
 main = () {}

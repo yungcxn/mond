@@ -12,6 +12,8 @@ const none_cell = std.math.maxInt(u32);
 
 // the cell of what the pattern being matched tests, when a label names it
 matched_cell: u32 = none_cell,
+// the checker declared the binders of the pattern it matches itself, typed by their place
+binders_declared: bool = false,
 
 pub fn owning_interpreter(self: *Patterns) *Interpreter {
     return @alignCast(@fieldParentPtr("patterns", self));
@@ -289,16 +291,9 @@ inline fn matches_value(self: *Patterns, pattern: NodeId, value: Value) bool {
     if (is_case) return self.case_of(value) == expected.index();
 
     if (expected.is(.poison_type)) return false;
-    // heap values are compared by their interned form
-    const expected_pooled: Value = if (expected.is_heap())
-        .pooled(interpreter.interned(expected))
-    else
-        expected;
-    const value_pooled: Value = if (value.is_heap())
-        .pooled(interpreter.interned(value))
-    else
-        value;
-    return Value.eql(expected_pooled, value_pooled);
+    // as `==` compares: a slice or array by its elements, in whatever form they are
+    const equal = interpreter.evaluate_binary(pattern, .equal, value, expected);
+    return !equal.is(.poison_type) and equal.bits != 0;
 }
 
 pub fn bind_name(self: *Patterns, id: NodeId, value: Value) void {
@@ -311,10 +306,13 @@ pub fn bind_name(self: *Patterns, id: NodeId, value: Value) void {
     const name = resolver.name_pool.name_of_node(id);
     if (name == .underscore) return;
 
-    // a label keeps the declaration the checker gave it, a binder of a static match gets a new one
+    // a label keeps the declaration the checker gave it, so does a binder the checker typed,
+    // another binder of a static match gets a new one
     const labelled = resolver.node_declarations[id];
     const is_label = labelled != .none and resolver.decl_pool.get(labelled, .kind) == .arrow_binder;
-    const declaration = if (is_label) blk: {
+    const declaration = if (self.binders_declared and labelled != .none)
+        labelled
+    else if (is_label) blk: {
         resolver.scopes.bind(name, labelled);
         break :blk labelled;
     } else blk: {

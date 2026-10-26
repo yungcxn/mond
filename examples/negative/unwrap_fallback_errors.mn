@@ -14,6 +14,11 @@ variant Pointing = +(Ok(u8), Text(&u8 at));
 fun pointer = (Opt o) -> &u8 { i32 v = o??; ret "x"; }              #! no_fallback
 fun writable = (Opt o, *u32 p) -> *u32 { i32 v = o??; ret p; }     #! no_fallback
 fun function = (Opt o) -> IntFn { i32 v = o??; ret (i32 x) -> i32: ret x; }   #! no_fallback
+# a unified variant fails as one of its members' cases or another member
+type Port = *(u32 n);
+variant Missing = +(Gone, Late(u32));
+fun unified = (Port || Missing p) -> &u8 { Port q = p??; ret "x"; }   #! no_fallback
+fun passed_on = (Port || Missing p) -> u32 || Missing { Port q = p??; ret q.n; }
 fun endless = (Opt o): loop { i32 v = o??; }                       #! no_fallback
 stcfun typed = (Opt o) -> type { i32 v = o??; ret u8; }            #! no_fallback
 stc type TYPED = typed(Opt.None);

@@ -9,7 +9,7 @@ stcfun splice_type = () -> ast(type): ret quote: u8;
 stc u32 type_as_value = <splice_type()>; #! type_mismatch
 stc ast(u32) not_a_quote = 5; #! type_mismatch
 fun spliced_statement = () -> u32 {
-    u32 x = <quote { brk; }>; #! type_mismatch
+    u32 x = <quote { brk; }>; #! brk_outside_loop
     ret x;
 }
 

@@ -4,6 +4,8 @@
 <include "../lib/macro_kit.mn">;
 stc u32 hidden = <hidden_macro()>; #! undefined_name
 stc u32 secret = kit_secret; #! undefined_name
+# what the other includes landed is there, a failed one adds nothing more
+stc u32 version = kit_version;
 <include "../lib/stray_unquote.mn">; #! stray_unquote
 
 main = () {}

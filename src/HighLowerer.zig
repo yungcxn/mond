@@ -2264,12 +2264,64 @@ fn match_value(
     }
 
     const expected = self.expression_as(pattern, value_type);
-    // strings and byte pointers compare their bytes, not their addresses
-    const is_text = self.resolver.tree.kind(pattern) == .string or
-        (self.is_pointer(value_type) and self.pointee_of(value_type) == .u8_type);
+    // strings and byte pointers compare their bytes, not their addresses, a slice its elements
+    const is_slice = self.static_pool.tag(value_type) == .slice_type;
+    const is_text = !is_slice and (self.resolver.tree.kind(pattern) == .string or
+        (self.is_pointer(value_type) and self.pointee_of(value_type) == .u8_type));
     const operation: Op = if (is_text) .bytes_eq else .eq;
     const equals = self.builder.emit_refs(operation, .bool_type, value, expected);
     self.builder.branch_if(equals, matched, failed);
+}
+
+// the `A ||| B` the parameter named by `node` was declared as, in a realization for one member
+fn packed_operand(self: *HighLowerer, node: NodeId) Index {
+    if (self.resolver.tree.kind(node) != .identifier) return .none;
+    const parameter = self.declaration_of(node);
+    return self.resolver.generics.packed_parameter(self.body.declaration, parameter);
+}
+
+// `?<-`, `??`, `x??` whose outcome the realization decides: `value` is the payload, or never holds
+// one
+fn unwrap_decided(
+    self: *HighLowerer,
+    node: NodeId,
+    value: Ref,
+    value_type: Index,
+    always: bool,
+) Ref {
+    const tree = self.resolver.tree;
+    const result_type = self.type_of(node);
+    switch (tree.kind(node)) {
+        .selftag_arrow => {
+            const label = tree.arg(node, 1);
+            if (always) {
+                self.bind_label(label, value);
+            } else {
+                const destructures = tree.kind(label) == .partial__destructure;
+                const names = if (destructures) tree.manychildren(label) else &[1]NodeId{label};
+                for (names) |name| self.declare_variable(self.declaration_of(name), .none);
+            }
+            return Ref.of(if (always) .bool_true else .bool_false);
+        },
+        .selftag_unwrap_fallback => {
+            if (always) return self.coerce(value, value_type, result_type);
+            return self.expression_as(tree.arg(node, 1), result_type);
+        },
+        else => {
+            if (always) return value;
+            self.return_fallback(value, value_type, value_type, .none);
+            return .none;
+        },
+    }
+}
+
+// what `??` and `?<-` unwrap of `value`: the payload of a case, a member that is one case itself
+fn success_payload(self: *HighLowerer, value: Ref, value_type: Index, success: Index) Ref {
+    if (self.static_pool.tag(success) != .variant_case_type) {
+        return self.narrow_to_variant(value, value_type, success);
+    }
+    const variant = self.static_pool.get(success).variant_case_type.variant;
+    return self.case_payload(self.narrow_to_variant(value, value_type, variant), success);
 }
 
 // a payload of one field stands for that field
@@ -2345,7 +2397,8 @@ fn alias_payload(self: *HighLowerer, label: NodeId, variant: Ref, case: Index) v
 }
 
 // whether a variant keeps its payloads where they can be written: not one a strategy or bits make
-fn stores_payloads(self: *HighLowerer, variant: Index) bool {
+fn stores_payloads(self: *HighLowerer, subset_or_variant: Index) bool {
+    const variant = self.static_pool.whole_of(subset_or_variant);
     if (self.static_pool.tag(variant) != .variant_type) return false;
     const declared = self.static_pool.get(variant).variant_type;
     return declared.tag_mode != .custom and !declared.is_packed;
@@ -2394,25 +2447,37 @@ fn unwrap(self: *HighLowerer, node: NodeId) Ref {
     else
         operand;
 
-    if (self.static_pool.tag(value_type) != .variant_type) return .none;
-    const cases = self.static_pool.get(value_type).variant_type.cases;
+    // a parameter realized for a member of `A ||| B` has its success always, never, or as tested
+    const packed_variant = self.packed_operand(tree.arg(node, 0));
+    const decided = if (packed_variant != .none)
+        self.static_pool.packed_unwrap(packed_variant, value_type)
+    else
+        .tested;
+    switch (decided) {
+        .always => return self.unwrap_decided(node, value, value_type, true),
+        .never => return self.unwrap_decided(node, value, value_type, false),
+        .tested => {},
+    }
+    const is_unified = self.static_pool.tag(value_type) == .unified_variant_type;
+    if (!is_unified and self.static_pool.tag(value_type) != .variant_type) return .none;
     // a subset unwraps the first payload case it keeps: its own type, before it is lowered as the
-    // whole
+    // whole; a unified variant the first member or member's case with a payload
     const operand_node_type = self.resolver.node_info(self.body, .node_type, tree.arg(node, 0));
     const kept_type = self.static_pool.through_pointer(
         self.static_pool.substitute_type_variables(operand_node_type),
     );
-    const kept_payload_case = self.static_pool.first_payload_case(kept_type);
-    const case = if (kept_payload_case != .none)
-        kept_payload_case
-    else
-        cases[self.payload_case_index(value_type)];
+    const case = if (is_unified) self.static_pool.success_of(kept_type) else blk: {
+        const kept_payload_case = self.static_pool.first_payload_case(kept_type);
+        if (kept_payload_case != .none) break :blk kept_payload_case;
+        const cases = self.static_pool.get(value_type).variant_type.cases;
+        break :blk cases[self.payload_case_index(value_type)];
+    };
     const has_payload = self.tests_case(value, value_type, case);
     if (kind == .selftag_arrow) {
         if (in_place) {
             self.alias_payload(tree.arg(node, 1), operand, case);
         } else {
-            self.bind_label(tree.arg(node, 1), self.case_payload(value, case));
+            self.bind_label(tree.arg(node, 1), self.success_payload(value, value_type, case));
         }
         return has_payload;
     }
@@ -2424,13 +2489,13 @@ fn unwrap(self: *HighLowerer, node: NodeId) Ref {
         self.builder.go_to(empty_block);
         self.return_fallback(value, value_type, kept_type, case);
         self.builder.go_to(payload_block);
-        return self.case_payload(value, case);
+        return self.success_payload(value, value_type, case);
     }
 
     const result = self.new_temporary(result_type);
     const merge = self.builder.new_block();
     self.builder.go_to(payload_block);
-    const payload = self.case_payload(value, case);
+    const payload = self.success_payload(value, value_type, case);
     const payload_type = self.static_pool.payload_of(value_type);
     self.write_current(result, self.coerce(payload, payload_type, result_type));
     self.builder.branch(merge);
@@ -2451,19 +2516,24 @@ fn return_fallback(
     unwrapped: Index,
 ) void {
     const pool = self.static_pool;
-    const cases = pool.get(value_type).variant_type.cases;
-    // a value of a subset is none of the cases it leaves out
-    var kept_count: usize = 0;
-    for (cases) |case| kept_count += @intFromBool(!pool.is_removed(kept_type, case));
+    // a value of a subset is none of the cases it leaves out, of a unified variant one of the
+    // members' cases or a member
+    const mark = pool.scratch.len;
+    pool.push_units(kept_type);
+    const units = self.resolver.temporary_slice(Index, pool.scratch.len - mark);
+    @memcpy(units, pool.scratch.buffer[mark..pool.scratch.len]);
+    pool.scratch.len = mark;
+    const holds_unwrapped = std.mem.indexOfScalar(Index, units, unwrapped) != null;
+    const failing_count = units.len - @intFromBool(holds_unwrapped);
     // the unwrapped case alone never fails
-    if (kept_count == 1) return self.emit_unreachable();
+    if (failing_count == 0) return self.emit_unreachable();
     var tested: usize = 0;
     var last_failing: Index = .none;
-    for (cases) |failing| {
-        if (failing == unwrapped or pool.is_removed(kept_type, failing)) continue;
+    for (units) |failing| {
+        if (failing == unwrapped) continue;
         if (pool.fallback_case(self.return_type, failing) != failing) continue;
         tested += 1;
-        if (tested == kept_count - 1) {
+        if (tested == failing_count) {
             last_failing = failing;
             break;
         }
@@ -3057,6 +3127,15 @@ fn record_update(self: *HighLowerer, node: NodeId) Ref {
         base = self.load(self.pointee_of(base_type), base);
         base_type = self.pointee_of(base_type);
     }
+    // a case is updated in its payload, made again as that case
+    const case = if (self.static_pool.tag(base_type) == .variant_case_type) base_type else .none;
+    if (case != .none) {
+        const case_type = self.static_pool.get(case).variant_case_type;
+        const narrowed = self.narrow_to_variant(base, base_type, case_type.variant);
+        const case_index: Ref = @fromBackingInt(case_type.case_index);
+        base = self.builder.emit_refs(.variant_payload, case_type.payload, narrowed, case_index);
+        base_type = case_type.payload;
+    }
 
     const tree = self.resolver.tree;
     const arguments = tree.manychildren(tree.arg(node, 1));
@@ -3114,10 +3193,7 @@ fn record_update(self: *HighLowerer, node: NodeId) Ref {
         const value = self.expression_as(tree.arg_value(argument), field_type);
         self.scratch.buffer[mark + field] = @backingInt(value);
     };
-    self.complete_fields(base_type, mark);
-    const fields = self.builder.list(self.scratch.buffer[mark..self.scratch.len]);
-    self.scratch.len = mark;
-    return self.builder.emit(.aggregate, base_type, 0, fields);
+    return self.constructed(if (case != .none) case else base_type, mark);
 }
 
 // the address of `a.b[i]` of `x with (a.b[i] = ..)` in the copy at `record`. pushes the type and
@@ -3274,6 +3350,23 @@ fn member_field(
     field_type: Index,
     field: u32,
 ) Ref {
+    // a payload a strategy or bits make is no place, it is read out of the value
+    const base_type = self.static_pool.through_pointer(parent_type);
+    const is_case = self.static_pool.tag(base_type) == .variant_case_type;
+    const pool = self.static_pool;
+    const variant = if (is_case) pool.get(base_type).variant_case_type.variant else .none;
+    if (is_case and !self.stores_payloads(variant)) {
+        const parent_value = self.expression(parent);
+        const value = if (base_type == parent_type)
+            parent_value
+        else
+            self.load(base_type, parent_value);
+        const case_type = self.static_pool.get(base_type).variant_case_type;
+        const case_index: Ref = @fromBackingInt(case_type.case_index);
+        const payload =
+            self.builder.emit_refs(.variant_payload, case_type.payload, value, case_index);
+        return self.builder.emit(.extract, field_type, @backingInt(payload), field);
+    }
     if (self.is_pointer(parent_type) or self.is_place(parent)) {
         return self.load(field_type, self.place(node));
     }
@@ -3330,7 +3423,7 @@ fn place(self: *HighLowerer, node: NodeId) Ref {
             if (self.stack_slots.get(declaration)) |slot| return slot;
         },
         .member => if (self.field_place(node)) |pointer| return pointer,
-        .array_index => return self.element_place(node, value_type),
+        .array_index => if (tree.names_place(node)) return self.element_place(node, value_type),
         .dereference => return self.expression(tree.arg(node, 0)),
         else => {},
     }

@@ -198,6 +198,8 @@ pub const UnifiedOf = union(enum) { unified: Index, sizeless_side: u1 };
 pub const DifferenceOf = union(enum) { difference: Index, wrong_side: u1 };
 // how many of what a value may be another type covers (see `units_covered`)
 pub const Covered = enum(u8) { none, some, all };
+// how `??` and `?<-` of a `A ||| B` parameter go in its realization for one member
+pub const PackedUnwrap = enum(u8) { always, never, tested };
 
 // the first entries are fixed, so `u8`, `bool`, ... are known without any lookup
 pub const Index = enum(u32) {
@@ -474,6 +476,8 @@ pub const tag_type_of = type_queries.tag_type_of;
 pub const stored_tag_type = type_queries.stored_tag_type;
 pub const lookup_member = type_queries.lookup_member;
 pub const first_payload_case = type_queries.first_payload_case;
+pub const success_of = type_queries.success_of;
+pub const packed_unwrap = type_queries.packed_unwrap;
 pub const is_field_tagged = type_queries.is_field_tagged;
 pub const fallback_case = type_queries.fallback_case;
 pub const niche_case = type_queries.niche_case;
