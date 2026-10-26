@@ -639,11 +639,11 @@ pub fn text_of(self: *Trees, value: Value) ?[]const u8 {
 // the keyword kind (`type_u32`) of each builtin type index (`u32_type`) that has one
 const keyword_kinds = blk: {
     var kinds: [Index.first_dynamic]?Kind = @splat(null);
-    const ti = @typeInfo(Index).@"enum";
-    for (ti.field_names, ti.field_values) |fname, fval| {
+    const info = @typeInfo(Index).@"enum";
+    for (info.field_names, info.field_values) |fname, fvalue| {
         if (!std.mem.endsWith(u8, fname, "_type")) continue;
         const keyword = "type_" ++ fname[0 .. fname.len - "_type".len];
-        if (@hasField(Kind, keyword)) kinds[fval] = @field(Kind, keyword);
+        if (@hasField(Kind, keyword)) kinds[fvalue] = @field(Kind, keyword);
     }
     break :blk kinds;
 };

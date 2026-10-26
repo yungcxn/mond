@@ -848,7 +848,7 @@ fn infer_return_value(
     }
     self.reject_escape(context, value, context.return_type);
     // a slice returned is held in the function's result (see `Slices`)
-    const result = Resolver.Slices.slot(.result, @intFromEnum(context.declaration), 0);
+    const result = Resolver.Slices.slot(.result, @backingInt(context.declaration), 0);
     if (context.declaration != .none) self.owning_resolver().slices.flows(value, result);
     return .never_type;
 }

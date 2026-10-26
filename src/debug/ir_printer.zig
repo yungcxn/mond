@@ -533,7 +533,7 @@ fn print_value(writer: *Writer, lowerer: *HighLowerer, value: StaticPool.Index) 
 }
 
 fn print_reference(writer: *Writer, lowerer: *HighLowerer, operand: u32) !void {
-    const reference: Ir.Ref = @enumFromInt(operand);
+    const reference: Ir.Ref = @fromBackingInt(operand);
     if (reference == .none) return writer.writeAll(dim ++ "void" ++ reset);
     if (reference.is_global()) {
         const declaration = lowerer.ir.globals.column(.decl)[reference.index()];
@@ -546,7 +546,7 @@ fn print_reference(writer: *Writer, lowerer: *HighLowerer, operand: u32) !void {
 
 // what a pointer operand points at: a global by name, else the dereferenced operand
 fn print_place(writer: *Writer, lowerer: *HighLowerer, operand: u32) !void {
-    const reference: Ir.Ref = @enumFromInt(operand);
+    const reference: Ir.Ref = @fromBackingInt(operand);
     if (reference.is_global()) {
         const declaration = lowerer.ir.globals.column(.decl)[reference.index()];
         const name = declaration_name(lowerer.resolver, declaration);
@@ -557,7 +557,7 @@ fn print_place(writer: *Writer, lowerer: *HighLowerer, operand: u32) !void {
 }
 
 fn operand_type(lowerer: *HighLowerer, function_index: usize, operand: u32) StaticPool.Index {
-    const reference: Ir.Ref = @enumFromInt(operand);
+    const reference: Ir.Ref = @fromBackingInt(operand);
     if (reference == .none) return .none;
     if (reference.is_const()) return lowerer.static_pool.type_of(reference.value());
     if (reference.is_global()) {
@@ -664,9 +664,9 @@ const InstructionContext = struct {
         try writer.writeAll(") ");
         try context.reference(instruction.a);
         const conversion_name = if (instruction.op == .convert)
-            @tagName(@as(StaticPool.CoercionKind, @enumFromInt(instruction.b)))
+            @tagName(@as(StaticPool.CoercionKind, @fromBackingInt(@intCast(instruction.b))))
         else
-            @tagName(@as(StaticPool.CastKind, @enumFromInt(instruction.b)));
+            @tagName(@as(StaticPool.CastKind, @fromBackingInt(@intCast(instruction.b))));
         try writer.print(dim ++ "  /* {s} */" ++ reset, .{conversion_name});
     }
 
@@ -678,7 +678,7 @@ const InstructionContext = struct {
         try writer.writeAll(kind_color ++ "alloca" ++ reset ++ "(");
         try print_type(writer, context.lowerer, allocated_type);
         // the optional operand is the element count
-        if (@as(Ir.Ref, @enumFromInt(instruction.a)) != .none) {
+        if (@as(Ir.Ref, @fromBackingInt(instruction.a)) != .none) {
             try writer.writeAll("[");
             try context.reference(instruction.a);
             try writer.writeAll("]");
@@ -741,7 +741,7 @@ const InstructionContext = struct {
         try writer.print(") " ++ kind_color ++ "{s}" ++ reset, .{name});
 
         try writer.writeAll("(");
-        const has_payload = @as(Ir.Ref, @enumFromInt(instruction.b)) != .none;
+        const has_payload = @as(Ir.Ref, @fromBackingInt(instruction.b)) != .none;
         if (has_payload) try context.reference(instruction.b);
         try writer.writeAll(")");
     }
@@ -835,7 +835,7 @@ const InstructionContext = struct {
 
     fn print_return(context: InstructionContext) !void {
         try context.writer.writeAll(kind_color ++ "return" ++ reset);
-        if (@as(Ir.Ref, @enumFromInt(context.instruction.a)) == .none) return;
+        if (@as(Ir.Ref, @fromBackingInt(context.instruction.a)) == .none) return;
         try context.writer.writeAll(" ");
         try context.reference(context.instruction.a);
     }

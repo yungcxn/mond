@@ -99,7 +99,7 @@ const binary_of_kind: [kind_count]?BinaryRow = blk: {
         seen[@backingInt(@as(BinaryOperator, row[1]))] = true;
     }
     for (seen, 0..) |was_seen, i| {
-        const operator: BinaryOperator = @fromBackingInt(@intCast(i));
+        const operator: BinaryOperator = @fromBackingInt(i);
         if (!was_seen) @compileError("operator without a node kind: " ++ @tagName(operator));
     }
     break :blk table;
@@ -122,7 +122,7 @@ const assigning_of_kind: [kind_count]?AssigningRow = blk: {
 comptime {
     @setEvalBranchQuota(100_000);
     for (0..kind_count) |i| {
-        const kind: Kind = @fromBackingInt(@intCast(i));
+        const kind: Kind = @fromBackingInt(i);
         const wants_binary_row = switch (constructs.construct_of(kind)) {
             .arithmetic, .comparison, .short_circuit_logic, .logical_xor => true,
             else => false,

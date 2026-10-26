@@ -39,7 +39,7 @@ pub fn print_operands(
         switch (operand.kind) {
             .name => {
                 const known = value < resolver.name_pool.text_to_name.count();
-                const text = if (known) resolver.name_pool.text_of(@enumFromInt(value)) else "?";
+                const text = if (known) resolver.name_pool.text_of(@fromBackingInt(value)) else "?";
                 // a name the compiler made (hygiene, a namespace's ``x`name``) shows as written
                 const written = text[0 .. std.mem.indexOfScalar(u8, text, '`') orelse text.len];
                 try writer.print(ink.bold ++ "`{s}`" ++ ink.reset, .{written});
@@ -48,7 +48,7 @@ pub fn print_operands(
                 try writer.writeAll(ink.type_color);
                 const pool = &resolver.static_pool;
                 if (value < pool.items.len()) {
-                    try pool.format(&resolver.name_pool, @enumFromInt(value), writer);
+                    try pool.format(&resolver.name_pool, @fromBackingInt(value), writer);
                 } else {
                     try writer.writeAll("?");
                 }

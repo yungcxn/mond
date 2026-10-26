@@ -62,7 +62,7 @@ pub fn deinit(self: *Types) void {
 
 pub fn of(self: *Types, type_index: Index) Type {
     if (type_index == .none) return self.unit;
-    const i = @intFromEnum(type_index);
+    const i = @backingInt(type_index);
     if (self.memo[i] == null) self.memo[i] = self.lower(type_index);
     return self.memo[i];
 }
@@ -176,7 +176,7 @@ fn lower(self: *Types, type_index: Index) Type {
                 break :blk llvm.LLVMArrayType2(byte, pool.layout(type_index).size);
             }
             const named = self.named_struct(type_index);
-            self.memo[@intFromEnum(type_index)] = named;
+            self.memo[@backingInt(type_index)] = named;
             const fields = self.allocator.alloc(Type, record.field_types.len) catch @panic("OOM");
             defer self.allocator.free(fields);
             for (record.field_types, fields) |field_type, *field| field.* = self.of(field_type);

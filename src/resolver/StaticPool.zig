@@ -257,7 +257,7 @@ pub const Index = enum(u32) {
                 return @fromBackingInt(@intCast(first_odd_int + signed * odd_widths.len + rank));
             },
         };
-        return @fromBackingInt(@intCast(signed * 4 + standard));
+        return @fromBackingInt(signed * 4 + standard);
     }
 };
 
@@ -639,16 +639,18 @@ fn put(self: *StaticPool, payload: anytype) u32 {
             self.payload_words.push(@intCast(payload.len));
             for (payload) |item| self.payload_words.push(@intCast(word64(item)));
         },
-        .@"struct" => |i| {
-            inline for (i.field_names, i.field_types) |fname, ftype| if (!comptime is_list(ftype)) {
+        .@"struct" => |info| {
+            const names = info.field_names;
+            const types = info.field_types;
+            inline for (names, types) |fname, ftype| if (!comptime is_list(ftype)) {
                 const word = word64(@field(payload, fname));
                 self.payload_words.push(@truncate(word));
                 if (@sizeOf(ftype) == 8) self.payload_words.push(@intCast(word >> 32));
             };
-            inline for (i.field_names, i.field_types) |fname, ftype| if (comptime is_list(ftype)) {
+            inline for (names, types) |fname, ftype| if (comptime is_list(ftype)) {
                 self.payload_words.push(@intCast(@field(payload, fname).len));
             };
-            inline for (i.field_names, i.field_types) |fname, ftype| if (comptime is_list(ftype)) {
+            inline for (names, types) |fname, ftype| if (comptime is_list(ftype)) {
                 for (@field(payload, fname)) |item| {
                     self.payload_words.push(@intCast(word64(item)));
                 }
@@ -664,10 +666,12 @@ fn take(self: *const StaticPool, comptime T: type, data: u32) T {
     switch (@typeInfo(T)) {
         .@"enum" => return @fromBackingInt(@intCast(data)),
         .pointer => return @ptrCast(words[data + 1 ..][0..words[data]]),
-        .@"struct" => |i| {
+        .@"struct" => |info| {
+            const names = info.field_names;
+            const types = info.field_types;
             var result: T = undefined;
             var at = data;
-            inline for (i.field_names, i.field_types) |fname, ftype| if (!comptime is_list(ftype)) {
+            inline for (names, types) |fname, ftype| if (!comptime is_list(ftype)) {
                 const low: u64 = words[at];
                 const wide = @sizeOf(ftype) == 8;
                 const word = if (wide) low | @as(u64, words[at + 1]) << 32 else low;
@@ -679,16 +683,15 @@ fn take(self: *const StaticPool, comptime T: type, data: u32) T {
                     else => @intCast(word),
                 };
             };
-            var list_lengths: [i.field_types.len]u32 = undefined;
-            inline for (i.field_types, 0..) |ftype, j| if (comptime is_list(ftype)) {
+            var list_lengths: [types.len]u32 = undefined;
+            inline for (types, 0..) |ftype, j| if (comptime is_list(ftype)) {
                 list_lengths[j] = words[at];
                 at += 1;
             };
-            inline for (i.field_names, i.field_types, 0..) |fname, ftype, j|
-                if (comptime is_list(ftype)) {
-                    @field(result, fname) = @ptrCast(words[at..][0..list_lengths[j]]);
-                    at += list_lengths[j];
-                };
+            inline for (names, types, 0..) |fname, ftype, j| if (comptime is_list(ftype)) {
+                @field(result, fname) = @ptrCast(words[at..][0..list_lengths[j]]);
+                at += list_lengths[j];
+            };
             return result;
         },
         else => @compileError("no decoding for " ++ @typeName(T)),
@@ -707,7 +710,7 @@ fn push_item(self: *StaticPool, item: Item, holds_type_variables: bool) Index {
         .state = .unknown,
         .niche = std.mem.zeroes(Layout.Niche),
     });
-    return @fromBackingInt(@intCast(i));
+    return @fromBackingInt(i);
 }
 
 fn any_type_variables(self: *const StaticPool, payload: anytype) bool {
@@ -718,8 +721,8 @@ fn any_type_variables(self: *const StaticPool, payload: anytype) bool {
         return false;
     }
     if (@typeInfo(T) != .@"struct") return false;
-    inline for (@typeInfo(T).@"struct".field_names) |fieldname| {
-        if (self.any_type_variables(@field(payload, fieldname))) return true;
+    inline for (@typeInfo(T).@"struct".field_names) |fname| {
+        if (self.any_type_variables(@field(payload, fname))) return true;
     }
     return false;
 }
@@ -767,14 +770,14 @@ pub fn init(allocator: std.mem.Allocator) StaticPool {
         _ = self.intern(.{ .int_type = .{ .signedness = signedness, .bits = bits } });
     }
     for ([_]u16{ 16, 32, 64 }) |bits| _ = self.intern(.{ .float_type = .{ .bits = bits } });
-    inline for (@typeInfo(SimpleType).@"enum".field_values) |fv| {
-        _ = self.intern(.{ .simple_type = @fromBackingInt(@intCast(fv)) });
+    inline for (@typeInfo(SimpleType).@"enum".field_values) |fvalue| {
+        _ = self.intern(.{ .simple_type = @fromBackingInt(fvalue) });
     }
-    inline for (@typeInfo(MetaType).@"enum".field_values) |fv| {
-        _ = self.intern(.{ .meta_type = @fromBackingInt(@intCast(fv)) });
+    inline for (@typeInfo(MetaType).@"enum".field_values) |fvalue| {
+        _ = self.intern(.{ .meta_type = @fromBackingInt(fvalue) });
     }
-    inline for (@typeInfo(SimpleValue).@"enum".field_values) |fv| {
-        _ = self.intern(.{ .simple_value = @fromBackingInt(@intCast(fv)) });
+    inline for (@typeInfo(SimpleValue).@"enum".field_values) |fvalue| {
+        _ = self.intern(.{ .simple_value = @fromBackingInt(fvalue) });
     }
     _ = self.intern(.{ .ast_type = .{ .produces = .none, .root_kind = 0 } });
     for ([_]IntType.Signedness{ .unsigned, .signed }) |signedness| for (Index.odd_widths) |bits| {
@@ -844,7 +847,7 @@ pub fn get(self: *const StaticPool, index: Index) Key {
     const data = self.items.column(.data)[@backingInt(index)];
     return switch (entry_tag) {
         .pointer_type, .mutable_pointer_type => .{ .pointer_type = .{
-            .pointee = @fromBackingInt(@intCast(data)),
+            .pointee = @fromBackingInt(data),
             .is_mutable = entry_tag == .mutable_pointer_type,
         } },
         .string_value => {
@@ -886,7 +889,7 @@ pub fn is_pointer(self: *const StaticPool, type_index: Index) bool {
 // the pointee of a pointer type, any other type itself
 pub fn pointee(self: *const StaticPool, type_index: Index) Index {
     if (!self.is_pointer(type_index)) return type_index;
-    return @fromBackingInt(@intCast(self.items.column(.data)[@backingInt(type_index)]));
+    return @fromBackingInt(self.items.column(.data)[@backingInt(type_index)]);
 }
 
 pub fn array_element(self: *const StaticPool, type_index: Index) Index {
@@ -947,9 +950,9 @@ pub fn type_of(self: *const StaticPool, value: Index) Index {
     const data = self.items.column(.data)[@backingInt(value)];
     return switch (self.tag(value)) {
         .int_value, .float_value, .aggregate_value, .variant_value, .tree_value => {
-            return @fromBackingInt(@intCast(self.payload_words.buffer[data]));
+            return @fromBackingInt(self.payload_words.buffer[data]);
         },
-        .string_value => @fromBackingInt(@intCast(self.payload_words.buffer[data + 2])),
+        .string_value => @fromBackingInt(self.payload_words.buffer[data + 2]),
         .simple_value => if (data == @backingInt(SimpleValue.unit)) .unit_type else .bool_type,
         .function_value => .fun_type,
         .static_function => .stcfun_type,

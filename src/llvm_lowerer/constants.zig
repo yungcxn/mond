@@ -24,7 +24,7 @@ pub fn operand(lowerer: *LLVMLowerer, value: Index) Value {
         pool.type_of(value);
     if (!lowerer.types.is_in_memory(value_type)) return lower(lowerer, value, value_type);
 
-    const slot = &lowerer.value_globals[@intFromEnum(value)];
+    const slot = &lowerer.value_globals[@backingInt(value)];
     if (slot.* == null) {
         const initializer = lower(lowerer, value, value_type);
         slot.* = constant_global(lowerer, initializer, lowerer.alignment_of(value_type));
@@ -33,7 +33,7 @@ pub fn operand(lowerer: *LLVMLowerer, value: Index) Value {
 }
 
 pub fn zeros(lowerer: *LLVMLowerer, zeroed_type: Index) Value {
-    const slot = &lowerer.zero_globals[@intFromEnum(zeroed_type)];
+    const slot = &lowerer.zero_globals[@backingInt(zeroed_type)];
     if (slot.* == null) {
         const initializer = llvm.LLVMConstNull(lowerer.types.of(zeroed_type));
         slot.* = constant_global(lowerer, initializer, lowerer.alignment_of(zeroed_type));
@@ -101,7 +101,7 @@ pub fn lower(lowerer: *LLVMLowerer, value: Index, expected: Index) Value {
         .variant_value => |variant| lower_variant(lowerer, variant, into),
         .variant_case_type => lower_variant(lowerer, .{ .case = value, .payload = .none }, into),
         .function_value => |declaration| {
-            const function = lowerer.function_of_declaration[@intFromEnum(declaration)];
+            const function = lowerer.function_of_declaration[@backingInt(declaration)];
             return pair(lowerer, lowerer.thunk(function), llvm.LLVMConstNull(types.pointer));
         },
         // types and trees are static only, and so is what stands for them
@@ -111,7 +111,7 @@ pub fn lower(lowerer: *LLVMLowerer, value: Index, expected: Index) Value {
 
 // the bytes of a string with a zero byte behind, which c functions need
 pub fn string_pointer(lowerer: *LLVMLowerer, value: Index) Value {
-    const slot = &lowerer.value_globals[@intFromEnum(value)];
+    const slot = &lowerer.value_globals[@backingInt(value)];
     if (slot.* == null) {
         const bytes = lowerer.pool.get(value).string_value;
         const text = llvm.LLVMConstStringInContext2(lowerer.context, bytes.ptr, bytes.len, 0);

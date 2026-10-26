@@ -31,7 +31,7 @@ pub fn count(self: *const TypeVariables) u32 {
 }
 
 pub fn create(self: *TypeVariables, origin: u32) Index {
-    const variable: Index = @enumFromInt(self.variables.len());
+    const variable: Index = @fromBackingInt(self.variables.len());
     self.variables.push(.{ .parent = variable, .binding = .none, .origin = origin });
     return variable;
 }
@@ -40,10 +40,10 @@ pub fn create(self: *TypeVariables, origin: u32) Index {
 pub fn root_of(self: *TypeVariables, variable: Index) Index {
     const parents = self.variables.column(.parent);
     var current = variable;
-    while (parents[@intFromEnum(current)] != current) {
-        const parent = parents[@intFromEnum(current)];
-        const grandparent = parents[@intFromEnum(parent)];
-        parents[@intFromEnum(current)] = grandparent;
+    while (parents[@backingInt(current)] != current) {
+        const parent = parents[@backingInt(current)];
+        const grandparent = parents[@backingInt(parent)];
+        parents[@backingInt(current)] = grandparent;
         current = grandparent;
     }
     return current;
@@ -53,30 +53,30 @@ pub fn root_of(self: *TypeVariables, variable: Index) Index {
 pub fn root_of_const(self: *const TypeVariables, variable: Index) Index {
     const parents = self.variables.column(.parent);
     var current = variable;
-    while (parents[@intFromEnum(current)] != current) current = parents[@intFromEnum(current)];
+    while (parents[@backingInt(current)] != current) current = parents[@backingInt(current)];
     return current;
 }
 
 pub fn bind(self: *TypeVariables, variable: Index, binding: StaticPool.Index) void {
-    self.variables.column(.binding)[@intFromEnum(self.root_of(variable))] = binding;
+    self.variables.column(.binding)[@backingInt(self.root_of(variable))] = binding;
 }
 
 pub fn unite(self: *TypeVariables, first: Index, second: Index) void {
     const first_root = self.root_of(first);
     const second_root = self.root_of(second);
     if (first_root == second_root) return;
-    self.variables.column(.parent)[@intFromEnum(first_root)] = second_root;
+    self.variables.column(.parent)[@backingInt(first_root)] = second_root;
     // the united group keeps a binding either side had
     const bindings = self.variables.column(.binding);
-    if (bindings[@intFromEnum(second_root)] == .none) {
-        bindings[@intFromEnum(second_root)] = bindings[@intFromEnum(first_root)];
+    if (bindings[@backingInt(second_root)] == .none) {
+        bindings[@backingInt(second_root)] = bindings[@backingInt(first_root)];
     }
 }
 
 pub fn binding_of(self: *TypeVariables, variable: Index) StaticPool.Index {
-    return self.variables.column(.binding)[@intFromEnum(self.root_of(variable))];
+    return self.variables.column(.binding)[@backingInt(self.root_of(variable))];
 }
 
 pub fn binding_of_const(self: *const TypeVariables, variable: Index) StaticPool.Index {
-    return self.variables.column(.binding)[@intFromEnum(self.root_of_const(variable))];
+    return self.variables.column(.binding)[@backingInt(self.root_of_const(variable))];
 }

@@ -59,7 +59,7 @@ pub fn any(
 }
 
 pub fn expr(p: *Parser, prec: u8) anyerror!NodeId {
-    const token = @intFromEnum(try p.pop_tok());
+    const token = @backingInt(try p.pop_tok());
     if (lookahead.macro_syntax[token]) p.tree.macros = true;
     const lookup_f = lookahead.pre[token] orelse return error.NoRuleFound;
     return rest(p, try lookup_f(p), prec);
@@ -75,14 +75,14 @@ fn rest(p: *Parser, first: NodeId, prec: u8) anyerror!NodeId {
         const is_cast = tok == .kw_as or tok == .kw_asbits or tok == .kw_oftype;
         if (prec > lookahead.prec_unary and is_cast) break;
         if (prec > lookahead.prec_unary and p.difference and tok == .@"xpct_--") break;
-        const post_f = lookahead.post[@intFromEnum(tok)] orelse break;
+        const post_f = lookahead.post[@backingInt(tok)] orelse break;
 
         p.tok_cursor += 1;
         parent = try post_f(p, parent);
     }
 
     while (p.tok_cursor < p.tokens.len()) {
-        const precd_bin = lookahead.binary_compute[@intFromEnum(try p.peek_tok())] orelse break;
+        const precd_bin = lookahead.binary_compute[@backingInt(try p.peek_tok())] orelse break;
         if (precd_bin.prec < prec or p.angle and try p.peek_eq_tok(.@"xpct_>")) break;
 
         p.tok_cursor += 1;
@@ -224,7 +224,7 @@ pub fn bracket(p: *Parser) anyerror!NodeId {
 
 fn type_follows(p: *Parser) !bool {
     const t = try p.peek_tok();
-    return lookahead.pre[@intFromEnum(t)] != null and !(p.head and t == .@"pct_{");
+    return lookahead.pre[@backingInt(t)] != null and !(p.head and t == .@"pct_{");
 }
 
 pub fn true_(p: *Parser) anyerror!NodeId {
@@ -244,7 +244,7 @@ pub fn brk(p: *Parser) anyerror!NodeId {
 }
 
 pub fn ret(p: *Parser) anyerror!NodeId {
-    if (lookahead.pre[@intFromEnum(try p.peek_tok())] == null) return p.tree.push_node(.ret_void);
+    if (lookahead.pre[@backingInt(try p.peek_tok())] == null) return p.tree.push_node(.ret_void);
 
     return p.tree.push_node_with(.ret, .{ .subnode = try any(p, .forbid_assign, 0) });
 }
@@ -791,7 +791,7 @@ pub fn selftag_unwrap(p: *Parser, lhs: NodeId) anyerror!NodeId {
     // a block after `??` belongs to what holds the unwrap (`match x?? {`), a block fallback is in
     // parentheses like any block operand
     const next = try p.peek_tok();
-    if (next == .@"pct_{" or lookahead.pre[@intFromEnum(next)] == null) {
+    if (next == .@"pct_{" or lookahead.pre[@backingInt(next)] == null) {
         return p.tree.push_node_with(.selftag_unwrap, .{ .value = lhs });
     }
 
@@ -860,7 +860,7 @@ pub fn source(comptime kind: Node.Kind) fn (parser: *Parser) anyerror!NodeId {
 }
 
 pub fn refl(p: *Parser) anyerror!NodeId {
-    const named = lookahead.pre[@intFromEnum(try p.peek_tok())] != null;
+    const named = lookahead.pre[@backingInt(try p.peek_tok())] != null;
     const reflected = if (named)
         try any(p, .forbid_assign, lookahead.prec_unary + 1)
     else

@@ -23,7 +23,7 @@ const Partial = struct {
 pub fn layout(pool: *StaticPool, type_index: Index) Layout {
     // a nominal type reserved but not completed yet reads as poison
     const reserved = type_index != .poison_type and pool.tag(type_index) == .simple_type and
-        pool.items.column(.data)[@intFromEnum(type_index)] == @intFromEnum(SimpleType.poison);
+        pool.items.column(.data)[@backingInt(type_index)] == @backingInt(SimpleType.poison);
     if (reserved) return std.mem.zeroes(Layout);
     // a case is laid out as its variant, before its own entry is marked in progress; a case of a
     // packed variant has a size of its own
@@ -33,7 +33,7 @@ pub fn layout(pool: *StaticPool, type_index: Index) Layout {
     }
     // a subset is laid out as its whole
     if (pool.tag(type_index) == .variant_subset_type) return pool.layout(pool.whole_of(type_index));
-    const i = @intFromEnum(type_index);
+    const i = @backingInt(type_index);
     const state = &pool.layouts.column(.state)[i];
     switch (state.*) {
         .done, .infinite => return pool.layouts.get(i).?,

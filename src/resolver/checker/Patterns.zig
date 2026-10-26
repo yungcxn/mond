@@ -493,7 +493,7 @@ fn constructor_pattern(
         else
             .none;
         if (binder != .none) resolver.slices.connects(
-            Resolver.Slices.slot(.field, @intFromEnum(record_type), field_of_argument[i]),
+            Resolver.Slices.slot(.field, @backingInt(record_type), field_of_argument[i]),
             Resolver.Slices.declaration_slot(binder),
         );
     }

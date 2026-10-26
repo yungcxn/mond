@@ -100,7 +100,7 @@ pub fn print_node(
 
     const kind = printer.tree.ast_nodes.column(.nk)[node];
     const slots: [2]NodeId = printer.tree.ast_nodes.column(.args)[node];
-    const child_count = Node.nk_childc[@intFromEnum(kind)];
+    const child_count = Node.nk_childc[@backingInt(kind)];
     const is_leaf = child_count == .none or child_count == .data;
 
     if (!is_root) {
@@ -137,7 +137,7 @@ pub fn print_node(
 
     if (child_count == .many) return printer.print_list_children(slots, child_prefix);
 
-    const field_names = Node.nk_field_names[@intFromEnum(kind)];
+    const field_names = Node.nk_field_names[@backingInt(kind)];
     const field_count: usize = if (child_count == .two) 2 else 1;
     const second_name_length = if (field_count == 2) field_names[1].len else 0;
     const field_label_width = @max(field_names[0].len, second_name_length);
@@ -191,7 +191,7 @@ pub fn annotate(printer: TreePrinter, node: NodeId) !void {
         const declaration_format = dim ++ "  → " ++ reset ++ bold ++ "#{d} {s}" ++ reset ++
             dim ++ " {s}" ++ reset;
         try printer.writer.print(declaration_format, .{
-            @intFromEnum(declaration),
+            @backingInt(declaration),
             source_positions.declaration_name(resolver, declaration),
             @tagName(resolver.decl_pool.get(declaration, .kind)),
         });

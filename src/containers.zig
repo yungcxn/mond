@@ -72,28 +72,28 @@ pub fn DynamicBuffer(T: type) type {
 // a growable struct of arrays: one `DynamicBuffer` per field of `Row`, all of the same length,
 // so a pass reading one field of every row touches only that field's memory
 pub fn StructOfArrays(Row: type) type {
-    const ti = @typeInfo(Row).@"struct";
+    const info = @typeInfo(Row).@"struct";
 
     return struct {
         const Self = @This();
         pub const Field = std.meta.FieldEnum(Row);
 
         pub const Buffers = blk: {
-            var names: [ti.field_names.len][]const u8 = undefined;
-            var types: [ti.field_types.len]type = undefined;
-            for (ti.field_names, ti.field_types, 0..) |n, t, i| {
-                names[i] = n;
-                types[i] = DynamicBuffer(t);
+            var names: [info.field_names.len][]const u8 = undefined;
+            var types: [info.field_types.len]type = undefined;
+            for (info.field_names, info.field_types, 0..) |fname, ftype, i| {
+                names[i] = fname;
+                types[i] = DynamicBuffer(ftype);
             }
             break :blk @Struct(.auto, null, &names, &types, &@splat(.{}));
         };
 
         pub const Columns = blk: {
-            var names: [ti.field_names.len][]const u8 = undefined;
-            var types: [ti.field_types.len]type = undefined;
-            for (ti.field_names, ti.field_types, 0..) |n, t, i| {
-                names[i] = n;
-                types[i] = []t;
+            var names: [info.field_names.len][]const u8 = undefined;
+            var types: [info.field_types.len]type = undefined;
+            for (info.field_names, info.field_types, 0..) |fname, ftype, i| {
+                names[i] = fname;
+                types[i] = []ftype;
             }
             break :blk @Struct(.auto, null, &names, &types, &@splat(.{}));
         };
@@ -102,31 +102,31 @@ pub fn StructOfArrays(Row: type) type {
 
         pub fn init(allocator: std.mem.Allocator, initial_capacity: u32) Self {
             var buffers: Buffers = undefined;
-            inline for (ti.field_names) |fieldname| {
-                @field(buffers, fieldname) = .init(allocator, initial_capacity);
+            inline for (info.field_names) |fname| {
+                @field(buffers, fname) = .init(allocator, initial_capacity);
             }
             return .{ .buffers = buffers };
         }
 
         pub fn deinit(self: *Self) void {
-            inline for (ti.field_names) |fieldname| @field(self.buffers, fieldname).deinit();
+            inline for (info.field_names) |fname| @field(self.buffers, fname).deinit();
         }
 
         pub fn len(self: *const Self) u32 {
-            return @field(self.buffers, ti.field_names[0]).len;
+            return @field(self.buffers, info.field_names[0]).len;
         }
 
         pub fn push(self: *Self, row: Row) void {
-            inline for (ti.field_names) |fieldname| {
-                @field(self.buffers, fieldname).push(@field(row, fieldname));
+            inline for (info.field_names) |fname| {
+                @field(self.buffers, fname).push(@field(row, fname));
             }
         }
 
         pub fn get(self: *const Self, index: u32) ?Row {
             if (index >= self.len()) return null;
             var row: Row = undefined;
-            inline for (ti.field_names) |fieldname| {
-                @field(row, fieldname) = @field(self.buffers, fieldname).buffer[index];
+            inline for (info.field_names) |fname| {
+                @field(row, fname) = @field(self.buffers, fname).buffer[index];
             }
             return row;
         }
@@ -146,7 +146,7 @@ pub fn StructOfArrays(Row: type) type {
 
         pub fn truncate(self: *Self, new_length: u32) void {
             std.debug.assert(new_length <= self.len());
-            inline for (ti.field_names) |fieldname| @field(self.buffers, fieldname).len = new_length;
+            inline for (info.field_names) |fname| @field(self.buffers, fname).len = new_length;
         }
 
         pub fn column(self: *const Self, comptime field: Field) []@FieldType(Row, @tagName(field)) {
@@ -155,8 +155,8 @@ pub fn StructOfArrays(Row: type) type {
 
         pub fn columns(self: *const Self) Columns {
             var result: Columns = undefined;
-            inline for (ti.field_names) |fieldname| {
-                @field(result, fieldname) = @field(self.buffers, fieldname).items();
+            inline for (info.field_names) |fname| {
+                @field(result, fname) = @field(self.buffers, fname).items();
             }
             return result;
         }

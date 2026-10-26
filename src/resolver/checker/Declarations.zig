@@ -591,7 +591,7 @@ fn check_body_once(self: *Declarations, declaration: DeclPool.Index) void {
     resolver.scopes.close();
 
     // the first row of a method body is its `self`, a write to it makes the method a writing one
-    if (self_count == 1 and decl_pool.get(@enumFromInt(first_row), .flags).writes) {
+    if (self_count == 1 and decl_pool.get(@fromBackingInt(first_row), .flags).writes) {
         decl_pool.pointer(declaration, .flags).writes = true;
     }
 
@@ -652,7 +652,7 @@ pub fn check_function_result(self: *Declarations, context: *FunctionContext, bod
     if (resolver.tree.kind(body) != .block) {
         _ = resolver.expressions.check(context, body, context.return_type);
         resolver.expressions.reject_escape(context, body, context.return_type);
-        const result = Resolver.Slices.slot(.result, @intFromEnum(context.declaration), 0);
+        const result = Resolver.Slices.slot(.result, @backingInt(context.declaration), 0);
         resolver.slices.flows(body, result);
         const open_result = static_pool.substitute_type_variables(context.return_type);
         const is_endless = resolver.tree.kind(body) == .loop or
@@ -1081,12 +1081,12 @@ pub fn owner_of(self: *Declarations, declaration: DeclPool.Index) StaticPool.Ind
     if (decl_pool.get(declaration, .kind) != .trait_member) return .none;
 
     // a trait body row always precedes its members, so the walk ends before row 0
-    var row = @intFromEnum(declaration);
-    while (decl_pool.get(@enumFromInt(row), .kind) != .trait) {
+    var row = @backingInt(declaration);
+    while (decl_pool.get(@fromBackingInt(row), .kind) != .trait) {
         std.debug.assert(row > 0);
         row -= 1;
     }
-    return decl_pool.get(@enumFromInt(row), .static_value);
+    return decl_pool.get(@fromBackingInt(row), .static_value);
 }
 
 // the kind of type a definition node declares, `variable` for anything else

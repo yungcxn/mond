@@ -28,7 +28,7 @@ const integer_widths = blk: {
 const ref_bit: u64 = 1 << 63;
 
 pub fn pooled(pool_index: Index) Value {
-    return .{ .value_type = .none, .bits = @intFromEnum(pool_index) };
+    return .{ .value_type = .none, .bits = @backingInt(pool_index) };
 }
 
 pub fn boolean(truth: bool) Value {
@@ -39,7 +39,7 @@ pub fn int(int_type: Index, bits: u64) Value {
     // integer bits are kept sign- or zero-extended to 64 bits, so equal values have equal bits
     const normalized: u64 = blk: {
         if (!is_int(int_type)) break :blk bits;
-        const bit_width = integer_widths[@intFromEnum(int_type)];
+        const bit_width = integer_widths[@backingInt(int_type)];
         if (bit_width == 64) break :blk bits;
 
         const shift: u6 = @intCast(64 - bit_width);
@@ -76,7 +76,7 @@ pub fn slice_len(self: Value) u32 {
 }
 
 pub fn index(self: Value) Index {
-    return @enumFromInt(@as(u32, @truncate(self.bits)));
+    return @fromBackingInt(@as(u32, @truncate(self.bits)));
 }
 
 pub fn cell(self: Value) u32 {
@@ -94,8 +94,8 @@ pub fn is_pooled(self: Value) bool {
 // integers, floats and booleans hold their value in `bits`, any other type a block or reference
 pub fn is_boxed(self: Value) bool {
     if (self.value_type == .none) return false;
-    const ordinal = @intFromEnum(self.value_type);
-    return ordinal > @intFromEnum(Index.bool_type) and !is_int(self.value_type);
+    const ordinal = @backingInt(self.value_type);
+    return ordinal > @backingInt(Index.bool_type) and !is_int(self.value_type);
 }
 
 pub fn is_heap(self: Value) bool {
@@ -111,23 +111,23 @@ pub fn is(self: Value, pool_index: Index) bool {
 }
 
 pub fn is_int(value_type: Index) bool {
-    const ordinal = @intFromEnum(value_type);
-    return ordinal <= @intFromEnum(Index.i64_type) or
+    const ordinal = @backingInt(value_type);
+    return ordinal <= @backingInt(Index.i64_type) or
         ordinal >= Index.first_odd_int and ordinal < Index.first_dynamic;
 }
 
 pub fn is_float(value_type: Index) bool {
-    const ordinal = @intFromEnum(value_type);
-    return ordinal >= @intFromEnum(Index.f16_type) and ordinal <= @intFromEnum(Index.f64_type);
+    const ordinal = @backingInt(value_type);
+    return ordinal >= @backingInt(Index.f16_type) and ordinal <= @backingInt(Index.f64_type);
 }
 
 fn is_signed(value_type: Index) bool {
-    const ordinal = @intFromEnum(value_type);
+    const ordinal = @backingInt(value_type);
     if (ordinal >= Index.first_odd_int) {
         const first_signed = Index.first_odd_int + Index.odd_widths.len;
         return ordinal >= first_signed and ordinal < Index.first_dynamic;
     }
-    return ordinal >= @intFromEnum(Index.i8_type) and ordinal <= @intFromEnum(Index.i64_type);
+    return ordinal >= @backingInt(Index.i8_type) and ordinal <= @backingInt(Index.i64_type);
 }
 
 pub fn as_float(self: Value) f64 {
@@ -181,7 +181,7 @@ pub fn cast(self: Value, target_type: Index) Value {
     if (!is_float(self.value_type)) return int(target_type, self.bits);
 
     // a float saturates at the bounds of the integer type, NaN becomes zero
-    const bit_width: u7 = integer_widths[@intFromEnum(target_type)];
+    const bit_width: u7 = integer_widths[@backingInt(target_type)];
     const magnitude_bits = if (is_signed(target_type)) bit_width - 1 else bit_width;
     const limit = std.math.ldexp(@as(f64, 1), magnitude_bits);
     const minimum = if (is_signed(target_type)) -limit else 0;
@@ -199,9 +199,9 @@ pub fn cast(self: Value, target_type: Index) Value {
 
 // booleans take one byte
 fn width(value_type: Index) u7 {
-    if (is_int(value_type)) return integer_widths[@intFromEnum(value_type)];
+    if (is_int(value_type)) return integer_widths[@backingInt(value_type)];
     if (is_float(value_type)) {
-        const float_rank = @intFromEnum(value_type) - @intFromEnum(Index.f16_type);
+        const float_rank = @backingInt(value_type) - @backingInt(Index.f16_type);
         return @as(u7, 16) << @intCast(float_rank);
     }
     return 8;
@@ -367,7 +367,7 @@ pub fn is_number(value_type: Index) bool {
 }
 
 inline fn shift_amount(exact_amount: i128, int_type: Index) EvaluationError!u6 {
-    const bit_width = integer_widths[@intFromEnum(int_type)];
+    const bit_width = integer_widths[@backingInt(int_type)];
     if (exact_amount < 0 or exact_amount >= bit_width) return error.Invalid;
     return @intCast(exact_amount);
 }

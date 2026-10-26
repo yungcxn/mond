@@ -258,7 +258,7 @@ pub const Node = struct {
     pub const named = blk: {
         @setEvalBranchQuota(100_000);
         var list: [DefTable.len]struct { []const u8, Kind } = undefined;
-        for (case_names, 0..) |n, i| list[i] = .{ n, @fromBackingInt(@intCast(i)) };
+        for (case_names, 0..) |n, i| list[i] = .{ n, @fromBackingInt(i) };
         break :blk std.StaticStringMap(Kind).initComptime(list);
     };
 

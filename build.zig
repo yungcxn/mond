@@ -196,7 +196,7 @@ fn add_backend(b: *std.Build, module: *std.Build.Module) void {
 // passed over
 fn find_llvm_config(b: *std.Build) []const u8 {
     var candidates: [llvm_config_names.len + llvm_config_places.len]?[]const u8 = undefined;
-    for (llvm_config_names, 0..) |name, i| candidates[i] = b.findProgram(.{ .names = &.{name} }) orelse null;
+    for (llvm_config_names, 0..) |name, i| candidates[i] = b.findProgram(.{ .names = &.{name} });
     for (llvm_config_places, llvm_config_names.len..) |place, i| {
         const found = exists(b, place, "llvm-config");
         candidates[i] = if (found) b.pathJoin(&.{ place, "llvm-config" }) else null;

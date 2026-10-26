@@ -348,7 +348,7 @@ fn report(
     self.diagnostics.push(.{
         .range = positions.range(self, start, marked_end),
         // lsp counts from error = 1 to hint = 4
-        .severity = 3 - @intFromEnum(severity),
+        .severity = 3 - @backingInt(severity),
         .message = std.mem.concat(self.allocator, u8, &.{ what, operands }) catch @panic("OOM"),
     });
 }
@@ -484,7 +484,7 @@ test "tokens and diagnostics" {
     };
     try std.testing.expectEqual(expected.len * 5, result.data.len);
     for (expected, 0..) |token, i| {
-        const encoded = [_]u32{ token[0], token[1], token[2], @intFromEnum(token[3]), token[4] };
+        const encoded = [_]u32{ token[0], token[1], token[2], @backingInt(token[3]), token[4] };
         try std.testing.expectEqualSlices(u32, &encoded, result.data[i * 5 ..][0..5]);
     }
     try std.testing.expectEqual(1, result.diagnostics.len);
@@ -818,7 +818,8 @@ test "macros: the meta syntax is a macro, code by its role, splices and stcfuns 
         const encoded = result.data[i * 5 ..][0..5];
         line += encoded[0];
         character = if (encoded[0] == 0) character + encoded[1] else encoded[1];
-        if (line < 4) classes[line][character] = .{ @enumFromInt(encoded[3]), encoded[4] };
+        const class: Type = @fromBackingInt(@intCast(encoded[3]));
+        if (line < 4) classes[line][character] = .{ class, encoded[4] };
     }
     // line, character, what it is
     // `twice` ran in the pass that expanded it, `unused` never ran
@@ -881,7 +882,7 @@ test "a namespace is a namespace where it is declared and reached, a `pub` one o
         const encoded = result.data[i * 5 ..][0..5];
         line += encoded[0];
         character = if (encoded[0] == 0) character + encoded[1] else encoded[1];
-        classes[line][character] = @enumFromInt(encoded[3]);
+        classes[line][character] = @fromBackingInt(@intCast(encoded[3]));
     }
     const expected = [_]struct { u32, u32, Type }{
         .{ 0, 0, .namespace },  .{ 1, 22, .namespace }, .{ 1, 24, .function },
@@ -907,7 +908,7 @@ test "main and the protocol methods are keywords, a free function of the same na
         const encoded = result.data[i * 5 ..][0..5];
         line += encoded[0];
         character = if (encoded[0] == 0) character + encoded[1] else encoded[1];
-        classes[line][character] = @enumFromInt(encoded[3]);
+        classes[line][character] = @fromBackingInt(@intCast(encoded[3]));
     }
     const expected = [_]struct { u32, u32, Type }{
         .{ 0, 25, .keyword }, .{ 0, 51, .keyword }, .{ 2, 4, .function },  .{ 3, 0, .keyword },

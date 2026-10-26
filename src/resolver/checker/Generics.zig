@@ -244,8 +244,8 @@ pub fn realize(
         const origin = type_variables.variables.column(.origin)[i];
         switch (resolver.tree.kind(origin)) {
             .@"while", .while_with_repeat_stmt, .loop, .loop_with_repeat_stmt => {
-                if (type_variables.binding_of(@enumFromInt(i)) == .none) {
-                    type_variables.bind(@enumFromInt(i), StaticPool.dyn_len);
+                if (type_variables.binding_of(@fromBackingInt(@intCast(i))) == .none) {
+                    type_variables.bind(@fromBackingInt(@intCast(i)), StaticPool.dyn_len);
                 }
             },
             else => {},
@@ -264,7 +264,7 @@ pub fn realize(
         static_pool.nominal_declaration(result)
     else
         .none;
-    if (made != .none and @intFromEnum(made) >= first_local) {
+    if (made != .none and @backingInt(made) >= first_local) {
         self.template_of.put(resolver.allocator, made, generic) catch @panic("OOM");
     }
 

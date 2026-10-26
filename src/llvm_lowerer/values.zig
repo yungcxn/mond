@@ -427,7 +427,7 @@ pub fn aggregate(lowerer: *LLVMLowerer, aggregate_type: Index, parts: []const u3
     if (bit_packed(lowerer, aggregate_type)) |record| {
         _ = llvm.LLVMBuildStore(lowerer.builder, llvm.LLVMConstNull(memory_type), slot);
         for (parts, 0..) |part_ref, i| {
-            const value = lowerer.operand(@enumFromInt(part_ref));
+            const value = lowerer.operand(@fromBackingInt(part_ref));
             if (pool.is_bit_field(record, i)) {
                 // the bytes around the field read, its bits replaced, written back
                 const builder = lowerer.builder;
@@ -463,7 +463,7 @@ pub fn aggregate(lowerer: *LLVMLowerer, aggregate_type: Index, parts: []const u3
     }
     for (parts, 0..) |part_ref, i| {
         const part_type = if (element != .none) element else pool.field_type(aggregate_type, i);
-        const value = lowerer.operand(@enumFromInt(part_ref));
+        const value = lowerer.operand(@fromBackingInt(part_ref));
         store_value(
             lowerer,
             part_type,
@@ -629,7 +629,7 @@ fn strategy_call(
     const mark = lowerer.value_stack.items.len;
     defer lowerer.value_stack.shrinkRetainingCapacity(mark);
     lowerer.value_stack.appendSlice(lowerer.allocator, arguments) catch @panic("OOM");
-    const function_index = lowerer.function_of_declaration[@intFromEnum(function)];
+    const function_index = lowerer.function_of_declaration[@backingInt(function)];
     return lowerer.call_function(function_index, mark, null);
 }
 

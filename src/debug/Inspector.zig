@@ -63,7 +63,7 @@ pub fn run(
     for (declarations.node, declarations.kind, 0..) |node, kind, i| {
         const owns_code = kind.is_function() or
             kind == .record or kind == .variant or kind == .type_alias;
-        if (owns_code and node < owner.len) owner[node] = @enumFromInt(i);
+        if (owns_code and node < owner.len) owner[node] = @fromBackingInt(@intCast(i));
     }
 
     const inspector: Inspector = .{
@@ -132,14 +132,14 @@ pub fn run(
 
             var matched = false;
             for (0..resolver.decl_pool.entries.len()) |i| {
+                const declaration: DeclPool.Index = @fromBackingInt(@intCast(i));
                 if (wanted_index) |wanted| {
                     if (wanted != i) continue;
                 } else {
-                    const name = source_positions.declaration_name(resolver, @enumFromInt(i));
+                    const name = source_positions.declaration_name(resolver, declaration);
                     if (!std.mem.eql(u8, name, query)) continue;
                 }
                 matched = true;
-                const declaration: DeclPool.Index = @enumFromInt(i);
 
                 try inspector.writer.writeAll(style.function_color ++ "resolved\n" ++ reset);
                 try resolver_dump.declaration_row(
@@ -224,7 +224,7 @@ fn print_lowered(inspector: Inspector, declaration: DeclPool.Index) !void {
         if (kind == .record or kind == .variant or kind == .type_alias) {
             const static_values = resolver.decl_pool.entries.column(.static_value);
             for (static_values, 0..) |static_value, i| {
-                const candidate: DeclPool.Index = @enumFromInt(i);
+                const candidate: DeclPool.Index = @fromBackingInt(@intCast(i));
                 if (static_value == .none) continue;
                 const is_wanted = candidate == current or (candidate != .none and
                     resolver.generics.template_of.get(candidate) == current);
@@ -252,7 +252,7 @@ fn print_lowered(inspector: Inspector, declaration: DeclPool.Index) !void {
 fn continues_past_line(inspector: Inspector, node: NodeId, line: usize) bool {
     const tree = inspector.resolver.tree;
     const kind = tree.ast_nodes.column(.nk)[node];
-    if (Node.nk_childc[@intFromEnum(kind)] != .many) return false;
+    if (Node.nk_childc[@backingInt(kind)] != .many) return false;
 
     var last_descendant = node;
     while (tree.children(last_descendant).len > 0) {

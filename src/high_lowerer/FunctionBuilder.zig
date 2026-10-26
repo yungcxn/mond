@@ -153,7 +153,7 @@ pub fn emit_raw(
         .block = block,
         .origin = self.current_origin,
     });
-    return @fromBackingInt(@intCast(self.instructions.len() - 1));
+    return @fromBackingInt(self.instructions.len() - 1);
 }
 
 pub fn emit(self: *FunctionBuilder, op: Op, result_type: Index, a: u32, b: u32) Ref {
@@ -164,8 +164,8 @@ pub fn emit(self: *FunctionBuilder, op: Op, result_type: Index, a: u32, b: u32) 
         if (folding == .none) break :blk null;
         const unary = folding == .unary;
 
-        const left: Ref = @fromBackingInt(@intCast(a));
-        const right: Ref = if (unary) Ref.of(.unit_value) else @fromBackingInt(@intCast(b));
+        const left: Ref = @fromBackingInt(a);
+        const right: Ref = if (unary) Ref.of(.unit_value) else @fromBackingInt(b);
         if (!left.is_const() or !right.is_const()) break :blk null;
 
         const left_value = left.value();
@@ -424,7 +424,7 @@ pub fn seal(self: *FunctionBuilder, block: u32) void {
     if (self.blocks.column(.sealed)[block]) return;
     var pending = self.blocks.column(.pending_phis)[block];
     while (pending != none) : (pending = self.pending_phis.column(.next_pending)[pending]) {
-        const phi: Ref = @fromBackingInt(@intCast(self.pending_phis.column(.phi)[pending]));
+        const phi: Ref = @fromBackingInt(self.pending_phis.column(.phi)[pending]);
         self.fill_phi_operands(self.pending_phis.column(.variable)[pending], phi);
     }
     self.blocks.column(.sealed)[block] = true;

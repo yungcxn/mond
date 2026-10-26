@@ -233,7 +233,7 @@ pub fn resolve(self: *Resolver) !void {
         if (!will_rebuild) {
             const declaration_count = self.decl_pool.entries.len();
             for (0..declaration_count) |i| {
-                const declaration: DeclPool.Index = @enumFromInt(i);
+                const declaration: DeclPool.Index = @fromBackingInt(@intCast(i));
                 self.declarations.ensure_signature(declaration);
                 self.declarations.check_body(declaration);
                 _ = self.temporary_arena.reset(.retain_capacity);

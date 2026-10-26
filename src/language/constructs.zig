@@ -174,7 +174,7 @@ const construct_of_kind: [kind_count]Construct = blk: {
     };
     var complete: [kind_count]Construct = undefined;
     for (table, 0..) |construct, i| {
-        const kind: Kind = @fromBackingInt(@intCast(i));
+        const kind: Kind = @fromBackingInt(i);
         complete[i] = construct orelse
             @compileError("node kind without a construct: " ++ @tagName(kind));
     }

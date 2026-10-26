@@ -283,7 +283,7 @@ fn holes(self: *Macros, context: *FunctionContext, node: NodeId) void {
         .quote => return,
         .paste => return self.holes(context, tree.arg(node, 1)),
         .unquote, .unquote_list => self.type_hole(context, node),
-        else => switch (ParseTree.Node.nk_childc[@intFromEnum(tree.kind(node))]) {
+        else => switch (ParseTree.Node.nk_childc[@backingInt(tree.kind(node))]) {
             .one => self.holes(context, tree.arg(node, 0)),
             .two => for (0..2) |i| {
                 const child = tree.arg(node, @intCast(i));
@@ -362,7 +362,7 @@ fn typable(self: *Macros, node: NodeId) bool {
         },
     }
 
-    switch (ParseTree.Node.nk_childc[@intFromEnum(tree.kind(node))]) {
+    switch (ParseTree.Node.nk_childc[@backingInt(tree.kind(node))]) {
         .one => return self.typable(tree.arg(node, 0)),
         .two => {
             const first = tree.arg(node, 0);
@@ -480,7 +480,7 @@ pub fn tree_kind_member(self: *Macros, node: NodeId, name: NamePool.Index) Index
         return resolver.report(.unknown_member, node, name, .ast_type);
     };
     // a root kind is stored shifted by one, 0 is a tree of any kind
-    return resolver.static_pool.ast_type_of(.none, @as(u16, @intFromEnum(kind)) + 1);
+    return resolver.static_pool.ast_type_of(.none, @as(u16, @backingInt(kind)) + 1);
 }
 
 // the views of trees (`x.name`), what each gives and is: the checker types them by it, the
@@ -622,7 +622,7 @@ pub fn check_builtin(
     if (name == .fresh) {
         _ = resolver.expressions.check(context, tree.arg_value(arguments[0]), self.string_type());
         // a root kind is stored shifted by one, 0 is a tree of any kind
-        const root_kind_code = @as(u16, @intFromEnum(ParseTree.Node.Kind.identifier)) + 1;
+        const root_kind_code = @as(u16, @backingInt(ParseTree.Node.Kind.identifier)) + 1;
         return resolver.static_pool.ast_type_of(.none, root_kind_code);
     }
     _ = resolver.expressions.check(context, tree.arg_value(arguments[0]), .ast_type);
@@ -664,7 +664,7 @@ pub fn quote_pattern(self: *Macros, node: NodeId) void {
     const tree = resolver.tree;
     switch (tree.kind(node)) {
         .unquote, .unquote_list => self.bind_quote_hole(node),
-        else => switch (ParseTree.Node.nk_childc[@intFromEnum(tree.kind(node))]) {
+        else => switch (ParseTree.Node.nk_childc[@backingInt(tree.kind(node))]) {
             .one => self.quote_pattern(tree.arg(node, 0)),
             .two => for ([_]NodeId{ tree.arg(node, 0), tree.arg(node, 1) }) |child| {
                 if (child != 0) self.quote_pattern(child);

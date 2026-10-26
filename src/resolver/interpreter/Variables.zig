@@ -34,7 +34,7 @@ pub fn owning_interpreter(self: *Variables) *Interpreter {
 
 pub fn cell_of_declaration(self: *Variables, declaration: DeclPool.Index) ?u32 {
     const interpreter = self.owning_interpreter();
-    const declaration_number = @intFromEnum(declaration);
+    const declaration_number = @backingInt(declaration);
     var i = interpreter.frames.len;
     while (i > 0) {
         i -= 1;

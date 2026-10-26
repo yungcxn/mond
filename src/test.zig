@@ -556,7 +556,7 @@ const Comparison = struct {
         while (other_tree.kind(m) == .capture) m = other_tree.arg(m, 0);
         const kind = tree.kind(n);
         var name: []const u8 = "";
-        if (ParseTree.Node.nk_childc[@intFromEnum(kind)] == .data) name = tree.text(n, self.source);
+        if (ParseTree.Node.nk_childc[@backingInt(kind)] == .data) name = tree.text(n, self.source);
         // a lifted float that has no literal (`inf`) is written as the division making it
         if (kind == .float and std.mem.indexOfAny(u8, name, "0123456789") == null) return true;
         // a lifted negative number (`-0.5`) reads back as the number negated
@@ -566,7 +566,7 @@ const Comparison = struct {
             name = name[1..];
         }
         if (kind != other_tree.kind(m)) return false;
-        if (ParseTree.Node.nk_childc[@intFromEnum(kind)] == .data) {
+        if (ParseTree.Node.nk_childc[@backingInt(kind)] == .data) {
             var other_name = other_tree.text(m, self.other_source);
             // a lifted float without a fraction is printed with one
             const fraction = other_name.len == name.len + 2 and
@@ -753,7 +753,7 @@ fn verify(allocator: Allocator, lowerer: *HighLowerer) !?InvalidIr {
                 };
 
                 for (items, 0..) |item, k| {
-                    const reference: Ref = @enumFromInt(item);
+                    const reference: Ref = @fromBackingInt(item);
                     // a case list alternates blocks and values, only the values are operands
                     if ((kind == .cases and k % 2 == 0) or reference == .none) continue;
                     if (reference.is_const()) continue;

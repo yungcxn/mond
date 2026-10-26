@@ -16,15 +16,13 @@ const Types = @This();
 // a primitive type node `type_X` stands for the pool type `X_type`
 const primitive_types = blk: {
     var table: [256]StaticPool.Index = @splat(.none);
-    for (
-        @typeInfo(StaticPool.Index).@"enum".field_names,
-        @typeInfo(StaticPool.Index).@"enum".field_values,
-    ) |fieldname, fieldvalue| {
-        if (!std.mem.endsWith(u8, fieldname, "_type")) continue;
-        const kind_name = "type_" ++ fieldname[0 .. fieldname.len - 5];
+    const info = @typeInfo(StaticPool.Index).@"enum";
+    for (info.field_names, info.field_values) |fname, fvalue| {
+        if (!std.mem.endsWith(u8, fname, "_type")) continue;
+        const kind_name = "type_" ++ fname[0 .. fname.len - 5];
         if (!@hasField(ParseTree.Node.Kind, kind_name)) continue;
         table[@backingInt(@field(ParseTree.Node.Kind, kind_name))] =
-            @fromBackingInt(@intCast(fieldvalue));
+            @fromBackingInt(fvalue);
     }
     break :blk table;
 };

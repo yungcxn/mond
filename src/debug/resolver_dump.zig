@@ -129,7 +129,7 @@ pub fn declaration_row(
     const node = declarations.node[index];
     const span = source_positions.node_span(resolver.tree, resolver.src_bytes, node);
     const line = if (span) |known| source_positions.line_of(starts, known[0]) + 1 else 0;
-    const name = source_positions.declaration_name(resolver, @enumFromInt(index));
+    const name = source_positions.declaration_name(resolver, @fromBackingInt(@intCast(index)));
 
     // the modifiers ("pub ", 4 columns each) share the padded name column
     const modifier_count = @as(usize, @intFromBool(flags.is_pub)) +
@@ -161,7 +161,7 @@ pub fn declaration_row(
     // a function's own value, a trait and a static function would only repeat the type
     const shows_static_value = static_value != .none and
         !(pool.tag(static_value) == .function_value and
-            @intFromEnum(pool.get(static_value).function_value) == index) and
+            @backingInt(pool.get(static_value).function_value) == index) and
         kind != .trait and
         pool.tag(static_value) != .static_function;
     if (shows_static_value) {
@@ -172,7 +172,7 @@ pub fn declaration_row(
     const next_overload = declarations.next_overload[index];
     if (next_overload != .none) {
         const overload_format = dim ++ "  next overload #{d}" ++ reset;
-        try writer.print(overload_format, .{@intFromEnum(next_overload)});
+        try writer.print(overload_format, .{@backingInt(next_overload)});
     }
     try writer.writeAll("\n");
 }

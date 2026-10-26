@@ -501,7 +501,7 @@ fn attempt(
     defer interpreter.leave_frame(keep);
 
     if (resolver.decl_pool.implicit_self_count(declaration) == 1) {
-        interpreter.variables.bind(@enumFromInt(body.first_local), self_value);
+        interpreter.variables.bind(@fromBackingInt(body.first_local), self_value);
     }
     const signature = resolver.types.signature(declaration);
     // the arguments stored into their parameters, the others take their default

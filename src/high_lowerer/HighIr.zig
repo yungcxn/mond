@@ -17,11 +17,11 @@ pub const Ref = enum(u32) {
     const global_bit: u32 = 1 << 30;
 
     pub fn of(constant: StaticPool.Index) Ref {
-        return @fromBackingInt(@intCast(@backingInt(constant) | const_bit));
+        return @fromBackingInt(@backingInt(constant) | const_bit);
     }
 
     pub fn global(global_index: u32) Ref {
-        return @fromBackingInt(@intCast(global_index | const_bit | global_bit));
+        return @fromBackingInt(global_index | const_bit | global_bit);
     }
 
     pub fn is_const(ref: Ref) bool {
@@ -34,7 +34,7 @@ pub const Ref = enum(u32) {
     }
 
     pub fn value(ref: Ref) StaticPool.Index {
-        return @fromBackingInt(@intCast(@backingInt(ref) & ~const_bit));
+        return @fromBackingInt(@backingInt(ref) & ~const_bit);
     }
 
     pub fn index(ref: Ref) u32 {

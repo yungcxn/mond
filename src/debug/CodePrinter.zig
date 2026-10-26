@@ -52,7 +52,7 @@ pub fn expression(self: *CodePrinter, node: NodeId) Error!void {
 pub fn note_names(self: *CodePrinter, node: NodeId) Error!void {
     const tree = self.tree;
     const n = self.unwrapped(node);
-    switch (Node.nk_childc[@intFromEnum(tree.kind(n))]) {
+    switch (Node.nk_childc[@backingInt(tree.kind(n))]) {
         .data => if (tree.kind(n) == .identifier) {
             const name = tree.text(n, self.source);
             const entry = try self.spellings.getOrPut(self.allocator, written_as(name));
@@ -149,7 +149,7 @@ fn ends_open(self: *const CodePrinter, n: NodeId) bool {
         .dec_postfix => return true,
         // the last operand of an index is in its brackets
         .array_index => return false,
-        else => |kind| switch (Node.nk_childc[@intFromEnum(kind)]) {
+        else => |kind| switch (Node.nk_childc[@backingInt(kind)]) {
             .one, .two => tree.children(n),
             else => return false,
         },
@@ -165,7 +165,7 @@ fn dangles(self: *const CodePrinter, node: NodeId) bool {
     return switch (tree.kind(n)) {
         .if_then, .stcif_then => true,
         .if_else, .stcif_else => self.dangles(tree.arg(n, 1)),
-        else => switch (Node.nk_childc[@intFromEnum(tree.kind(n))]) {
+        else => switch (Node.nk_childc[@backingInt(tree.kind(n))]) {
             .one, .two => for (tree.children(n)) |child| {
                 if (child != 0 and self.dangles(child)) break true;
             } else false,
@@ -442,7 +442,7 @@ fn write(self: *CodePrinter, n: NodeId) Error!void {
             // `crash "why"`, `fresh name`
             const arguments = tree.manychildren(b);
             const bare = arguments.len == 1 and
-                Node.nk_childc[@intFromEnum(tree.kind(self.unwrapped(arguments[0])))] == .data;
+                Node.nk_childc[@backingInt(tree.kind(self.unwrapped(arguments[0])))] == .data;
             if (bare) return self.prefixed(" ", arguments[0], prefix);
             try self.text(" ");
             try self.write(b);

@@ -24,7 +24,8 @@ const undefined_name = Analysis.undefined_name;
 pub const class_of_token_kind = blk: {
     @setEvalBranchQuota(10_000);
     var table: [256]?Type = @splat(null);
-    for (@typeInfo(Kind).@"enum".field_names, @typeInfo(Kind).@"enum".field_values) |fname, fvalue| {
+    const info = @typeInfo(Kind).@"enum";
+    for (info.field_names, info.field_values) |fname, fvalue| {
         if (std.mem.startsWith(u8, fname, "kw_")) table[fvalue] = .keyword;
         if (std.mem.startsWith(u8, fname, "xpct_")) table[fvalue] = .operator;
         // a token that also continues an expression (`<`) is macro syntax only where the tree says
@@ -48,7 +49,8 @@ pub const class_of_token_kind = blk: {
 
 const is_punctuation = blk: {
     var table: [256]bool = @splat(false);
-    for (@typeInfo(Kind).@"enum".field_names, @typeInfo(Kind).@"enum".field_values) |fname, fvalue| {
+    const info = @typeInfo(Kind).@"enum";
+    for (info.field_names, info.field_values) |fname, fvalue| {
         table[fvalue] = std.mem.startsWith(u8, fname, "pct_");
     }
     break :blk table;

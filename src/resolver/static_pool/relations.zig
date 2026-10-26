@@ -14,8 +14,8 @@ const dyn_len = StaticPool.dyn_len;
 fn resolve_bound(pool: *StaticPool, index: Index) Index {
     var current = index;
     while (current != .none and pool.tag(current) == .type_variable) {
-        const data = pool.items.column(.data)[@intFromEnum(current)];
-        const variable: TypeVariables.Index = @enumFromInt(data);
+        const data = pool.items.column(.data)[@backingInt(current)];
+        const variable: TypeVariables.Index = @fromBackingInt(data);
         const binding = pool.type_variables.binding_of(variable);
         if (binding == .none) return current;
         current = binding;
@@ -333,7 +333,7 @@ fn without(pool: *StaticPool, whole: Index, removing: usize) Index {
     const removed = pool.scratch.buffer[removing..end];
     std.mem.sort(Index, removed, {}, struct {
         fn less(_: void, a: Index, b: Index) bool {
-            return @intFromEnum(a) < @intFromEnum(b);
+            return @backingInt(a) < @backingInt(b);
         }
     }.less);
     var kept: usize = 0;

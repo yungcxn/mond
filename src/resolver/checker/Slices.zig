@@ -57,11 +57,11 @@ pub fn owning_resolver(self: *Slices) *Resolver {
 }
 
 pub fn slot(kind: Kind, owner: u32, part: u32) Slot {
-    return @as(u64, @intFromEnum(kind)) << 61 | @as(u64, owner) << 24 | part;
+    return @as(u64, @backingInt(kind)) << 61 | @as(u64, owner) << 24 | part;
 }
 
 pub fn declaration_slot(declaration: DeclPool.Index) Slot {
-    return slot(.declaration, @intFromEnum(declaration), 0);
+    return slot(.declaration, @backingInt(declaration), 0);
 }
 
 // whether values of the type hold slices themselves: a slice, behind pointers, as elements. a
@@ -85,7 +85,7 @@ pub fn register_parameter(
     declaration: DeclPool.Index,
 ) void {
     const allocator = self.edges.allocator;
-    const parameter_slot = slot(.parameter, @intFromEnum(function), @intCast(position));
+    const parameter_slot = slot(.parameter, @backingInt(function), @intCast(position));
     self.parameters.put(allocator, declaration, parameter_slot) catch @panic("OOM");
 }
 
@@ -104,7 +104,7 @@ pub fn payload_slot(self: *Slices, variant: Index) ?Slot {
     if (case == .none) return null;
     const payload = pool.get(case).variant_case_type.payload;
     if (pool.get(payload).record_type.field_types.len != 1) return null;
-    return slot(.field, @intFromEnum(payload), 0);
+    return slot(.field, @backingInt(payload), 0);
 }
 
 // `node` flows into the slot `into`: from the slot it is held in, or from where its elements are
@@ -243,7 +243,7 @@ pub fn root(self: *Slices, node: NodeId) Root {
             if (record == .none or pool.tag(record) != .record_type) return .{ .read_only = node };
             const name = resolver.name_pool.name_of_node(tree.arg(node, 1));
             return switch (pool.lookup_member(record, name)) {
-                .field => |field| .{ .slot = slot(.field, @intFromEnum(record), field.index) },
+                .field => |field| .{ .slot = slot(.field, @backingInt(record), field.index) },
                 else => .{ .read_only = node },
             };
         },
@@ -251,10 +251,10 @@ pub fn root(self: *Slices, node: NodeId) Root {
         .array_index => self.root(tree.arg(node, 0)),
         .fun_call => {
             const callee = resolver.node_declarations[node];
-            if (callee != .none) return .{ .slot = slot(.result, @intFromEnum(callee), 0) };
+            if (callee != .none) return .{ .slot = slot(.result, @backingInt(callee), 0) };
             // a function value: the results of every function of its type
             const callee_type = self.type_of(tree.arg(node, 0));
-            return .{ .slot = slot(.indirect_result, @intFromEnum(callee_type), 0) };
+            return .{ .slot = slot(.indirect_result, @backingInt(callee_type), 0) };
         },
         .as => self.root(tree.arg(node, 0)),
         .selftag_unwrap => if (self.payload_slot(self.type_of(tree.arg(node, 0)))) |payload|
@@ -279,12 +279,12 @@ pub fn finish(self: *Slices) void {
         const function_type = pool.substitute_type_variables(function.function_type);
         const parameters = pool.get(function_type).function_type.parameters;
         for (0..parameters.len) |i| self.edges.push(.{
-            .from = slot(.indirect, @intFromEnum(function_type), @intCast(i)),
-            .to = slot(.parameter, @intFromEnum(function.declaration), @intCast(i)),
+            .from = slot(.indirect, @backingInt(function_type), @intCast(i)),
+            .to = slot(.parameter, @backingInt(function.declaration), @intCast(i)),
         });
         self.edges.push(.{
-            .from = slot(.result, @intFromEnum(function.declaration), 0),
-            .to = slot(.indirect_result, @intFromEnum(function_type), 0),
+            .from = slot(.result, @backingInt(function.declaration), 0),
+            .to = slot(.indirect_result, @backingInt(function_type), 0),
         });
     }
 

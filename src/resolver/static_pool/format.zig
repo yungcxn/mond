@@ -33,7 +33,7 @@ fn write_entry(
             .trait_type => |trait| trait.declaration,
             else => unreachable,
         };
-        return writer.print("type#{d}", .{@intFromEnum(declaration)});
+        return writer.print("type#{d}", .{@backingInt(declaration)});
     }
     switch (pool.get(index)) {
         .int_type => |int_type| {
@@ -115,16 +115,16 @@ fn write_entry(
             try writer.writeAll("}");
         },
         .static_function => |function| {
-            try writer.print("stcfun#{d}", .{@intFromEnum(function.declaration)});
+            try writer.print("stcfun#{d}", .{@backingInt(function.declaration)});
         },
         .template_type => |declaration| {
-            try writer.print("abstract#{d}", .{@intFromEnum(declaration)});
+            try writer.print("abstract#{d}", .{@backingInt(declaration)});
         },
         .type_variable => |variable| {
             const root = pool.type_variables.root_of_const(variable);
             const binding = pool.type_variables.binding_of_const(root);
             if (binding != .none) return write_entry(pool, names, binding, writer, depth);
-            try writer.print("?{d}", .{@intFromEnum(root) + 1});
+            try writer.print("?{d}", .{@backingInt(root) + 1});
         },
         .int_value => |int_value| {
             const value_type = pool.get(int_value.value_type);
@@ -151,7 +151,7 @@ fn write_entry(
                 try write_entry(pool, names, variant_value.payload, writer, depth);
             }
         },
-        .function_value => |declaration| try writer.print("fun#{d}", .{@intFromEnum(declaration)}),
+        .function_value => |declaration| try writer.print("fun#{d}", .{@backingInt(declaration)}),
         .ast_type => |ast| {
             try writer.writeAll("ast");
             if (ast.produces != .none) {

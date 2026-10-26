@@ -81,8 +81,8 @@ pub fn node_span(tree: *const ParseTree, source: []const u8, node: NodeId) ?Lexe
         .boolean_false => "false",
         .identifier_self => @tagName(kind)["identifier_".len..],
         else => blk: {
-            const is_builtin_type = @intFromEnum(kind) >= @intFromEnum(Node.Kind.type_u8) and
-                @intFromEnum(kind) <= @intFromEnum(Node.Kind.type_stcfun);
+            const is_builtin_type = @backingInt(kind) >= @backingInt(Node.Kind.type_u8) and
+                @backingInt(kind) <= @backingInt(Node.Kind.type_stcfun);
             if (is_builtin_type) break :blk @tagName(kind)["type_".len..];
             break :blk null;
         },
@@ -124,5 +124,5 @@ fn first_token_within(tree: *const ParseTree, node: NodeId) ?u32 {
 }
 
 fn child_count_of(kind: Node.Kind) @TypeOf(Node.nk_childc[0]) {
-    return Node.nk_childc[@intFromEnum(kind)];
+    return Node.nk_childc[@backingInt(kind)];
 }

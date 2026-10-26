@@ -129,7 +129,7 @@ pub const Index = enum(u32) {
 
     // members are pushed right after the declaration that owns them
     pub fn member(owner: Index, i: usize) Index {
-        return @enumFromInt(@intFromEnum(owner) + 1 + i);
+        return @fromBackingInt(@intCast(@backingInt(owner) + 1 + i));
     }
 };
 
@@ -152,7 +152,7 @@ pub fn push(
     value_type: StaticPool.Index,
     flags: DeclPool.Entry.Flags,
 ) DeclPool.Index {
-    const declaration: DeclPool.Index = @enumFromInt(self.entries.len());
+    const declaration: DeclPool.Index = @fromBackingInt(self.entries.len());
     // globals, functions and types are resolved on first use, everything else when declared
     const lazy = flags.is_global or kind.is_function() or kind.is_type_declaration();
 
@@ -175,7 +175,7 @@ pub fn get(
     declaration: Index,
     comptime field: Entry.Field,
 ) Entry.FieldType(field) {
-    return self.entries.column(field)[@intFromEnum(declaration)];
+    return self.entries.column(field)[@backingInt(declaration)];
 }
 
 pub fn set(
@@ -184,7 +184,7 @@ pub fn set(
     comptime field: Entry.Field,
     value: Entry.FieldType(field),
 ) void {
-    self.entries.column(field)[@intFromEnum(declaration)] = value;
+    self.entries.column(field)[@backingInt(declaration)] = value;
 }
 
 pub fn pointer(
@@ -192,7 +192,7 @@ pub fn pointer(
     declaration: Index,
     comptime field: Entry.Field,
 ) *Entry.FieldType(field) {
-    return &self.entries.column(field)[@intFromEnum(declaration)];
+    return &self.entries.column(field)[@backingInt(declaration)];
 }
 
 // 1 when the declaration's function type starts with the induced `*Self` (methods except `init`)

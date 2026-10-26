@@ -36,7 +36,7 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
     const declarations = resolver.decl_pool.entries.columns();
     for (analysis.declaration_token, 0..) |*declaration_token, i| {
         // a realization is declared where its template is
-        const index: DeclPool.Index = @enumFromInt(i);
+        const index: DeclPool.Index = @fromBackingInt(@intCast(i));
         const template = resolver.generics.template_of.get(index) orelse index;
         const node = resolver.decl_pool.get(template, .node);
         declaration_token.* = named(resolver, node, declarations.name[i]) orelse continue;
@@ -175,14 +175,14 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
         const token, const declaration = usage;
         // a positional parameter has no name of its own (`(i32, i32)`), its function declares it
         analysis.token_meaning[token] = blk: {
-            const declaration_token = analysis.declaration_token[@intFromEnum(declaration)];
+            const declaration_token = analysis.declaration_token[@backingInt(declaration)];
             const template = resolver.generics.template_of.get(declaration) orelse declaration;
             if (declaration_token != none) break :blk analysis.token_meaning[declaration_token];
 
             const template_name =
-                resolver.name_pool.text_of(declarations.name[@intFromEnum(template)]);
+                resolver.name_pool.text_of(declarations.name[@backingInt(template)]);
             if (!positional(template_name)) {
-                const index = @intFromEnum(template);
+                const index = @backingInt(template);
                 if (declared_elsewhere.get(index)) |made| break :blk made;
                 if (included == null) included = read_included(analysis, resolver);
                 // ``x`name`` landed from a namespace's file, ``name`1`` a private name made fresh
@@ -217,7 +217,7 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
                 break :blk made;
             }
             // the declaration made by the template's node or by a node enclosing it
-            var ancestor = declarations.node[@intFromEnum(template)];
+            var ancestor = declarations.node[@backingInt(template)];
             while (ancestor != none and analysis.node_declaration[ancestor] == none) {
                 ancestor = analysis.node_parent[ancestor];
             }
@@ -431,7 +431,7 @@ pub fn remember_pass(analysis: *Analysis, resolver: *Resolver) void {
     const naming_tokens = analysis.allocate_unset(declarations.kind.len);
     for (naming_tokens, 0..) |*naming_token, i| {
         // a realization is declared where its template is
-        const index: DeclPool.Index = @enumFromInt(i);
+        const index: DeclPool.Index = @fromBackingInt(@intCast(i));
         const template = resolver.generics.template_of.get(index) orelse index;
         const node = resolver.decl_pool.get(template, .node);
         naming_token.* = named(resolver, node, declarations.name[i]) orelse continue;
@@ -465,7 +465,7 @@ pub fn remember_pass(analysis: *Analysis, resolver: *Resolver) void {
         const token = name_token(resolver, @intCast(i)) orelse continue;
         const declaration = resolver.node_declarations[i];
         if (declaration == .none) continue;
-        const naming_token = naming_tokens[@intFromEnum(declaration)];
+        const naming_token = naming_tokens[@backingInt(declaration)];
         analysis.earlier_naming_token[token] = naming_token;
         if (naming_token != none) continue;
         // the names of this pass are gone with it
@@ -734,7 +734,7 @@ fn type_owner(analysis: *Analysis, resolver: *Resolver, type_index: StaticIndex)
     if (declaration == .none) return null;
 
     const template = resolver.generics.template_of.get(declaration) orelse declaration;
-    const declaration_token = analysis.declaration_token[@intFromEnum(template)];
+    const declaration_token = analysis.declaration_token[@backingInt(template)];
     const meaning = if (declaration_token == none)
         none
     else

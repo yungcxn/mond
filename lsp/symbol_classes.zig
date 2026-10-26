@@ -43,7 +43,7 @@ pub fn modifiers(class: Type, flags: DeclPool.Entry.Flags) u32 {
 }
 
 pub fn modifier_bit(modifier: Modifier, on: bool) u32 {
-    return @as(u32, @intFromBool(on)) << @intFromEnum(modifier);
+    return @as(u32, @intFromBool(on)) << @backingInt(modifier);
 }
 
 // lsp numbers the kinds of symbols

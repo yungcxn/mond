@@ -229,7 +229,7 @@ pub fn lower(self: *LLVMLowerer) void {
 fn declare_function(self: *LLVMLowerer, function_index: u32) void {
     const function = self.ir.functions.get(function_index).?;
     if (function.decl != .none) {
-        self.function_of_declaration[@intFromEnum(function.decl)] = function_index;
+        self.function_of_declaration[@backingInt(function.decl)] = function_index;
     }
     const is_external = function.blocks == 0 and function.decl != .none;
     const function_type = self.pool.get(function.ty).function_type;
@@ -778,7 +778,7 @@ fn lower_function(self: *LLVMLowerer, function_index: u32) void {
         for (predecessors, self.ir.list(pending.instruction.b)) |predecessor, operand_ref| {
             if (!self.reachable.isSet(predecessor)) continue;
             const exit = self.block_exits.items[predecessor];
-            const incoming = self.operand(@enumFromInt(operand_ref));
+            const incoming = self.operand(@fromBackingInt(operand_ref));
             if (in_memory) {
                 const terminator = llvm.LLVMGetBasicBlockTerminator(exit);
                 llvm.LLVMPositionBuilderBefore(self.builder, terminator);
@@ -865,8 +865,8 @@ fn successors(self: *LLVMLowerer, block_index: u32) Successors {
 fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) Value {
     const builder = self.builder;
     const result_type = instruction.ty;
-    const a: Ref = @enumFromInt(instruction.a);
-    const b: Ref = @enumFromInt(instruction.b);
+    const a: Ref = @fromBackingInt(instruction.a);
+    const b: Ref = @fromBackingInt(instruction.b);
     return switch (instruction.op) {
         .param => {
             const result_slots = @intFromBool(self.results_in_memory.isSet(self.function_index));
@@ -907,8 +907,8 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
         else
             llvm.LLVMBuildNeg(builder, self.operand(a), ""),
         .not => llvm.LLVMBuildNot(builder, self.operand(a), ""),
-        .convert => values.convert(self, @enumFromInt(instruction.b), result_type, a),
-        .cast => values.cast(self, @enumFromInt(instruction.b), result_type, a),
+        .convert => values.convert(self, @fromBackingInt(@intCast(instruction.b)), result_type, a),
+        .cast => values.cast(self, @fromBackingInt(@intCast(instruction.b)), result_type, a),
         .alloca => {
             const pointee = self.types.of(self.pool.pointee(result_type));
             // with a length: the elements of a runtime-length array, allocated where it is made
@@ -952,7 +952,7 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
         .dyn => {
             const bounds = self.ir.list(instruction.b);
             const element = self.pool.get(result_type).array_type.element;
-            const start = self.index_value(@enumFromInt(bounds[0]));
+            const start = self.index_value(@fromBackingInt(bounds[0]));
             var offset = [_]Value{start};
             const element_type = self.types.of(element);
             const base = self.operand(a);
@@ -961,8 +961,8 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
         .aggregate => values.aggregate(self, result_type, self.ir.list(instruction.b)),
         .select => {
             const choices = self.ir.list(instruction.b);
-            const then_value = self.operand(@enumFromInt(choices[0]));
-            const else_value = self.operand(@enumFromInt(choices[1]));
+            const then_value = self.operand(@fromBackingInt(choices[0]));
+            const else_value = self.operand(@fromBackingInt(choices[1]));
             return llvm.LLVMBuildSelect(builder, self.operand(a), then_value, else_value, "");
         },
         .extract => values.extract(self, result_type, a, instruction.b),
@@ -983,7 +983,7 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
             defer self.value_stack.shrinkRetainingCapacity(mark);
             const operands = self.ir.list(instruction.b);
             for (operands, 0..) |operand_ref, i| {
-                const ref: Ref = @enumFromInt(operand_ref);
+                const ref: Ref = @fromBackingInt(operand_ref);
                 const value_type = self.type_of_ref(ref);
                 const value = self.operand(ref);
                 const signed: c_int = @intFromBool(self.is_signed(value_type));
@@ -1054,7 +1054,7 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
             const lowered = llvm.LLVMBuildSwitch(builder, self.operand(a), default, key_count);
             var i: usize = 1;
             while (i < cases.len) : (i += 2) {
-                const key = self.operand(@enumFromInt(cases[i]));
+                const key = self.operand(@fromBackingInt(cases[i]));
                 llvm.LLVMAddCase(lowered, key, self.blocks.items[cases[i + 1]]);
             }
             return null;
@@ -1152,7 +1152,7 @@ fn call(self: *LLVMLowerer, result_type: Index, callee: Ref, arguments: []const 
     const result_slot = if (in_memory) self.entry_alloca(self.types.of(result_type)) else null;
     const is_direct = callee.is_const() and self.pool.tag(callee.value()) == .function_value;
     const direct_function = if (is_direct)
-        self.function_of_declaration[@intFromEnum(self.pool.get(callee.value()).function_value)]
+        self.function_of_declaration[@backingInt(self.pool.get(callee.value()).function_value)]
     else
         no_function;
     const callee_type = if (is_direct)
@@ -1170,7 +1170,7 @@ fn call(self: *LLVMLowerer, result_type: Index, callee: Ref, arguments: []const 
         self.value_stack.append(self.allocator, environment) catch @panic("OOM");
     }
     for (arguments) |argument| {
-        const argument_ref: Ref = @enumFromInt(argument);
+        const argument_ref: Ref = @fromBackingInt(argument);
         // a capture by reference of a variable that never lived in memory is passed as nothing
         const lowered = if (argument_ref == .none)
             llvm.LLVMConstNull(self.types.pointer)
@@ -1402,7 +1402,7 @@ fn closure(self: *LLVMLowerer, function_index: u32, captured: []const u32) Value
     const type_mark = self.type_stack.items.len;
     defer self.type_stack.shrinkRetainingCapacity(type_mark);
     for (captured) |capture| {
-        const capture_ref: Ref = @enumFromInt(capture);
+        const capture_ref: Ref = @fromBackingInt(capture);
         const capture_value = if (capture_ref == .none)
             llvm.LLVMConstNull(self.types.pointer)
         else
@@ -1432,8 +1432,8 @@ fn closure(self: *LLVMLowerer, function_index: u32, captured: []const u32) Value
 pub fn operand(self: *LLVMLowerer, ref: Ref) Value {
     if (ref.is_global()) return self.globals[ref.index()];
     if (ref.is_const()) return constants.operand(self, ref.value());
-    return self.instruction_values.items[@intFromEnum(ref)] orelse
-        std.debug.panic("%{d} is used before it is lowered", .{@intFromEnum(ref)});
+    return self.instruction_values.items[@backingInt(ref)] orelse
+        std.debug.panic("%{d} is used before it is lowered", .{@backingInt(ref)});
 }
 
 // the pool type of an operand, a global's is the type of what it holds
@@ -1443,7 +1443,7 @@ pub fn type_of_ref(self: *LLVMLowerer, ref: Ref) Index {
         return self.pool.get(ref.value()).variant_case_type.variant;
     }
     if (ref.is_const()) return self.pool.type_of(ref.value());
-    return self.ir.insts.column(.ty)[self.function.first_inst + @intFromEnum(ref)];
+    return self.ir.insts.column(.ty)[self.function.first_inst + @backingInt(ref)];
 }
 
 // what an operand points to, also for a global
@@ -1454,7 +1454,7 @@ pub fn pointee_of_ref(self: *LLVMLowerer, ref: Ref) Index {
 
 pub fn instruction_of(self: *LLVMLowerer, ref: Ref) ?HighIr.Inst {
     if (ref == .none or ref.is_const() or ref.is_global()) return null;
-    return self.ir.insts.get(self.function.first_inst + @intFromEnum(ref)).?;
+    return self.ir.insts.get(self.function.first_inst + @backingInt(ref)).?;
 }
 
 fn is_zeroed(self: *LLVMLowerer, ref: Ref) bool {
@@ -1466,7 +1466,7 @@ fn is_zeroed(self: *LLVMLowerer, ref: Ref) bool {
 fn is_packed_field(self: *LLVMLowerer, pointer: Ref) bool {
     const instruction = self.instruction_of(pointer) orelse return false;
     if (instruction.op != .field_ptr) return false;
-    const record = self.pointee_of_ref(@enumFromInt(instruction.a));
+    const record = self.pointee_of_ref(@fromBackingInt(instruction.a));
     return self.pool.tag(record) == .record_type and self.pool.get(record).record_type.is_packed;
 }
 

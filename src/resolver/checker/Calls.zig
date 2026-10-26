@@ -124,7 +124,7 @@ pub fn check_call(self: *Calls, context: *FunctionContext, node: NodeId) StaticP
             if (member == .field) {
                 const field_type = self.type_named_argument(argument, member.field.field_type);
                 _ = resolver.expressions.check(context, tree.arg_value(argument), field_type);
-                const record = @intFromEnum(record_type);
+                const record = @backingInt(record_type);
                 const into = Resolver.Slices.slot(.field, record, member.field.index);
                 resolver.slices.flows(tree.arg_value(argument), into);
                 continue;
@@ -315,7 +315,7 @@ fn check_constructor(
         const expected = self.type_named_argument(argument, field_type);
         _ = resolver.expressions.check(context, resolver.tree.arg_value(argument), expected);
         // a slice given for a field is held in the field's slot (see `Slices`)
-        const into = Resolver.Slices.slot(.field, @intFromEnum(record_type), parameter_of[i]);
+        const into = Resolver.Slices.slot(.field, @backingInt(record_type), parameter_of[i]);
         resolver.slices.flows(resolver.tree.arg_value(argument), into);
     }
     return target_type;
@@ -341,7 +341,7 @@ fn check_function_value_call(
         const parameter_type = static_pool.get(function_type).function_type.parameters[i];
         _ = resolver.expressions.check(context, resolver.tree.arg_value(argument), parameter_type);
         // the parameters of every function of the type (see `Slices`)
-        const into = Resolver.Slices.slot(.indirect, @intFromEnum(function_type), @intCast(i));
+        const into = Resolver.Slices.slot(.indirect, @backingInt(function_type), @intCast(i));
         resolver.slices.flows(resolver.tree.arg_value(argument), into);
     }
     return static_pool.get(function_type).function_type.return_type;
@@ -352,7 +352,7 @@ fn flow_arguments(self: *Calls, callee: DeclPool.Index, arguments: CallArguments
     const resolver = self.owning_resolver();
     for (arguments.nodes, 0..) |argument, i| {
         const position = arguments.parameter_of[i] + arguments.self_count;
-        const into = Resolver.Slices.slot(.parameter, @intFromEnum(callee), @intCast(position));
+        const into = Resolver.Slices.slot(.parameter, @backingInt(callee), @intCast(position));
         resolver.slices.flows(resolver.tree.arg_value(argument), into);
     }
 }
@@ -924,7 +924,7 @@ pub fn check_dispatch_groups(self: *Calls) void {
     // overload lists in declaration order, reports then come in an order independent of hashing
     const names = resolver.decl_pool.entries.column(.name);
     for (0..names.len) |i| {
-        const declaration: DeclPool.Index = @enumFromInt(i);
+        const declaration: DeclPool.Index = @fromBackingInt(@intCast(i));
         const head = resolver.scopes.globals.get(names[i]) orelse continue;
         if (head != declaration) continue;
 
