@@ -1,0 +1,1 @@
+stc ast q = quote 5; #! UnexpectedToken

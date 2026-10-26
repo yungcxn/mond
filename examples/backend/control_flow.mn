@@ -90,6 +90,30 @@ fun loop_value = () -> u64 {
     }
     ret n;
 }
+fun loop_pre = (i64 n) -> i64 {
+    mut i64 i = 0;
+    mut i64 t = 0;
+    loop i += 1 {
+        if i > n: brk;
+        t = t * 10 + i;
+    }
+    ret t;
+}
+fun up_to = (i64 n) -> i64 { mut i64 s = 0; for i in ..=n: s += i; ret s; }
+fun early = (*i64 p, bool stop) { if stop: ret; p.* = 7; }
+type Tracked = *(*i64 log, i64 id) !{
+    deinit = () { self.log.* = self.log.* * 10 + self.id; }
+}
+fun destructors = (i64 id) -> i64 {
+    mut i64 log = 0;
+    {
+        a = Tracked(log = log.&, id = id) defer deinit;
+        mut Tracked b = Tracked(log = log.&, id = 2);
+        deinit b;
+        log = log * 10 + 3;
+    }
+    ret log;
+}
 
 main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
@@ -111,6 +135,15 @@ main = (u32 argc, &&u8 argv) {
     line_i64(defers(7));                      #> 23232
     line_i64(ret_before_defer());             #> 5
     line_u64(loop_value());                   #> 7
+    line_i64(loop_pre(h(3)));                 #> 123
+    line_i64(up_to(h(4)));                    #> 10
+    mut i64 kept = 1;
+    early(kept.&, ONE == 1);
+    line_i64(kept);                           #> 1
+    early(kept.&, ONE == 2);
+    line_i64(kept);                           #> 7
+    # `deinit` runs at once, `defer deinit` when the block ends
+    line_i64(destructors(h(1)));              #> 231
     # `and` and `or` short-circuit, operands left to right
     LOG = 0;
     bool x = note(2) and note(4);

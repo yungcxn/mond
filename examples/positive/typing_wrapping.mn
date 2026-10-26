@@ -22,5 +22,6 @@ stcfun spin = (u8 seed, u32 n) -> u8 {
 stc u8 SP = spin(1, 10); #= SP 245
 
 fun at_runtime = (i8 a, u32 b) -> i8: ret a + (b as i8) * 2; #: at_runtime (i8, u32) -> i8
+fun folded = (u8 n) { u8 r0 = n + 255; u8 r1 = 128 * 2; i8 r2 = -64 * 3; }
 
 main = () {}

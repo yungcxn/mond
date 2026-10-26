@@ -13,6 +13,10 @@ fun gcd = (u64 a, u64 b) -> u64 {
     ret x;
 }
 
+fun counts = (i64 n) -> i64 { mut i64 k = n; i64 a = k--; i64 b = --k; ret a * 100 + b * 10 + k; }
+fun remainders = (i64 n) -> i64 { mut i64 x = n; x %= 7; mut u8 y = 200; y %= n as u8; ret x * 1000 + y as i64; }
+fun xored = (bool a, bool b) -> i64: ret (a xor b) as i64 * 10 + (a xor !b) as i64;
+
 main = () {
     puts("arithmetic");     #> arithmetic
     line_u64(fib(20));      #> 6765
@@ -24,4 +28,7 @@ main = () {
     line_u64(1 << 40);      #> 1099511627776
     i32 shifted = -64;
     line_i64((shifted >> 3) as i64);  #> -8
+    line_i64(counts(5));    #> 533
+    line_i64(remainders(30));  #> 2020
+    line_i64(xored(true, false) * 100 + xored(false, false));  #> 1001
 }

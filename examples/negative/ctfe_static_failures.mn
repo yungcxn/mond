@@ -2,9 +2,11 @@
 # integer divided by -1, a shift by the width or more (the narrow type's width, not the promoted
 # one), an index past either end; a failing `??` outside a function
 stc u32 divide_by_zero = 1 / (1 - 1);                  #! static_eval_failed
+stc u32 remainder_by_zero = 7 % 0;                     #! static_eval_failed
 stc i8 narrow_divide_by_zero = (-128 as i8) / (0 as i8);   #! static_eval_failed
 stc u8 shift_u8_width = (200 as u8) >> 8;              #! static_eval_failed
 stc i16 shift_i16_width = (1 as i16) << 16;            #! static_eval_failed
+stc u64 shift_u64_width = 1 << 64;                     #! static_eval_failed
 stc i32 shift_negative = 1 << -1;                      #! static_eval_failed
 stc i8 min_by_minus_one = (-128 as i8) / (-1 as i8);   #! static_eval_failed
 stc i64 min_remainder = (-9223372036854775807 - 1) % -1;   #! static_eval_failed

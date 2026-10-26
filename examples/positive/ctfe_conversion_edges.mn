@@ -28,12 +28,6 @@ stc u32 SHL_WIDE = (255 as u8) << (4 as u32);   #= SHL_WIDE 4080
 stc bool SIGNED_LT = (-1 as i8) < (0 as i8);    #= SIGNED_LT true
 stc bool UNSIGNED_LT = (255 as u8) < (0 as u8); #= UNSIGNED_LT false
 
-# integers to floats round to the nearest, ties to even
-stc f64 U64F = 18446744073709551615 as f64;   #= U64F 18446744073709552000
-stc u64 TIE = (9007199254740993 as f64) as u64; #= TIE 9007199254740992
-stc f32 F24 = 16777217 as f32;                 #= F24 16777216
-stc f64 I64F = -9223372036854775808 as f64;    #= I64F -9223372036854776000
-
 # floats: negative zero, narrowing, half precision
 stc f64 ZERO = 0.0;
 stc f64 NEG_ZERO = -ZERO;

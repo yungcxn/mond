@@ -74,7 +74,6 @@ pub inline fn eat_assert_tok(self: *@This(), comptime tok: Lexer.Token.Kind) !vo
         .@"pct_)" => error.ExpectedClosingParen,
         .@"pct_]" => error.ExpectedClosingBracket,
         .@"pct_{" => error.ExpectedOpeningBrace,
-        .@"pct_}" => error.ExpectedClosingBrace,
         .@"pct_," => error.ExpectedComma,
         .@"pct_;" => error.ExpectedSemicolon,
         .@"xpct_=" => error.ExpectedAssign,

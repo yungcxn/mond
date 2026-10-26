@@ -30,11 +30,12 @@ stc i32 T8 = NINF as i32; #= T8 -2147483648
 stc i64 T9 = NAN as i64; #= T9 0
 stc u64 T10 = INF as u64; #= T10 18446744073709551615
 
-# int to float rounds to the nearest representable value
+# int to float rounds to the nearest representable value, ties to even
 stc f32 F1 = 16777217 as f32; #= F1 16777216
 stc f32 F2 = 16777219 as f32; #= F2 16777220
 stc f64 F3 = -9223372036854775808 as f64; #= F3 -9223372036854776000
 stc f64 F4 = 18446744073709551615 as f64; #= F4 18446744073709552000
+stc u64 F5 = (9007199254740993 as f64) as u64; #= F5 9007199254740992
 stc f16 H1 = 2049 as f16; #= H1 2048
 stc f16 H2 = 0.1 as f16; #= H2 0.0999755859375
 stc f64 W1 = (1.0 / 3.0) as f64; #= W1 0.3333333432674408

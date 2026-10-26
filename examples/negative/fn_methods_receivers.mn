@@ -4,10 +4,13 @@ type C = *(mut u32 n, u32 fixed) !{
     fun inc_via = () { self.inc(); }
     fun set_fixed = () { self.fixed = 1; } #! assign_to_immutable
     fun add = (u32 k) -> u32 { self.n += k; ret self.n; }
+    fun reset = () { self.* = C(n = 0, fixed = self.fixed); }
 }
 type Outer = *(C inner, mut C minner);
 
 fun make = () -> C: ret C(n = 0, fixed = 0);
+fun take_ro = (&C c) -> u32: ret c.get();
+fun take_rw = (*C c) { c.inc(); }
 
 fun f = (&C ro, *C rw, C byval, &Outer ro_o, *Outer rw_o) {
     C imm = C(n = 1, fixed = 2);
@@ -37,6 +40,14 @@ fun f = (&C ro, *C rw, C byval, &Outer ro_o, *Outer rw_o) {
     C.add(rw); #! wrong_arity
     u32 h = make().get();
     u32 i = C.add(rw, 1, 2); #! wrong_arity
+    imm.reset(); #! assign_to_immutable
+    m.reset();
+    u32 j = rw_o.inner.get();
+    C(n = 1, fixed = 1).inc();
+    take_rw(m.&);
+    take_rw(imm.&); #! type_mismatch
+    u32 k = take_ro(imm.&);
+    m.fixed = 3; #! assign_to_immutable
 }
 
 main = () {}

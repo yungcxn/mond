@@ -38,6 +38,11 @@ fun after_errors = () {
     u64 p2 = pick([1, 2, 3, 4]);
     u64 p3 = pick([1, 2]);
     u64 p4 = pick(true);
+    [3]u8 bytes = [1, 2, 3];
+    u32 q1 = total(bytes.&); #! type_mismatch
+    [4]u32 four = [1, 2, 3, 4];
+    [2]u32 pair = [1, 2];
+    u32 q2 = total(four.&) + total(pair.&);
 }
 
 stcfun lens = () -> u64 {

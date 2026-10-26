@@ -34,6 +34,7 @@ stc i16 WR5 = I16MAX * 2; #= WR5 -2
 stc u64 WR6 = U64MAX * U64MAX; #= WR6 1
 stc i64 WR7 = I64MIN * -1; #= WR7 -9223372036854775808
 stc u32 WR8 = U32MAX + U32MAX; #= WR8 4294967294
+stc i8 WR9 = -I8MIN; #= WR9 -128
 
 # division and remainder truncate toward zero for every sign combination
 stc i32 D1 = 17 / 5; #= D1 3
