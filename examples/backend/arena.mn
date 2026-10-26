@@ -1,0 +1,70 @@
+<include "lib/out.mn">;
+<include "../lib/arena.mn">;
+# examples/lib/arena.mn at run time: values and elements made front to back at their alignment,
+# a request past the end refused without taking room, reset handing out the same memory again,
+# release leaving no room; a list linked through the arena
+
+type Node = *(u64 value, Made(Node) next);
+type Pair = *(u8 tag, u64 wide);
+
+# the address of a place, to compare where things were made
+fun at = (*u8 p) -> u64: ret p asbits u64;
+
+fun aligned = (*Arena a) -> u64 {
+    *u8 small = make(u8)(a, 1)??;
+    *u64 wide = make(u64)(a, 2)??;
+    *Pair pair = make(Pair)(a, Pair(3, 4))??;
+    u64 from = at(small);
+    u64 offsets = (at(wide as *u8) - from) * 100 + (at(pair as *u8) - from) * 10;
+    ret offsets + small.* + wide.* + pair.wide;
+}
+
+fun refused = (u32 one) -> u64 {
+    mut Arena a = arena(64)??;
+    mut u64 found = 0;
+    # 64 bytes fit exactly, one more does not and takes nothing
+    if make_slice(u8)(a.&, 65 * one as u64, 0) ?<- none: found += 1000;
+    [..]u8 all = make_slice(u8)(a.&, 64 * one as u64, 9)??;
+    if make(u8)(a.&, 1) ?<- extra: found += 1000;
+    found += left(a.&) * 10 + lenof all + all[63];
+    # a count whose size wraps around is refused too
+    reset(a.&);
+    if make_slice(u64)(a.&, 1 << 61, 0) ?<- huge: found += 1000;
+    ret found + left(a.&);
+}
+
+fun reused = () -> u64 {
+    mut Arena a = arena(4096)??;
+    *u64 first = make(u64)(a.&, 5)??;
+    reset(a.&);
+    *u64 again = make(u64)(a.&, 6)??;
+    u64 same = (at(first as *u8) == at(again as *u8)) as u64;
+    release(a.&);
+    u64 none = match make(u64)(a.&, 7) { Made(u64).Full => 1, _ => 0 };
+    ret same * 100 + none * 10 + left(a.&);
+}
+
+fun linked = (u64 count) -> u64 {
+    mut Arena a = arena(1 << 16)??;
+    mut Made(Node) head = Made(Node).Full;
+    for i in 0..<count: head = make(Node)(a.&, Node(i, head));
+    mut u64 sum = 0;
+    mut Made(Node) cur = head;
+    while cur ?<- node {
+        sum += node.value;
+        cur = node.next;
+    }
+    ret sum * 10 + (left(a.&) == (1 << 16) - count * sizeof Node) as u64;
+}
+
+main = (u32 argc, &&u8 argv) -> u8 {
+    mut Arena a = arena(4096)??;
+    line_u64(aligned(a.&));                        #> 967
+    line_u64(sizeof Made(Node));                   #> 8
+    line_u64(refused(argc));                       #> 137
+    line_u64(reused());                            #> 110
+    line_u64(linked(1000 * argc as u64));          #> 4995001
+    # the kernel has no room of 0 bytes
+    line_u64(match arena(0) { Reserved.Refused => 1, _ => 0 });   #> 1
+    ret 0;
+}

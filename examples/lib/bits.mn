@@ -1,0 +1,32 @@
+# bit sets, a library for `include`: `Bits(N)` holds N flags in N/64 words, 8 times denser than
+# `[N]bool`. an index past `N` is in no set: `get` gives false, `set` and `clear` do nothing.
+# works while compiling and at run time
+
+pub type Bits = (u64 N): *(mut [(N + 63) / 64]u64 words) !{
+    fun get = (u64 i where i < N else ret false) -> bool:
+        ret ((self.words[i >> 6] >> (i & 63)) & 1) == 1;
+    fun set = (u64 i) { if i < N: self.words[i >> 6] = self.words[i >> 6] | 1 << (i & 63); };
+    fun clear = (u64 i) {
+        if i < N: self.words[i >> 6] = self.words[i >> 6] & !(1 << (i & 63));
+    };
+    # how many are set, word by word (llvm counts a word in one instruction)
+    fun count = () -> u64 {
+        mut u64 n = 0;
+        for word in self.words {
+            mut u64 w = word;
+            while w != 0 {
+                w = w & w - 1;
+                n += 1;
+            }
+        }
+        ret n;
+    };
+    fun len = () -> u64: ret N;
+    # the members of both, of either
+    fun intersect = (&Bits(N) other) {
+        for i in 0..<lenof self.words: self.words[i] = self.words[i] & other.words[i];
+    };
+    fun unite = (&Bits(N) other) {
+        for i in 0..<lenof self.words: self.words[i] = self.words[i] | other.words[i];
+    };
+};

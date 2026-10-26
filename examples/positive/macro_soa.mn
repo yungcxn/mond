@@ -1,0 +1,41 @@
+<include "../lib/soa.mn">;
+# examples/lib/soa.mn while compiling: a record of one array per field of another, `get` and `set`
+# moving whole elements, nested records, arrays, guards and methods of the element kept
+
+type Particle = *(f32 x, f32 y, u8 alive);
+type Particles = <soa(refl Particle, 4)>;
+stc u64 SOA = sizeof Particles;          #= SOA 36
+stc u64 AOS = sizeof [4]Particle;        #= AOS 48
+
+stcfun filled = () -> Particles {
+    mut Particles ps;
+    for i in 0..<ps.len(): ps.set(i, Particle(i as f32, (i * 2) as f32, (i % 2) as u8));
+    ret ps;
+}
+stc Particles PS = filled();
+stc [4]f32 XS = PS.x;                    #= XS [0, 1, 2, 3]
+stc [4]f32 YS = PS.y;                    #= YS [0, 2, 4, 6]
+stc [4]u8 ALIVE = PS.alive;              #= ALIVE [0, 1, 0, 1]
+stc f32 Y2 = PS.get(2).y;                #= Y2 4
+stc u64 LEN = PS.len();                  #= LEN 4
+
+# a column of records and of arrays; a guard of the element runs where `get` makes one
+type Rich = *(Particle at, [2]u16 pair, i64 n where n > 0 else 1) !{
+    fun twice = () -> i64: ret self.n * 2;
+};
+type Riches = <soa(refl Rich, 3)>;
+stcfun rich = () -> i64 {
+    mut Riches r;
+    r.set(0, Rich(Particle(1.5, 2.5, 1), [7, 8], 4));
+    r.pair[2][1] = 9;
+    ret r.get(0).twice() * 1000 + r.get(1).n * 100 + r.pair[0][1] as i64 * 10 + r.pair[2][1] as i64;
+}
+stc i64 RICH = rich();                   #= RICH 8189
+stc u64 RS = sizeof Riches;              #= RS 72
+
+# a packed record's columns are arrays like any, laid out with padding
+type Tight = **(u8 a, u32 b);
+type Tights = <soa(refl Tight, 2)>;
+stc u64 TS = sizeof Tights;              #= TS 12
+
+main = () {}

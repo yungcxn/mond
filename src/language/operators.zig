@@ -140,6 +140,31 @@ comptime {
     }
 }
 
+// how the operator is written
+pub fn symbol(operator: BinaryOperator) []const u8 {
+    return switch (operator) {
+        .add => "+",
+        .subtract => "-",
+        .multiply => "*",
+        .divide => "/",
+        .remainder => "%",
+        .shift_left => "<<",
+        .shift_right => ">>",
+        .bit_or => "|",
+        .bit_xor => "^",
+        .bit_and => "&",
+        .equal => "==",
+        .not_equal => "!=",
+        .less => "<",
+        .greater => ">",
+        .less_equal => "<=",
+        .greater_equal => ">=",
+        .logic_and => "and",
+        .logic_or => "or",
+        .logic_xor => "xor",
+    };
+}
+
 // the operator of an `arithmetic`, `comparison`, `short_circuit_logic` or `logical_xor` node
 pub fn binary_operator_of(kind: Kind) BinaryOperator {
     return (binary_of_kind[@backingInt(kind)] orelse unreachable).operator;

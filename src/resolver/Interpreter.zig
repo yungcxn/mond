@@ -619,7 +619,9 @@ pub fn evaluate(self: *Interpreter, node: NodeId) Value {
         else
             self.unary(node, .negate, self.evaluate(first_operand)),
         .logical_not => self.unary(node, .not, self.evaluate(first_operand)),
-        .grouping, .do => self.evaluate(first_operand),
+        .grouping => self.evaluate(first_operand),
+        // `do e` evaluates `e` and drops its value
+        .do => if (self.evaluate(first_operand).is(.poison_type)) .poison else .unit,
         .return_value, .return_void, .loop_jump => self.flow.jump(node, kind),
         .name => self.variables.load(node),
         .block => self.flow.block(node),
@@ -699,6 +701,20 @@ fn unary(
 ) Value {
     if (operand.is(.poison_type)) return operand;
     const result_type = self.node_info(.node_type, node);
+    if (self.element_count(operand)) |length| {
+        const static_pool = &self.owning_resolver().static_pool;
+        const element_type = static_pool.element_operand(result_type);
+        const first_cell = self.allocate_cells(length);
+        for (0..length) |i| {
+            const position: u32 = @intCast(i);
+            const element_value = self.element(operand, position);
+            const value = Value.unary(operator, element_value, element_type) catch {
+                return self.fail(node, .not_static, self.interned(element_value), 0);
+            };
+            self.store_converted(first_cell + position, value, element_type);
+        }
+        return .block(result_type, first_cell, length);
+    }
     return Value.unary(operator, operand, result_type) catch |err| self.fail(
         node,
         if (err == error.Invalid) .static_eval_failed else .not_static,
@@ -715,6 +731,12 @@ pub fn evaluate_binary(
     right: Value,
 ) Value {
     if (left.is(.poison_type) or right.is(.poison_type)) return .poison;
+
+    // arrays and slices with each other or a number: element by element (`==` and `!=` compare
+    // whole values)
+    const compares_whole = operator == .equal or operator == .not_equal;
+    const by_element = self.element_count(left) != null or self.element_count(right) != null;
+    if (!compares_whole and by_element) return self.elementwise(node, operator, left, right);
 
     // a slice is equal to a slice or array of the same length and equal elements
     if (self.is_slice(left) or self.is_slice(right)) {
@@ -792,6 +814,44 @@ pub fn evaluate_binary(
         self.interned(left_operand),
         self.interned(right_operand),
     );
+}
+
+// an operator on arrays and slices element by element, a number with every element: a new array.
+// the result's elements are the node's, of an update (`a += b`) the updated value's
+fn elementwise(
+    self: *Interpreter,
+    node: NodeId,
+    operator: operators.BinaryOperator,
+    left: Value,
+    right: Value,
+) Value {
+    const static_pool = &self.owning_resolver().static_pool;
+    const left_count = self.element_count(left);
+    const right_count = self.element_count(right);
+    const length = left_count orelse right_count.?;
+    // a slice of another length than the other operand, a trap at run time
+    if (left_count != null and right_count != null and left_count.? != right_count.?) {
+        return self.fail(node, .static_eval_failed, 0, 0);
+    }
+    const node_type = self.node_info(.node_type, node);
+    const shape = if (left_count != null) left else right;
+    const element_type = if (static_pool.element_operand(node_type) != .none)
+        static_pool.element_operand(node_type)
+    else
+        static_pool.element_operand(self.value_type(shape));
+
+    const first_cell = self.allocate_cells(length);
+    for (0..length) |i| {
+        const position: u32 = @intCast(i);
+        const left_element = if (left_count != null) self.element(left, position) else left;
+        const right_element = if (right_count != null) self.element(right, position) else right;
+        const value = Value.binary(operator, left_element, right_element, element_type) catch |e| {
+            const code: Disorder = if (e == error.Invalid) .static_eval_failed else .not_static;
+            return self.fail(node, code, self.interned(left_element), self.interned(right_element));
+        };
+        self.store_converted(first_cell + position, value, element_type);
+    }
+    return .block(static_pool.array_of(length, element_type), first_cell, length);
 }
 
 // `a ~ b`: a new array of the elements of both, printable bytes as a text

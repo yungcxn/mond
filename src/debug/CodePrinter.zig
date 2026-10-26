@@ -459,7 +459,11 @@ fn write(self: *CodePrinter, n: NodeId) Error!void {
             // `@x.@(n)` names the member by another hole, `(@x).y` is a member of the hole
             try self.base(a, tree.kind(b) != .unquote, true);
             try self.text(".");
-            try self.write(b);
+            if (tree.kind(b) != .unquote) return self.write(b);
+            // the hole keeps its parentheses, `x.@n[i]` would index `n`
+            try self.text("@(");
+            try self.operand(tree.arg(b, 0), open, false);
+            try self.text(")");
         },
         .dereference => try self.postfixed(a, ".*"),
         .address_of => try self.postfixed(a, ".&"),

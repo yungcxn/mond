@@ -1,0 +1,32 @@
+# operators element by element: arrays of one length, numbers, integers where the operator wants
+# them; two slices have no array for a result; an update writes what it may write
+type R = *(u8 a);
+
+fun f = ([2]u8 two, [3]u8 three, [2]f32 floats, [2]bool flags, [2]R records, [..]u8 view) {
+    e1 = two + three; #! type_mismatch
+    e2 = floats % 2.0; #! type_mismatch
+    e3 = floats << 1; #! type_mismatch
+    e4 = flags + flags; #! type_mismatch
+    e5 = records * 2; #! type_mismatch
+    e6 = view + view; #! invalid_operand
+    e7 = view * 2; #! invalid_operand
+    e8 = two < three; #! type_mismatch
+    e9 = two == 2; #! type_mismatch
+    e10 = -flags; #! type_mismatch
+    e11 = !floats; #! type_mismatch
+    e12 = two + floats; #! type_mismatch
+    two += 1; #! assign_to_immutable
+}
+
+fun g = ([..]u8 view) {
+    mut [2]u8 pair = [1, 2];
+    pair += [1, 2, 3]; #! type_mismatch
+    mut [2]f32 halves = [0.5, 1.5];
+    halves %= 2.0; #! type_mismatch
+    pair += 300; #! type_mismatch
+    [3]u8 fixed = [1, 2, 3];
+    [..]u8 shared = fixed; #! write_through_immutable_pointer
+    shared += 1;
+}
+
+main = () {}

@@ -471,6 +471,7 @@ pub const argument_length = type_queries.argument_length;
 pub const payload_of = type_queries.payload_of;
 pub const is_element_pointer = type_queries.is_element_pointer;
 pub const element_type = type_queries.element_type;
+pub const element_operand = type_queries.element_operand;
 pub const implements = type_queries.implements;
 pub const tag_type_of = type_queries.tag_type_of;
 pub const stored_tag_type = type_queries.stored_tag_type;

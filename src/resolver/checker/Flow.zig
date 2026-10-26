@@ -667,9 +667,12 @@ pub fn settle(
     const settled_type = if (is_runit) .runit_type else branch_type;
     if (!resolver.static_pool.is_concrete(expected)) return settled_type;
 
-    const fits_any = settled_type == .never_type or settled_type == .runit_type or
-        settled_type == .poison_type;
-    if (fits_any) return settled_type;
+    if (settled_type == .never_type or settled_type == .poison_type) return settled_type;
+    // a branch without a value has none to give where one is expected
+    if (settled_type == .runit_type and expected != .unit_type) {
+        return resolver.report(.runit_mixing, node, settled_type, expected);
+    }
+    if (settled_type == .runit_type) return settled_type;
     // a branch that is a case with a payload is its constructor, not a value (as in `check`)
     const is_payload_constructor = resolver.tree.kind(node) == .member and
         resolver.static_pool.tag(settled_type) == .variant_case_type and
@@ -693,6 +696,12 @@ pub fn merge_branch_types(
     const resolver = self.owning_resolver();
     if (resolver.static_pool.is_concrete(expected)) return expected;
     if (accumulated == .none) return branch_type;
+    // a branch without a value leaves the choice without one, the values of others are dropped
+    if (accumulated == .runit_type or branch_type == .runit_type) {
+        const other = if (accumulated == .runit_type) branch_type else accumulated;
+        if (other == .poison_type) return .poison_type;
+        return if (other == .never_type or other == .runit_type) .runit_type else .unit_type;
+    }
 
     const join = resolver.static_pool.join(accumulated, branch_type);
     if (join.joined_type != .none) return join.joined_type;

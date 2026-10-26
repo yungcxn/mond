@@ -941,14 +941,14 @@ fun if_tour = (i32 x) {
     mut i32 magnitude = 0;
     if x >= 0: magnitude = x else: magnitude = -x;
 
-    # a block producing unit mixed with a value -> "runit"
+    # a block producing unit is "runit": it has no value to give, so it stands as a statement
     mut i32 myvar = 0;
-    myvar = if x == 5 {
+    if x == 5 {
         print("x == 5");
-    } else 42;
+    } else: myvar = 42;
 
     # a plain unit call as a branch needs `do` to become runit
-    myvar = if x == 5: do print("x == 5") else: 42;
+    if x == 5: do print("x == 5") else: myvar = 42;
 
     # brk / ret / cont and nested if / match are runit on their own, no `do` needed
     i32 checked = if x >= 0: x else: ret;

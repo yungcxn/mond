@@ -24,6 +24,20 @@ pub fn check_assignable(
     context: *FunctionContext,
     node: NodeId,
 ) StaticPool.Index {
+    return self.check_written(context, node, false);
+}
+
+// a place an operator updates (`x += ..`): a slice is updated through its elements, it stays
+pub fn check_updated(self: *Mutability, context: *FunctionContext, node: NodeId) StaticPool.Index {
+    return self.check_written(context, node, true);
+}
+
+fn check_written(
+    self: *Mutability,
+    context: *FunctionContext,
+    node: NodeId,
+    through_slice: bool,
+) StaticPool.Index {
     const resolver = self.owning_resolver();
     const mark = resolver.doctor.diagnostics.len();
     const assignable_type = resolver.expressions.infer(context, node, .none);
@@ -31,6 +45,13 @@ pub fn check_assignable(
     const failed = assignable_type == .poison_type and
         resolver.doctor.errors_since(resolver.tree, mark, node);
     if (failed) return assignable_type;
+    const static_pool = &resolver.static_pool;
+    const is_slice = static_pool.tag(static_pool.substitute_type_variables(assignable_type)) ==
+        .slice_type;
+    if (through_slice and is_slice) {
+        resolver.slices.writes(node);
+        return assignable_type;
+    }
 
     self.record_write_access(node, self.writable(node));
     resolver.slices.writes_into(node);

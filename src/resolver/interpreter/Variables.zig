@@ -484,6 +484,15 @@ pub fn update(self: *Variables, node: NodeId, kind: Kind) Value {
     const right: Value = if (compound) operand else .int(step_type, 1);
     const new_value = interpreter.evaluate_binary(node, operator, old_value, right);
     if (new_value.is(.poison_type)) return new_value;
+    // a slice is updated through its elements, it stays itself
+    if (interpreter.is_slice(old_value)) {
+        for (0..old_value.slice_len()) |i| {
+            const position: u32 = @intCast(i);
+            const updated = interpreter.element(new_value, position);
+            interpreter.store_cell(old_value.cell() + position, updated);
+        }
+        return .unit;
+    }
 
     if (target_cell) |cell| {
         interpreter.store_cell(cell, interpreter.owned_copy(new_value.fit(old_value.value_type)));

@@ -1053,6 +1053,9 @@ fn expression(self: *HighLowerer, node: NodeId) Ref {
     return switch (constructs.construct_of(kind)) {
         .comparison => {
             const operation = operation_of(operators.binary_operator_of(kind));
+            if (self.static_pool.element_operand(value_type) != .none) {
+                return self.elementwise_value(operation, value_type, first, second);
+            }
             return self.comparison(operation, first, second);
         },
         .compound_assignment => self.compound_assignment(kind, first, second),
@@ -1080,6 +1083,9 @@ fn expression(self: *HighLowerer, node: NodeId) Ref {
             return self.builder.emit_refs(.ne, .bool_type, left, right);
         },
         .logical_not => {
+            if (self.static_pool.element_operand(value_type) != .none) {
+                return self.elementwise_value(.not, value_type, first, 0);
+            }
             const operand = self.expression_as(first, value_type);
             return self.builder.emit_refs(.not, value_type, operand, .none);
         },
@@ -1188,6 +1194,18 @@ fn expression(self: *HighLowerer, node: NodeId) Ref {
 fn compound_assignment(self: *HighLowerer, kind: NodeKind, target: NodeId, operand: NodeId) Ref {
     const operation = operation_of(operators.assigned_operator_of(kind));
     const target_type = self.type_of(target);
+    // an array or a slice is updated element by element where its elements are
+    const elements = self.static_pool.element_operand(target_type);
+    if (elements != .none) {
+        const destination = if (self.static_pool.tag(target_type) == .slice_type)
+            self.element_source(self.slice_value(target), target_type)
+        else
+            self.element_source_at(self.place(target), target_type);
+        const value = self.element_source(self.expression(operand), self.type_of(operand));
+        const length = self.source_length(destination, target_type);
+        self.elementwise_into(operation, destination.first, elements, length, destination, value);
+        return unit();
+    }
     const value = self.expression_as(operand, target_type);
     _ = self.update_place(target, operation, value, false);
     return unit();
@@ -1210,6 +1228,9 @@ fn arithmetic(
 ) Ref {
     const operator = operators.binary_operator_of(kind);
     const operation = operation_of(operator);
+    if (self.static_pool.element_operand(value_type) != .none) {
+        return self.elementwise_value(operation, value_type, left, right);
+    }
     const offsets_pointer = (operator == .add or operator == .subtract) and
         self.is_pointer(value_type);
     if (!offsets_pointer) {
@@ -1230,8 +1251,117 @@ fn numeric_negation(self: *HighLowerer, node: NodeId, value_type: Index, operand
     if (self.resolver.tree.is_literal(node)) {
         return self.constant_of(self.resolver.static_values.literal_value(node, false), value_type);
     }
+    if (self.static_pool.element_operand(value_type) != .none) {
+        return self.elementwise_value(.neg, value_type, operand, 0);
+    }
     const value = self.expression_as(operand, value_type);
     return self.builder.emit_refs(.neg, value_type, value, .none);
+}
+
+// one operand of an operator element by element: an array or a slice by its first element's
+// address, a number as it is
+const ElementSource = struct { first: Ref, element_type: Index, number: Ref, slice: Ref };
+
+fn element_source(self: *HighLowerer, value: Ref, value_type: Index) ElementSource {
+    const pool = self.static_pool;
+    const elements = pool.element_operand(value_type);
+    if (elements == .none) {
+        return .{ .first = .none, .element_type = value_type, .number = value, .slice = .none };
+    }
+    if (pool.tag(value_type) == .slice_type) {
+        const first = self.slice_part(value, value_type, 0);
+        return .{ .first = first, .element_type = elements, .number = .none, .slice = value };
+    }
+    // an array value is the address of its own copy
+    const address = self.builder.emit_refs(.address, self.pointer_to(value_type), value, .none);
+    return self.element_source_at(address, value_type);
+}
+
+fn element_source_at(self: *HighLowerer, array: Ref, array_type: Index) ElementSource {
+    const elements = self.static_pool.element_operand(array_type);
+    const as_elements = @backingInt(StaticPool.CoercionKind.array_ptr_to_elem_ptr);
+    const first =
+        self.builder.emit(.convert, self.pointer_to(elements), @backingInt(array), as_elements);
+    return .{ .first = first, .element_type = elements, .number = .none, .slice = .none };
+}
+
+// how many elements an array or slice operand has
+fn source_length(self: *HighLowerer, source: ElementSource, value_type: Index) Ref {
+    if (source.slice != .none) return self.slice_part(source.slice, value_type, 1);
+    return self.builder.constant_int(.u64_type, self.static_pool.static_length(value_type).?);
+}
+
+// a new array of an operator applied element by element, `right` 0 for `-` and `!`
+fn elementwise_value(
+    self: *HighLowerer,
+    operation: Op,
+    result_type: Index,
+    left: NodeId,
+    right: NodeId,
+) Ref {
+    const elements = self.static_pool.element_operand(result_type);
+    const slot = self.alloca(result_type);
+    const destination = self.element_source_at(slot, result_type);
+    const length = self.source_length(destination, result_type);
+    const left_source = self.element_source(self.expression(left), self.type_of(left));
+    const right_source: ?ElementSource = if (right == 0)
+        null
+    else
+        self.element_source(self.expression(right), self.type_of(right));
+    const first = destination.first;
+    self.elementwise_into(operation, first, elements, length, left_source, right_source);
+    return self.load(result_type, slot);
+}
+
+// writes `left` and `right` combined element by element to the `length` elements at `first`: a
+// slice of another length is a trap where checks are on
+fn elementwise_into(
+    self: *HighLowerer,
+    operation: Op,
+    first: Ref,
+    result_elements: Index,
+    length: Ref,
+    left: ElementSource,
+    right: ?ElementSource,
+) void {
+    for ([2]?ElementSource{ left, right }) |source| if (source) |known| if (known.slice != .none) {
+        const slice_type = self.type_of_ref(known.slice);
+        const slice_length = self.slice_part(known.slice, slice_type, 1);
+        self.check(self.builder.emit_refs(.eq, .bool_type, slice_length, length));
+    };
+    // a comparison compares in the type both sides join to, anything else computes the result's
+    const operand_elements = if (right) |known|
+        self.static_pool.join(left.element_type, known.element_type).joined_type
+    else
+        result_elements;
+
+    const counter = self.new_temporary(.u64_type);
+    self.write_current(counter, self.builder.constant_int(.u64_type, 0));
+    const head = self.builder.new_block();
+    const body = self.builder.new_block();
+    const exit = self.builder.new_block();
+    self.enter_loop_head(head);
+    const index = self.read_current(counter);
+    self.builder.branch_if(self.builder.emit_refs(.lt, .bool_type, index, length), body, exit);
+    self.builder.go_to(body);
+    const left_element = self.element_at(left, index, operand_elements);
+    const right_element =
+        if (right) |known| self.element_at(known, index, operand_elements) else .none;
+    const value = self.builder.emit_refs(operation, result_elements, left_element, right_element);
+    const element_pointer = self.pointer_to(result_elements);
+    self.store(self.builder.emit_refs(.index_ptr, element_pointer, first, index), value);
+    const one = self.builder.constant_int(.u64_type, 1);
+    self.write_current(counter, self.builder.emit_refs(.add, .u64_type, index, one));
+    self.builder.branch(head);
+    self.builder.seal(head);
+    self.builder.go_to(exit);
+}
+
+fn element_at(self: *HighLowerer, source: ElementSource, index: Ref, as_type: Index) Ref {
+    if (source.first == .none) return self.coerce(source.number, source.element_type, as_type);
+    const element_pointer = self.pointer_to(source.element_type);
+    const pointer = self.builder.emit_refs(.index_ptr, element_pointer, source.first, index);
+    return self.coerce(self.load(source.element_type, pointer), source.element_type, as_type);
 }
 
 fn block(self: *HighLowerer, node: NodeId) Ref {
@@ -1706,7 +1836,11 @@ fn match_expression(self: *HighLowerer, node: NodeId) Ref {
     const result = if (has_value(result_type)) self.new_temporary(result_type) else none;
     const merge = self.builder.new_block();
     // the arms a switch took, the others are tested one after another from its default
-    const switched =
+    const strings =
+        self.lower_strings_as_switch(arms, scrutinee, scrutinee_type, result_type, result, merge);
+    const switched = if (strings > 0)
+        strings
+    else
         self.lower_as_switch(arms, scrutinee, scrutinee_type, result_type, result, merge);
     if (switched == arms.len) {
         self.builder.go_to(merge);
@@ -1837,19 +1971,7 @@ fn lower_as_switch(
         break :blk self.builder.emit_refs(.variant_tag, key_type, scrutinee, .none);
     } else scrutinee;
 
-    if (key.is_const()) {
-        var target = default_block;
-        var i: usize = 1;
-        while (i < cases.len) : (i += 2) {
-            if (cases[i] == @backingInt(key)) target = cases[i + 1];
-        }
-        self.builder.branch(target);
-    } else if (!self.builder.is_unreachable) {
-        self.builder.add_edge(default_block);
-        var i: usize = 2;
-        while (i < cases.len) : (i += 2) self.builder.add_edge(cases[i]);
-        _ = self.builder.emit(.@"switch", .unit_type, @backingInt(key), self.builder.list(cases));
-    }
+    self.switch_into(key, cases);
     self.scratch.len = mark;
 
     for (switched_arms, 0..) |arm, i| {
@@ -1864,6 +1986,198 @@ fn lower_as_switch(
         if (rest == arms.len) self.emit_unreachable();
     }
     return rest;
+}
+
+// branches on `key` to the block `cases` pairs it with, `cases[0]` the default; a constant key
+// straight there
+fn switch_into(self: *HighLowerer, key: Ref, cases: []const u32) void {
+    if (key.is_const()) {
+        var target = cases[0];
+        var i: usize = 1;
+        while (i < cases.len) : (i += 2) {
+            if (cases[i] == @backingInt(key)) target = cases[i + 1];
+        }
+        return self.builder.branch(target);
+    }
+    if (self.builder.is_unreachable) return;
+    self.builder.add_edge(cases[0]);
+    var i: usize = 2;
+    while (i < cases.len) : (i += 2) self.builder.add_edge(cases[i]);
+    _ = self.builder.emit(.@"switch", .unit_type, @backingInt(key), self.builder.list(cases));
+}
+
+// a string an arm tests and the arm, among the arms a string switch takes
+const StringKey = struct { bytes: []const u8, value: Index, arm: u32 };
+
+// a `match` of a byte slice whose first arms (four strings at least) test strings, up to the first
+// catch-all or other arm: a `switch` on the length, then on the byte that tells the strings of a
+// length apart, then one comparison. how many arms it took, as `lower_as_switch` counts them
+fn lower_strings_as_switch(
+    self: *HighLowerer,
+    arms: []const NodeId,
+    scrutinee: Ref,
+    scrutinee_type: Index,
+    result_type: Index,
+    result: u32,
+    merge: u32,
+) usize {
+    const pool = self.static_pool;
+    const is_bytes = scrutinee_type != .none and pool.tag(scrutinee_type) == .slice_type and
+        pool.get(scrutinee_type).slice_type.element == .u8_type;
+    if (!is_bytes) return 0;
+    const tree = self.resolver.tree;
+    var keys: std.ArrayList(StringKey) = .empty;
+    defer keys.deinit(self.allocator);
+    var arm_count: u32 = 0;
+    var has_catch_all = false;
+    for (arms) |arm| {
+        const pattern = tree.arg(arm, 0);
+        if (tree.kind(pattern) == .identifier) {
+            has_catch_all = true;
+            arm_count += 1;
+            break;
+        }
+        if (!self.string_keys(pattern, arm_count, &keys)) break;
+        arm_count += 1;
+    }
+    if (keys.items.len < 4) return 0;
+    const rest = if (has_catch_all) arms.len else arm_count;
+
+    const first_arm_block = self.builder.block_count();
+    for (0..arm_count) |_| _ = self.builder.new_block();
+    const default_block = if (has_catch_all)
+        first_arm_block + arm_count - 1
+    else
+        self.builder.new_block();
+
+    std.mem.sort(StringKey, keys.items, {}, struct {
+        fn shorter(_: void, left: StringKey, right: StringKey) bool {
+            return left.bytes.len < right.bytes.len;
+        }
+    }.shorter);
+    self.split_strings(keys.items, scrutinee, scrutinee_type, first_arm_block, default_block);
+
+    for (arms[0..arm_count], 0..) |arm, i| {
+        self.builder.go_to(first_arm_block + @as(u32, @intCast(i)));
+        self.bind_pattern(tree.arg(arm, 0), scrutinee, scrutinee_type);
+        self.arm_into(tree.arg(arm, 1), result_type, result, merge);
+    }
+    if (!has_catch_all) {
+        self.builder.go_to(default_block);
+        if (rest == arms.len) self.emit_unreachable();
+    }
+    return rest;
+}
+
+// the strings a pattern tests, a string an earlier arm tests already left out; false for a pattern
+// that tests more than strings
+fn string_keys(
+    self: *HighLowerer,
+    pattern: NodeId,
+    arm: u32,
+    keys: *std.ArrayList(StringKey),
+) bool {
+    const tree = self.resolver.tree;
+    switch (tree.kind(pattern)) {
+        .string => {
+            const value = self.resolver.static_values.literal_value(pattern, false);
+            const bytes = self.static_pool.get(value).string_value;
+            for (keys.items) |key| if (std.mem.eql(u8, key.bytes, bytes)) return true;
+            keys.append(self.allocator, .{ .bytes = bytes, .value = value, .arm = arm }) catch {
+                @panic("OOM");
+            };
+            return true;
+        },
+        .partial__match_case_pattern_or => {
+            const mark = keys.items.len;
+            for (tree.manychildren(pattern)) |alternative| {
+                if (self.string_keys(alternative, arm, keys)) continue;
+                keys.shrinkRetainingCapacity(mark);
+                return false;
+            }
+            return true;
+        },
+        .labelarrow => return self.string_keys(tree.arg(pattern, 0), arm, keys),
+        else => return false,
+    }
+}
+
+// branches to the arm of the string the scrutinee is among `keys` (sorted by length), else to
+// `default_block`: by length, then by the byte telling most of one length apart, then comparing
+fn split_strings(
+    self: *HighLowerer,
+    keys: []const StringKey,
+    scrutinee: Ref,
+    scrutinee_type: Index,
+    first_arm_block: u32,
+    default_block: u32,
+) void {
+    if (keys.len == 1) {
+        const expected = self.constant_of(keys[0].value, scrutinee_type);
+        const equals = self.builder.emit_refs(.eq, .bool_type, scrutinee, expected);
+        return self.builder.branch_if(equals, first_arm_block + keys[0].arm, default_block);
+    }
+    const same_length = keys[0].bytes.len == keys[keys.len - 1].bytes.len;
+    const at = if (same_length) distinguishing_byte(keys) else 0;
+    const key = if (!same_length)
+        self.slice_part(scrutinee, scrutinee_type, 1)
+    else blk: {
+        const first = self.slice_part(scrutinee, scrutinee_type, 0);
+        const offset = self.builder.constant_int(.u64_type, at);
+        const byte = self.builder.emit_refs(.index_ptr, self.pointer_to(.u8_type), first, offset);
+        break :blk self.load(.u8_type, byte);
+    };
+
+    // the groups of keys of one length or byte, in order
+    var groups: std.ArrayList(StringKey) = .empty;
+    defer groups.deinit(self.allocator);
+    groups.appendSlice(self.allocator, keys) catch @panic("OOM");
+    if (same_length) std.mem.sort(StringKey, groups.items, at, struct {
+        fn lower(position: usize, left: StringKey, right: StringKey) bool {
+            return left.bytes[position] < right.bytes[position];
+        }
+    }.lower);
+    const mark = self.scratch.len;
+    self.scratch.push(default_block);
+    var starts: std.ArrayList(usize) = .empty;
+    defer starts.deinit(self.allocator);
+    for (groups.items, 0..) |item, i| {
+        const value: u64 = if (same_length) item.bytes[at] else item.bytes.len;
+        const previous: u64 = if (i == 0) value +% 1 else if (same_length)
+            groups.items[i - 1].bytes[at]
+        else
+            groups.items[i - 1].bytes.len;
+        if (i > 0 and value == previous) continue;
+        starts.append(self.allocator, i) catch @panic("OOM");
+        const key_type: Index = if (same_length) .u8_type else .u64_type;
+        self.scratch.push(@backingInt(self.builder.constant_int(key_type, value)));
+        self.scratch.push(self.builder.new_block());
+    }
+    starts.append(self.allocator, groups.items.len) catch @panic("OOM");
+    self.switch_into(key, self.scratch.buffer[mark..self.scratch.len]);
+    const first_group_block = self.scratch.buffer[mark + 2];
+    self.scratch.len = mark;
+
+    for (starts.items[0 .. starts.items.len - 1], starts.items[1..], 0..) |from, to, k| {
+        self.builder.go_to(first_group_block + @as(u32, @intCast(k)));
+        const group = groups.items[from..to];
+        self.split_strings(group, scrutinee, scrutinee_type, first_arm_block, default_block);
+    }
+}
+
+// the position where the strings, all of one length, have the most different bytes
+fn distinguishing_byte(keys: []const StringKey) usize {
+    var best: usize = 0;
+    var best_count: usize = 0;
+    for (0..keys[0].bytes.len) |position| {
+        var seen: std.StaticBitSet(256) = .empty;
+        for (keys) |key| seen.set(key.bytes[position]);
+        if (seen.count() > best_count) {
+            best = position;
+            best_count = seen.count();
+        }
+    }
+    return best;
 }
 
 // null when the pattern needs more than comparing the key, so no switch is possible

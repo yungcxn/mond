@@ -375,6 +375,21 @@ pub fn element_type(pool: *StaticPool, type_index: Index) Index {
     return if (pool.has_type_variables(element)) .none else element;
 }
 
+// the elements of an array of a static length or of a slice, what an operator applies to element by
+// element; none for any other type
+pub fn element_operand(pool: *StaticPool, type_index: Index) Index {
+    if (type_index == .none or type_index == .poison_type) return .none;
+    const resolved = pool.substitute_type_variables(type_index);
+    return switch (pool.get(resolved)) {
+        .slice_type => |slice| slice.element,
+        .array_type => if (pool.static_length(resolved) == null)
+            .none
+        else
+            element_type(pool, resolved),
+        else => .none,
+    };
+}
+
 pub fn implements(pool: *const StaticPool, type_index: Index, trait: Index) bool {
     if (type_index == trait) return true;
     const traits = switch (pool.get(type_index)) {

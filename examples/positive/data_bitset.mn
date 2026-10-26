@@ -1,0 +1,56 @@
+<include "../lib/bits.mn">;
+# examples/lib/bits.mn while compiling: one bit per member, words of 64, the edges of the words, an
+# index past the length in no set, counting, both and either of two sets
+
+stc []u64 SIZES = [sizeof Bits(0), sizeof Bits(1), sizeof Bits(64), sizeof Bits(65)];
+stc []u64 SEEN = SIZES;                      #= SEEN [0, 8, 8, 16]
+
+stcfun edges = () -> u64 {
+    mut Bits(65) b;
+    b.set(63);
+    b.set(64);
+    b.set(65);
+    b.set(1 << 40);
+    ret b.count() * 100 + b.get(63) as u64 * 10 + b.get(65) as u64 + b.words[1] * 1000;
+}
+stc u64 EDGES = edges();                     #= EDGES 1210
+
+stcfun cleared = () -> u64 {
+    mut Bits(10) b;
+    b.set(2);
+    b.set(2);
+    b.clear(2);
+    b.clear(7);
+    b.clear(99);
+    b.set(9);
+    ret b.count() * 10 + b.get(9) as u64;
+}
+stc u64 CLEARED = cleared();                 #= CLEARED 11
+
+stcfun full = () -> u64 {
+    mut Bits(130) b;
+    for i in 0..<b.len(): b.set(i);
+    ret b.count() * 1000 + b.words[2];
+}
+stc u64 FULL = full();                       #= FULL 130003
+
+stcfun combined = () -> u64 {
+    mut Bits(200) a;
+    mut Bits(200) b;
+    for i in 0..<200: if i % 2 == 0: a.set(i);
+    for i in 0..<200: if i % 3 == 0: b.set(i);
+    mut Bits(200) both = a;
+    both.intersect(b.&);
+    a.unite(b.&);
+    ret both.count() * 1000 + a.count();
+}
+stc u64 COMBINED = combined();               #= COMBINED 34133
+
+stcfun empty = () -> u64 {
+    mut Bits(0) b;
+    b.set(0);
+    ret b.count() + b.get(0) as u64 + b.len();
+}
+stc u64 EMPTY = empty();                     #= EMPTY 0
+
+main = () {}

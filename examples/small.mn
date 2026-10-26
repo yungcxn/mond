@@ -376,12 +376,12 @@ main = () {
     # if-else with "runit" code execution
     mut i32 myvar = 0;                                       # initialization, mandatory before such
 
-    myvar = if 2 + 3 == 5 {
+    if 2 + 3 == 5 {
         print("2 + 3 == 5");
-    } else 42;
+    } else: myvar = 42;
 
     # same as:
-    myvar = if 2 + 3 == 5: do print("2 + 3 == 5") else: 42;                   # do for unit -> runit
+    if 2 + 3 == 5: do print("2 + 3 == 5") else: myvar = 42;                   # do for unit -> runit
 
     # stcif: condition is static, evaluated at compile-time only true compiles
     i32 stcif_var = stcif 1 == 1: 42 else: "illegal never-compiled value";

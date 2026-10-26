@@ -1,0 +1,68 @@
+<include "lib/out.mn">;
+# a match of a byte slice over many strings switches on the length, then on the byte telling the
+# strings of a length apart, then compares once: the same arm as testing them in order. each line
+# ends in 1 where compiling computed the same
+
+fun word = ([..]u8 w) -> u64: ret match w {
+    "" => 1,
+    "a" => 2,
+    "fun" => 3,
+    "for" => 4,
+    "ret" | "return" => 5,
+    "abcd" | "abce" => 6,
+    "abdd" => 7,
+    "abde" <- seen => 70 + lenof seen,
+    "é" => 9,
+    "while" => 10,
+    other => 100 + lenof other,
+};
+# the strings before a guard are switched on, the guard and what follows are tested after them
+fun guarded = ([..]u8 w, bool flag) -> u64: ret match w {
+    "one" => 1,
+    "two" => 2,
+    "three" => 3,
+    "four" => 4,
+    "five" where flag => 5,
+    "five" => 50,
+    "six" => 6,
+    _ => 0,
+};
+
+stc [16][..]u8 INPUTS = ["", "a", "b", "fun", "for", "fan", "ret", "return", "abcd", "abce", "abdd",
+    "abde", "abcf", "é", "while", "whilf"];
+stcfun all_words = () -> [16]u64: ret for i in 0..<16: word(INPUTS[i]);
+stc [16]u64 WORDS = all_words();
+stc [5]u64 GUARDED = [guarded("four", true), guarded("five", true), guarded("five", false),
+    guarded("six", true), guarded("seven", true)];
+
+main = (u32 argc, &&u8 argv) {
+    for i in 0..<16 {
+        u64 got = word(INPUTS[i][0..<lenof INPUTS[i] * argc as u64]);
+        line_u64(got * 10 + (got == WORDS[i]) as u64);
+    }
+    #> 11
+    #> 21
+    #> 1011
+    #> 31
+    #> 41
+    #> 1031
+    #> 51
+    #> 51
+    #> 61
+    #> 61
+    #> 71
+    #> 741
+    #> 1041
+    #> 91
+    #> 101
+    #> 1051
+    bool flag = argc == 1;
+    [5]u64 got = [guarded("four", flag), guarded("five", flag), guarded("five", !flag),
+        guarded("six", flag), guarded("seven", flag)];
+    for i in 0..<5: line_u64(got[i] * 10 + (got[i] == GUARDED[i]) as u64);
+    #> 41
+    #> 51
+    #> 501
+    #> 61
+    #> 1
+}

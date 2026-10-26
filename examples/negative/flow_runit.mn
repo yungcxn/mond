@@ -1,17 +1,18 @@
-# `do` and unit blocks are runit and mix with values, a plain unit value does not
+# `do`, unit blocks and nested ifs without else are runit: a branch without a value. next to a value
+# that is an error where a value is expected, elsewhere the choice has none, its values dropped
 fun unit_fn = () {}
 variant V = +(A, B);
 
 fun f = (bool c, V v, i32 n) {
-    i32 a = if c: 1 else: do unit_fn();
-    i32 b = if c { unit_fn(); } else: 2;
+    i32 a = if c: 1 else: do unit_fn(); #! runit_mixing
+    i32 b = if c { unit_fn(); } else: 2; #! runit_mixing
     i32 b2 = if c { 1; } else: 2;
-    x = if c: 1 else: do unit_fn(); #: x u32
+    x = if c: 1 else: do unit_fn(); #: x ()
     y = if c: do unit_fn() else: do unit_fn(); #: y runit
     z = if c: 1; #: z ()
-    i32 m = match v { V.A => 1, V.B => do unit_fn() }
-    w = match v { V.A => 1, V.B => do unit_fn() } #: w u32
-    i32 k = match n { 0 => { unit_fn(); }, _ => 3 }
+    i32 m = match v { V.A => 1, V.B => do unit_fn() } #! runit_mixing
+    w = match v { V.A => 1, V.B => do unit_fn() } #: w ()
+    i32 k = match n { 0 => { unit_fn(); }, _ => 3 } #! runit_mixing
     i32 q = if c: unit_fn() else: unit_fn(); #! runit_mixing runit_mixing
     u = if c: unit_fn() else: unit_fn(); #: u ()
     i32 j = if c: if n > 0: 1 else: 2 else: 3;
@@ -21,5 +22,8 @@ fun f = (bool c, V v, i32 n) {
     i32 nn = match v { V.A => unit_fn(), V.B => unit_fn() } #! runit_mixing runit_mixing
     i32 dd = do unit_fn(); #! type_mismatch
     i32 rr = if c: 1 else: ret;
+    i32 dr = if c: 1 else: { unit_fn(); ret; };
+    e = if c: do unit_fn() else: ret; #: e runit
+    if c: 1 else: do unit_fn();
 }
 main = () {}

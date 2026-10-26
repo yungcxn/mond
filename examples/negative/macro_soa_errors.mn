@@ -1,0 +1,8 @@
+<include "../lib/soa.mn">;
+# soa takes a record with named fields, anything else stops at the declaration
+type Unnamed = *(u32, u8); #! crash
+type Columns = <soa(refl Unnamed, 2)>;
+variant Choice = +(A, B); #! crash
+type Choices = <soa(refl Choice, 2)>;
+
+main = () {}

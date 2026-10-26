@@ -1,0 +1,12 @@
+# a runtime check stops the program: an operator element by element between an array and a slice
+# of another length. the line before is printed, the one after isn't
+#+
+#? trap
+<include "lib/raw.mn">;
+fun added = ([..]u32 s) -> [3]u32: ret [1, 2, 3] + s;
+main = (u32 argc, &&u8 argv) {
+    say_u64(1);   #> 1
+    [4]u32 four = [1, 2, 3, argc];
+    [3]u32 got = added(four[0..<argc as u64 + 3]);
+    say_u64(got[0] as u64);
+}

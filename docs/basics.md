@@ -74,7 +74,7 @@ stc u64 BYTES = sizeof u7 + sizeof i24;  #= BYTES 5
 fun narrow = (u8 x) -> u7: ret x;        #! type_mismatch
 ```
 
-Two types appear only in messages: `never` (the type of `ret`, `brk`, `cont`, or a `loop` without `brk`) and `runit` (an `if` or block used as a statement-like branch). Both disappear when joined with another type.
+Two types appear only in messages: `never` (the type of `ret`, `brk`, `cont`, or a `loop` without `brk`) and `runit` (a branch without a value: `do e`, a block ending in a statement, an `if` without `else`). `never` disappears when joined with another type, `runit` leaves the choice without a value (see [control](control.md)).
 
 `[]T` means different things by position. A parameter `[]T` / `&[]T` / `*[]T` is realized for each length (see [functions.md](functions.md#length-generic-functions)). A `&[]T` or `*[]T` field or result is a runtime-length array: like a pointer in C, only the address of its first element (`sizeof` 8), and it only fits pointer parameters. A length is always static, so a runtime-length array has no `lenof`, no `for` over it and no `==` (each `not_static`); keep its length yourself, or cast it to a length (`p as &[4]u8`) to have one again. Its elements index as usual, unchecked.
 
@@ -92,7 +92,7 @@ typeof N m = 4;            #: m u64
 
 ### Arrays
 
-`[a, b, c]` builds an array, and trailing commas are fine. The element type comes from the expected type, else from the join of the elements. Arrays are values: they are copied, and `==` compares them element by element. An array without a value is zero-filled. `lenof a` is its length, a static `u64`, also through a pointer to an array of a static length; `lenof` of anything else is `invalid_operand`. Arrays of different lengths don't join as values (`if c: "ab" else: "other"` is a `type_mismatch`), but runtime-length arrays do: a function returning `&[]u8` may return `"ab".&` or `"other".&`.
+`[a, b, c]` builds an array, and trailing commas are fine. The element type comes from the expected type, else from the join of the elements. Arrays are values: they are copied, `==` compares them element by element, and arithmetic works on each element (see [operators](#operators)). An array without a value is zero-filled. `lenof a` is its length, a static `u64`, also through a pointer to an array of a static length; `lenof` of anything else is `invalid_operand`. Arrays of different lengths don't join as values (`if c: "ab" else: "other"` is a `type_mismatch`), but runtime-length arrays do: a function returning `&[]u8` may return `"ab".&` or `"other".&`.
 
 `a ~ b` is a new array of the elements of `a` and then of `b`: arrays or slices (also behind pointers) of one element type, a literal taking the other side's. Arrays join to an array of both lengths, at run time as well (`"ab" ~ "cd"` is a `[4]u8`). A slice's length is known only while the program runs, so a join with one is made while compiling (in a `stcfun`, for a static value) and is `not_static` in the program.
 
@@ -194,6 +194,22 @@ stc []u32 G = for 1 + 1..<2 * 2 + 1: $it;     #= G [2, 3, 4]
 ```
 
 Both operands of an operator must join to one type: `u8 + i8`, or an int with a float variable, is `type_mismatch`.
+
+On arrays the operators work element by element: an array with an array of its length, with a number (each element takes it), or with a slice (checked to have the array's length at run time, a trap where checks are on) gives an array of the results, the elements' types joined. `< > <= >=` give an array of `bool`s, while `==` and `!=` still compare whole arrays. Unary `-` and `!` work the same, and `+=` and the others update an array, or the elements a slice views, in place. Two slices, or a slice and a number, have no array to hold a result: `invalid_operand`, except updating a slice. In the optimizing modes the loops become vector instructions.
+
+```mond
+stc [4]i32 V = [1, 5, 3, 7];
+stc [4]i32 W = V * 2 - [1, 1, 1, 1];     #= W [1, 9, 5, 13]
+stc [4]bool LOW = V < 4;                 #= LOW [true, false, true, false]
+stc bool ALL = V == [1, 5, 3, 7];        #= ALL true
+stcfun bumped = () -> [3]u8 {
+    mut [3]u8 b = [1, 2, 3];
+    [..]u8 tail = b[1..];
+    tail += 10;
+    ret b;
+}
+stc [3]u8 BUMPED = bumped();             #= BUMPED [1, 12, 13]
+```
 
 ## Conversions
 

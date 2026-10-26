@@ -1,0 +1,67 @@
+# arenas, a library for `include`: one piece of memory from the kernel, handed out front to back
+# and given back all at once (regions). a value made in an arena lives until the arena is reset or
+# released, nothing frees it alone. the kernel is called directly, with the c library or without,
+# so arenas exist at run time only
+
+stc i64 MMAP = stcmatch __os { "linux" => stcmatch __arch { "x86_64" => 9, _ => 222 }, _ => 197 };
+stc i64 MUNMAP = stcmatch __os { "linux" => stcmatch __arch { "x86_64" => 11, _ => 215 }, _ => 73 };
+# readable and writable, private and anonymous: memory of the program's own
+stc i64 READ_WRITE = 3;
+stc i64 ANONYMOUS = stcmatch __os { "linux" => 0x22, _ => 0x1002 };
+
+pub type Arena = *(*u8 base, mut u64 used, mut u64 cap);
+# an arena, `Refused` when the kernel has no memory for it
+pub variant Reserved = +(Some(Arena), Refused);
+# a value made in an arena, `Full` when it has no room left; 8 bytes, `Full` is the null address
+pub variant Made = (type T): +(Some(*T), Full) tagtype self;
+# elements made in an arena
+pub variant Taken = (type T): +(Some([..]T), Full);
+
+# an arena of `cap` bytes, the kernel hands out its pages when they are first written
+pub fun arena = (u64 cap) -> Reserved {
+    i64 got = syscall (MMAP, 0, cap, READ_WRITE, ANONYMOUS, -1, 0);
+    if got <= 0: ret Reserved.Refused;
+    ret Reserved.Some(Arena(got asbits *u8, 0, cap));
+}
+
+# the offset of the next `size` bytes aligned to `align`, `cap` and more when they don't fit
+fun claim = (*Arena a, u64 size, u64 align) -> u64 {
+    u64 at = (a.used + align - 1) & !(align - 1);
+    if at > a.cap or size > a.cap - at: ret a.cap + 1;
+    a.used = at + size;
+    ret at;
+}
+
+# a copy of `value` in the arena
+pub stcfun make = (type T): (*Arena a, T value) -> Made(T) {
+    u64 at = claim(a, sizeof T, alignof T);
+    if at > a.cap: ret Made(T).Full;
+    *T place = (a.base + at) as *T;
+    place.* = value;
+    ret Made(T).Some(place);
+}
+
+# `count` elements in the arena, each a copy of `fill`
+pub stcfun make_slice = (type T): (*Arena a, u64 count, T fill) -> Taken(T) {
+    # more elements than the arena could ever hold, before their size wraps
+    u64 unit = if sizeof T > 0: sizeof T else: 1;
+    if count > a.cap / unit: ret Taken(T).Full;
+    u64 at = claim(a, sizeof T * count, alignof T);
+    if at > a.cap: ret Taken(T).Full;
+    *T first = (a.base + at) as *T;
+    for i in 0..<count: first[i] = fill;
+    ret Taken(T).Some(first[0..<count]);
+}
+
+# how many bytes are not handed out yet
+pub fun left = (&Arena a) -> u64: ret a.cap - a.used;
+
+# everything made in the arena is gone, its memory is handed out anew
+pub fun reset = (*Arena a) { a.used = 0; }
+
+# the memory goes back to the kernel, the arena is empty and has no room
+pub fun release = (*Arena a) {
+    do syscall (MUNMAP, a.base, a.cap);
+    a.used = 0;
+    a.cap = 0;
+}

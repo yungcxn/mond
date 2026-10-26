@@ -41,6 +41,6 @@ main = () -> u32 {
 
 ## What a program can do today
 
-The compiler builds native executables through LLVM (see [tooling](tooling.md)). There is no standard library: no I/O, heap, or string functions. A function declared without a body (`fun puts = (&u8 s) -> i32;`) is a C function, see [tooling](tooling.md#c-functions). Arrays have a fixed length, strings are `[n]u8` (string literals get a hidden terminating zero for C), and only lists of trees grow.
+The compiler builds native executables through LLVM (see [tooling](tooling.md)). There is no standard library: no I/O, heap, or string functions. Libraries in `examples/lib/` cover some of it, each a file to `include`: [arena.mn](../examples/lib/arena.mn) hands out memory from the kernel and takes it back all at once, [soa.mn](../examples/lib/soa.mn) turns a record into one array per field (`type Particles = <soa(refl Particle, 1024)>;`), [bits.mn](../examples/lib/bits.mn) is a set of flags in 64-bit words (`Bits(N)`), [files.mn](../examples/lib/files.mn) reads and writes files while compiling. A function declared without a body (`fun puts = (&u8 s) -> i32;`) is a C function, see [tooling](tooling.md#c-functions). Arrays have a fixed length, strings are `[n]u8` (string literals get a hidden terminating zero for C), and only lists of trees grow.
 
 The code on these pages is compiled by `zig build test`. In the examples, `#= name value` shows a static value, `#: name type` a type, and `#! code` the diagnostic a line reports.

@@ -1,0 +1,36 @@
+<include "lib/out.mn">;
+<include "../lib/bits.mn">;
+# examples/lib/bits.mn at run time: a sieve over a million numbers in 125 KiB of bits, the same
+# primes as one over a million bools
+stc u64 N = 1000000;
+mut Bits(N) COMPOSITE;
+mut [N]bool CROSSED;
+
+fun sieve_bits = (u64 limit) -> u64 {
+    COMPOSITE.set(0);
+    COMPOSITE.set(1);
+    for i in 2..<limit {
+        if COMPOSITE.get(i) or i * i >= limit: cont;
+        mut u64 j = i * i;
+        while j < limit, j += i: COMPOSITE.set(j);
+    }
+    ret limit - COMPOSITE.count();
+}
+fun sieve_bools = (u64 limit) -> u64 {
+    mut u64 primes = 0;
+    for i in 2..<limit {
+        if CROSSED[i]: cont;
+        primes += 1;
+        mut u64 j = i * i;
+        while j < limit, j += i: CROSSED[j] = true;
+    }
+    ret primes;
+}
+
+main = (u32 argc, &&u8 argv) {
+    u64 limit = N * argc as u64;
+    line_u64(sieve_bits(limit));                 #> 78498
+    line_u64(sieve_bools(limit));                #> 78498
+    line_u64(sizeof Bits(N));                    #> 125000
+    line_u64(COMPOSITE.get(999983) as u64 * 10 + COMPOSITE.get(999981) as u64);   #> 1
+}

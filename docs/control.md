@@ -11,13 +11,16 @@ stc i32 C = if 1 > 0: 100 else 200;
 ```
 
 - The condition must be a `bool`. The value is the join of both branches, and an untyped literal takes the other branch's type.
-- An `if` without `else` is `()`. A unit call used as a branch next to a value is `runit_mixing`, so use `do f()` (evaluate and discard) or a block.
+- An `if` without `else` is `()`. A branch without a value (`do f()`, which evaluates `f()` and drops it, a block ending in a statement, an `if` without `else`) leaves the choice without one: where a value is expected that is `runit_mixing`, elsewhere the choice is `()` and the other branches' values are dropped. A unit call as a branch next to a value is `runit_mixing` too. A branch that leaves (`ret`, `brk`, `cont`) fits any value.
 
 ```mond
 fun unit_fn = () {}
-fun mix = (bool c) {
-    i32 a = if c: 1 else: do unit_fn();
-    i32 b = if c: unit_fn() else: 2;   #! runit_mixing
+fun mix = (bool c) -> i32 {
+    if c: unit_fn() else: do unit_fn();
+    x = if c: 1 else: do unit_fn();          #: x ()
+    i32 a = if c: 1 else: do unit_fn();      #! runit_mixing
+    i32 b = if c: unit_fn() else: 2;         #! runit_mixing
+    ret if c: 1 else: { unit_fn(); ret 2; };
 }
 ```
 
@@ -118,6 +121,7 @@ stc u8 Q = quadrant(Pt(3, 5));              #= Q 1
 | `p <- x` · `p <- (a, b)` | matches `p` and names the part of the scrutinee it matched `x` (the place itself, see [unwrapping](#unwrapping)), as the type it is matched as, or its fields `a, b` in order |
 | `quote: ..` | tree shapes, see [metaprogramming.md](metaprogramming.md#quote-patterns) |
 
+- Arms of constants up to the first guard or catch-all become one `switch` on the value or the case's tag. Over a byte slice, four strings or more switch on the length, then on the byte that tells the strings of a length apart, and compare once: as fast with fifty keywords as with five.
 - There are no tuples. To match on two values at once, wrap them in a record; exhaustiveness is checked across both:
 
 ```mond

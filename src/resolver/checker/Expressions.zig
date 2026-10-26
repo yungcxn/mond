@@ -171,7 +171,7 @@ fn infer_compound_assignment(
     const target = resolver.tree.arg(node, 0);
     const value = resolver.tree.arg(node, 1);
 
-    const target_type = resolver.mutability.check_assignable(context, target);
+    const target_type = resolver.mutability.check_updated(context, target);
 
     const appends_to_list = kind == .assign_add and
         resolver.tree.macros and
@@ -189,6 +189,26 @@ fn infer_compound_assignment(
 
         _ = resolver.report(.type_mismatch, value, operand_type, .u64_type);
         return .poison_type;
+    }
+
+    // an array or a slice updated element by element, in place
+    const elements = static_pool.element_operand(target_type);
+    if (elements != .none) {
+        const value_hint = if (resolver.tree.is_literal(value)) elements else target_type;
+        const value_type = self.infer_operand(context, value, value_hint);
+        if (value_type == .poison_type) return .unit_type;
+        const combined = self.elementwise_type(node, target_type, value_type) orelse .poison_type;
+        if (combined == .poison_type) return .unit_type;
+        if (static_pool.element_operand(combined) != elements) {
+            return resolver.report_mismatch(value, value_type, target_type);
+        }
+        const integral = operators.assigned_operands_of(kind) == .integers;
+        const fits = if (integral)
+            static_pool.properties(elements).is_integer
+        else
+            static_pool.is_numeric(elements);
+        if (!fits) return resolver.report_mismatch(node, target_type, .none);
+        return .unit_type;
     }
 
     _ = self.check(context, value, target_type);
@@ -217,13 +237,16 @@ fn infer_arithmetic(
     const left = resolver.tree.arg(node, 0);
     const right = resolver.tree.arg(node, 1);
 
-    const hint: StaticPool.Index = if (resolver.static_pool.is_numeric(expected))
+    const static_pool = &resolver.static_pool;
+    const by_element = static_pool.element_operand(expected) != .none;
+    const hint: StaticPool.Index = if (static_pool.is_numeric(expected) or by_element)
         expected
     else
         .none;
     const operand_type = self.join_operands(context, node, left, right, hint);
+    const elements = static_pool.element_operand(operand_type);
+    if (elements != .none) return self.elementwise_result(node, operand_type, elements, elements);
     const result_type = blk: {
-        const static_pool = &resolver.static_pool;
         const kind = resolver.tree.kind(node);
 
         const offsets_pointer = (kind == .binary_add or kind == .binary_sub) and
@@ -266,6 +289,11 @@ fn infer_comparison(self: *Expressions, context: *FunctionContext, node: NodeId)
     const compared = resolver.static_pool.substitute_type_variables(operand_type);
     const kind = resolver.tree.kind(node);
     const orders = kind != .binary_eq and kind != .binary_neq;
+    // arrays order element by element, into an array of `bool`s
+    const elements = if (orders) resolver.static_pool.element_operand(compared) else .none;
+    if (elements != .none and resolver.static_pool.static_length(compared) != null) {
+        return self.elementwise_result(node, compared, elements, .bool_type);
+    }
     if (orders and resolver.static_pool.tag(compared) == .slice_type) {
         const operator = resolver.name_pool.intern(switch (kind) {
             .binary_less => "<",
@@ -321,6 +349,7 @@ fn infer_logical_not(
     const operand_type = self.infer(context, resolver.tree.arg(node, 0), expected);
     const is_integer = resolver.static_pool.properties(operand_type).is_integer;
     if (operand_type == .bool_type or is_integer) return operand_type;
+    if (self.is_array_of(operand_type, .bits)) return operand_type;
     return resolver.report_mismatch(node, operand_type, .bool_type);
 }
 
@@ -334,7 +363,26 @@ fn infer_numeric_negation(
     if (resolver.tree.is_literal(node)) return resolver.static_values.literal_type(node, expected);
 
     const operand_type = self.infer(context, resolver.tree.arg(node, 0), expected);
+    if (self.is_array_of(operand_type, .numbers)) return operand_type;
     return self.numeric_result(node, operand_type, .none);
+}
+
+// an array of a static length whose elements are numbers or integers and bools
+fn is_array_of(
+    self: *Expressions,
+    value_type: StaticPool.Index,
+    which: enum { numbers, bits },
+) bool {
+    const static_pool = &self.owning_resolver().static_pool;
+    if (static_pool.static_length(static_pool.substitute_type_variables(value_type)) == null) {
+        return false;
+    }
+    const elements = static_pool.element_operand(value_type);
+    if (elements == .none) return false;
+    return switch (which) {
+        .numbers => static_pool.is_numeric(elements),
+        .bits => elements == .bool_type or static_pool.properties(elements).is_integer,
+    };
 }
 
 fn infer_index(
@@ -1437,6 +1485,60 @@ fn infer_operand(
     return self.infer(context, node, hint);
 }
 
+// what an operator on arrays, slices and numbers gives element by element: an array where one is
+// (two arrays of one length), else a slice; null when neither is an array or a slice
+fn elementwise_type(
+    self: *Expressions,
+    node: NodeId,
+    first: StaticPool.Index,
+    second: StaticPool.Index,
+) ?StaticPool.Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const first_elements = static_pool.element_operand(first);
+    const second_elements = static_pool.element_operand(second);
+    if (first_elements == .none and second_elements == .none) return null;
+
+    const first_scalar = if (first_elements == .none) first else first_elements;
+    const second_scalar = if (second_elements == .none) second else second_elements;
+    const element = static_pool.join(first_scalar, second_scalar).joined_type;
+    const first_length = static_pool.static_length(static_pool.substitute_type_variables(first));
+    const second_length = static_pool.static_length(static_pool.substitute_type_variables(second));
+    const lengths_differ = first_length != null and second_length != null and
+        first_length.? != second_length.?;
+    if (element == .none or lengths_differ) {
+        return resolver.report(.type_mismatch, node, first, second);
+    }
+    const length = first_length orelse second_length orelse return static_pool.slice_of(element);
+    return static_pool.array_of(length, element);
+}
+
+// an operator element by element: two slices have no array to hold the result
+fn elementwise_result(
+    self: *Expressions,
+    node: NodeId,
+    operand_type: StaticPool.Index,
+    elements: StaticPool.Index,
+    result: StaticPool.Index,
+) StaticPool.Index {
+    const resolver = self.owning_resolver();
+    const static_pool = &resolver.static_pool;
+    const kind = resolver.tree.kind(node);
+    const length = static_pool.static_length(static_pool.substitute_type_variables(operand_type));
+    if (length == null) {
+        const symbol = operators.symbol(operators.binary_operator_of(kind));
+        const operator = resolver.name_pool.intern(symbol);
+        return resolver.report(.invalid_operand, node, operator, operand_type);
+    }
+    const integral = operators.operands_of(kind) == .integers;
+    const fits = if (integral)
+        static_pool.properties(elements).is_integer
+    else
+        static_pool.is_numeric(elements);
+    if (!fits) return resolver.report_mismatch(node, operand_type, .none);
+    return static_pool.array_of(length.?, result);
+}
+
 // both sides of a binary operator: the non-literal side first, so a literal takes its type
 fn join_operands(
     self: *Expressions,
@@ -1477,8 +1579,17 @@ fn join_operands(
         return .poison_type;
     }
 
+    // an array or a slice next to another or to a number: the operator works element by element,
+    // a literal taking the elements' type (`==` and `!=` compare whole values)
+    const compares_whole = kind == .binary_eq or kind == .binary_neq;
+    const first_elements = if (compares_whole) .none else static_pool.element_operand(first_type);
     // a first operand that never ends (`(if c: ret 5 else: 1) + 10` with `c` known) types nothing
-    const second_hint = if (first_type == .never_type) hint else first_type;
+    const second_hint = if (first_type == .never_type)
+        hint
+    else if (first_elements != .none and resolver.tree.is_literal(second))
+        first_elements
+    else
+        first_type;
     const second_type = self.infer_operand(context, second, second_hint);
 
     const offsets_second = is_add and
@@ -1491,6 +1602,9 @@ fn join_operands(
     const both_are_types = static_pool.tag(first_type) == .meta_type and
         static_pool.tag(second_type) == .meta_type;
     if (both_are_types) return first_type;
+    if (!compares_whole) if (self.elementwise_type(node, first_type, second_type)) |by_element| {
+        return by_element;
+    };
 
     var joined = static_pool.join(first_type, second_type).joined_type;
     if (joined == .none) {

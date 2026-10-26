@@ -1,0 +1,28 @@
+# structures of arrays, a library for `include`: `type Particles = <soa(refl Particle, 1024)>;` is a
+# record of one array per field of `Particle`, so a loop over one field reads only that field's
+# memory. `get(i)` and `set(i, p)` move a whole element, `len()` is the length. made from the tree
+# of the record, the compiler knows nothing of it
+
+pub stcfun soa = (*ast record, u64 length) -> ast(type) {
+    ast declared = record.assigned;
+    bool is_record = declared oftype ast.TypeDefinition or
+        declared oftype ast.TypeDefinitionPacked or declared oftype ast.TypeDefinitionWithTrait;
+    if !is_record: crash (record.*, "soa takes a record");
+    mut []ast columns = [];
+    mut []ast reads = [];
+    mut []ast writes = [];
+    for field in record.fields {
+        if field oftype ast.TypeDefinitionParameter: crash (record.*, "soa takes named fields");
+        ast name = field.name;
+        ast column = quote: *(mut [@length]@(field.type) @name);
+        columns += column.fields[0];
+        reads += quote: self.@(name)[i];
+        writes += quote: self.@(name)[i] = element.@name;
+    }
+    ast element_type = record.name;
+    ret quote: *(@..columns) !{
+        fun get = (u64 i) -> @element_type: ret @element_type(@..reads);
+        fun set = (u64 i, @element_type element) { @..writes; };
+        fun len = () -> u64: ret @length;
+    };
+}

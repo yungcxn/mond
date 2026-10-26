@@ -1,0 +1,37 @@
+<include "lib/out.mn">;
+<include "../lib/soa.mn">;
+# examples/lib/soa.mn at run time: a column summed alone gives what the array of records gives,
+# elements set and read back whole, run-time indices into the columns
+type Body = *(f64 x, f64 v, u32 id, bool live);
+type Bodies = <soa(refl Body, 1000)>;
+mut Bodies BS;
+mut [1000]Body AS;
+
+fun fill = (u32 one) {
+    for i in 0..<1000 {
+        Body b = Body((i * one) as f64 * 0.5, 1.0, i as u32, i % 3 == 0);
+        BS.set(i, b);
+        AS[i] = b;
+    }
+}
+fun columns = () -> f64 {
+    mut f64 s = 0.0;
+    for i in 0..<BS.len(): if BS.live[i]: s += BS.x[i] + BS.v[i];
+    ret s;
+}
+fun rows = () -> f64 {
+    mut f64 s = 0.0;
+    for b in AS: if b.live: s += b.x + b.v;
+    ret s;
+}
+
+main = (u32 argc, &&u8 argv) {
+    fill(argc);
+    line_u64(columns() as u64);                                  #> 83750
+    line_u64((columns() == rows()) as u64);                      #> 1
+    u64 k = 7 * argc as u64;
+    Body b = BS.get(k);
+    BS.x[k + 1] = 99.0;
+    line_u64(b.id as u64 * 1000 + (b.x * 10.0) as u64 + BS.get(k + 1).x as u64);   #> 7134
+    line_u64(sizeof Bodies);                                     #> 21000
+}
