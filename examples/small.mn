@@ -247,7 +247,7 @@ fun handle_code = (CommonCode c): match c {
     CommonCode.Ok => print("Ok"),
     CommonCode.OOM => print("Out of memory"),
     CommonCode.EOF => print("End of file"),
-    CommonCode.Undefined <- undefined_val => print("Undefined code: %d", undefined_val),
+    CommonCode.Undefined(undefined_val) => print("Undefined code: %d", undefined_val),
 }
 
 # some more complex example

@@ -20,7 +20,7 @@ stcfun assigns = () -> u32 {
     e = 5;
     stc mut u32 f = 6;
     f += 1;
-    u32 sum = (ORIGIN <- x, y).x + x + y;
+    u32 sum = (ORIGIN <- (x, y)).x + x + y;
     ret a + b + c * 100 + d * 1000 + e + f + sum;
 }
 

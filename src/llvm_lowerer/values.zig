@@ -601,6 +601,13 @@ fn room(lowerer: *LLVMLowerer, variant_type: Index, pointer: Value) Value {
     return llvm.LLVMBuildStructGEP2(lowerer.builder, lowered_type, pointer, 1, "");
 }
 
+// where the variant at `base` keeps its payloads: a self-tagged one is its payload
+pub fn payload_place(lowerer: *LLVMLowerer, base: Ref) Value {
+    const variant = lowerer.pointee_of_ref(base);
+    if (lowerer.types.is_self_tagged(variant)) return lowerer.operand(base);
+    return room(lowerer, variant, lowerer.operand(base));
+}
+
 // a variant whose cases a strategy stores (`tagtype ranges(1000)`)
 fn custom_variant(lowerer: *LLVMLowerer, type_index: Index) bool {
     const pool = lowerer.pool;

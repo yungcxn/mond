@@ -3,11 +3,15 @@ const ParseTree = @import("../../ParseTree.zig");
 const Resolver = @import("../../Resolver.zig");
 const NamePool = @import("../NamePool.zig");
 const StaticPool = @import("../StaticPool.zig");
+const DeclPool = @import("../DeclPool.zig");
 const FunctionContext = Resolver.FunctionContext;
 const NodeId = ParseTree.NodeId;
 
 // match: arms, patterns and their binders, exhaustiveness and redundancy
 const Patterns = @This();
+
+// whether the place the pattern being checked matches may be written: a label names it
+writable_place: bool = false,
 
 pub fn owning_resolver(self: *Patterns) *Resolver {
     return @alignCast(@fieldParentPtr("patterns", self));
@@ -22,9 +26,21 @@ pub fn check_match(
     const resolver = self.owning_resolver();
     const arms = resolver.tree.manychildren(resolver.tree.arg(node, 1));
     const scrutinee = resolver.tree.arg(node, 0);
-    const scrutinee_type = resolver.static_pool.through_pointer(
-        resolver.expressions.infer(context, scrutinee, .none),
-    );
+    const initialization_mark = resolver.initialization.count;
+    defer resolver.initialization.release(initialization_mark);
+    // a `true` arm reads the names a condition proves, a `false` arm those its failing proves
+    const outcomes = if (resolver.flow.is_condition(scrutinee))
+        resolver.flow.check_condition(context, scrutinee)
+    else
+        null;
+    if (outcomes) |sets| {
+        resolver.initialization.copy(0, sets[0]);
+        resolver.initialization.merge(0, sets[1]);
+    }
+    const scrutinee_type = if (outcomes != null)
+        .bool_type
+    else
+        resolver.static_pool.through_pointer(resolver.expressions.infer(context, scrutinee, .none));
     const is_stcmatch = resolver.tree.kind(node) == .stcmatch;
     const is_stc = is_stcmatch and !context.is_interpreted and !context.is_abstract;
     for (arms) |arm| resolver.node_static_values[arm] = .none;
@@ -43,6 +59,9 @@ pub fn check_match(
     if (is_stc or known != null) {
         const value = known orelse resolver.interpreter.evaluate_static(context, scrutinee);
         if (value == .poison_type) return value;
+        if (outcomes) |sets| {
+            resolver.initialization.copy(0, if (value == .bool_true) sets[0] else sets[1]);
+        }
 
         resolver.scopes.open();
         defer resolver.scopes.close();
@@ -65,9 +84,14 @@ pub fn check_match(
     var has_catch_all = false;
     var result: StaticPool.Index = .none;
 
-    const initialization_mark = resolver.initialization.count;
-    defer resolver.initialization.release(initialization_mark);
     const before = resolver.initialization.save(0);
+    const outer_writable = self.writable_place;
+    defer self.writable_place = outer_writable;
+    const access = if (resolver.static_pool.is_pointer(resolver.node_types[scrutinee]))
+        resolver.mutability.pointee_access(scrutinee)
+    else
+        resolver.mutability.writable(scrutinee);
+    self.writable_place = access == .ok;
     const after = resolver.initialization.new_set();
     defer resolver.initialization.copy(0, after);
 
@@ -82,10 +106,15 @@ pub fn check_match(
             resolver.static_pool.is_concrete(expected);
         if (is_first_concrete) first_settled_arm = i;
 
-        resolver.initialization.copy(0, before);
+        const arm_pattern = resolver.tree.arg(arm, 0);
+        const proven = if (outcomes) |sets| switch (resolver.tree.kind(arm_pattern)) {
+            .boolean_true => sets[0],
+            .boolean_false => sets[1],
+            else => before,
+        } else before;
+        resolver.initialization.copy(0, proven);
         resolver.scopes.open();
         const mark = resolver.doctor.diagnostics.len();
-        const arm_pattern = resolver.tree.arg(arm, 0);
         const is_guarded = resolver.tree.kind(arm_pattern) == .partial__match_case_where;
         const inner = if (is_guarded) resolver.tree.arg(arm_pattern, 0) else arm_pattern;
         // a binder after arms that took whole cases is of the scrutinee without them
@@ -95,15 +124,13 @@ pub fn check_match(
             scrutinee_type;
         const takes_every_value = self.pattern(context, inner, pattern_type) and !is_guarded;
         // a binder of the whole scrutinee holds its slices (see `Slices`)
-        const binder = if (resolver.tree.kind(inner) == .identifier)
-            resolver.node_declarations[inner]
-        else
-            .none;
+        const binder = self.whole_binder(inner);
         if (binder != .none) {
             resolver.slices.flows(scrutinee, Resolver.Slices.declaration_slot(binder));
         }
         if (is_guarded) {
-            _ = resolver.expressions.check(context, resolver.tree.arg(arm_pattern, 1), .bool_type);
+            const guard = resolver.flow.check_condition(context, resolver.tree.arg(arm_pattern, 1));
+            resolver.initialization.copy(0, guard[0]);
         }
         quiet = quiet or resolver.doctor.errors_since(resolver.tree, mark, arm);
         const may_be_redundant = !quiet and scrutinee_type != .poison_type and
@@ -276,6 +303,10 @@ fn bits_pattern(
     var used: u64 = 0;
     var takes_every_value = true;
     var rest: NodeId = 0;
+    // the bits of a part live nowhere a label could write
+    const outer_writable = self.writable_place;
+    defer self.writable_place = outer_writable;
+    self.writable_place = false;
     for (tree.manychildren(node)) |part| {
         if (tree.kind(part) == .partial__bits_rest) {
             rest = part;
@@ -325,6 +356,10 @@ fn alternatives_pattern(
     scrutinee_type: StaticPool.Index,
 ) bool {
     const resolver = self.owning_resolver();
+    // alternatives share their names, which then are values, not places
+    const outer_writable = self.writable_place;
+    defer self.writable_place = outer_writable;
+    self.writable_place = false;
     const scope_names = &resolver.scopes.local_names;
     const first_start = scope_names.len;
     var first_end = first_start;
@@ -406,7 +441,7 @@ fn typecast_pattern(
     return widens;
 }
 
-// `p <- x`: x is bound to the payload of what p matches, or to all of it
+// `p <- x`: x names what p matches, as it is
 fn labelled_pattern(
     self: *Patterns,
     context: *FunctionContext,
@@ -414,16 +449,21 @@ fn labelled_pattern(
     scrutinee_type: StaticPool.Index,
 ) bool {
     const resolver = self.owning_resolver();
-    const inner = resolver.tree.arg(node, 0);
-    const takes_every_value = self.pattern(context, inner, scrutinee_type);
-    const inner_type = resolver.node_types[inner];
-    const payload_type = resolver.static_pool.payload_of(inner_type);
-    const bound_type = if (payload_type == .none) inner_type else payload_type;
-    resolver.flow.bind_label(resolver.tree.arg(node, 1), bound_type);
-    if (resolver.slices.payload_slot(inner_type)) |payload| {
-        resolver.flow.flow_into_label(0, payload, resolver.tree.arg(node, 1));
-    }
+    const takes_every_value = self.pattern(context, resolver.tree.arg(node, 0), scrutinee_type);
+    resolver.flow.bind_label(resolver.tree.arg(node, 1), scrutinee_type);
+    if (self.writable_place) resolver.flow.write_labels(resolver.tree.arg(node, 1), scrutinee_type);
     return takes_every_value;
+}
+
+// the declaration holding all a pattern matches: of a name or of the label of `p <- x`
+fn whole_binder(self: *Patterns, node: NodeId) DeclPool.Index {
+    const resolver = self.owning_resolver();
+    const named = switch (resolver.tree.kind(node)) {
+        .identifier => node,
+        .labelarrow => resolver.tree.arg(node, 1),
+        else => return .none,
+    };
+    return resolver.node_declarations[named];
 }
 
 // `Case(a, b)`, `Record(x = p)`: a constructor with a pattern per field
@@ -481,17 +521,24 @@ fn constructor_pattern(
     }
 
     var all_take_every_value = true;
+    // a field is a place to write where its record is and it is `mut`, a payload where its
+    // variant keeps it
+    const outer_writable = self.writable_place;
+    defer self.writable_place = outer_writable;
+    const variant = if (is_case) static_pool.get(target).variant_case_type.variant else .none;
+    const keeps_payloads = !is_case or static_pool.tag(variant) == .variant_type and
+        static_pool.get(variant).variant_type.tag_mode != .custom and
+        !static_pool.get(variant).variant_type.is_packed;
     for (arguments, 0..) |argument, i| {
         const field_type = static_pool.field_type(record_type, field_of_argument[i]);
         const argument_type = resolver.calls.type_named_argument(argument, field_type);
         const argument_pattern = resolver.tree.arg_value(argument);
+        self.writable_place = outer_writable and keeps_payloads and
+            resolver.mutability.field_is_mut(record_type, field_of_argument[i]);
         all_take_every_value =
             self.pattern(context, argument_pattern, argument_type) and all_take_every_value;
         // a binder of a field holds the slices the field does (see `Slices`)
-        const binder = if (resolver.tree.kind(argument_pattern) == .identifier)
-            resolver.node_declarations[argument_pattern]
-        else
-            .none;
+        const binder = self.whole_binder(argument_pattern);
         if (binder != .none) resolver.slices.connects(
             Resolver.Slices.slot(.field, @backingInt(record_type), field_of_argument[i]),
             Resolver.Slices.declaration_slot(binder),

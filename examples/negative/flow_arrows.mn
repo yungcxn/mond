@@ -1,0 +1,39 @@
+<include "../lib/tags.mn">;
+variant Opt = +(Some(i32), None);
+variant Small = +(Low(u8), Zero) tagtype ranges(u16, 256);
+variant Packed = ++(I(i64), N);
+type Q = *(i32 a, mut i32 b);
+
+# a `?<-` name is read only where its test held, also when it hides an outer name
+fun else_branch = (Opt o) -> i32: ret if o ?<- v: v else: v; #! use_before_initialization
+fun shadowed = (Opt o, i32 v) -> i32: ret if o ?<- v: v else: v; #! use_before_initialization
+fun or_left = (Opt o, bool c) -> i32: ret if o ?<- v or c: v else: 0; #! use_before_initialization
+fun negated_and = (Opt o, bool c) -> i32: ret if !(o ?<- v) and c: v else: 0; #! use_before_initialization
+fun false_arm = (Opt o) -> i32: ret match o ?<- v { true => 0, false => v }; #! use_before_initialization
+fun any_arm = (Opt o) -> i32: ret match o ?<- v { _ => v }; #! use_before_initialization
+fun same_statement = (Opt o) -> i32: ret (o ?<- v) as i32 + v; #! use_before_initialization
+fun after_loop = (Opt o) -> i32 { while o ?<- v {} ret v; } #! undefined_name
+
+# a name lives to the end of its statement
+fun later = (i32 a) -> i32 { i32 x = a * 2 <- d; ret d; } #! undefined_name
+fun past_loop = (i32 n) -> i32 { mut i32 i = 0; while i < (n <- m) { i += 1; } ret m; } #! undefined_name
+
+# `?<-` needs a variant with a payload, a pattern's label keeps the scrutinee's type
+fun not_variant = (i32 x) -> bool: ret x ?<- v; #! type_mismatch
+fun alias_type = (Opt o) -> i32: ret match o { Opt.Some(_) <- s => s, _ => 0 }; #! type_mismatch
+
+# a label writes the place it names where that place may be written: not a value of its own, an
+# immutable local, a `&` pointee, a field that is not `mut`, a payload a strategy or bits make, a
+# name `|` alternatives share, the bits of a part
+fun of_value = () { if (1 + 2 <- t) > 0 { t = 5; } } #! assign_to_immutable
+fun of_immutable = (i32 x) { if (x <- y) > 0 { y = 1; } } #! assign_to_immutable
+fun of_reader = (&Opt p) { if p ?<- v { v = 1; } } #! assign_to_immutable
+fun of_parameter = (Opt o) { if o ?<- v { v = 1; } } #! assign_to_immutable
+fun of_field = () { mut Q q = Q(1, 2); if (q <- (a, b)).b > 0 { a = 3; b = 4; } } #! assign_to_immutable
+fun of_strategy = () { mut Small s = Small.Low(1); if s ?<- v { v = 2; } } #! assign_to_immutable
+fun of_bits = (*Packed k) { if k ?<- v { v = 2; } } #! assign_to_immutable
+fun of_scrutinee = (Opt o) { match o { _ <- w => { w = Opt.None; } } } #! assign_to_immutable
+fun of_alternatives = () { mut Opt o = Opt.Some(1); match o { Opt.Some(1 <- k) | Opt.Some(2 <- k) => { k = 0; }, _ => {} } } #! assign_to_immutable
+fun of_part = () { mut u8 x = 3; match x { bits(u4 _ <- low, ..) => { low = 1; } } } #! assign_to_immutable
+
+main = () {}

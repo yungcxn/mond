@@ -689,6 +689,34 @@ test "a bare unwrap shows the fallback it returns" {
     try std.testing.expectError(error.TestUnexpectedResult, link_at(result, 29, 37));
 }
 
+test "a label shows whether it writes the place it names" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\variant Opt = +(Some(i32), None);
+        \\fun f = (Opt o, *Opt p) -> i32 {
+        \\    mut i32 x = 1;
+        \\    if (x <- a) > 0 and o ?<- b and p ?<- c { a = 2; c = 3; }
+        \\    ret (x + 1 <- d) + d;
+        \\}
+        \\main = () {}
+    );
+    const result = analyze(arena.allocator(), source);
+    try std.testing.expectEqual(0, result.diagnostics.len);
+    // a mutable local and a `*` pointer's payload may be written, an immutable parameter's
+    // payload and a value of its own not
+    const expected = [_]struct { u32, u32, []const u8 }{
+        .{ 3, 13, "i32 (writable)" },
+        .{ 3, 30, "i32" },
+        .{ 3, 42, "i32 (writable)" },
+        .{ 4, 18, "i32" },
+    };
+    for (expected) |label| {
+        const declaration = result.decls[(try link_at(result, label[0], label[1]))[3]];
+        try std.testing.expectEqualStrings(label[2], declaration.detail);
+    }
+}
+
 test "a bare unwrap in a default, a guard and a quote" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

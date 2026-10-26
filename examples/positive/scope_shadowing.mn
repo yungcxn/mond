@@ -17,7 +17,7 @@ fun global_hidden = (u32 G) -> u32: ret G;
 fun upper_binder = (u32 v) -> u32: ret match v { 0 => 100, BINDER => BINDER + 1, };
 fun unwrap_scope = (O o) -> u32 {
     u32 v = 7;
-    u32 inside = if o ?<- v: v else: v + 1000;
+    u32 inside = if o ?<- v: v else: 1000;
     ret inside * 10 + v;
 }
 # the label binder lives in its statement only, the outer `s` is back afterwards
@@ -75,7 +75,7 @@ stc u32 GH = global_hidden(3); #= GH 3
 stc u32 UB0 = upper_binder(0); #= UB0 100
 stc u32 UB = upper_binder(8); #= UB 9
 stc u32 US = unwrap_scope(O.Some(3)); #= US 37
-stc u32 UN = unwrap_scope(O.None); #= UN 10077
+stc u32 UN = unwrap_scope(O.None); #= UN 10007
 stc u32 LS = label_scope(); #= LS 1
 stc u32 AS1 = arm_scope(O.Some(2)); #= AS1 205
 stc u32 AS2 = arm_scope(O.None); #= AS2 505

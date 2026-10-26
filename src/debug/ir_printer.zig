@@ -205,6 +205,10 @@ pub fn print_function(writer: *Writer, lowerer: *HighLowerer, function_index: us
                     const variant_type = operand_type(lowerer, function_index, instruction.a);
                     try writer.print(".{s}", .{case_name(lowerer, variant_type, instruction.b)});
                 },
+                .payload_ptr => {
+                    try context.reference(instruction.a);
+                    try writer.writeAll(".payload&");
+                },
                 .call => try context.print_call(),
                 .closure => try context.print_closure(),
                 .syscall => {

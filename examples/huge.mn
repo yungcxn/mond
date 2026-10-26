@@ -861,7 +861,7 @@ fun handle_code = (CommonCode c): match c {
     CommonCode.Ok => print("Ok"),
     CommonCode.OOM => print("Out of memory"),
     CommonCode.EOF => print("End of file"),
-    CommonCode.Undefined <- undefined_val => print("Undefined code: %d", undefined_val),
+    CommonCode.Undefined(undefined_val) => print("Undefined code: %d", undefined_val),
 }
 
 # nested variant payloads and nested matches
@@ -1155,7 +1155,7 @@ fun resource_tour = () {
 # ============================================================================================== #
 
 fun calc_something = () -> i32: ret 42;
-# no tuple returns: a small type carries both results, `<- q, r` destructures it again
+# no tuple returns: a small type carries both results, `<- (q, r)` destructures it again
 type DivMod = *(i32 quot, i32 rem);
 fun divmod = (i32 a, i32 b) -> DivMod: ret DivMod(a / b, a % b);
 fun find_byte = (&[]u8 hay, u8 needle) -> Opt8 {
@@ -1179,7 +1179,7 @@ fun unwrap_tour = () -> u8 {
     if (calc_something() <- solution) == 42 or solution == 43: do print("alright!");
 
     # label arrow with destructuring, binders live only in their own expression and below it
-    if (divmod(17, 5) <- q, r).rem == 2: print("17 = 5 * %d + %d", q, r);
+    if (divmod(17, 5) <- (q, r)).rem == 2: print("17 = 5 * %d + %d", q, r);
 
     # unwrap arrow: true when the self-tagged value holds a payload
     if vari ?<- nonnone_var {

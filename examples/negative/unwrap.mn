@@ -4,7 +4,7 @@ type R = *(i32 a, i32 b);
 fun f = (O o, i32 n) {
     u8 q = o ?? "s"; #! type_mismatch
     if n ?<- v {} #! type_mismatch
-    i32 z = (5 <- a, b); #! type_mismatch type_mismatch
+    i32 z = (5 <- (a, b)); #! type_mismatch type_mismatch
     u8 ok = o ?? 0;
-    i32 sum = (R(a = 1, b = 2) <- x, y).a + x + y;
+    i32 sum = (R(a = 1, b = 2) <- (x, y)).a + x + y;
 }

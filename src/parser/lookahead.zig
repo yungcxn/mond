@@ -113,8 +113,6 @@ pub const post = blk: {
     t[@backingInt(Lexer.Token.Kind.kw_oftype)] = &eval.oftype;
     t[@backingInt(Lexer.Token.Kind.kw_as)] = &eval.as;
     t[@backingInt(Lexer.Token.Kind.kw_asbits)] = &eval.asbits;
-    t[@backingInt(Lexer.Token.Kind.@"xpct_<-")] = &eval.labelarrow;
-    t[@backingInt(Lexer.Token.Kind.@"xpct_?<-")] = &eval.selftag_arrow;
     t[@backingInt(Lexer.Token.Kind.@"xpct_??")] = &eval.selftag_unwrap;
     t[@backingInt(Lexer.Token.Kind.kw_defer)] = &eval.inlined_defer_deinit;
     t[@backingInt(Lexer.Token.Kind.kw_with)] = &eval.with;
@@ -193,6 +191,9 @@ pub const binary_compute = blk: {
     t[@backingInt(Lexer.Token.Kind.@"xpct_..")] = .{ .f = &eval.gen_lowerbound, .prec = 5 };
     t[@backingInt(Lexer.Token.Kind.@"xpct_..=")] = .{ .f = &eval.gen_incl, .prec = 5 };
     t[@backingInt(Lexer.Token.Kind.@"xpct_..<")] = .{ .f = &eval.gen_excl, .prec = 5 };
+    // a label names all on its left that binds tighter than `|` and logic: `a * 2 <- d > 4`
+    t[@backingInt(Lexer.Token.Kind.@"xpct_<-")] = .{ .f = &eval.labelarrow, .prec = 5 };
+    t[@backingInt(Lexer.Token.Kind.@"xpct_?<-")] = .{ .f = &eval.selftag_arrow, .prec = 5 };
     t[@backingInt(Lexer.Token.Kind.@"xpct_^")] = .{ .f = &eval.templ_binary(.binary_num_xor, 6), .prec = 6 };
     t[@backingInt(Lexer.Token.Kind.@"xpct_&")] = .{ .f = &eval.templ_binary(.binary_num_and, 7), .prec = 7 };
     t[@backingInt(Lexer.Token.Kind.@"xpct_==")] = .{ .f = &eval.templ_binary(.binary_eq, 8), .prec = 8 };

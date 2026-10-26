@@ -91,7 +91,7 @@ stcfun describe = (Res r) -> i32: ret match r {
     Res.Ok(0) => 0,                  # payload pattern
     Res.Ok(v) => v,                  # binder
     Res.Err(code = 1) | Res.Empty => -1,
-    Res.Err <- e => -(e.code as i32), # label: the payload
+    Res.Err e => -(e.code as i32),   # the case itself
 };
 stcfun quadrant = (Pt p) -> u8: ret match p {
     Pt(0, 0) => 0,
@@ -115,7 +115,7 @@ stc u8 Q = quadrant(Pt(3, 5));              #= Q 1
 | `p where c` | `p`, when `c` holds for what it bound (only at the top of an arm, after `\|` alternatives) |
 | `bits(u7 0x13, u5 rd, ..rest)` | an integer's bits from the lowest up: each field a width and a pattern on those bits, seen as that width's type; `..rest` binds the bits left (unsigned), `..` ignores them (only at the top of an arm or of an alternative) |
 | `T x` | a value that is a `T` (a member of a unified variant, a trait implementer, a case), bound as `T` |
-| `p <- x` · `p <- a, b` | matches `p` and binds its payload: a single field directly, several fields as a record, or `a, b` in order |
+| `p <- x` · `p <- (a, b)` | matches `p` and names the part of the scrutinee it matched `x` (the place itself, see [unwrapping](#unwrapping)), as the type it is matched as, or its fields `a, b` in order |
 | `quote: ..` | tree shapes, see [metaprogramming.md](metaprogramming.md#quote-patterns) |
 
 - There are no tuples. To match on two values at once, wrap them in a record; exhaustiveness is checked across both:
@@ -183,20 +183,42 @@ fun again = (bool b) -> u8: ret match b { _ => 0, true => 1 };   #! redundant_ma
 
 ## Unwrapping
 
+`<-` names, `?` asks for the success payload: the payload of the first case that has one (so declare the success case first). Through a pointer (`&V`, `*V`) they read the variant it points to.
+
 | | |
 |---|---|
-| `x ?? fallback` | the payload of the first payload case (so declare the success case first), else `fallback` (which may be `ret ..`) |
-| `x??` | the payload, else `ret` of the result's fallback; outside a function body (also in a default of a parameter or field) failing is `static_eval_failed` |
-| `x ?<- v` | `bool`; binds the payload as `v` in the then-branch or the `while` body |
-| `e <- v` · `e <- a, b` | the value is `e`; binds `v` to it, or `a, b` to its fields, for the rest of the statement |
+| `e <- v` · `e <- (a, b)` | the value is `e`, named `v` (an alias, of `e`'s type), or `a, b` naming its fields in order |
+| `x ?<- v` | `bool`: whether `x` holds the success payload, named `v` where it does |
+| `x ?? fallback` | the success payload, else `fallback` (which may be `ret ..`); `if x ?<- v: v else: fallback` |
+| `x??` | the success payload, else `ret` of the result's fallback; outside a function body (also in a default of a parameter or field) failing is `static_eval_failed` |
+
+An arrow names all on its left that binds tighter than `|`, `and`, `or` and `xor` (`a * 2 <- d > 4` is `(a * 2 <- d) > 4`, `c and o ?<- v` is `c and (o ?<- v)`). Its name lives to the end of the statement holding it, the branches, arms, guards and loop bodies in it included, and is read where it is surely bound: a `<-` name everywhere after it, a `?<-` name where its test held (the then-branch, a `while` body, the right of `and`, a `true =>` arm, the else of `!(x ?<- v)`). Elsewhere reading it is `use_before_initialization`, also when it hides an outer name. In a `while` condition `?<-` tests and binds anew on each round, while a `<-` stays an alias of one value: its operand runs the first time the condition reaches it.
 
 ```mond
 variant Opt = +(Some(i32), None);
 stcfun or_zero = (Opt o) -> i32: ret o ?? 0;
 stcfun bound = (Opt o) -> i32: ret if o ?<- v: v * 2 else: -1;
 type P = *(i32 a, i32 b);
-stcfun parts = () -> i32: ret (P(3, 4) <- a, b).a + a * b;
+stcfun parts = () -> i32: ret (P(3, 4) <- (a, b)).a + a * b;
 stc i32 U = or_zero(Opt.Some(5)) + bound(Opt.None) + parts();   #= U 19
+stcfun twice = (i32 a) -> i32: ret if a * 2 <- d > 4: d else: -d;
+stcfun failed = (Opt o) -> i32: ret if !(o ?<- v): 0 else: v;
+stcfun steps = (i32 n) -> i32 { mut i32 i = 0; while i < (n * 2 <- end) { i += 1; } ret i; }
+stc []i32 N = [twice(3), twice(1), failed(Opt.Some(4)), steps(3)];   #= N [6, -2, 4, 6]
+fun unbound = (Opt o) -> i32: ret if o ?<- v: v else: v;   #! use_before_initialization
+```
+
+Arrows never copy: a name an arrow binds is the place it names, the variable, field or element on its left, and `?<-` the payload inside the variant there (through a pointer, inside the variant it points to). Reading it reads that place as it is now, writing it writes there. It may be written where the place may be: in a mutable variable, through a `*` pointer, a field only when it is `mut`. A value that lives nowhere (`a + b <- s`) is a place of its own, read-only. A payload written into a niche makes the value that niche's case. The names `|` alternatives share, the bits of `bits(..)` parts, and the payloads of variants a strategy (`tagtype ranges(..)`) or a bit-packed layout (`++(..)`) store are values, read-only as well. Hovering a name in the editor shows `(writable)` where it writes.
+
+```mond
+variant Cell = +(Some(mut i32), None);
+variant Byte = +(Some(mut u8), None = 0xFF) tagtype self;
+stcfun bump = () -> i32 { mut Cell c = Cell.Some(3); if c ?<- v { v += 10; } ret c ?? -1; }
+stcfun niche = () -> i32 { mut Byte b = Byte.Some(3); if b ?<- v { v = 255; } ret (b ?? 7) as i32; }
+stcfun live = () -> i32 { mut i32 x = 1; if (x <- y) > 0 { x = 8; ret y; } ret 0; }
+stcfun matched = () -> i32 { mut Cell c = Cell.Some(1); match c { Cell.Some(_ <- k) => { k = 5; }, _ => {} } ret c ?? -1; }
+stc []i32 W = [bump(), niche(), live(), matched()];   #= W [13, 7, 8, 5]
+fun reads = (&Cell p) { if p ?<- v { v = 1; } }   #! assign_to_immutable
 ```
 
 The fallback of the result, which a failed `x??` returns (hovering `??` in the editor shows it):

@@ -1,0 +1,99 @@
+variant Opt = +(Some(i32), None);
+variant Res = +(Ok(i32), Err(u8 code, u8 extra), Empty);
+variant Bit = +(B(u8), W);
+variant Mix = Opt || Bit;
+
+stcfun mk = (i32 n) -> Opt: ret if n > 0: Opt.Some(n) else: Opt.None;
+
+# a label names all on its left up to `|`, `and`, `or` and `xor`: sums, comparisons, casts
+stcfun sum_label = (i32 a, i32 b) -> i32: ret a + b <- s + s;
+stcfun cmp_label = (i32 a) -> bool: ret a > 3 <- big and big;
+stcfun cast_label = (i32 a) -> i64: ret a as i64 <- w + w;
+stcfun and_right = (bool c, Opt o) -> i32: ret if c and o ?<- v: v else: -1;
+stc []i64 PRECEDENCE = [sum_label(2, 3), cmp_label(5) as i64, cmp_label(1) as i64, cast_label(7), and_right(true, Opt.Some(4)), and_right(false, Opt.Some(4)), and_right(true, Opt.None)]; #= PRECEDENCE [10, 1, 0, 14, 4, -1, -1]
+
+# a `<-` name is read in both branches, a `?<-` name where its test held
+stcfun both_sides = (i32 a) -> i32: ret if a * 2 <- d > 4: d else: -d;
+stcfun negated = (Opt o) -> i32: ret if !(o ?<- v): 0 else: v;
+stcfun neg_or = (Opt o, Opt p) -> i32: ret if !(o ?<- v) or !(p ?<- w): 0 else: v + w;
+stcfun chained = (Opt o, Opt p) -> i32: ret if o ?<- v and p ?<- w and v < w: w - v else: 0;
+stcfun in_match = (Opt o) -> i32: ret match o ?<- v { true => v, false => -1 };
+stcfun guarded = (Res r, Opt o) -> i32: ret match r {
+    Res.Ok(n) where o ?<- m => n + m,
+    Res.Ok(n) where n * 2 <- d > 4 => d,
+    _ => 0,
+};
+stc []i32 SCOPE = [both_sides(3), both_sides(1), negated(Opt.Some(4)), negated(Opt.None), neg_or(Opt.Some(1), Opt.Some(2)), neg_or(Opt.Some(1), Opt.None), chained(Opt.Some(1), Opt.Some(5)), chained(Opt.Some(5), Opt.Some(1)), in_match(Opt.Some(3)), in_match(Opt.None)]; #= SCOPE [6, -2, 4, 0, 3, 0, 4, 0, 3, -1]
+stc []i32 GUARDS = [guarded(Res.Ok(1), Opt.Some(2)), guarded(Res.Ok(3), Opt.None), guarded(Res.Ok(1), Opt.None), guarded(Res.Err(1, 2), Opt.Some(2))]; #= GUARDS [3, 6, 0, 0]
+
+# in a `while` condition `?<-` tests and binds anew each round, a `<-` keeps the value it got
+# the first time the condition reached it; a `for` head runs once
+stcfun drain = (i32 n) -> i32 { mut i32 k = n; mut i32 s = 0; while mk(k) ?<- v { s += v; k -= 1; } ret s; }
+stcfun frozen = (i32 n) -> i32 { mut i32 k = n; mut i32 s = 0; while k - 1 <- m >= 0 and s < 20 { s += m + 1; k -= 1; } ret s; }
+stcfun reached_late = () -> i32 { mut i32 i = 0; while i < 1 or (i * 10 <- t) + i < 50 { i += 1; } ret i; }
+stcfun reentered = () -> i32 {
+    mut i32 total = 0;
+    mut i32 i = 0;
+    while i < 3 {
+        mut i32 j = 0;
+        while j < (i + 1 <- lim) { j += 1; total += lim; }
+        i += 1;
+    }
+    ret total;
+}
+stcfun nested_calls = (i32 d) -> i32 { mut i32 i = 0; mut i32 t = 0; while i < (d <- n) { t += if n > 1: nested_calls(n - 1) else: 1; i += 1; } ret t; }
+stcfun for_head = (i32 n) -> i32 { mut i32 s = 0; for i in 0..<(n + 1 <- k): s += k; ret s; }
+stc []i32 LOOPS = [drain(4), frozen(3), reached_late(), reentered(), nested_calls(3), for_head(2)]; #= LOOPS [10, 21, 40, 14, 6, 9]
+
+# in a pattern `<-` names what the pattern matched as it is, `Case c` is the case itself
+stcfun ranged = (i32 x) -> i32: ret match x { 1..=5 <- n => n * 10, 6.. <- m => -m, _ => 0 };
+stcfun inner = (Res r) -> i32: ret match r {
+    Res.Ok(1..=9 <- n) => n,
+    Res.Err(0 <- z, e) => 100 + e as i32 + z as i32,
+    _ <- all => if all oftype Res.Empty: -2 else: -3,
+};
+stcfun cased = (Res r) -> i32: ret match r { Res.Err e => e.code as i32 * 10 + e.extra as i32, Res.Ok o => o.$0, Res.Empty => 0 };
+stcfun member = (Mix m) -> i32: ret match m { Opt.Some s => s.$0, Bit.B b => b.$0 as i32, Opt o => -1, Bit w => -2 };
+stc []i32 PATTERNS = [ranged(3), ranged(8), ranged(-1), inner(Res.Ok(5)), inner(Res.Err(0, 7)), inner(Res.Ok(50)), inner(Res.Empty), inner(Res.Err(1, 7))]; #= PATTERNS [30, -8, 0, 5, 107, -3, -2, -3]
+stc []i32 CASES = [cased(Res.Err(3, 4)), cased(Res.Ok(9)), cased(Res.Empty), member(Opt.Some(5)), member(Bit.B(6)), member(Opt.None), member(Bit.W)]; #= CASES [34, 9, 0, 5, 6, -1, -2]
+
+# `?<-` takes what `??` takes: a case value always holds its payload, a subset the first payload
+# case it keeps, a pointer the variant it points to
+stcfun case_typed = () -> i32 { Opt.Some s = Opt.Some(4); ret if s ?<- v: v else: -1; }
+stcfun subset = (Res r) -> i32: ret match r { Res.Ok(n) => n, rest => if rest ?<- (c, x): c as i32 * 10 + x as i32 else: -1 };
+stcfun through = (Opt o) -> i32 { &Opt p = o.&; ret if p ?<- v: v + (p ?? 0) else: p ?? -5; }
+stc []i32 UNWRAPS = [case_typed(), subset(Res.Ok(9)), subset(Res.Err(3, 4)), subset(Res.Empty), through(Opt.Some(4)), through(Opt.None)]; #= UNWRAPS [4, 9, 34, -1, 8, -5]
+
+# a static condition binds static names, in a `stcif` and in a static declaration
+stc i32 K = 3;
+fun picked = () -> i32: ret stcif K * 2 <- k > 2: k else: 0;
+stc i32 G = (K + 1 <- g) * g; #= G 16
+stc i32 H = if mk(7) ?<- h: h else: 0; #= H 7
+stc i32 PK = picked(); #= PK 6
+
+# arrows never copy: a label is the place it names and writes it where that may be written,
+# through a `*` pointer too; a payload written where a niche is changes the case
+variant Cell = +(Some(mut i32), None);
+variant Byte = +(Some(mut u8), None = 0xFF) tagtype self;
+variant Two = +(Pair(mut u8 code, u8 extra), Nothing);
+type Point = *(mut i32 x, mut i32 y);
+stcfun aliased = () -> i32 { mut i32 x = 1; if (x <- y) > 0 { y = 5; } ret x; }
+stcfun follows = () -> i32 { mut i32 x = 1; if (x <- y) > 0 { x = 8; ret y; } ret 0; }
+stcfun in_payload = () -> i32 { mut Cell c = Cell.Some(3); if c ?<- v { v += 10; } ret c ?? -1; }
+stcfun via_pointer = () -> i32 { mut Cell c = Cell.Some(3); *Cell p = c.&; if p ?<- v { v = 42; } ret c ?? -1; }
+stcfun into_niche = () -> i32 { mut Byte b = Byte.Some(3); if b ?<- v { v = 255; } ret (b ?? 7) as i32; }
+stcfun parts = () -> i32 { mut Point p = Point(1, 2); if (p <- (a, b)).x > 0 { a = 10; b += 5; } ret p.x * 100 + p.y; }
+stcfun payload_parts = () -> i32 { mut Two t = Two.Pair(1, 2); if t ?<- (c, x) { c = 7; } ret match t { Two.Pair(c, x) => c as i32 * 10 + x as i32, _ => -1 }; }
+stcfun payload_record = () -> i32 { mut Two t = Two.Pair(1, 2); if t ?<- v { v.code = 9; } ret match t { Two.Pair(c, x) => c as i32 * 10 + x as i32, _ => -1 }; }
+stcfun loop_place = () -> i32 { mut i32 n = 3; mut i32 i = 0; while i < (n <- m) { i += 1; if i == 2: n = 5; } ret i * 10 + n; }
+stc []i32 PLACES = [aliased(), follows(), in_payload(), via_pointer(), into_niche(), parts(), payload_parts(), payload_record(), loop_place()]; #= PLACES [5, 8, 13, 42, 7, 1007, 72, 92, 55]
+
+# in a pattern a label is the part of the scrutinee's place it matched
+stcfun whole_case = () -> i32 { mut Cell c = Cell.Some(3); match c { Cell.Some(_) <- whole => { whole = Cell.None; }, _ => {} } ret c ?? -1; }
+stcfun nested_field = () -> i32 { mut Cell c = Cell.Some(3); match c { Cell.Some(_ <- k) => { k += 10; }, _ => {} } ret c ?? -1; }
+stcfun record_field = () -> i32 { mut Point p = Point(1, 2); match p { Point(1.. <- x, _) => { x = 50; }, _ => {} } ret p.x * 10 + p.y; }
+stcfun matched_pointer = () -> i32 { mut Cell c = Cell.Some(1); *Cell q = c.&; match q { Cell.Some(_ <- k) => { k = 77; }, _ => {} } ret c ?? -1; }
+stcfun matched_niche = () -> i32 { mut Byte b = Byte.Some(1); match b { Byte.Some(_ <- v) => { v = 255; }, _ => {} } ret (b ?? 9) as i32; }
+stc []i32 MATCHED = [whole_case(), nested_field(), record_field(), matched_pointer(), matched_niche()]; #= MATCHED [-1, 13, 502, 77, 9]
+
+main = () {}

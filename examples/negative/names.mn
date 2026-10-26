@@ -13,7 +13,7 @@ fun f = () {
 }
 
 fun g = (O o) {
-    if o ?<- v { u8 w = v; } else { u8 z = v; } #! undefined_name
+    if o ?<- v { u8 w = v; } else { u8 z = v; } #! use_before_initialization
     fun local = () {}
 }
 

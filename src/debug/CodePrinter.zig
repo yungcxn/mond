@@ -90,6 +90,7 @@ fn operand(self: *CodePrinter, node: NodeId, level: u8, left: bool) Error!void {
         .binary_logic_and => 3,
         .binary_num_or, .unify_variants, .unify_variants_packed => 4,
         .gen_lowerbound, .gen_incl, .gen_excl, .gen_upperbound_incl, .gen_upperbound_excl => range,
+        .labelarrow, .selftag_arrow => range,
         .binary_num_xor => 6,
         .binary_num_and => 7,
         .binary_eq, .binary_neq => 8,
@@ -103,7 +104,7 @@ fn operand(self: *CodePrinter, node: NodeId, level: u8, left: bool) Error!void {
         .type_ptr, .type_ptrmut, .type_array, .type_array_unlengthed, .type_slice => prefix,
         .fun_call, .array_index, .member, .dereference, .address_of, .with => postfix,
         .inc_postfix, .dec_postfix, .variant_difference, .inlined_defer_deinit => postfix,
-        .selftag_unwrap, .selftag_unwrap_fallback, .labelarrow, .selftag_arrow => postfix,
+        .selftag_unwrap, .selftag_unwrap_fallback => postfix,
         .quote => if (tree.kind(tree.arg(n, 0)) == .block) primary else open,
         .def_fun => if (tree.kind(tree.arg(n, 1)) == .block) primary else open,
         .def_type_assertsize, .def_variant_assertsize, .def_variant_tagtype => open,
@@ -485,9 +486,10 @@ fn write(self: *CodePrinter, n: NodeId) Error!void {
             try self.operand(b, prefix, false);
         },
         .labelarrow, .selftag_arrow => {
-            try self.operand(a, postfix, true);
+            try self.operand(a, range, true);
             try self.text(if (kind == .labelarrow) " <- " else " ?<- ");
-            try self.operand(b, open, false);
+            if (tree.kind(b) != .partial__destructure) return self.operand(b, open, false);
+            try self.list("(", tree.manychildren(b), ")");
         },
         .selftag_unwrap_fallback => {
             try self.operand(a, postfix, true);

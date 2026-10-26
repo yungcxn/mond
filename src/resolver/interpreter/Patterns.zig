@@ -8,6 +8,10 @@ const NodeId = ParseTree.NodeId;
 
 // match: arms tried in order, patterns tested against values and their binders bound
 const Patterns = @This();
+const none_cell = std.math.maxInt(u32);
+
+// the cell of what the pattern being matched tests, when a label names it
+matched_cell: u32 = none_cell,
 
 pub fn owning_interpreter(self: *Patterns) *Interpreter {
     return @alignCast(@fieldParentPtr("patterns", self));
@@ -20,7 +24,18 @@ pub fn match(self: *Patterns, node: NodeId) Value {
     const scrutinee = tree.arg(node, 0);
     const arms = tree.arg(node, 1);
 
-    const evaluated = interpreter.evaluate(scrutinee);
+    // a label in a pattern names the part of the scrutinee's place it matched
+    const labelled = interpreter.has_body_frame() and for (tree.manychildren(arms)) |arm| {
+        if (tree.holds_label(tree.arg(arm, 0))) break true;
+    } else false;
+    const cell = if (labelled)
+        interpreter.variables.cell_of_operand(scrutinee) orelse return .poison
+    else
+        none_cell;
+    const evaluated = if (labelled)
+        interpreter.memory.buffer[cell]
+    else
+        interpreter.evaluate(scrutinee);
     const scrutinee_type = if (interpreter.has_body_frame())
         interpreter.node_info(.node_type, scrutinee)
     else
@@ -29,6 +44,9 @@ pub fn match(self: *Patterns, node: NodeId) Value {
         resolver.static_pool.through_pointer(scrutinee_type) != scrutinee_type;
     const value = if (through_reference) interpreter.dereference(evaluated) else evaluated;
     if (value.is(.poison_type) or interpreter.unwind != .none) return value;
+    const outer_cell = self.matched_cell;
+    defer self.matched_cell = outer_cell;
+    self.matched_cell = if (labelled and through_reference) evaluated.cell() else cell;
 
     // a body frame already holds the binders of the arms
     const scoped = !interpreter.has_body_frame();
@@ -58,10 +76,17 @@ pub fn match(self: *Patterns, node: NodeId) Value {
 
 // a case value is pooled, or a block of its payload fields when they hold references
 pub fn case_of(self: *Patterns, value: Value) Index {
-    const static_pool = &self.owning_interpreter().owning_resolver().static_pool;
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
     const is_case_block = value.is_heap() and
         static_pool.tag(value.value_type) == .variant_case_type;
-    if (is_case_block) return value.value_type;
+    // a payload written where a niche is (`?<-` through a place) makes it the niche's case
+    if (is_case_block) {
+        const payload_type = static_pool.get(value.value_type).variant_case_type.payload;
+        const payload = interpreter.interned(.block(payload_type, value.cell(), value.len()));
+        const niche = static_pool.niche_case(value.value_type, payload);
+        return if (niche != .none) niche else value.value_type;
+    }
     if (!value.is_pooled() or value.is(.none)) return .none;
 
     return switch (static_pool.tag(value.index())) {
@@ -92,7 +117,11 @@ pub fn matches(self: *Patterns, pattern: NodeId, value: Value) bool {
         },
         .labelarrow => {
             if (!self.matches(tree.arg(pattern, 0), value)) return false;
-            self.bind_label(tree.arg(pattern, 1), self.payload_of(value) orelse value);
+            if (self.matched_cell == none_cell) {
+                self.bind_label(tree.arg(pattern, 1), value);
+            } else {
+                self.alias_label(tree.arg(pattern, 1), self.matched_cell);
+            }
             return true;
         },
         .fun_call => return self.matches_fields(pattern, value),
@@ -117,6 +146,10 @@ fn matches_bits(self: *Patterns, pattern: NodeId, value: Value) bool {
     var offset: u64 = 0;
     // by index: a part's pattern may evaluate a quote, which moves child lists
     const total = static_pool.get(integer.value_type).int_type.bits;
+    // the bits of a part live in no cell
+    const outer_cell = self.matched_cell;
+    defer self.matched_cell = outer_cell;
+    self.matched_cell = none_cell;
     for (0..tree.manychildren(pattern).len) |i| {
         const part = tree.manychildren(pattern)[i];
         // a pattern the checker matched itself (a static scrutinee) has no types noted
@@ -143,6 +176,10 @@ fn matches_bits(self: *Patterns, pattern: NodeId, value: Value) bool {
 
 inline fn matches_any(self: *Patterns, alternatives: NodeId, value: Value) bool {
     const tree = self.owning_interpreter().owning_resolver().tree;
+    // alternatives share their names, which then are values, not places
+    const outer_cell = self.matched_cell;
+    defer self.matched_cell = outer_cell;
+    self.matched_cell = none_cell;
     for (0..tree.manychildren(alternatives).len) |alternative_index| {
         const alternative = tree.manychildren(alternatives)[alternative_index];
         if (self.matches(alternative, value)) return true;
@@ -167,7 +204,7 @@ inline fn matches_typecast(self: *Patterns, pattern: NodeId, value: Value) bool 
     // a case belongs to its variant and to every unified variant holding that variant
     const matched = if (case != .none) blk: {
         const variant = static_pool.get(case).variant_case_type.variant;
-        if (variant == wanted_type) break :blk true;
+        if (case == wanted_type or variant == wanted_type) break :blk true;
         break :blk static_pool.is_member(wanted_type, variant);
     } else value_type == wanted_type or static_pool.implements(value_type, wanted_type);
     if (matched) self.bind_name(tree.arg(pattern, 1), value);
@@ -200,6 +237,16 @@ inline fn matches_fields(self: *Patterns, pattern: NodeId, value: Value) bool {
         };
     }
 
+    // the cells of the fields, when a label may name one
+    const outer_cell = self.matched_cell;
+    defer self.matched_cell = outer_cell;
+    const field_cells = if (outer_cell == none_cell) none_cell else blk: {
+        const holder = if (static_pool.tag(target) == .variant_case_type)
+            self.case_block(outer_cell)
+        else
+            interpreter.thaw_cell(outer_cell);
+        break :blk if (holder.is_heap()) holder.cell() else none_cell;
+    };
     const arguments = tree.arg(pattern, 1);
     for (0..tree.manychildren(arguments).len) |i| {
         const argument = tree.manychildren(arguments)[i];
@@ -208,6 +255,10 @@ inline fn matches_fields(self: *Patterns, pattern: NodeId, value: Value) bool {
         if (field_index >= (interpreter.aggregate_length(fields) orelse 0)) return false;
 
         const field = interpreter.element(fields, @intCast(field_index));
+        self.matched_cell = if (field_cells == none_cell)
+            none_cell
+        else
+            field_cells + @as(u32, @intCast(field_index));
         if (!self.matches(tree.arg_value(argument), field)) return false;
     }
     return true;
@@ -260,14 +311,85 @@ pub fn bind_name(self: *Patterns, id: NodeId, value: Value) void {
     const name = resolver.name_pool.name_of_node(id);
     if (name == .underscore) return;
 
-    const binder_type = interpreter.value_type(value);
-    const declaration = resolver.declarations.declare_local(name, id, .pattern_binder, binder_type);
-    resolver.node_declarations[id] = declaration;
+    // a label keeps the declaration the checker gave it, a binder of a static match gets a new one
+    const labelled = resolver.node_declarations[id];
+    const is_label = labelled != .none and resolver.decl_pool.get(labelled, .kind) == .arrow_binder;
+    const declaration = if (is_label) blk: {
+        resolver.scopes.bind(name, labelled);
+        break :blk labelled;
+    } else blk: {
+        const binder_type = interpreter.value_type(value);
+        const declarations = &resolver.declarations;
+        const declared = declarations.declare_local(name, id, .pattern_binder, binder_type);
+        resolver.node_declarations[id] = declared;
+        break :blk declared;
+    };
     interpreter.variables.bind(declaration, value);
     // matched while checking (a static scrutinee): the name is that static value where it is used
     if (!interpreter.escapes(value)) {
         resolver.decl_pool.set(declaration, .static_value, interpreter.interned(value));
     }
+}
+
+// a label names the place in `cell`, a destructuring one each field of it
+pub fn alias_label(self: *Patterns, label: NodeId, cell: u32) void {
+    const interpreter = self.owning_interpreter();
+    const tree = interpreter.owning_resolver().tree;
+    const held = interpreter.memory.buffer[cell];
+    if (!interpreter.has_body_frame()) return self.bind_label(label, held);
+    const variables = &interpreter.variables;
+    if (tree.kind(label) != .partial__destructure) {
+        return variables.alias(interpreter.node_info(.declaration, label), cell, false);
+    }
+    const fields = interpreter.thaw_cell(cell);
+    if (!fields.is_heap()) return;
+    for (tree.manychildren(label), 0..) |name, i| {
+        if (i >= fields.len()) break;
+        const field_cell = fields.cell() + @as(u32, @intCast(i));
+        variables.alias(interpreter.node_info(.declaration, name), field_cell, false);
+    }
+}
+
+// `?<-` names the payload where the variant in `cell` holds it: a single field itself, several
+// as a view of their cells
+pub fn alias_payload(self: *Patterns, label: NodeId, cell: u32) void {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    if (!interpreter.has_body_frame()) {
+        return self.bind_label(label, self.payload_of(interpreter.memory.buffer[cell]).?);
+    }
+    const case = self.case_block(cell);
+    const variables = &interpreter.variables;
+    if (resolver.tree.kind(label) == .partial__destructure) {
+        for (resolver.tree.manychildren(label), 0..) |name, i| {
+            if (i >= case.len()) break;
+            const field_cell = case.cell() + @as(u32, @intCast(i));
+            variables.alias(interpreter.node_info(.declaration, name), field_cell, false);
+        }
+        return;
+    }
+    const declaration = interpreter.node_info(.declaration, label);
+    if (case.len() == 1) return variables.alias(declaration, case.cell(), false);
+    const payload_type = resolver.static_pool.get(case.value_type).variant_case_type.payload;
+    const view = interpreter.push_cell(.block(payload_type, case.cell(), case.len()));
+    variables.alias(declaration, view, true);
+}
+
+// the variant in `cell` as a case block, its payload in cells of their own
+fn case_block(self: *Patterns, cell: u32) Value {
+    const interpreter = self.owning_interpreter();
+    const static_pool = &interpreter.owning_resolver().static_pool;
+    const held = interpreter.memory.buffer[cell];
+    if (held.is_heap()) return held;
+    const case_value = static_pool.get(held.index()).variant_value;
+    const payload: Value = .of(static_pool, case_value.payload);
+    const length = interpreter.aggregate_length(payload) orelse 0;
+    const first = interpreter.allocate_cells(length);
+    for (0..length) |i| {
+        interpreter.memory.buffer[first + i] = interpreter.element(payload, @intCast(i));
+    }
+    interpreter.store_cell(cell, .block(case_value.case, first, length));
+    return interpreter.memory.buffer[cell];
 }
 
 // a destructuring label binds each name to an element, missing elements to poison

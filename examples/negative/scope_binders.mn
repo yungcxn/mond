@@ -32,7 +32,7 @@ fun or_one_sided = (R r) -> u32: ret match r {
     _ => 0,
 }
 fun destructure_scope = (R r) -> u32 {
-    u32 s = (r <- p, q).a + p + q;
+    u32 s = (r <- (p, q)).a + p + q;
     ret p; #! undefined_name
 }
 fun while_binder_after = (O o) -> u32 {

@@ -13,15 +13,16 @@ stcfun classify = (u32 n) -> u32: ret match n {
 
 stc [7]u32 C = [classify(0), classify(2), classify(4), classify(9), classify(10), classify(19), classify(20)]; #= C [0, 1, 2, 3, 4, 4, 5]
 
-# payload binders positional and named, a label arrow on a case, a typecast arm
+# payload binders positional and named, a label naming a case's value, typecast arms
+stcfun area_of_dot = (Shape s) -> u32: ret 0;
 stcfun area = (Shape s) -> u32: ret match s {
     Shape.Circle(r) => 3 * r * r,
     Shape.Rect(w = width, h = height) => width * height,
-    Shape.Dot <- d => 0,
+    Shape.Dot <- d => area_of_dot(d),
 }
 
 stcfun opt = (Opt8 o) -> u32: ret match o {
-    Opt8.Some <- v => v,
+    Opt8.Some s => s.$0,
     Opt8 other => 1000,
 }
 

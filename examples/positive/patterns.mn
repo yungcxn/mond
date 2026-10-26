@@ -27,7 +27,7 @@ fun ranges = (i32 x) -> u8: ret match x {
 }
 
 fun codes = (Code c) -> u8: ret match c {
-    Code.Bad <- raw => raw, #: raw u8
+    Code.Bad(raw) => raw, #: raw u8
     Code.Ok => 0,
 }
 

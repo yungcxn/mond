@@ -81,6 +81,12 @@ temporary_types: DynamicBuffer(Index),
 parameters: DynamicBuffer(Ref),
 defers: DynamicBuffer(Defer),
 loops: DynamicBuffer(Loop),
+// the place of what the pattern being lowered tests, when a label names it
+matched_place: Ref = .none,
+// the constant aliases (`<-`) of the loop conditions lowered, each with the temporary holding its
+// value; the temporary after it says whether it was reached
+alias_nodes: DynamicBuffer(NodeId),
+alias_values: DynamicBuffer(u32),
 // variables living in memory, by the pointer to them
 stack_slots: std.AutoHashMapUnmanaged(DeclPool.Index, Ref) = .empty,
 // variables of the current body whose address is taken, they must live in memory
@@ -105,6 +111,8 @@ pub fn init(allocator: std.mem.Allocator, resolver: *Resolver) HighLowerer {
         .parameters = .init(allocator, 16),
         .defers = .init(allocator, 16),
         .loops = .init(allocator, 16),
+        .alias_nodes = .init(allocator, 8),
+        .alias_values = .init(allocator, 8),
     };
 }
 
@@ -126,6 +134,8 @@ pub fn deinit(self: *HighLowerer) void {
     self.parameters.deinit();
     self.defers.deinit();
     self.loops.deinit();
+    self.alias_nodes.deinit();
+    self.alias_values.deinit();
 }
 
 pub fn lower(self: *HighLowerer) void {
@@ -599,6 +609,14 @@ fn lower_overload(self: *HighLowerer, overload: DeclPool.Index) bool {
             !self.is_pointer(self.type_of(target)))
         {
             put_entry(self.allocator, &self.address_taken, self.declaration_of(target), {});
+        }
+        // a label is the place it names, so a variable holding that place lives in memory
+        const names_place = tree.kind(node) == .labelarrow or tree.kind(node) == .selftag_arrow and
+            !self.is_pointer(self.type_of(tree.arg(node, 0))) or
+            tree.kind(node) == .match and self.arms_hold_label(node);
+        const root = if (names_place) self.place_root(tree.arg(node, 0)) else 0;
+        if (root != 0) {
+            put_entry(self.allocator, &self.address_taken, self.declaration_of(root), {});
         }
 
         const function = self.declaration_of(node);
@@ -1320,8 +1338,8 @@ fn name_value(self: *HighLowerer, node: NodeId) Ref {
     if (kind.is_function()) return self.function_value(declaration);
     const stands_for_static_value = self.resolver.decl_pool.get(declaration, .flags).is_stc or
         switch (kind) {
-            // a binder of a pattern matched while checking (`stcmatch`) has its value
-            .static_parameter, .parameter, .pattern_binder => true,
+            // a binder of a pattern matched or a condition tested while checking has its value
+            .static_parameter, .parameter, .pattern_binder, .arrow_binder => true,
             .type_alias, .record, .variant, .trait => true,
             else => false,
         };
@@ -1634,11 +1652,21 @@ fn match_expression(self: *HighLowerer, node: NodeId) Ref {
         return self.expression_as(tree.arg(arm, 1), result_type);
     }
 
+    // a label in a pattern names the part of the scrutinee's place it matched
+    const labelled = self.arms_hold_label(node);
+    const outer_place = self.matched_place;
+    defer self.matched_place = outer_place;
     var scrutinee_type = self.type_of(tree.arg(node, 0));
-    var scrutinee = self.expression(tree.arg(node, 0));
+    const of_place = labelled and !self.is_pointer(scrutinee_type);
+    self.matched_place = if (of_place) self.place(tree.arg(node, 0)) else .none;
+    var scrutinee = if (of_place)
+        self.load(scrutinee_type, self.matched_place)
+    else
+        self.expression(tree.arg(node, 0));
     const is_pointer_to_nominal = self.is_pointer(scrutinee_type) and
         self.static_pool.through_pointer(scrutinee_type) != scrutinee_type;
     if (is_pointer_to_nominal) {
+        if (labelled) self.matched_place = scrutinee;
         scrutinee = self.load(self.pointee_of(scrutinee_type), scrutinee);
         scrutinee_type = self.pointee_of(scrutinee_type);
     }
@@ -1910,20 +1938,10 @@ fn bind_pattern(self: *HighLowerer, pattern: NodeId, value: Ref, value_type: Ind
             if (self.resolver.name_pool.name_of_node(pattern) == .underscore) return;
             self.declare_variable(self.declaration_of(pattern), value);
         },
-        .labelarrow => self.bind_arrow_label(pattern, value, value_type),
+        .labelarrow => self.label_matched(self.resolver.tree.arg(pattern, 1), value, value_type),
         .fun_call => self.bind_payload_fields(pattern, value, value_type),
         else => {},
     }
-}
-
-fn bind_arrow_label(self: *HighLowerer, pattern: NodeId, value: Ref, value_type: Index) void {
-    const label = self.resolver.tree.arg(pattern, 1);
-    const case_type = self.type_of(self.resolver.tree.arg(pattern, 0));
-    if (self.static_pool.tag(case_type) != .variant_case_type) return self.bind_label(label, value);
-
-    const variant = self.static_pool.get(case_type).variant_case_type.variant;
-    const narrowed = self.narrow_to_variant(value, value_type, variant);
-    self.bind_label(label, self.case_payload(narrowed, case_type));
 }
 
 fn bind_payload_fields(self: *HighLowerer, pattern: NodeId, value: Ref, value_type: Index) void {
@@ -1934,13 +1952,53 @@ fn bind_payload_fields(self: *HighLowerer, pattern: NodeId, value: Ref, value_ty
     const narrowed = self.narrow_to_variant(value, value_type, case_type.variant);
     const case_index: Ref = @fromBackingInt(case_type.case_index);
     const payload = self.builder.emit_refs(.variant_payload, record, narrowed, case_index);
+    const holder = self.payload_place(value_type, self.type_of(pattern));
+    const outer_place = self.matched_place;
+    defer self.matched_place = outer_place;
     const arguments = self.resolver.tree.manychildren(self.resolver.tree.arg(pattern, 1));
     for (arguments, 0..) |argument, i| {
         const field = self.field_index(record, argument, i);
         const field_type = self.static_pool.field_type(record, field);
         const field_value = self.builder.emit(.extract, field_type, @backingInt(payload), field);
+        self.matched_place = self.field_place_in(holder, record, field, field_type);
         self.bind_pattern(self.resolver.tree.arg_value(argument), field_value, field_type);
     }
+}
+
+// whether an arm of the match `node` has a label in its pattern
+fn arms_hold_label(self: *HighLowerer, node: NodeId) bool {
+    const tree = self.resolver.tree;
+    for (tree.manychildren(tree.arg(node, 1))) |arm| {
+        if (tree.holds_label(tree.arg(arm, 0))) return true;
+    }
+    return false;
+}
+
+// a label in a pattern names the place it matched, a value of its own where that is none
+fn label_matched(self: *HighLowerer, label: NodeId, value: Ref, value_type: Index) void {
+    if (self.matched_place == .none) return self.bind_label(label, value);
+    self.alias_label(label, self.matched_place, value_type);
+}
+
+// where the matched value of `value_type` keeps the payload of `case`, none where nothing does
+fn payload_place(self: *HighLowerer, value_type: Index, case: Index) Ref {
+    if (self.matched_place == .none) return .none;
+    const case_type = self.static_pool.get(case).variant_case_type;
+    const is_whole = self.static_pool.whole_of(value_type) == case_type.variant;
+    if (!is_whole or !self.stores_payloads(case_type.variant)) return .none;
+    const pointer_type = self.pointer_to(case_type.payload);
+    return self.builder.emit_refs(.payload_ptr, pointer_type, self.matched_place, .none);
+}
+
+fn field_place_in(
+    self: *HighLowerer,
+    holder: Ref,
+    record: Index,
+    field: u32,
+    field_type: Index,
+) Ref {
+    if (holder == .none) return .none;
+    return self.field_pointer(field_type, holder, record, field);
 }
 
 // tests `value` against `pattern`, binding its names, and continues in `matched` or `failed`
@@ -1962,6 +2020,10 @@ fn match_pattern(
             self.builder.branch(matched);
         },
         .partial__match_case_pattern_or => {
+            // alternatives share their names, which then are values, not places
+            const outer_place = self.matched_place;
+            defer self.matched_place = outer_place;
+            self.matched_place = .none;
             for (tree.manychildren(pattern)) |alternative| {
                 const next_alternative = self.builder.new_block();
                 self.match_pattern(alternative, value, value_type, matched, next_alternative);
@@ -1984,7 +2046,7 @@ fn match_pattern(
             const labelled = tree.arg(pattern, 0);
             self.match_pattern(labelled, value, value_type, labelled_matched, failed);
             self.builder.go_to(labelled_matched);
-            self.bind_arrow_label(pattern, value, value_type);
+            self.label_matched(tree.arg(pattern, 1), value, value_type);
             self.builder.branch(matched);
         },
         .fun_call => {
@@ -2012,6 +2074,10 @@ fn match_bits(
     const tree = self.resolver.tree;
     const resize = @backingInt(StaticPool.CastKind.int_resize);
     var offset: u64 = 0;
+    // the bits of a part live in no place
+    const outer_place = self.matched_place;
+    defer self.matched_place = outer_place;
+    self.matched_place = .none;
     for (tree.manychildren(pattern)) |part| {
         const part_type = self.type_of(part);
         const shift = self.builder.constant_int(value_type, offset);
@@ -2136,6 +2202,11 @@ fn match_destructuring(
         self.narrow_to_variant(value, value_type, pattern_type)
     else
         value;
+    const holder = if (is_case)
+        self.payload_place(value_type, pattern_type)
+    else if (is_member) .none else self.matched_place;
+    const outer_place = self.matched_place;
+    defer self.matched_place = outer_place;
     if (record != .none and self.static_pool.tag(record) == .record_type) {
         const arguments = self.resolver.tree.manychildren(self.resolver.tree.arg(pattern, 1));
         for (arguments, 0..) |argument, i| {
@@ -2145,6 +2216,7 @@ fn match_destructuring(
             const field_value =
                 self.builder.emit(.extract, field_type, @backingInt(container), field);
             const field_pattern = self.resolver.tree.arg_value(argument);
+            self.matched_place = self.field_place_in(holder, record, field, field_type);
             self.match_pattern(field_pattern, field_value, field_type, field_matched, failed);
             self.builder.go_to(field_matched);
         }
@@ -2222,17 +2294,105 @@ fn bind_label(self: *HighLowerer, label: NodeId, value: Ref) void {
     }
 }
 
+// the constant aliases of a loop condition, none reached before the loop
+fn hold_aliases(self: *HighLowerer, condition: NodeId) void {
+    const mark = self.alias_nodes.len;
+    self.resolver.tree.labels_of(condition, &self.alias_nodes);
+    for (self.alias_nodes.buffer[mark..self.alias_nodes.len]) |alias| {
+        const held = self.new_temporary(self.pointer_to(self.type_of(alias)));
+        self.write_current(self.new_temporary(.bool_type), Ref.of(.bool_false));
+        self.alias_values.push(held);
+    }
+}
+
+// a constant alias names the place its condition first reached
+fn constant_alias(self: *HighLowerer, node: NodeId, held: u32) Ref {
+    const reached = held + 1;
+    const first = self.builder.new_block();
+    const kept = self.builder.new_block();
+    self.builder.branch_if(self.read_current(reached), kept, first);
+    self.builder.go_to(first);
+    self.write_current(held, self.place(self.resolver.tree.arg(node, 0)));
+    self.write_current(reached, Ref.of(.bool_true));
+    self.branch_and_enter(kept);
+    const pointer = self.read_current(held);
+    self.alias_label(self.resolver.tree.arg(node, 1), pointer, self.type_of(node));
+    return self.load(self.type_of(node), pointer);
+}
+
+// a label is the place at `pointer`, a destructuring one each field of the record there
+fn alias_label(self: *HighLowerer, label: NodeId, pointer: Ref, value_type: Index) void {
+    const tree = self.resolver.tree;
+    if (tree.kind(label) != .partial__destructure) {
+        return put_entry(self.allocator, &self.stack_slots, self.declaration_of(label), pointer);
+    }
+    for (tree.manychildren(label), 0..) |name, i| {
+        const field = self.field_pointer(self.type_of(name), pointer, value_type, @intCast(i));
+        put_entry(self.allocator, &self.stack_slots, self.declaration_of(name), field);
+    }
+}
+
+// `?<-` names the payload of `case` in the variant at `variant`, a single field that field
+fn alias_payload(self: *HighLowerer, label: NodeId, variant: Ref, case: Index) void {
+    const payload_type = self.static_pool.get(case).variant_case_type.payload;
+    const pointer_type = self.pointer_to(payload_type);
+    const payload = self.builder.emit_refs(.payload_ptr, pointer_type, variant, .none);
+    const fields = self.static_pool.get(payload_type).record_type.field_types;
+    if (fields.len > 1 or self.resolver.tree.kind(label) == .partial__destructure) {
+        return self.alias_label(label, payload, payload_type);
+    }
+    self.alias_label(label, self.field_pointer(fields[0], payload, payload_type, 0), fields[0]);
+}
+
+// whether a variant keeps its payloads where they can be written: not one a strategy or bits make
+fn stores_payloads(self: *HighLowerer, variant: Index) bool {
+    if (self.static_pool.tag(variant) != .variant_type) return false;
+    const declared = self.static_pool.get(variant).variant_type;
+    return declared.tag_mode != .custom and !declared.is_packed;
+}
+
+// the variable whose memory holds the place `node` names, 0 for one reached through a pointer
+fn place_root(self: *HighLowerer, node: NodeId) NodeId {
+    const tree = self.resolver.tree;
+    var n = node;
+    while (true) switch (tree.kind(n)) {
+        .capture => n = tree.arg(n, 0),
+        .member, .array_index => {
+            if (self.is_pointer(self.type_of(tree.arg(n, 0)))) return 0;
+            n = tree.arg(n, 0);
+        },
+        .identifier => return n,
+        else => return 0,
+    };
+}
+
 // `<-` binds a label, `?<-` tests for the payload and binds it, `??` takes it or the fallback
 fn unwrap(self: *HighLowerer, node: NodeId) Ref {
     const tree = self.resolver.tree;
     const kind = tree.kind(node);
-    const result_type = self.type_of(node);
-    const value = self.expression(tree.arg(node, 0));
-    const value_type = self.static_pool.through_pointer(self.type_of(tree.arg(node, 0)));
     if (kind == .labelarrow) {
-        self.bind_label(tree.arg(node, 1), value);
-        return value;
+        const alias = std.mem.lastIndexOfScalar(NodeId, self.alias_nodes.items(), node);
+        if (alias) |i| return self.constant_alias(node, self.alias_values.buffer[i]);
     }
+    const result_type = self.type_of(node);
+    // a label is the place it names, the payload `?<-` names is where its variant keeps it
+    if (kind == .labelarrow) {
+        const pointer = self.place(tree.arg(node, 0));
+        self.alias_label(tree.arg(node, 1), pointer, result_type);
+        return self.load(result_type, pointer);
+    }
+    const operand_type = self.type_of(tree.arg(node, 0));
+    const value_type = self.static_pool.through_pointer(operand_type);
+    const in_place = kind == .selftag_arrow and self.stores_payloads(value_type);
+    const of_place = in_place and value_type == operand_type;
+    const operand = if (of_place)
+        self.place(tree.arg(node, 0))
+    else
+        self.expression(tree.arg(node, 0));
+    const value = if (in_place or value_type != operand_type)
+        self.load(value_type, operand)
+    else
+        operand;
 
     if (self.static_pool.tag(value_type) != .variant_type) return .none;
     const cases = self.static_pool.get(value_type).variant_type.cases;
@@ -2249,7 +2409,11 @@ fn unwrap(self: *HighLowerer, node: NodeId) Ref {
         cases[self.payload_case_index(value_type)];
     const has_payload = self.tests_case(value, value_type, case);
     if (kind == .selftag_arrow) {
-        self.bind_label(tree.arg(node, 1), self.case_payload(value, case));
+        if (in_place) {
+            self.alias_payload(tree.arg(node, 1), operand, case);
+        } else {
+            self.bind_label(tree.arg(node, 1), self.case_payload(value, case));
+        }
         return has_payload;
     }
 
@@ -2389,9 +2553,13 @@ fn loop(self: *HighLowerer, node: NodeId) Ref {
     const parts = ParseTree.Loop.from_node(self.resolver.tree, node);
     var repeat: NodeId = 0;
     var walk: SequenceWalk = .{};
+    const alias_mark = self.alias_nodes.len;
+    defer self.alias_nodes.len = alias_mark;
+    defer self.alias_values.len = alias_mark;
     switch (kind) {
         .@"while", .stcwhile, .while_with_repeat_stmt, .stcwhile_with_repeat_stmt => {
             repeat = parts.repeat;
+            self.hold_aliases(parts.cond);
             self.enter_loop_head(head);
             self.builder.branch_if(self.expression_as(parts.cond, .bool_type), body_block, exit);
         },

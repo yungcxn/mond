@@ -13,16 +13,27 @@ const Kind = ParseTree.Node.Kind;
 const Flow = @This();
 
 const Defer = struct { node: NodeId, cell: u32 };
+const none_cell = std.math.maxInt(u32);
 
 // the defers of the open blocks
 defers: DynamicBuffer(Defer),
+// the constant aliases (`<-`) of the running loop conditions and the cells of their places, none
+// until reached
+held_nodes: DynamicBuffer(NodeId),
+held_cells: DynamicBuffer(u32),
 
 pub fn init(allocator: std.mem.Allocator) Flow {
-    return .{ .defers = .init(allocator, 16) };
+    return .{
+        .defers = .init(allocator, 16),
+        .held_nodes = .init(allocator, 8),
+        .held_cells = .init(allocator, 8),
+    };
 }
 
 pub fn deinit(self: *Flow) void {
     self.defers.deinit();
+    self.held_nodes.deinit();
+    self.held_cells.deinit();
 }
 
 pub fn owning_interpreter(self: *Flow) *Interpreter {
@@ -149,6 +160,13 @@ pub fn loop(self: *Flow, node: NodeId) Value {
     const parts = ParseTree.Loop.from_node(resolver.tree, node);
     // a `loop .. repeat` without a condition runs its repeat statement before the body
     const repeat_first = parts.repeat != 0 and parts.cond == 0;
+    const held_mark = self.held_nodes.len;
+    defer self.held_nodes.len = held_mark;
+    defer self.held_cells.len = held_mark;
+    if (parts.cond != 0) {
+        resolver.tree.labels_of(parts.cond, &self.held_nodes);
+        for (held_mark..self.held_nodes.len) |_| self.held_cells.push(none_cell);
+    }
 
     var source: LoopSource = .{};
     if (parts.seq != 0) {
@@ -326,18 +344,39 @@ pub fn unwrap(self: *Flow, node: NodeId) Value {
     const kind = tree.kind(node);
     const operand = tree.arg(node, 0);
 
-    const binds_label = kind == .labelarrow or kind == .selftag_arrow;
-    if (!interpreter.has_body_frame() and binds_label) {
-        return interpreter.fail(node, .not_static, 0, 0);
+    // a label is the place it names, a constant alias of a loop condition the one it first named
+    if (kind == .labelarrow) {
+        const held = std.mem.lastIndexOfScalar(NodeId, self.held_nodes.items(), node);
+        if (held) |i| if (self.held_cells.buffer[i] != none_cell) {
+            return interpreter.memory.buffer[self.held_cells.buffer[i]];
+        };
+        const cell = interpreter.variables.cell_of_operand(operand) orelse return .poison;
+        interpreter.patterns.alias_label(tree.arg(node, 1), cell);
+        if (held) |i| self.held_cells.buffer[i] = cell;
+        return interpreter.memory.buffer[cell];
+    }
+    // `?<-` names the payload where it is: in the variant a place holds or a pointer points to
+    if (kind == .selftag_arrow) {
+        const static_pool = &interpreter.owning_resolver().static_pool;
+        const cell = if (static_pool.is_pointer(interpreter.checked_type(operand))) blk: {
+            const pointer = interpreter.evaluate(operand);
+            if (!pointer.is_ref() or interpreter.unwind != .none) return pointer;
+            break :blk pointer.cell();
+        } else interpreter.variables.cell_of_operand(operand) orelse return .poison;
+        return self.unwrap_variant(node, interpreter.memory.buffer[cell], cell);
     }
 
     const value = interpreter.evaluate(operand);
     if (value.is(.poison_type) or interpreter.unwind != .none) return value;
+    return self.unwrap_variant(node, interpreter.dereference(value), null);
+}
 
-    if (kind == .labelarrow) {
-        interpreter.patterns.bind_label(tree.arg(node, 1), value);
-        return value;
-    }
+// `x ?<- v`, `x ?? f`, `x??` of the variant `value`, `?<-` naming its payload where `cell` holds it
+fn unwrap_variant(self: *Flow, node: NodeId, value: Value, cell: ?u32) Value {
+    const interpreter = self.owning_interpreter();
+    const tree = interpreter.owning_resolver().tree;
+    const kind = tree.kind(node);
+    const operand = tree.arg(node, 0);
 
     // a self-tagged variant unwraps to its first payload case, its other cases to nothing
     const payload: ?Value = blk: {
@@ -346,7 +385,7 @@ pub fn unwrap(self: *Flow, node: NodeId) Value {
         const case = interpreter.patterns.case_of(value);
         if (case == .none) break :blk interpreter.patterns.payload_of(value);
 
-        const operand_type = interpreter.checked_type(operand);
+        const operand_type = static_pool.through_pointer(interpreter.checked_type(operand));
         if (static_pool.tag(operand_type) == .variant_case_type) {
             break :blk interpreter.patterns.payload_of(value);
         }
@@ -364,7 +403,7 @@ pub fn unwrap(self: *Flow, node: NodeId) Value {
     };
     return switch (kind) {
         .selftag_arrow => blk: {
-            if (payload) |unwrapped| interpreter.patterns.bind_label(tree.arg(node, 1), unwrapped);
+            if (payload != null) interpreter.patterns.alias_payload(tree.arg(node, 1), cell.?);
             break :blk .boolean(payload != null);
         },
         .selftag_unwrap_fallback => payload orelse interpreter.evaluate(tree.arg(node, 1)),

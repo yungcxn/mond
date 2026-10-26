@@ -31,7 +31,7 @@ main = () -> i32 {
     Opt8 auto = 7; #: auto +(Some, None)
     u = auto ??; #: u u8
     fb = auto ?? 0; #: fb u8
-    sum = (Pair(a = 1, b = 2) <- q, t).a + q + t; #: sum i32
+    sum = (Pair(a = 1, b = 2) <- (q, t)).a + q + t; #: sum i32
     ptr = x.&; #: ptr &u32
     back = ptr.*; #: back u32
     fl = x as f64; #: fl f64

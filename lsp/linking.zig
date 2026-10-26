@@ -52,7 +52,14 @@ pub fn link(analysis: *Analysis, lexer: *Lexer, resolver: *Resolver) void {
             declarations.static_value[i]
         else
             declarations.value_type[i];
-        const detail = type_text(analysis, resolver, declared_type);
+        // a label names a place, which it writes where that place may be written
+        const writes_place = declarations.kind[i] == .arrow_binder and flags.is_mut;
+        const type_name = type_text(analysis, resolver, declared_type);
+        const allocator = analysis.allocator;
+        const detail = if (writes_place)
+            std.mem.concat(allocator, u8, &.{ type_name, " (writable)" }) catch @panic("OOM")
+        else
+            type_name;
         declare(analysis, token, .{
             .name = name,
             .detail = detail,

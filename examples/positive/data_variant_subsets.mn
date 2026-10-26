@@ -52,7 +52,7 @@ fun retry = (IoErr e) -> u32: ret match e {
 };
 fun describe_two = (IoErr -- IoErr.NotFound -- IoErr.Busy t) -> u32: ret match t { IoErr.Timeout => 7, IoErr.Denied => 8 };
 stc []u32 RETRIED = [retry(IoErr.NotFound), retry(IoErr.Busy(1)), retry(IoErr.Timeout), retry(IoErr.Denied)]; #= RETRIED [0, 1, 7, 8]
-fun by_label = (IoErr e) -> u32: ret match e { IoErr.Busy <- b => b as u32, IoErr.NotFound | IoErr.Denied => 100, rest => only_timeout(rest) };
+fun by_label = (IoErr e) -> u32: ret match e { IoErr.Busy(b) => b as u32, IoErr.NotFound | IoErr.Denied => 100, rest => only_timeout(rest) };
 fun only_timeout = (IoErr -- IoErr.Busy -- IoErr.NotFound -- IoErr.Denied t) -> u32: ret 200;
 stc []u32 LABELLED = [by_label(IoErr.Busy(4)), by_label(IoErr.Denied), by_label(IoErr.Timeout)]; #= LABELLED [4, 100, 200]
 fun by_type = (Loaded l) -> u32: ret match l {

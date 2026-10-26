@@ -64,6 +64,7 @@ pub fn check_if(
     // only the branch the condition takes is checked
     if (is_decided) {
         _ = resolver.set_node_type(branch.cond, .bool_type);
+        self.write_proven(branch.cond, condition_value == .bool_true);
         if (condition_value == .bool_true) return self.check_branch(context, branch.then, expected);
 
         if (condition_value != .bool_false) {
@@ -76,19 +77,19 @@ pub fn check_if(
         return self.check_branch(context, branch.@"else", expected);
     }
 
-    // binders of the condition (`x ?<- v`) are visible in the then branch only
+    // the names the condition binds are seen by both branches, readable where it proves them
     const initialization_mark = resolver.initialization.count;
     defer resolver.initialization.release(initialization_mark);
     resolver.scopes.open();
+    defer resolver.scopes.close();
     const unwritten = self.check_condition(context, branch.cond);
     resolver.initialization.copy(0, unwritten[when_true]);
 
     const expected_was_concrete = resolver.static_pool.is_concrete(expected);
-    const then_type = self.check_branch(context, branch.then, expected);
+    const then_type = self.check_scoped_branch(context, branch.then, expected);
     const after_then = resolver.initialization.new_set();
     if (then_type != .never_type) resolver.initialization.copy(after_then, 0);
     resolver.initialization.copy(0, unwritten[when_false]);
-    resolver.scopes.close();
 
     if (branch.@"else" == 0) {
         resolver.initialization.merge(0, after_then);
@@ -103,7 +104,7 @@ pub fn check_if(
         return self.merge_branch_types(node, then_type, .unit_type, merge_expected);
     }
 
-    const else_type = self.check_branch(context, branch.@"else", expected);
+    const else_type = self.check_scoped_branch(context, branch.@"else", expected);
     if (else_type == .never_type) {
         resolver.initialization.copy(0, after_then);
     } else {
@@ -133,7 +134,11 @@ pub fn check_condition(self: *Flow, context: *FunctionContext, node: NodeId) [2]
     if (kind != .binary_logic_and and kind != .binary_logic_or) {
         _ = resolver.expressions.check(context, node, .bool_type);
         const unwritten = resolver.initialization.save(0);
-        return .{ unwritten, unwritten };
+        self.write_proven(node, true);
+        const proven_true = resolver.initialization.save(0);
+        resolver.initialization.copy(0, unwritten);
+        self.write_proven(node, false);
+        return .{ proven_true, resolver.initialization.save(0) };
     }
 
     const is_and = kind == .binary_logic_and;
@@ -151,6 +156,78 @@ pub fn check_condition(self: *Flow, context: *FunctionContext, node: NodeId) [2]
 
     if (is_and) return .{ right[when_true], either };
     return .{ either, right[when_false] };
+}
+
+// whether `node` is a condition whose outcome proves names: `?<-`, through `!`, `and`, `or`
+pub fn is_condition(self: *Flow, node: NodeId) bool {
+    const tree = self.owning_resolver().tree;
+    return switch (tree.kind(node)) {
+        .capture, .neg_logic => self.is_condition(tree.arg(node, 0)),
+        .binary_logic_and, .binary_logic_or => true,
+        .selftag_arrow => true,
+        else => false,
+    };
+}
+
+// writes the names a condition's `?<-` binds where it came out `outcome`
+pub fn write_proven(self: *Flow, node: NodeId, outcome: bool) void {
+    const tree = self.owning_resolver().tree;
+    switch (tree.kind(node)) {
+        .capture => self.write_proven(tree.arg(node, 0), outcome),
+        .neg_logic => self.write_proven(tree.arg(node, 0), !outcome),
+        .binary_logic_and, .binary_logic_or => {
+            if (outcome != (tree.kind(node) == .binary_logic_and)) return;
+            self.write_proven(tree.arg(node, 0), outcome);
+            self.write_proven(tree.arg(node, 1), outcome);
+        },
+        .selftag_arrow => if (outcome) self.mark_labels(tree.arg(node, 1), true),
+        else => {},
+    }
+}
+
+// the names of a label, as written or as not yet written
+fn mark_labels(self: *Flow, label: NodeId, written: bool) void {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    const destructures = tree.kind(label) == .partial__destructure;
+    const labels = if (destructures) tree.manychildren(label) else &[1]NodeId{label};
+    for (labels) |name| {
+        const declaration = resolver.node_declarations[name];
+        if (declaration == .none) continue;
+        if (written) {
+            resolver.initialization.mark_written(declaration);
+        } else {
+            resolver.initialization.track(declaration);
+        }
+    }
+}
+
+// a label is the place it names, writable where that place is; a part of the record there also
+// needs its field to be `mut`
+pub fn write_labels(self: *Flow, label: NodeId, record_type: StaticPool.Index) void {
+    const resolver = self.owning_resolver();
+    const tree = resolver.tree;
+    const destructures = tree.kind(label) == .partial__destructure;
+    const labels = if (destructures) tree.manychildren(label) else &[1]NodeId{label};
+    for (labels, 0..) |name, i| {
+        const declaration = resolver.node_declarations[name];
+        if (declaration == .none) continue;
+        if (destructures and !resolver.mutability.field_is_mut(record_type, i)) continue;
+        resolver.decl_pool.pointer(declaration, .flags).is_mut = true;
+    }
+}
+
+// a branch's own names end with it
+fn check_scoped_branch(
+    self: *Flow,
+    context: *FunctionContext,
+    node: NodeId,
+    expected: StaticPool.Index,
+) StaticPool.Index {
+    const resolver = self.owning_resolver();
+    resolver.scopes.open();
+    defer resolver.scopes.close();
+    return self.check_branch(context, node, expected);
 }
 
 // the first type of the literals among `nodes` that every one of them fits
@@ -199,7 +276,11 @@ pub fn check_loop(
 
     resolver.scopes.open();
     defer resolver.scopes.close();
-    if (loop.cond != 0) _ = resolver.expressions.check(context, loop.cond, .bool_type);
+    const initialization_mark = resolver.initialization.count;
+    defer resolver.initialization.release(initialization_mark);
+    // the body runs where the condition holds, the loop is left where it fails
+    const unwritten = if (loop.cond != 0) self.check_condition(context, loop.cond) else null;
+    if (unwritten) |outcomes| resolver.initialization.copy(0, outcomes[when_true]);
     if (loop.repeat != 0) _ = resolver.expressions.infer(context, loop.repeat, .none);
     if (loop.cond != 0 and loop.repeat != 0) _ = resolver.set_node_type(loop.head, .unit_type);
     // `for x in seq`: the loop variable (or the implicit `it`) takes the elements of the sequence
@@ -257,9 +338,10 @@ pub fn check_loop(
         }
     }
 
-    const initialization_mark = resolver.initialization.count;
-    defer resolver.initialization.release(initialization_mark);
-    const at_exit = resolver.initialization.save(0);
+    const at_exit = if (unwritten) |outcomes|
+        outcomes[when_false]
+    else
+        resolver.initialization.save(0);
     self.exits.push(resolver.initialization.new_set());
 
     context.loop_depth += 1;
@@ -370,14 +452,18 @@ pub fn check_unwrap(
     if (kind == .labelarrow) {
         self.bind_label(resolver.tree.arg(node, 1), operand_type);
         self.flow_into_label(operand, null, resolver.tree.arg(node, 1));
+        const writable = resolver.mutability.writable(operand) == .ok;
+        if (writable) self.write_labels(resolver.tree.arg(node, 1), operand_type);
         return operand_type;
     }
 
-    const payload_type = resolver.static_pool.payload_of(operand_type);
+    // through a pointer the variant it points to
+    const variant_type = resolver.static_pool.through_pointer(operand_type);
+    const payload_type = resolver.static_pool.payload_of(variant_type);
     if (payload_type == .none) return resolver.report_mismatch(operand, operand_type, .none);
     // which case it is needs a tag
-    if (resolver.static_pool.is_untagged_at_run_time(operand_type)) {
-        return resolver.report(.untagged_variant, operand, operand_type, 0);
+    if (resolver.static_pool.is_untagged_at_run_time(variant_type)) {
+        return resolver.report(.untagged_variant, operand, variant_type, 0);
     }
 
     switch (kind) {
@@ -402,6 +488,19 @@ pub fn check_unwrap(
         },
         .selftag_arrow => {
             self.bind_label(resolver.tree.arg(node, 1), payload_type);
+            self.mark_labels(resolver.tree.arg(node, 1), false);
+            // the payload a strategy or bits store is made when read, no place holds it
+            const mutability = &resolver.mutability;
+            const access = if (operand_type == variant_type)
+                mutability.writable(operand)
+            else
+                mutability.pointee_access(operand);
+            const static_pool = &resolver.static_pool;
+            const stored = static_pool.tag(variant_type) == .variant_type and
+                static_pool.get(variant_type).variant_type.tag_mode != .custom and
+                !static_pool.get(variant_type).variant_type.is_packed;
+            const label = resolver.tree.arg(node, 1);
+            if (access == .ok and stored) self.write_labels(label, payload_type);
             const payload = resolver.slices.payload_slot(operand_type);
             if (payload != null) self.flow_into_label(0, payload, resolver.tree.arg(node, 1));
             return .bool_type;
@@ -425,7 +524,9 @@ pub fn check_fallbacks(self: *Flow, context: *FunctionContext, mark: u32) void {
     } else declared;
     for (self.bare_unwraps.buffer[mark..self.bare_unwraps.len]) |node| {
         const operand = resolver.tree.arg(node, 0);
-        const operand_type = static_pool.substitute_type_variables(resolver.node_types[operand]);
+        const operand_type = static_pool.through_pointer(
+            static_pool.substitute_type_variables(resolver.node_types[operand]),
+        );
         // a value typed as a case always holds its payload
         if (static_pool.tag(operand_type) != .variant_type) continue;
         const missing = self.missing_fallback(result, operand_type);

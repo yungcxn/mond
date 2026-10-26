@@ -173,13 +173,13 @@ Lowest to highest precedence, and `·` separates levels within a row. All binary
 | `+= -= *= /= %=` | compound assignment (a statement) |
 | `or` · `xor` · `and` / `&&` | bool only, `and` and `or` short-circuit |
 | `\|` | bitwise or |
-| `..< ..= ..` | ranges (`a..` is open, `..<b` and `..=b` start anywhere) |
+| `..< ..= .. <- ?<-` | ranges (`a..` is open, `..<b` and `..=b` start anywhere); the arrows name all on their left, so `x * 2 <- d > 4` is `(x * 2 <- d) > 4` (see [control.md](control.md#unwrapping)) |
 | `^` · `&` | bitwise |
 | `== !=` · `< > <= >=` | comparisons, not chained |
 | `<< >>` | shifts (`>>` is arithmetic on signed types) |
 | `+ - ~` · `* / %` | arithmetic (`/` truncates, `%` keeps the dividend's sign and takes integers only), `~` joins arrays (see [arrays](#arrays)) |
 | prefix | `- ! ++ -- typeof isstc sizeof alignof lenof tagof crash asm syscall fresh` |
-| postfix | `f(..) a[i] .m .* .& x++ x-- as asbits oftype ?? <- ?<- with` (unwrapping and labels: [control.md](control.md#unwrapping)) |
+| postfix | `f(..) a[i] .m .* .& x++ x-- as asbits oftype ?? with` (unwrapping: [control.md](control.md#unwrapping)) |
 
 `crash`, `asm`, `syscall` and `fresh` take one operand, or several in parentheses: `crash "too big"`, `syscall (WRITE, 1, p, n)`. `!` is logical not on `bool` and bitwise not on integers. Unary `-` on an unsigned value wraps. The operands of a shift join like any others, so `u8 << u32` is a `u32`. `||` and `|||` are not logical or: they make unified variants (see [types.md](types.md#unified-variants-a--b-a--b)), and `--` between types removes cases of a variant (see [types.md](types.md#subsets-v----vcase)). There is no `**`, and no `<<=` or similar.
 

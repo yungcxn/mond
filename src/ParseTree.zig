@@ -831,6 +831,21 @@ pub fn rebuild(self: *@This(), alloc: std.mem.Allocator, roots: *DynamicBuffer(N
 
 // questions about nodes, nothing here looks further than the tree
 
+// the `<-` in `n` outside the functions it defines: a loop condition's constant aliases
+pub fn labels_of(self: *const @This(), n: NodeId, out: *DynamicBuffer(NodeId)) void {
+    if (self.props(n).function) return;
+    if (self.kind(n) == .labelarrow) out.push(n);
+    for (self.children(n)) |child| self.labels_of(child, out);
+}
+
+// whether `n` holds a `<-` outside the functions it defines
+pub fn holds_label(self: *const @This(), n: NodeId) bool {
+    if (self.props(n).function) return false;
+    if (self.kind(n) == .labelarrow) return true;
+    for (self.children(n)) |child| if (self.holds_label(child)) return true;
+    return false;
+}
+
 // the classes of the node's kind
 pub inline fn props(self: *const @This(), n: NodeId) Props {
     return Node.nk_props[@backingInt(self.kind(n))];

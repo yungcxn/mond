@@ -37,7 +37,7 @@ stc []bool NEAR = [near(1), near(2), near(3), near(4)]; #= NEAR [true, false, tr
 # labels and type patterns bind before the guard runs
 variant Res = +(Ok(i32), Err(u8 code, u8 extra));
 fun severe = (Res r) -> i32: ret match r {
-    Res.Err <- e where e.code > 10 => -(e.code as i32),
+    Res.Err e where e.code > 10 => -(e.code as i32),
     Res.Err(code = c) where c == 0 => 0,
     Res.Err => -1,
     Res.Ok(v) => v,

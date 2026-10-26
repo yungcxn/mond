@@ -15,9 +15,9 @@ fun dangling = (bool a, bool b) -> u32 {
 }
 fun nested_value = (bool a, bool b) -> u32: ret if a: (if b: 1 else: 2) else: 3;
 fun cond_group = (i32 x) -> bool: ret if (x > 0) and (x < 10): true else: false;
-# `<-` is postfix and labels the operand right before it
+# `<-` names all on its left up to `and`, `or`, `|`: `x * 2 <- d > 10` is `(x * 2 <- d) > 10`
 fun arrow_head = (i32 x) -> i32 {
-    if (x * 2 <- d) > 10: ret d;
+    if x * 2 <- d > 10: ret d;
     if ((x + 1) <- e) > 5: ret e * 10;
     ret 0;
 }
@@ -33,7 +33,7 @@ stc u32 B = blocky(true) * 10 + blocky(false); #= B 163
 stc []u32 D = stcfor p in [0, 1, 2, 3]: dangling(p >= 2, p % 2 == 1); #= D [0, 0, 2, 1]
 stc []u32 NV = stcfor p in [0, 1, 2, 3]: nested_value(p >= 2, p % 2 == 1); #= NV [3, 3, 2, 1]
 stc bool CG = cond_group(5) and !cond_group(10); #= CG true
-stc i32 AH = arrow_head(6) * 100 + arrow_head(5); #= AH 260
+stc i32 AH = arrow_head(6) * 100 + arrow_head(5); #= AH 1260
 
 fun typing = (bool c) {
     t1 = if c: true else: false; #: t1 bool

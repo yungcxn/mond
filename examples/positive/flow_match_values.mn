@@ -14,7 +14,7 @@ stcfun nest = (N n) -> u32: ret match n {
 }
 stcfun orb = (P p) -> i32: ret match p { P.Two(x, 0) | P.Two(0, x) => x, P.One(x) => x * 10, _ => -1 }
 stcfun rec = (R r) -> u32: ret match r { R(A.X, true) => 1, R(f = false) => 2, R(a = A.Y, f = f) => if f: 3 else: 4 }
-stcfun lab = (B b) -> u32: ret match b { B.Z <- v => v * 2, B.W => 7 }
+stcfun lab = (B b) -> u32: ret match b { B.Z(v) => v * 2, B.W => 7 }
 stcfun ptr = (A a) -> u32 { &A p = a.&; ret match p { A.X => 1, A.Y => 2 }; }
 stcfun ranges = (i32 x) -> u32: ret match x { ..<-10 => 0, -10..<0 => 1, 0 => 2, 1..=9 => 3, 10.. => 4 }
 stcfun first_arm = (u8 x) -> u32: ret match x { 1 | 2 => 12, 1..=5 => 15, _ => 0 }
@@ -39,7 +39,7 @@ stc u32 BA = bind_all(0) + bind_all(9); #= BA 110
 
 fun types = (P p, B b) {
     v = match p { P.Two(x, _) => x, P.One(y) => y, P.Zero => 0 }; #: v i32
-    w = match b { B.Z <- k => k, B.W => 0 }; #: w u8
+    w = match b { B.Z(k) => k, B.W => 0 }; #: w u8
     bb = match p { P.Zero => true, _ => false }; #: bb bool
 }
 main = () {}

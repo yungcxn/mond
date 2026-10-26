@@ -5,7 +5,7 @@ variant B = +(Z(u8), W);
 
 fun swap_diff = (P p) -> i32: ret match p {
     P.Two(x, 0) | P.Two(0, x) => x,
-    P.Two(x, y) | P.One(x) <- y => x - y,
+    P.Two(x, y) | P.One(x <- y) => x - y,
     P.Zero => 99,
 }
 fun side = (A || B u) -> u32: ret match u { A a => (match a { A.X => 1, A.Y => 2 }), B.Z(k) => k, B b => 50 }

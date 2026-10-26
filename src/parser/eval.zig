@@ -761,12 +761,6 @@ pub fn labelarrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
     def.value = lhs;
 
     def.label = try label(p);
-
-    if (try p.peek_eq_tok(.@"pct_,")) {
-        // cursor should be right at first comma
-        def.label = try partial.destructure(p, def.label);
-    }
-
     p.tree.set_children(parent, def);
     return parent;
 }
@@ -777,12 +771,6 @@ pub fn selftag_arrow(p: *Parser, lhs: NodeId) anyerror!NodeId {
     def.value = lhs;
 
     def.label = try label(p);
-
-    if (try p.peek_eq_tok(.@"pct_,")) {
-        // cursor should be right at first comma
-        def.label = try partial.destructure(p, def.label);
-    }
-
     p.tree.set_children(parent, def);
     return parent;
 }
@@ -838,8 +826,15 @@ pub fn identifier(p: *Parser) anyerror!NodeId {
     return p.tree.push_node_with(.paste, .{ .prefix = n, .hole = try unquote(p) });
 }
 
-// the name an arrow binds, in a quote also `@x`
+// the name an arrow binds, `(a, b)` the names of its parts, in a quote also `@x`
 fn label(p: *Parser) anyerror!NodeId {
+    if (try p.peek_eq_tok(.@"pct_(")) {
+        p.tok_cursor += 1;
+        try p.eat_assert_tok(.identifier);
+        const parts = try partial.destructure(p, try identifier(p));
+        try p.eat_assert_tok(.@"pct_)");
+        return parts;
+    }
     if ((try p.pop_tok()) == .@"xpct_@") return unquote(p);
     p.tok_cursor -= 1;
     try p.eat_assert_tok(.identifier);

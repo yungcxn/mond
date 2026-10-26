@@ -132,6 +132,20 @@ fn member_access(self: *Mutability, node: NodeId) Access {
     return .immutable;
 }
 
+// whether field `index` of a record is declared `mut`
+pub fn field_is_mut(self: *Mutability, record_type: StaticPool.Index, index: usize) bool {
+    const resolver = self.owning_resolver();
+    if (resolver.static_pool.tag(record_type) != .record_type) return false;
+    const field_nodes = resolver.types.field_nodes_of(record_type);
+    if (index >= field_nodes.len) return false;
+    return ParseTree.Param.from_node(resolver.tree, field_nodes[index]).is_mut;
+}
+
+// writing what the pointer `node` points to
+pub fn pointee_access(self: *Mutability, node: NodeId) Access {
+    return self.access_through_parent(node, false);
+}
+
 // writing through a parent: `*T` allows it, `&T` never, anything else if the parent is writable
 fn access_through_parent(self: *Mutability, parent: NodeId, or_assignable: bool) Access {
     const resolver = self.owning_resolver();

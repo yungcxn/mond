@@ -25,7 +25,7 @@ pub const max_depth: u32 = 256;
 pub const no_cell = std.math.maxInt(u32);
 
 // env: the closure a frame was called through, its captures resolve to the closure's cells
-pub const Frame = struct { body: BodyPool.Body, base: u32, env: Value = .empty };
+pub const Frame = struct { body: BodyPool.Body, base: u32, env: Value = .empty, aliases: u32 = 0 };
 
 // what an evaluation replaces and restores when it ends
 const Session = struct {
@@ -161,16 +161,22 @@ fn close(self: *Interpreter, session: Session) void {
     self.variables.flush(session.adopted_length);
     self.depth -= 1;
     self.frames.len -= 1;
+    self.variables.forget_aliases(self.frames.buffer[self.frames.len].aliases);
     self.truncate(session.memory_length);
     self.function_context = session.outer_context;
 }
 
 pub fn enter_frame(self: *Interpreter, body: BodyPool.Body) void {
-    self.frames.push(.{ .body = body, .base = self.allocate_cells(body.local_count) });
+    self.frames.push(.{
+        .body = body,
+        .base = self.allocate_cells(body.local_count),
+        .aliases = self.variables.alias_cells.len,
+    });
 }
 
 pub fn leave_frame(self: *Interpreter, keep: bool) void {
     self.frames.len -= 1;
+    self.variables.forget_aliases(self.frames.buffer[self.frames.len].aliases);
     if (!keep) self.truncate(self.frames.buffer[self.frames.len].base);
 }
 

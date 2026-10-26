@@ -19,13 +19,64 @@ const Adopted = struct { decl: DeclPool.Index, cell: u32 };
 
 // statics written by an evaluation, held in cells until it ends
 adopted: DynamicBuffer(Adopted),
+// the labels (`<-`, `?<-`) of the running frames and the cells of the places they name; a view
+// is a cell of its own holding the payload record of a case, whose fields it shares
+alias_declarations: DynamicBuffer(DeclPool.Index),
+alias_cells: DynamicBuffer(u32),
+alias_views: DynamicBuffer(bool),
 
 pub fn init(allocator: std.mem.Allocator) Variables {
-    return .{ .adopted = .init(allocator, 16) };
+    return .{
+        .adopted = .init(allocator, 16),
+        .alias_declarations = .init(allocator, 16),
+        .alias_cells = .init(allocator, 16),
+        .alias_views = .init(allocator, 16),
+    };
 }
 
 pub fn deinit(self: *Variables) void {
     self.adopted.deinit();
+    self.alias_declarations.deinit();
+    self.alias_cells.deinit();
+    self.alias_views.deinit();
+}
+
+// `declaration` names the place in `cell`, again when bound again in the same frame
+pub fn alias(self: *Variables, declaration: DeclPool.Index, cell: u32, view: bool) void {
+    const first = self.owning_interpreter().current_frame().aliases;
+    const own = self.alias_declarations.items()[first..];
+    if (std.mem.lastIndexOfScalar(DeclPool.Index, own, declaration)) |i| {
+        self.alias_cells.buffer[first + i] = cell;
+        self.alias_views.buffer[first + i] = view;
+        return;
+    }
+    self.alias_declarations.push(declaration);
+    self.alias_cells.push(cell);
+    self.alias_views.push(view);
+}
+
+pub fn forget_aliases(self: *Variables, mark: u32) void {
+    self.alias_declarations.len = mark;
+    self.alias_cells.len = mark;
+    self.alias_views.len = mark;
+}
+
+fn alias_of(self: *Variables, declaration: DeclPool.Index) ?usize {
+    if (self.alias_declarations.len == 0) return null;
+    return std.mem.lastIndexOfScalar(DeclPool.Index, self.alias_declarations.items(), declaration);
+}
+
+// the cell of a place, a new one holding the value of anything else
+pub fn cell_of_operand(self: *Variables, node: NodeId) ?u32 {
+    const interpreter = self.owning_interpreter();
+    const resolver = interpreter.owning_resolver();
+    const props = resolver.tree.props(node);
+    // a static outside the running frames is a value here
+    const in_frame = !props.name or self.cell_of_declaration(self.declaration_of(node)) != null;
+    if (props.assignable and in_frame) return self.cell_of_place(node);
+    const value = interpreter.evaluate(node);
+    if (value.is(.poison_type) or interpreter.unwind != .none) return null;
+    return interpreter.push_cell(interpreter.owned_copy(value));
 }
 
 pub fn owning_interpreter(self: *Variables) *Interpreter {
@@ -33,6 +84,7 @@ pub fn owning_interpreter(self: *Variables) *Interpreter {
 }
 
 pub fn cell_of_declaration(self: *Variables, declaration: DeclPool.Index) ?u32 {
+    if (self.alias_of(declaration)) |i| return self.alias_cells.buffer[i];
     const interpreter = self.owning_interpreter();
     const declaration_number = @backingInt(declaration);
     var i = interpreter.frames.len;
@@ -162,6 +214,15 @@ pub fn store(self: *Variables, node: NodeId, declaration: DeclPool.Index, value:
     const interpreter = self.owning_interpreter();
     const resolver = interpreter.owning_resolver();
     if (declaration == .none) return true;
+    // a view writes the fields it shares
+    if (self.alias_of(declaration)) |i| if (self.alias_views.buffer[i]) {
+        const fields = interpreter.memory.buffer[self.alias_cells.buffer[i]];
+        for (0..fields.len()) |j| {
+            const field = interpreter.element(value, @intCast(j));
+            interpreter.store_cell(fields.cell() + j, interpreter.owned_copy(field));
+        }
+        return true;
+    };
     if (self.cell_of_declaration(declaration)) |cell| {
         interpreter.store_converted(cell, value, resolver.decl_pool.get(declaration, .value_type));
         return true;

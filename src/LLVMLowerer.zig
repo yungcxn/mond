@@ -974,6 +974,7 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
             const value = self.operand(a);
             return values.variant_payload(self, result_type, variant_type, value, case_index);
         },
+        .payload_ptr => values.payload_place(self, a),
         .call => self.call(result_type, a, self.ir.list(instruction.b)),
         .closure => self.closure(instruction.a, self.ir.list(instruction.b)),
         .syscall => {

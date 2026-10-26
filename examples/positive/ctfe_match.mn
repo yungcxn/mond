@@ -42,7 +42,7 @@ stcfun flags = (bool a, bool b) -> u32: ret match a {
 
 # a binder of the whole value next to the case test
 stcfun whole = (Shape s) -> u32: ret match s {
-    Shape.Rect <- whole => whole.w + whole.h,
+    Shape.Rect whole => whole.w + whole.h,
     other => area(other),
 }
 

@@ -1,0 +1,85 @@
+<include "lib/out.mn">;
+# the arrows at run time: labels naming all on their left, names read where their test held,
+# constant aliases of loop conditions computed once where first reached, aliases in patterns,
+# typed case binders, unwrapping through pointers
+variant Opt = +(Some(i32), None);
+variant Res = +(Ok(i32), Err(u8 code, u8 extra), Empty);
+stc i32 K = 3;
+mut i32 ONE = 0;
+mut i32 CALLS = 0;
+
+fun mk = (i32 n) -> Opt: ret if n > 0: Opt.Some(n) else: Opt.None;
+fun limit = (i32 n) -> i32 { CALLS += 1; ret n; }
+fun both_sides = (i32 a) -> i32: ret if a * 2 <- d > 4: d else: -d;
+fun negated = (Opt o) -> i32: ret if !(o ?<- v): 0 else: v;
+fun in_match = (Opt o) -> i32: ret match o ?<- v { true => v, false => -1 };
+fun guarded = (Res r, Opt o) -> i32: ret match r { Res.Ok(n) where o ?<- m => n + m, Res.Ok(n) where n * 2 <- d > 4 => d, _ => 0 };
+fun drain = (i32 n) -> i32 { mut i32 k = n; mut i32 s = 0; while mk(k) ?<- v { s += v; k -= 1; } ret s; }
+fun counted = (i32 n) -> i32 { mut i32 i = 0; while i < (limit(n) <- end) { i += end; } ret i; }
+fun short = (bool go) -> i32 { mut i32 k = 0; while go and (limit(4) <- l) > k { k += 1; } ret k; }
+fun reached_late = () -> i32 { mut i32 i = 0; while i < ONE or (i * 10 <- t) + i < 50 { i += 1; } ret i; }
+fun reentered = () -> i32 {
+    mut i32 total = 0;
+    mut i32 i = 0;
+    while i < 3 {
+        mut i32 j = 0;
+        while j < (i + ONE <- lim) { j += 1; total += lim; }
+        i += 1;
+    }
+    ret total;
+}
+fun ranged = (i32 x) -> i32: ret match x { 1..=5 <- n => n * 10, 6.. <- m => -m, _ => 0 };
+fun cased = (Res r) -> i32: ret match r { Res.Err e => e.code as i32 * 10 + e.extra as i32, Res.Ok(1..=9 <- n) => n, _ => -1 };
+fun through = (&Opt p) -> i32: ret if p ?<- v: v + (p ?? 0) else: p ?? -5;
+fun picked = () -> i32: ret stcif K * 2 <- k > 2: k else: 0;
+
+# a label is the place it names: written through, in a pattern too, a niche write changes the case
+variant Cell = +(Some(mut i32), None);
+variant Byte = +(Some(mut u8), None = 0xFF) tagtype self;
+variant Two = +(Pair(mut u8 code, u8 extra), Nothing);
+type Point = *(mut i32 x, mut i32 y);
+fun aliased = () -> i32 { mut i32 x = ONE; if (x <- y) > 0 { y = 5; } ret x; }
+fun follows = () -> i32 { mut i32 x = ONE; if (x <- y) > 0 { x = 8; ret y; } ret 0; }
+fun in_payload = () -> i32 { mut Cell c = Cell.Some(3 * ONE); if c ?<- v { v += 10; } ret c ?? -1; }
+fun via_pointer = (*Cell p) { if p ?<- v { v = 42; } }
+fun into_niche = () -> i32 { mut Byte b = Byte.Some(3 * ONE as u8); if b ?<- v { v = 255; } ret (b ?? 7) as i32; }
+fun parts = () -> i32 { mut Point p = Point(ONE, 2); if (p <- (a, b)).x > 0 { a = 10; b += 5; } ret p.x * 100 + p.y; }
+fun payload_record = () -> i32 { mut Two t = Two.Pair(1, 2 * ONE as u8); if t ?<- v { v.code = 9; } ret match t { Two.Pair(c, x) => c as i32 * 10 + x as i32, _ => -1 }; }
+fun loop_place = () -> i32 { mut i32 n = 3 * ONE; mut i32 i = 0; while i < (n <- m) { i += 1; if i == 2: n = 5; } ret i * 10 + n; }
+fun nested_field = () -> i32 { mut Cell c = Cell.Some(3 * ONE); match c { Cell.Some(_ <- k) => { k += 10; }, _ => {} } ret c ?? -1; }
+fun matched_pointer = (*Cell q) { match q { Cell.Some(_ <- k) => { k = 77; }, _ => {} } }
+fun matched_niche = () -> i32 { mut Byte b = Byte.Some(ONE as u8); match b { Byte.Some(_ <- v) => { v = 255; }, _ => {} } ret (b ?? 9) as i32; }
+
+main = (u32 argc, &&u8 argv) {
+    ONE = argc as i32;
+    line_i64((ONE + 2 <- s) * s);                                             #> 9
+    line_i64(both_sides(3 * ONE) * 10 + both_sides(ONE));                     #> 58
+    line_i64(negated(mk(4 * ONE)) * 10 + negated(mk(0)));                     #> 40
+    line_i64(in_match(mk(3 * ONE)) * 10 + in_match(mk(0)));                   #> 29
+    line_i64(guarded(Res.Ok(ONE), mk(2)) * 100 + guarded(Res.Ok(3), Opt.None) * 10 + guarded(Res.Ok(ONE), Opt.None));  #> 360
+    line_i64(drain(4 * ONE));                                                 #> 10
+    line_i64(counted(5 * ONE) * 10 + CALLS);                                  #> 51
+    CALLS = 0;
+    line_i64(short(ONE == 2) * 10 + CALLS);                                   #> 0
+    line_i64(short(ONE == 1) * 10 + CALLS);                                   #> 41
+    line_i64(reached_late());                                                 #> 40
+    line_i64(reentered());                                                    #> 14
+    line_i64(ranged(3 * ONE) * 100 + ranged(8 * ONE));                        #> 2992
+    line_i64(cased(Res.Err(3, 4 * ONE as u8)) * 10 + cased(Res.Ok(9)));       #> 349
+    mut Opt some = mk(4 * ONE);
+    mut Opt none = mk(0);
+    line_i64(through(some.&) * 100 + through(none.&));                        #> 795
+    line_i64(picked());                                                       #> 6
+    line_i64(aliased() * 10 + follows());                                     #> 58
+    line_i64(in_payload());                                                   #> 13
+    mut Cell c = Cell.Some(3 * ONE);
+    via_pointer(c.&);
+    line_i64(c ?? -1);                                                        #> 42
+    line_i64(into_niche() * 10 + matched_niche());                            #> 79
+    line_i64(parts());                                                        #> 1007
+    line_i64(payload_record());                                               #> 92
+    line_i64(loop_place());                                                   #> 55
+    line_i64(nested_field());                                                 #> 13
+    matched_pointer(c.&);
+    line_i64(c ?? -1);                                                        #> 77
+}
