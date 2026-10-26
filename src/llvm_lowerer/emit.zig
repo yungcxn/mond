@@ -102,12 +102,15 @@ pub const Machine = struct {
         llvm.LLVMDisposeMessage(machine.triple);
     }
 
-    pub fn optimize(machine: Machine, module: llvm.LLVMModuleRef) void {
+    // before anything is built, so loads, stores and allocas get the target's alignments
+    pub fn set_target(machine: Machine, module: llvm.LLVMModuleRef) void {
         llvm.LLVMSetTarget(module, machine.triple);
         const data_layout = llvm.LLVMCreateTargetDataLayout(machine.target_machine);
         defer llvm.LLVMDisposeTargetData(data_layout);
         llvm.LLVMSetModuleDataLayout(module, data_layout);
+    }
 
+    pub fn optimize(machine: Machine, module: llvm.LLVMModuleRef) void {
         const options = llvm.LLVMCreatePassBuilderOptions();
         defer llvm.LLVMDisposePassBuilderOptions(options);
         const failure = llvm.LLVMRunPasses(

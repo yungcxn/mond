@@ -458,6 +458,10 @@ fn load(self: *HighLowerer, value_type: Index, pointer: Ref) Ref {
         const record = self.builder.emit_refs(.load, record_type, record_pointer, .none);
         return self.builder.emit(.extract, value_type, @backingInt(record), field);
     }
+    // an immutable value is read where it is, not copied
+    if (self.builder.addressed(pointer)) |value| {
+        if (self.builder.result_type_of(value) == value_type) return value;
+    }
     return self.builder.emit_refs(.load, value_type, pointer, .none);
 }
 
@@ -499,8 +503,11 @@ fn declare_variable(self: *HighLowerer, declaration: DeclPool.Index, value: Ref)
 
     const variable = @backingInt(declaration);
     const declared_type = self.resolver.decl_pool.get(declaration, .value_type);
-    const needs_memory = self.address_taken.contains(declaration) or
-        self.lives_in_memory(self.substituted(declared_type));
+    // an immutable value in memory is its own place: read where it is, also through its address
+    const is_mut = self.resolver.decl_pool.get(declaration, .flags).is_mut;
+    const is_taken = self.address_taken.contains(declaration);
+    const in_memory = self.lives_in_memory(self.substituted(declared_type));
+    const needs_memory = if (is_mut) is_taken or in_memory else is_taken and !in_memory;
     if (needs_memory) {
         const slot = self.alloca(self.variable_type(variable));
         put_entry(self.allocator, &self.stack_slots, declaration, slot);
@@ -522,6 +529,20 @@ fn load_variable(self: *HighLowerer, declaration: DeclPool.Index) Ref {
     }
     if (self.stack_slots.get(declaration)) |slot| return self.load(value_type, slot);
     return self.read_current(@backingInt(declaration));
+}
+
+// a local's place: its slot, or the immutable value in memory itself; none for a value in a
+// register
+fn variable_place(self: *HighLowerer, declaration: DeclPool.Index) Ref {
+    if (self.stack_slots.get(declaration)) |slot| return slot;
+    const decl_pool = &self.resolver.decl_pool;
+    const is_variable = decl_pool.get(declaration, .kind).is_runtime_local() and
+        !decl_pool.get(declaration, .flags).is_stc and
+        decl_pool.get(declaration, .static_value) == .none;
+    const value_type = self.variable_type(@backingInt(declaration));
+    if (!is_variable or !self.lives_in_memory(value_type)) return .none;
+    const value = self.load_variable(declaration);
+    return self.builder.emit_refs(.address, self.pointer_to(value_type), value, .none);
 }
 
 fn store_variable(self: *HighLowerer, declaration: DeclPool.Index, value: Ref) void {
@@ -555,7 +576,7 @@ fn function_value(self: *HighLowerer, declaration: DeclPool.Index) Ref {
     for (captures) |captured| {
         // variables captured by reference are passed as the pointer to them
         const value = if (self.resolver.declarations.is_captured_by_reference(captured))
-            self.stack_slots.get(captured) orelse .none
+            self.variable_place(captured)
         else
             self.load_variable(captured);
         self.scratch.push(@backingInt(value));
@@ -593,7 +614,14 @@ fn lower_overload(self: *HighLowerer, overload: DeclPool.Index) bool {
         const node: NodeId = @intCast(i);
         // the variable node whose address `node` takes, 0 when it takes none
         var target: NodeId = 0;
-        if (tree.kind(node) == .address_of) target = tree.arg(node, 0);
+        switch (constructs.construct_of(tree.kind(node))) {
+            .address_of, .deinit => target = tree.arg(node, 0),
+            // a narrowed array is a pointer into the one narrowed
+            .cast => if (self.lives_in_memory(self.type_of(tree.arg(node, 0)))) {
+                target = tree.arg(node, 0);
+            },
+            else => {},
+        }
 
         const calls_member = tree.kind(node) == .fun_call and
             tree.kind(tree.arg(node, 0)) == .member;
@@ -1104,7 +1132,11 @@ fn expression(self: *HighLowerer, node: NodeId) Ref {
             return unit();
         },
         .deinit => {
-            const pointer = self.place(first);
+            // an immutable value in memory is shared, it is deinitialized in a copy
+            const operand_type = self.type_of(first);
+            const is_shared = !self.is_place(first) and self.lives_in_memory(operand_type);
+            const pointer = if (is_shared) self.alloca(operand_type) else self.place(first);
+            if (is_shared) self.store(pointer, self.expression(first));
             self.call_deinit(pointer, self.dereferenced_type(self.type_of(first)));
             return unit();
         },
@@ -2978,7 +3010,7 @@ fn direct_call(
     for (self.resolver.bodies.captures_of(&self.resolver.decl_pool, head)) |captured| {
         // variables captured by reference are passed as the pointer to them
         const value = if (self.resolver.declarations.is_captured_by_reference(captured))
-            self.stack_slots.get(captured) orelse .none
+            self.variable_place(captured)
         else
             self.load_variable(captured);
         self.scratch.push(@backingInt(value));
@@ -3355,22 +3387,18 @@ fn member_field(
     const is_case = self.static_pool.tag(base_type) == .variant_case_type;
     const pool = self.static_pool;
     const variant = if (is_case) pool.get(base_type).variant_case_type.variant else .none;
-    if (is_case and !self.stores_payloads(variant)) {
-        const parent_value = self.expression(parent);
-        const value = if (base_type == parent_type)
-            parent_value
-        else
-            self.load(base_type, parent_value);
-        const case_type = self.static_pool.get(base_type).variant_case_type;
-        const case_index: Ref = @fromBackingInt(case_type.case_index);
-        const payload =
-            self.builder.emit_refs(.variant_payload, case_type.payload, value, case_index);
-        return self.builder.emit(.extract, field_type, @backingInt(payload), field);
-    }
-    if (self.is_pointer(parent_type) or self.is_place(parent)) {
+    const is_value = is_case and !self.stores_payloads(variant);
+    if (!is_value and (self.is_pointer(parent_type) or self.is_place(parent))) {
         return self.load(field_type, self.place(node));
     }
-    return self.builder.emit(.extract, field_type, @backingInt(self.expression(parent)), field);
+    const parent_value = self.expression(parent);
+    const value =
+        if (base_type == parent_type) parent_value else self.load(base_type, parent_value);
+    if (!is_case) return self.builder.emit(.extract, field_type, @backingInt(value), field);
+    const case_type = self.static_pool.get(base_type).variant_case_type;
+    const case_index: Ref = @fromBackingInt(case_type.case_index);
+    const payload = self.builder.emit_refs(.variant_payload, case_type.payload, value, case_index);
+    return self.builder.emit(.extract, field_type, @backingInt(payload), field);
 }
 
 // lengths are static, the checker rejects one of a runtime-length array
@@ -3420,7 +3448,10 @@ fn place(self: *HighLowerer, node: NodeId) Ref {
         .identifier, .identifier_self => {
             const declaration = self.declaration_of(node);
             if (self.global_index_of.get(declaration)) |global| return Ref.global(global);
-            if (self.stack_slots.get(declaration)) |slot| return slot;
+            if (declaration != .none) {
+                const local = self.variable_place(declaration);
+                if (local != .none) return local;
+            }
         },
         .member => if (self.field_place(node)) |pointer| return pointer,
         .array_index => if (tree.names_place(node)) return self.element_place(node, value_type),

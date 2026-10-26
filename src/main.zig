@@ -378,10 +378,11 @@ pub fn main(init: std.process.Init) void {
         .libc = libc,
     });
     defer backend.deinit();
-    backend.lower();
-
     const machine = emit.Machine.init(mode);
     defer machine.deinit();
+    machine.set_target(backend.module);
+    backend.lower();
+
     machine.optimize(backend.module);
     if (stages.llvm) emit.print(io, backend.module) catch |err| @panic(@errorName(err));
 

@@ -243,6 +243,7 @@ pub fn analyze_at(
             const position = positions.position(&self, @intCast(line_end));
             self.hints.push(.{ .position = position, .label = label });
         }
+        self.hint_field_orders(resolver);
         std.mem.sort(Hint, self.hints.items(), {}, struct {
             fn earlier(_: void, left: Hint, right: Hint) bool {
                 return positions.before(left.position, right.position);
@@ -332,6 +333,47 @@ fn resolve(self: *Analysis, lexer: *Lexer) ?*Resolver {
         self.report(span[0], span[1], Doctor.severity_of(code), @tagName(code), operands.written());
     }
     return resolver;
+}
+
+// a record whose fields in another order would be smaller is hinted at, the compiler keeps the
+// order written
+fn hint_field_orders(self: *Analysis, resolver: *Resolver) void {
+    const declarations = resolver.decl_pool.entries.columns();
+    const pool = &resolver.static_pool;
+    for (declarations.kind, declarations.static_value, declarations.node) |kind, value, node| {
+        if (kind != .record or value == .none or pool.tag(value) != .record_type) continue;
+        const record = pool.get(value).record_type;
+        // a packed record has no padding
+        if (record.is_packed or pool.layout(value).state != .done or node == 0) continue;
+        const order = self.allocator.alloc(u32, record.field_types.len) catch @panic("OOM");
+        const size = pool.layout(value).size;
+        const reordered = pool.reordered_size(record, order);
+        if (reordered >= size) continue;
+
+        var text: std.Io.Writer.Allocating = .init(self.allocator);
+        const writer = &text.writer;
+        writer.print("{d} B, reordered {d} B: (", .{ size, reordered }) catch @panic("OOM");
+        for (order, 0..) |field, k| {
+            if (k > 0) writer.writeAll(", ") catch @panic("OOM");
+            pool.format(&resolver.name_pool, record.field_types[field], writer) catch {
+                @panic("OOM");
+            };
+            const name = resolver.name_pool.text_of(record.field_names[field]);
+            writer.print(" {s}", .{name}) catch @panic("OOM");
+        }
+        writer.writeAll(")") catch @panic("OOM");
+        const span = resolver.tree.extent(node) orelse
+            dbg.node_span(resolver.tree, self.source, node) orelse continue;
+        if (span[0] >= self.source.len) continue;
+        const line_end = std.mem.indexOfScalarPos(u8, self.source, span[0], '\n') orelse
+            self.source.len;
+        self.diagnostics.push(.{
+            .range = positions.range(self, span[0], @intCast(@min(span[1], line_end))),
+            // lsp's hint
+            .severity = 4,
+            .message = text.written(),
+        });
+    }
 }
 
 // a diagnostic marks its node up to the end of the node's first line, a whole body is too much
@@ -975,6 +1017,33 @@ test "the values of `stc` variables, as `#=` reads them" {
         try std.testing.expectEqual(position, found.position);
         try std.testing.expectEqualStrings(hint[2], found.label);
     }
+}
+
+test "a record its fields in another order would make smaller is hinted at" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupe(u8,
+        \\type Loose = *(u8 a, u64 b, u8 c);
+        \\type Unnamed = *(u8, u32, u8);
+        \\type Nested = *(bool flag, Loose inner);
+        \\type Tight = *(u64 b, u8 a, u8 c);
+        \\type Packed = **(u8 a, u64 b);
+        \\main = () {}
+    );
+    const result = analyze(arena.allocator(), source);
+    const expected = [_]struct { u32, []const u8 }{
+        .{ 0, "24 B, reordered 16 B: (u64 b, u8 a, u8 c)" },
+        .{ 1, "12 B, reordered 8 B: (u32 $1, u8 $0, u8 $2)" },
+    };
+    var found: usize = 0;
+    for (result.diagnostics) |diagnostic| {
+        if (diagnostic.severity != 4) continue;
+        try std.testing.expect(found < expected.len);
+        try std.testing.expectEqual(expected[found][0], diagnostic.range.start.line);
+        try std.testing.expectEqualStrings(expected[found][1], diagnostic.message);
+        found += 1;
+    }
+    try std.testing.expectEqual(expected.len, found);
 }
 
 test "a statement that doesn't parse is a hole, the rest is analyzed" {

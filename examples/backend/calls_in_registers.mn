@@ -1,0 +1,88 @@
+<include "lib/out.mn">;
+# values of up to 16 bytes cross calls of mond's functions in registers, as c passes them: odd
+# sizes read and written in their bytes only, floats in float registers, the larger ones and
+# packed records off their alignment by address; recursion keeps the calls, a function value
+# and a closure take them too. each line ends in 1 where compiling computed the same
+type Three = *(u8 a, u8 b, u8 c);
+type Twelve = *(u32 a, u32 b, u32 c);
+type Floats = *(f32 a, f32 b, f32 c);
+type Doubles = *(f64 a, f64 b);
+type Mixed = *(f32 f, u32 n);
+type Big = *(u64 a, u64 b, u8 c);
+type Packed = **(u8 a, u32 b);
+variant Opt = +(Some(i32), None);
+variant Num = u32 || f32;
+
+fun three = (Three t, u32 d) -> Three:
+    ret if d == 0: t else: three(Three(t.c, t.a + 1, t.b), d - 1);
+fun twelve = (Twelve t, u32 d) -> Twelve:
+    ret if d == 0: t else: twelve(Twelve(t.b, t.c, t.a * 2), d - 1);
+fun floats = (Floats f, u32 d) -> Floats:
+    ret if d == 0: f else: floats(Floats(f.b, f.c, f.a + 0.5), d - 1);
+fun doubles = (Doubles x, u32 d) -> Doubles:
+    ret if d == 0: x else: doubles(Doubles(x.b, x.a * 3.0), d - 1);
+fun mixed = (Mixed m, u32 d) -> Mixed:
+    ret if d == 0: m else: mixed(Mixed(m.f * 2.0, m.n + 1), d - 1);
+fun big = (Big b, u32 d) -> Big:
+    ret if d == 0: b else: big(Big(b.b, b.a + b.c as u64, b.c + 1), d - 1);
+fun packed = (Packed p, u32 d) -> Packed:
+    ret if d == 0: p else: packed(Packed(p.a + 1, p.b * 3), d - 1);
+fun opt = (Opt o, u32 d) -> Opt:
+    ret if d == 0: o else: opt(if o ?<- v: Opt.Some(v * 2) else: Opt.Some(1), d - 1);
+fun num = (Num n, u32 d) -> Num:
+    ret if d == 0: n else: num(match n { u32 u => (u as f32) * 1.5, f32 f => f as u32 + 1 }, d - 1);
+fun bytes = ([3]u8 a, u32 d) -> [3]u8: ret if d == 0: a else: bytes([a[2], a[0] + 1, a[1]], d - 1);
+fun total = ([..]u32 s, u32 d) -> u64:
+    ret if lenof s == 0 or d == 0: 0 else: s[0] as u64 + total(s[1..], d - 1);
+fun through = (Three t) -> u32: ret t.a as u32 * 100 + t.b as u32 * 10 + t.c as u32;
+fun apply = ((Three) -> u32 f, Three t) -> u32: ret f(t);
+fun shifted = (u8 k, u32 ONE) -> u32 {
+    fun add = (Three t) -> u32: ret through(Three(t.a + k, t.b, t.c));
+    ret apply(add, Three(1 * ONE as u8, 2, 3));
+}
+
+fun all = (u32 ONE) -> [12]u64 {
+    Three t = three(Three(1, 2, 3 * ONE as u8), 5);
+    Twelve w = twelve(Twelve(1, 2, 3 * ONE), 7);
+    Floats f = floats(Floats(1.0, 2.0, 3.0 * ONE as f32), 4);
+    Doubles x = doubles(Doubles(1.0, 2.0 * ONE as f64), 5);
+    Mixed m = mixed(Mixed(1.5, 7 * ONE), 3);
+    Big b = big(Big(1, 2, 3 * ONE as u8), 4);
+    Packed p = packed(Packed(1, 2 * ONE), 3);
+    [3]u8 a = bytes([1, 2, 3 * ONE as u8], 4);
+    [5]u32 s = [1, 2, 3, 4, 5 * ONE];
+    u32 n = match num(5 * ONE, 3) { u32 u => u, f32 f => 0 };
+    ret [
+        through(t) as u64,
+        w.a as u64 * 1000 + w.b as u64 * 100 + w.c as u64,
+        (f.a * 100.0) as u64 * 1000000 + (f.b * 100.0) as u64 * 1000 + (f.c * 100.0) as u64,
+        (x.a * 1000.0 + x.b) as u64,
+        (m.f * 10.0) as u64 * 100 + m.n as u64,
+        b.a * 10000 + b.b * 100 + b.c as u64,
+        p.a as u64 * 1000 + p.b as u64,
+        a[0] as u64 * 10000 + a[1] as u64 * 100 + a[2] as u64,
+        total(s, 4),
+        (opt(Opt.None, 4) ?? 0) as u64,
+        n as u64,
+        shifted(4 * ONE as u8, ONE) as u64,
+    ];
+}
+
+stc [12]u64 ALL = all(1);
+
+main = (u32 argc, &&u8 argv) {
+    [12]u64 run = all(argc);
+    for i in 0..<12: line_u64(run[i] * 10 + (run[i] == ALL[i]) as u64);
+    #> 3531
+    #> 92081
+    #> 2503502001
+    #> 180271
+    #> 120101
+    #> 912071
+    #> 40541
+    #> 403031
+    #> 101
+    #> 81
+    #> 1
+    #> 5231
+}

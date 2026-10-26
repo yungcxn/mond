@@ -166,6 +166,27 @@ fn record_layout(pool: *StaticPool, record: StaticPool.RecordType) Partial {
     return partial;
 }
 
+// the size the record would have with its fields ordered by alignment, largest first, which
+// leaves no padding between them; `order` gets the field indices in that order. the language
+// server hints at it, the compiler never reorders
+pub fn reordered_size(pool: *StaticPool, record: StaticPool.RecordType, order: []u32) u64 {
+    const Fields = struct { pool: *StaticPool, types: []const Index };
+    for (order, 0..) |*field, i| field.* = @intCast(i);
+    std.mem.sort(u32, order, Fields{ .pool = pool, .types = record.field_types }, struct {
+        fn wider(fields: Fields, left: u32, right: u32) bool {
+            const left_align = fields.pool.layout(fields.types[left]).align_log2;
+            return left_align > fields.pool.layout(fields.types[right]).align_log2;
+        }
+    }.wider);
+    var size: u64 = 0;
+    var align_log2: u8 = 0;
+    for (record.field_types) |field_type| {
+        size += pool.layout(field_type).size;
+        align_log2 = @max(align_log2, pool.layout(field_type).align_log2);
+    }
+    return std.mem.alignForward(u64, size, @as(u64, 1) << @intCast(align_log2));
+}
+
 // where a field starts: behind the one before it, aligned unless the record is packed. in a
 // bit-packed record the byte its first bit is in
 pub fn field_offset(pool: *StaticPool, record: StaticPool.RecordType, field: usize) u64 {

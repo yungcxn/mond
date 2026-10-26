@@ -83,6 +83,8 @@ pub const Op = enum(u8) {
     variant_payload,
     // the address of the payloads in the variant at `a`
     payload_ptr,
+    // the address of the value `a` in memory, only read through
+    address,
     call,
     closure,
     // `asm`: `a` is the constant of its text
@@ -174,6 +176,7 @@ const definition_table = .{
     .{ .variant_tag, .ref, .none, .pure, .none },
     .{ .variant_payload, .ref, .imm, .pure, .none },
     .{ .payload_ptr, .ref, .none, .pure, .none },
+    .{ .address, .ref, .none, .pure, .none },
     .{ .call, .ref, .refs, .impure, .none },
     .{ .closure, .imm, .refs, .impure, .none },
     .{ .inline_asm, .ref, .none, .impure, .none },

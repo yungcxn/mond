@@ -500,6 +500,7 @@ pub const unified_offset = type_layouts.unified_offset;
 pub const Room = type_layouts.Room;
 pub const payload_room = type_layouts.payload_room;
 pub const field_offset = type_layouts.field_offset;
+pub const reordered_size = type_layouts.reordered_size;
 pub const is_bit_packed = type_layouts.is_bit_packed;
 pub const field_bits = type_layouts.field_bits;
 pub const field_bit_offset = type_layouts.field_bit_offset;

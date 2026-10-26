@@ -141,7 +141,7 @@ A range binds looser than arithmetic, shifts and comparisons, so both bounds are
 
 ### Pointers
 
-`x.&` takes the address of any value, also of a literal (`"abc".&`). It is `*T` if `x` is writable, else `&T`. `p.*` dereferences. `*T` coerces to `&T`, and a pointer to `[n]T` coerces to a pointer to `T` or to `[]T`. An element pointer moves with `+ - ++ --` and indexes with `p[i]`. There is no null literal and no pointer difference. Integers and pointers convert only through bits: `p asbits u64`, `0 asbits *u8`.
+`x.&` takes the address of any value, also of a literal (`"abc".&`). It is `*T` if `x` is writable, else `&T`. `p.*` dereferences. `*T` coerces to `&T`, and a pointer to `[n]T` coerces to a pointer to `T` or to `[]T`. An element pointer moves with `+ - ++ --` and indexes with `p[i]`. There is no null literal and no pointer difference: a pointer is never null, the compiler relies on it (`tagtype self` uses the null address as a niche). Integers and pointers convert only through bits: `p asbits u64`, `0x1000 asbits *u8`; `0 asbits *u8` is undefined behavior.
 
 An address in a function's frame (of a local or a part of one, a range of a local array, a local array made a slice) ends with the call, so it may not outlive it: returning it, storing it in a global or through a pointer the function was given is `escaping_reference`, also when a local, a record or a call's result holds it. Passed down as an argument it is fine.
 

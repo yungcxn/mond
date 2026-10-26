@@ -13,6 +13,10 @@ fun moved = (World w, u64 i, i64 by) -> World:
 type At = *(i32 x, i32 y);
 variant Mark = +(Dot(At at), Empty);
 fun moved = (i32 k) -> i64 { Mark.Dot d = Mark.Dot(At(1, 2)); Mark.Dot e = d with (at.x = k, at.y = k * 2); ret e.at.x as i64 * 100 + e.at.y as i64 * 10 + d.at.x as i64; }
+# a case a pattern names, its payload replaced in a copy of it
+variant Res = +(Ok(i32), Err(u8 code, u8 extra), Empty);
+fun replaced = (Res r) -> i64:
+    ret match r { Res.Err e => (e with (code = 7)).code as i64 * 10 + e.code as i64, _ => -1 };
 
 main = (u32 argc, &&u8 argv) {
     ONE = argc as i64;
@@ -34,4 +38,5 @@ main = (u32 argc, &&u8 argv) {
     for i in 0..<4: walker = walker with (player.trail[(i % 3) as u64].y = i as i64 * ONE);
     line_i64(walker.player.trail[0].y * 100 + walker.player.trail[1].y * 10 + walker.player.trail[2].y);   #> 312
     line_i64(moved(7 * ONE as i32));                                   #> 841
+    line_i64(replaced(Res.Err(3 * ONE as u8, 4)));                         #> 73
 }

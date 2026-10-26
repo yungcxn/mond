@@ -125,6 +125,14 @@ pub fn result_type_of(self: *const FunctionBuilder, instruction: Ref) Index {
     return self.instructions.column(.result_type)[@backingInt(instruction)];
 }
 
+// the value whose address `pointer` is, when it is an `address` of one
+pub fn addressed(self: *const FunctionBuilder, pointer: Ref) ?Ref {
+    if (pointer == .none or pointer.is_const() or pointer.is_global()) return null;
+    const i = @backingInt(pointer);
+    if (self.instructions.column(.op)[i] != .address) return null;
+    return @fromBackingInt(self.instructions.column(.a)[i]);
+}
+
 pub fn block_count(self: *const FunctionBuilder) u32 {
     return self.blocks.len();
 }

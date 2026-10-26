@@ -259,7 +259,11 @@ pub fn convert(lowerer: *LLVMLowerer, kind: StaticPool.CoercionKind, to: Index, 
         .float_widen => llvm.LLVMBuildFPExt(builder, value, lowerer.types.of(to), ""),
         // the address of the first element, of an array value its own copy
         .array_ptr_to_elem_ptr, .to_dyn => value,
-        .member_to_unified => into_unified(lowerer, lowerer.types.variant_of(from), to, value),
+        // a subset is laid out as its whole
+        .member_to_unified => blk: {
+            const member = lowerer.types.variant_of(lowerer.pool.whole_of(from));
+            break :blk into_unified(lowerer, member, to, value);
+        },
     };
 }
 

@@ -209,6 +209,10 @@ pub fn print_function(writer: *Writer, lowerer: *HighLowerer, function_index: us
                     try context.reference(instruction.a);
                     try writer.writeAll(".payload&");
                 },
+                .address => {
+                    try context.reference(instruction.a);
+                    try writer.writeAll(".&");
+                },
                 .call => try context.print_call(),
                 .closure => try context.print_closure(),
                 .syscall => {

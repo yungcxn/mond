@@ -23,8 +23,9 @@ pub const Block = llvm.LLVMBasicBlockRef;
 // instruction. the ir is in ssa form already, so this translates; llvm optimizes (emit.zig).
 // records, arrays and variants live in memory like in c: such a value is the address of an
 // immutable copy, passed by that address and returned through a pointer the caller gives
-// (sret). the conversions, casts and variants are in llvm_lowerer/values.zig, constants in
-// constants.zig, dwarf in DebugInfo.zig, calls of c functions follow c_abi.zig
+// (sret), or in registers when small (`in_registers`). the conversions, casts and variants are
+// in llvm_lowerer/values.zig, constants in constants.zig, dwarf in DebugInfo.zig, calls of c
+// functions follow c_abi.zig
 const LLVMLowerer = @This();
 pub const no_function = std.math.maxInt(u32);
 
@@ -238,10 +239,11 @@ fn declare_function(self: *LLVMLowerer, function_index: u32) void {
         c_abi.classify(self, function_type.return_type)
     else
         .{ .how = .direct, .lowered = self.types.unit };
+    const result_registers = self.in_registers(function_type.return_type);
     const in_memory = if (is_external)
         has_result and result_passing.how == .indirect
     else
-        self.types.is_in_memory(function_type.return_type);
+        self.types.is_in_memory(function_type.return_type) and result_registers == null;
     self.externals.setValue(function_index, is_external);
     self.results_in_memory.setValue(function_index, in_memory);
 
@@ -251,16 +253,21 @@ fn declare_function(self: *LLVMLowerer, function_index: u32) void {
     defer self.type_stack.shrinkRetainingCapacity(mark);
     const first = @intFromBool(in_memory);
     const fixed = @min(function_type.parameters.len, self.fixed_parameters[function_index]);
-    const count = first + function.captures + fixed;
-    self.type_stack.appendNTimes(self.allocator, self.types.pointer, count) catch @panic("OOM");
-    const parameters = self.type_stack.items[mark..];
-    const declared = parameters[first + function.captures ..];
-    for (function_type.parameters[0..fixed], declared) |parameter, *lowered| {
-        lowered.* = if (is_external)
-            c_abi.classify(self, parameter).lowered
-        else
-            self.types.value_of(parameter);
+    const prefix = first + function.captures;
+    self.type_stack.appendNTimes(self.allocator, self.types.pointer, prefix) catch @panic("OOM");
+    for (function_type.parameters[0..fixed]) |parameter| {
+        if (is_external) {
+            const lowered = c_abi.classify(self, parameter).lowered;
+            self.type_stack.append(self.allocator, lowered) catch @panic("OOM");
+        } else if (self.in_registers(parameter)) |registers| {
+            self.push_part_types(registers);
+        } else {
+            const lowered = self.types.value_of(parameter);
+            self.type_stack.append(self.allocator, lowered) catch @panic("OOM");
+        }
     }
+    const parameters = self.type_stack.items[mark..];
+    const count = parameters.len;
     const instructions = self.ir.insts.columns();
     for (function.first_inst..function.first_inst + function.insts) |i| {
         if (instructions.op[i] != .param or instructions.a[i] >= function.captures) continue;
@@ -271,7 +278,7 @@ fn declare_function(self: *LLVMLowerer, function_index: u32) void {
     else if (is_external)
         result_passing.lowered
     else
-        self.types.value_of(function_type.return_type);
+        result_registers orelse self.types.value_of(function_type.return_type);
     const variadic: c_int = @intFromBool(self.fixed_parameters[function_index] != no_function);
     const lowered_type = llvm.LLVMFunctionType(result, parameters.ptr, @intCast(count), variadic);
     self.function_types[function_index] = lowered_type;
@@ -300,10 +307,13 @@ fn declare_function(self: *LLVMLowerer, function_index: u32) void {
     }
     llvm.LLVMSetLinkage(lowered, llvm.LLVMInternalLinkage);
     self.add_function_attributes(lowered);
+    self.add_pointer_attributes(lowered, llvm.LLVMAttributeReturnIndex, function_type.return_type);
+    var position: c_uint = @intCast(prefix);
     for (0..function_type.parameters.len) |i| {
         const parameter = self.pool.get(function.ty).function_type.parameters[i];
-        const position: c_uint = @intCast(first + function.captures + i);
         self.add_value_attributes(lowered, position, parameter);
+        self.add_pointer_attributes(lowered, position + 1, parameter);
+        position += self.parameter_width(parameter);
     }
 }
 
@@ -384,7 +394,6 @@ fn define_main(self: *LLVMLowerer) void {
         llvm.LLVMBuildAlloca(self.builder, self.types.of(return_type), "")
     else
         null;
-    if (in_memory) self.value_stack.append(self.allocator, result_slot) catch @panic("OOM");
     if (parameters.len == 2) {
         const count_type = self.types.of(parameters[0]);
         const signed: c_int = @intFromBool(self.is_signed(parameters[0]));
@@ -392,12 +401,7 @@ fn define_main(self: *LLVMLowerer) void {
         self.value_stack.append(self.allocator, count) catch @panic("OOM");
         self.value_stack.append(self.allocator, argument_vector) catch @panic("OOM");
     }
-    const called = self.build_call(
-        self.function_types[main_function],
-        self.functions[main_function],
-        self.value_stack.items[mark..],
-    );
-    const result = if (in_memory) result_slot else called;
+    const result = self.call_function(@intCast(main_function), mark, result_slot);
 
     // a variant exits with its int: the bits of a self tag, else the tag
     const is_variant = self.pool.tag(return_type) == .variant_type;
@@ -673,7 +677,7 @@ fn add_value_attributes(
     position: c_uint,
     value_type: Index,
 ) void {
-    if (!self.types.is_in_memory(value_type)) return;
+    if (!self.types.is_in_memory(value_type) or self.in_registers(value_type) != null) return;
     const index = position + 1;
     self.add_attribute(function, index, "noalias", 0);
     self.add_attribute(function, index, "readonly", 0);
@@ -681,6 +685,18 @@ fn add_value_attributes(
     self.add_attribute(function, index, "captures", 0);
     self.add_attribute(function, index, "nocapture", 0);
     self.add_memory_attributes(function, index, value_type);
+}
+
+// a pointer is never null, and points to a value of its pointee's alignment
+fn add_pointer_attributes(
+    self: *LLVMLowerer,
+    function: Value,
+    index: c_uint,
+    value_type: Index,
+) void {
+    if (!self.pool.is_pointer(value_type)) return;
+    self.add_attribute(function, index, "nonnull", 0);
+    self.add_attribute(function, index, "align", self.alignment_of(self.pool.pointee(value_type)));
 }
 
 fn add_memory_attributes(
@@ -870,7 +886,27 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
     return switch (instruction.op) {
         .param => {
             const result_slots = @intFromBool(self.results_in_memory.isSet(self.function_index));
-            return llvm.LLVMGetParam(self.llvm_function, instruction.a + result_slots);
+            const captures = self.function.captures;
+            if (instruction.a < captures) {
+                return llvm.LLVMGetParam(self.llvm_function, instruction.a + result_slots);
+            }
+            // the parameters before take one position per register
+            var position: c_uint = result_slots + captures;
+            const lowered = self.llvm_function;
+            for (0..instruction.a - captures) |k| {
+                const before = self.pool.get(self.function.ty).function_type.parameters[k];
+                position += self.parameter_width(before);
+            }
+            const registers = self.in_registers(result_type) orelse {
+                return llvm.LLVMGetParam(lowered, position);
+            };
+            // a small value comes in registers, copied to a slot of the frame that is the value
+            const slot = self.entry_alloca(self.types.of(result_type));
+            for (0..part_count(registers)) |k| {
+                const part = llvm.LLVMGetParam(lowered, position + @as(c_uint, @intCast(k)));
+                self.store_part(part, slot, result_type, registers, k);
+            }
+            return slot;
         },
         .phi => {
             const phi = if (self.types.is_in_memory(result_type))
@@ -975,6 +1011,8 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
             return values.variant_payload(self, result_type, variant_type, value, case_index);
         },
         .payload_ptr => values.payload_place(self, a),
+        // a value in memory is the address of its immutable copy already
+        .address => self.operand(a),
         .call => self.call(result_type, a, self.ir.list(instruction.b)),
         .closure => self.closure(instruction.a, self.ir.list(instruction.b)),
         .syscall => {
@@ -1062,7 +1100,13 @@ fn lower_instruction(self: *LLVMLowerer, instruction: HighIr.Inst, block: u32) V
         },
         .ret => {
             const result = self.pool.get(self.function.ty).function_type.return_type;
-            if (self.types.is_in_memory(result)) {
+            if (self.in_registers(result)) |registers| {
+                const returned = if (a == .none)
+                    llvm.LLVMGetUndef(registers)
+                else
+                    self.load_registers(self.operand(a), result, registers);
+                _ = llvm.LLVMBuildRet(builder, returned);
+            } else if (self.types.is_in_memory(result)) {
                 if (a != .none) {
                     self.copy(llvm.LLVMGetParam(self.llvm_function, 0), self.operand(a), result);
                 }
@@ -1268,11 +1312,34 @@ pub fn call_function(
         self.copy(result_slot, scratch, result_type);
         return result_slot;
     }
-    if (!self.results_in_memory.isSet(function_index)) {
-        return self.build_call(function_type, target, self.value_stack.items[mark..]);
+    // the arguments again behind them: the result slot, the captures, a small value in memory
+    // as its registers
+    const pool_type = self.ir.functions.column(.ty)[function_index];
+    const captures = self.ir.functions.column(.captures)[function_index];
+    const in_memory = self.results_in_memory.isSet(function_index);
+    const passed = self.value_stack.items.len;
+    if (in_memory) self.value_stack.append(self.allocator, result_slot) catch @panic("OOM");
+    for (mark..passed, 0..) |at, i| {
+        const argument = self.value_stack.items[at];
+        const parameter = if (i < captures)
+            .none
+        else
+            self.pool.get(pool_type).function_type.parameters[i - captures];
+        const registers = if (i < captures) null else self.in_registers(parameter);
+        if (registers == null) {
+            self.value_stack.append(self.allocator, argument) catch @panic("OOM");
+            continue;
+        }
+        for (0..part_count(registers)) |k| {
+            const part = self.load_part(argument, parameter, registers, k);
+            self.value_stack.append(self.allocator, part) catch @panic("OOM");
+        }
     }
-    self.value_stack.insert(self.allocator, mark, result_slot) catch @panic("OOM");
-    _ = self.build_call(function_type, target, self.value_stack.items[mark..]);
+    const called = self.build_call(function_type, target, self.value_stack.items[passed..]);
+    if (in_memory) return result_slot;
+    const result_type = self.pool.get(pool_type).function_type.return_type;
+    if (self.in_registers(result_type) == null) return called;
+    self.store_registers(called, result_slot, result_type);
     return result_slot;
 }
 
@@ -1293,12 +1360,13 @@ fn c_entry(self: *LLVMLowerer, function_index: u32) Value {
     const pool_type = self.ir.functions.column(.ty)[function_index];
     const parameter_count = self.pool.get(pool_type).function_type.parameters.len;
     const result_type = self.pool.get(pool_type).function_type.return_type;
-    var has_record = self.types.is_in_memory(result_type);
+    var by_address = self.results_in_memory.isSet(function_index);
     for (0..parameter_count) |i| {
         const parameter = self.pool.get(pool_type).function_type.parameters[i];
-        has_record = has_record or self.types.is_in_memory(parameter);
+        by_address = by_address or
+            (self.types.is_in_memory(parameter) and self.in_registers(parameter) == null);
     }
-    if (!has_record) return function;
+    if (!by_address) return function;
 
     var name_length: usize = 0;
     const function_name = llvm.LLVMGetValueName2(function, &name_length);
@@ -1344,29 +1412,25 @@ fn c_entry(self: *LLVMLowerer, function_index: u32) Value {
     defer llvm.LLVMDisposeBuilder(builder);
     const block = llvm.LLVMAppendBasicBlockInContext(self.context, entry, "");
     llvm.LLVMPositionBuilderAtEnd(builder, block);
-    const scratch_type = llvm.LLVMArrayType2(llvm.LLVMInt8TypeInContext(self.context), 32);
     const value_mark = self.value_stack.items.len;
     defer self.value_stack.shrinkRetainingCapacity(value_mark);
-    const in_memory = self.results_in_memory.isSet(function_index);
-    var result_slot: Value = null;
-    if (in_memory) {
-        result_slot = if (by_slot) llvm.LLVMGetParam(entry, 0) else blk: {
-            const slot = llvm.LLVMBuildAlloca(builder, scratch_type, "");
-            llvm.LLVMSetAlignment(slot, 16);
-            break :blk slot;
-        };
-        self.value_stack.append(self.allocator, result_slot) catch @panic("OOM");
+    if (by_slot) {
+        self.value_stack.append(self.allocator, llvm.LLVMGetParam(entry, 0)) catch @panic("OOM");
     }
+    // a record c passes in registers mond's functions take in the same ones, a larger one by
+    // the address of a copy
     for (0..parameter_count) |i| {
+        const argument = llvm.LLVMGetParam(entry, @intCast(first + i));
         const parameter = self.pool.get(pool_type).function_type.parameters[i];
-        var argument = llvm.LLVMGetParam(entry, @intCast(first + i));
-        if (c_abi.classify(self, parameter).how == .coerced) {
-            const scratch = llvm.LLVMBuildAlloca(builder, scratch_type, "");
-            llvm.LLVMSetAlignment(scratch, 16);
-            _ = llvm.LLVMBuildStore(builder, argument, scratch);
-            argument = scratch;
+        const registers = self.in_registers(parameter);
+        const count = if (registers) |known| part_count(known) else 1;
+        for (0..count) |k| {
+            const part = if (count == 1)
+                argument
+            else
+                llvm.LLVMBuildExtractValue(builder, argument, @intCast(k), "");
+            self.value_stack.append(self.allocator, part) catch @panic("OOM");
         }
-        self.value_stack.append(self.allocator, argument) catch @panic("OOM");
     }
     const arguments = self.value_stack.items[value_mark..];
     const function_type = self.function_types[function_index];
@@ -1374,9 +1438,6 @@ fn c_entry(self: *LLVMLowerer, function_index: u32) Value {
     const called = llvm.LLVMBuildCall2(builder, function_type, function, arguments.ptr, count, "");
     if (!has_result or by_slot) {
         _ = llvm.LLVMBuildRetVoid(builder);
-    } else if (in_memory) {
-        const loaded = llvm.LLVMBuildLoad2(builder, lowered_result, result_slot, "");
-        _ = llvm.LLVMBuildRet(builder, loaded);
     } else {
         _ = llvm.LLVMBuildRet(builder, called);
     }
@@ -1504,6 +1565,138 @@ pub fn copy(self: *LLVMLowerer, destination: Value, source: Value, copied_type: 
     const size = llvm.LLVMConstInt(self.types.length, self.pool.layout(copied_type).size, 0);
     const alignment = self.alignment_of(copied_type);
     _ = llvm.LLVMBuildMemCpy(self.builder, destination, alignment, source, alignment, size);
+}
+
+// a small value in memory crosses calls of mond's own functions in the registers c passes it in,
+// null for one passed by its address
+pub fn in_registers(self: *LLVMLowerer, value_type: Index) Type {
+    if (!self.types.is_in_memory(value_type)) return null;
+    const size = self.pool.layout(value_type).size;
+    if (size == 0 or size > 32) return null;
+    const passing = c_abi.classify(self, value_type);
+    return if (passing.how == .coerced) passing.lowered else null;
+}
+
+// a register of the small value at `address`: a part past the value's bytes (aarch64 rounds up
+// to whole registers) is read in its bytes and widened
+fn load_part(
+    self: *LLVMLowerer,
+    address: Value,
+    value_type: Index,
+    registers: Type,
+    k: usize,
+) Value {
+    const part = self.register_part(value_type, registers, k);
+    const from = self.byte_offset(address, part.at);
+    const read = llvm.LLVMBuildLoad2(self.builder, part.memory, from, "");
+    llvm.LLVMSetAlignment(read, part.alignment);
+    if (part.memory == part.lowered) return read;
+    return llvm.LLVMBuildZExt(self.builder, read, part.lowered, "");
+}
+
+// writes a register of a small value to `address`, no byte past the value
+fn store_part(
+    self: *LLVMLowerer,
+    value: Value,
+    address: Value,
+    value_type: Index,
+    registers: Type,
+    k: usize,
+) void {
+    const part = self.register_part(value_type, registers, k);
+    const written = if (part.memory == part.lowered)
+        value
+    else
+        llvm.LLVMBuildTrunc(self.builder, value, part.memory, "");
+    const store = llvm.LLVMBuildStore(self.builder, written, self.byte_offset(address, part.at));
+    llvm.LLVMSetAlignment(store, part.alignment);
+}
+
+// the registers of the small value at `address` as one value, how a result is returned
+fn load_registers(self: *LLVMLowerer, address: Value, value_type: Index, registers: Type) Value {
+    const count = part_count(registers);
+    if (count == 1) return self.load_part(address, value_type, registers, 0);
+    var loaded = llvm.LLVMGetUndef(registers);
+    for (0..count) |k| {
+        const part = self.load_part(address, value_type, registers, k);
+        loaded = llvm.LLVMBuildInsertValue(self.builder, loaded, part, @intCast(k), "");
+    }
+    return loaded;
+}
+
+fn store_registers(self: *LLVMLowerer, value: Value, address: Value, value_type: Index) void {
+    const registers = llvm.LLVMTypeOf(value);
+    const count = part_count(registers);
+    for (0..count) |k| {
+        const part = if (count == 1)
+            value
+        else
+            llvm.LLVMBuildExtractValue(self.builder, value, @intCast(k), "");
+        self.store_part(part, address, value_type, registers, k);
+    }
+}
+
+// a parameter takes one register a part: llvm's fast instruction selection takes no aggregates
+fn push_part_types(self: *LLVMLowerer, registers: Type) void {
+    for (0..part_count(registers)) |k| {
+        self.type_stack.append(self.allocator, part_type(registers, k)) catch @panic("OOM");
+    }
+}
+
+// how many parameters a value of the type takes
+fn parameter_width(self: *LLVMLowerer, value_type: Index) c_uint {
+    const registers = self.in_registers(value_type) orelse return 1;
+    return @intCast(part_count(registers));
+}
+
+fn part_count(registers: Type) usize {
+    return switch (llvm.LLVMGetTypeKind(registers)) {
+        llvm.LLVMStructTypeKind => llvm.LLVMCountStructElementTypes(registers),
+        llvm.LLVMArrayTypeKind => @intCast(llvm.LLVMGetArrayLength2(registers)),
+        else => 1,
+    };
+}
+
+fn part_type(registers: Type, k: usize) Type {
+    return switch (llvm.LLVMGetTypeKind(registers)) {
+        llvm.LLVMStructTypeKind => llvm.LLVMStructGetTypeAtIndex(registers, @intCast(k)),
+        llvm.LLVMArrayTypeKind => llvm.LLVMGetElementType(registers),
+        else => registers,
+    };
+}
+
+// a register of a small value: its type, where it sits in the value, the type of the value's
+// bytes in it, the alignment there
+const Part = struct { lowered: Type, at: u64, memory: Type, alignment: c_uint };
+
+fn register_part(self: *LLVMLowerer, value_type: Index, registers: Type, k: usize) Part {
+    const data_layout = llvm.LLVMGetModuleDataLayout(self.module);
+    const lowered = part_type(registers, k);
+    const at = switch (llvm.LLVMGetTypeKind(registers)) {
+        llvm.LLVMStructTypeKind => llvm.LLVMOffsetOfElement(data_layout, registers, @intCast(k)),
+        llvm.LLVMArrayTypeKind => k * llvm.LLVMStoreSizeOfType(data_layout, lowered),
+        else => 0,
+    };
+    const bytes = self.pool.layout(value_type).size - at;
+    const memory = if (bytes < llvm.LLVMStoreSizeOfType(data_layout, lowered))
+        llvm.LLVMIntTypeInContext(self.context, @intCast(bytes * 8))
+    else
+        lowered;
+    const alignment = self.alignment_of(value_type);
+    const offset_alignment: c_uint = @intCast(at & (~at +% 1));
+    return .{
+        .lowered = lowered,
+        .at = at,
+        .memory = memory,
+        .alignment = if (at == 0) alignment else @min(alignment, offset_alignment),
+    };
+}
+
+fn byte_offset(self: *LLVMLowerer, address: Value, at: u64) Value {
+    if (at == 0) return address;
+    var offset = [_]Value{llvm.LLVMConstInt(self.types.length, at, 0)};
+    const byte = llvm.LLVMInt8TypeInContext(self.context);
+    return llvm.LLVMBuildInBoundsGEP2(self.builder, byte, address, &offset, 1, "");
 }
 
 // with checks on, continues only when `failed` is false
